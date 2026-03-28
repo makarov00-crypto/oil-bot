@@ -16,6 +16,8 @@ import requests
 import ta
 from dotenv import load_dotenv
 from instrument_groups import DEFAULT_SYMBOLS, is_currency_instrument as is_currency_symbol
+from news_bias import NewsBias, select_active_biases
+from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
 from strategy_registry import get_secondary_strategies
 from strategy_engine import evaluate_primary_signal_bundle
 from tinkoff.invest import (
@@ -36,6 +38,8 @@ from strategies import get_strategy_profile as get_primary_strategy_profile
 APP_NAME = "oil-bot-main"
 STATE_DIR = Path(__file__).with_name("bot_state")
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+NEWS_CACHE_TTL_SECONDS = 300
+NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 SUPPORTED_INTERVALS = {
     1: CandleInterval.CANDLE_INTERVAL_1_MIN,
     2: CandleInterval.CANDLE_INTERVAL_2_MIN,
@@ -304,6 +308,22 @@ def compact_reason(reason: str) -> str:
     return cleaned
 
 
+def format_news_bias_label(news_bias: NewsBias | None) -> str:
+    if news_bias is None:
+        return "NEUTRAL"
+    return f"{news_bias.bias}/{news_bias.strength}"
+
+
+def format_news_bias_lines(news_bias: NewsBias | None) -> list[str]:
+    if news_bias is None:
+        return ["• News bias: NEUTRAL"]
+    return [
+        f"• News bias: {news_bias.bias} ({news_bias.strength})",
+        f"• Источник: {news_bias.source}",
+        f"• Причина: {news_bias.reason}",
+    ]
+
+
 def format_reason_multiline(reason: str) -> list[str]:
     text = compact_reason(reason)
     lines: list[str] = []
@@ -368,6 +388,46 @@ def build_telegram_card(title: str, emoji: str, lines: list[str]) -> str:
     return f"{emoji} {title}\n\n{body}"
 
 
+def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
+    now = datetime.now(UTC)
+    fetched_at = NEWS_CACHE.get("fetched_at")
+    if (
+        not force
+        and isinstance(fetched_at, datetime)
+        and (now - fetched_at).total_seconds() < NEWS_CACHE_TTL_SECONDS
+    ):
+        return NEWS_CACHE.get("biases", {})
+
+    all_biases: list[NewsBias] = []
+    target_day = current_moscow_time().date()
+    for channel in CHANNEL_URLS:
+        try:
+            posts = fetch_posts_for_day(channel, target_day=target_day)
+            for _, biases in detect_biases_for_posts(posts):
+                all_biases.extend(biases)
+        except Exception as error:
+            logging.warning("Не удалось обновить новости из %s: %s", channel, error)
+
+    active = select_active_biases(all_biases, now=now)
+    NEWS_CACHE["fetched_at"] = now
+    NEWS_CACHE["biases"] = active
+    return active
+
+
+def apply_news_bias_to_signal(signal: str, reason: str, news_bias: NewsBias | None) -> tuple[str, str]:
+    if news_bias is None:
+        return signal, reason
+    if news_bias.bias == "BLOCK" and signal in {"LONG", "SHORT"}:
+        return "HOLD", f"{reason}. News bias BLOCK: {news_bias.reason}."
+    if signal == "LONG" and news_bias.bias == "SHORT":
+        return "HOLD", f"{reason}. News bias конфликтует с LONG: {news_bias.reason}."
+    if signal == "SHORT" and news_bias.bias == "LONG":
+        return "HOLD", f"{reason}. News bias конфликтует с SHORT: {news_bias.reason}."
+    if signal in {"LONG", "SHORT"} and news_bias.bias == signal:
+        return signal, f"{reason}. News bias подтверждает сигнал: {news_bias.reason}."
+    return signal, reason
+
+
 def get_strategy_profile(config: BotConfig, instrument: InstrumentConfig) -> StrategyProfile:
     return get_primary_strategy_profile(config, instrument)
 
@@ -423,21 +483,26 @@ def get_market_session(now: datetime | None = None) -> str:
     return "EVENING"
 
 
-def get_session_position_multiplier(session_name: str) -> float:
+def get_session_position_multiplier(session_name: str, symbol: str | None = None) -> float:
+    if session_name == "WEEKEND":
+        if symbol and is_currency_symbol(symbol):
+            return 0.0
+        return 0.35
     return {
-        "WEEKEND": 0.0,
         "MORNING": 0.5,
         "DAY": 1.0,
         "EVENING": 0.5,
     }.get(session_name, 1.0)
 
 
-def session_allows_new_entries(session_name: str) -> bool:
-    return session_name != "WEEKEND"
+def session_allows_new_entries(session_name: str, symbol: str) -> bool:
+    if session_name != "WEEKEND":
+        return True
+    return not is_currency_symbol(symbol)
 
 
-def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str) -> bool:
-    if session_name == "WEEKEND":
+def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str) -> bool:
+    if session_name == "WEEKEND" and is_currency_symbol(symbol):
         return False
     if session_name in {"DAY", "MORNING"}:
         return True
@@ -453,8 +518,14 @@ def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str) 
     prev_macd = float(prev["macd"])
     prev_macd_signal = float(prev["macd_signal"])
 
-    volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
-    impulse_ok = body_avg > 0 and body >= body_avg * 0.85
+    volume_factor = 1.05
+    impulse_factor = 0.85
+    if session_name == "WEEKEND":
+        volume_factor = 1.10
+        impulse_factor = 0.95
+
+    volume_ok = volume_avg > 0 and volume >= volume_avg * volume_factor
+    impulse_ok = body_avg > 0 and body >= body_avg * impulse_factor
     if signal == "LONG":
         macd_ok = macd > macd_signal and macd >= prev_macd and prev_macd >= prev_macd_signal
     else:
@@ -664,6 +735,7 @@ def build_periodic_status_message(
     candle_time: str,
     higher_tf_bias: str,
     df: pd.DataFrame,
+    news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> str:
     position_text = "нет" if state.position_side == "FLAT" else f"{state.position_side}, qty={state.position_qty}"
@@ -678,6 +750,9 @@ def build_periodic_status_message(
         f"🧾 Позиция: {position_text}",
         "",
         *build_market_view_lines(df, config, instrument, higher_tf_bias),
+        "",
+        "📰 Новостный фон",
+        *format_news_bias_lines(news_bias),
     ]
 
     if compare_lines:
@@ -704,6 +779,7 @@ def notify_signal_change(
     signal: str,
     price: float,
     reason: str,
+    news_bias: NewsBias | None = None,
 ) -> None:
     if signal == state.last_signal:
         return
@@ -718,6 +794,7 @@ def notify_signal_change(
                 f"Режим: {mode}",
                 f"Цена: {price:.4f}",
                 f"Новый сигнал: {signal_emoji(signal)} {signal}",
+                f"News bias: {format_news_bias_label(news_bias)}",
                 "",
                 "Причины:",
                 *format_reason_multiline(reason),
@@ -736,6 +813,7 @@ def notify_periodic_status(
     candle_time: str,
     higher_tf_bias: str,
     df: pd.DataFrame,
+    news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> None:
     if candle_time == state.last_status_candle:
@@ -752,6 +830,7 @@ def notify_periodic_status(
             candle_time,
             higher_tf_bias,
             df,
+            news_bias,
             compare_lines,
         ),
     )
@@ -843,7 +922,7 @@ def calculate_order_quantity(
     signal: str,
 ) -> int:
     session_name = get_market_session()
-    session_multiplier = get_session_position_multiplier(session_name)
+    session_multiplier = get_session_position_multiplier(session_name, instrument.symbol)
     if session_multiplier <= 0:
         return 0
     if config.risk_per_trade_pct <= 0:
@@ -901,7 +980,7 @@ def build_position_sizing_lines(
     quantity: int,
 ) -> list[str]:
     session_name = get_market_session()
-    session_multiplier = get_session_position_multiplier(session_name)
+    session_multiplier = get_session_position_multiplier(session_name, instrument.symbol)
     lines = [f"Сессия: {session_name}", f"Множитель размера: {session_multiplier:.2f}", f"Количество: {quantity}"]
     try:
         snapshot = get_account_snapshot(client, config)
@@ -1276,6 +1355,18 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     state = load_state(instrument.symbol)
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
         return
+    session_name = get_market_session()
+    if session_name == "WEEKEND" and is_currency_symbol(instrument.symbol):
+        weekend_message = "Выходной день: валютный фьючерс не торгуется."
+        if state.last_error != weekend_message or state.last_signal != "HOLD":
+            state.last_error = weekend_message
+            state.last_signal = "HOLD"
+            save_state(instrument.symbol, state)
+            logging.info("symbol=%s status=weekend_currency_closed", instrument.symbol)
+        else:
+            state.last_error = weekend_message
+        state.last_signal = "HOLD"
+        return
     if not ensure_risk_limits(state, config):
         today = datetime.now(UTC).date().isoformat()
         if state.last_risk_stop_day != today:
@@ -1306,9 +1397,12 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
 
     higher_tf_bias = get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
+    news_bias = get_active_news_biases().get(instrument.symbol)
+    signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
     compare_lines: list[str] = []
     secondary_strategies = set(get_secondary_strategies(instrument.symbol))
     compare_lines.append(f"Основная: {signal_emoji(signal)} {signal} ({primary_strategy_name})")
+    compare_lines.append(f"News bias: {format_news_bias_label(news_bias)}")
     if "williams" in secondary_strategies:
         try:
             williams_df = add_williams_indicators(get_candles(client, config, instrument, config.candle_interval))
@@ -1326,7 +1420,6 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                 ]
             )
     current_price = float(lower_df.iloc[-1]["close"])
-    session_name = get_market_session()
     candle_time_value = lower_df.iloc[-1].get("time")
     candle_time = (
         candle_time_value.tz_convert("Europe/Moscow").strftime("%Y-%m-%d %H:%M")
@@ -1335,7 +1428,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     )
     signal_changed = signal != state.last_signal
 
-    notify_signal_change(config, instrument, state, signal, current_price, reason)
+    notify_signal_change(config, instrument, state, signal, current_price, reason, news_bias)
 
     if not config.dry_run:
         sync_state_with_portfolio(client, config, instrument, state)
@@ -1353,6 +1446,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         candle_time,
         higher_tf_bias,
         lower_df,
+        news_bias,
         compare_lines,
     )
 
@@ -1363,7 +1457,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         logging.info("symbol=%s signal=%s side=%s qty=%s", instrument.symbol, signal, state.position_side, state.position_qty)
 
     if state.position_side == "FLAT":
-        if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name) and session_signal_quality_ok(lower_df, signal, session_name):
+        if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol):
             open_position(client, config, instrument, state, signal)
     else:
         check_exit(client, config, instrument, state, lower_df, signal)
