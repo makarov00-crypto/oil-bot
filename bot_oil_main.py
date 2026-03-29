@@ -475,15 +475,21 @@ def get_market_session(now: datetime | None = None) -> str:
     now = now or current_moscow_time()
     if now.weekday() >= 5:
         return "WEEKEND"
-    hour = now.hour
-    if 7 <= hour < 10:
+    current_minutes = now.hour * 60 + now.minute
+    if current_minutes < 8 * 60 + 50:
+        return "CLOSED"
+    if current_minutes < 10 * 60:
         return "MORNING"
-    if 10 <= hour < 19:
+    if current_minutes < 19 * 60:
         return "DAY"
-    return "EVENING"
+    if current_minutes < 23 * 60 + 50:
+        return "EVENING"
+    return "CLOSED"
 
 
 def get_session_position_multiplier(session_name: str, symbol: str | None = None) -> float:
+    if session_name == "CLOSED":
+        return 0.0
     if session_name == "WEEKEND":
         if symbol and is_currency_symbol(symbol):
             return 0.0
@@ -496,12 +502,16 @@ def get_session_position_multiplier(session_name: str, symbol: str | None = None
 
 
 def session_allows_new_entries(session_name: str, symbol: str) -> bool:
+    if session_name == "CLOSED":
+        return False
     if session_name != "WEEKEND":
         return True
     return not is_currency_symbol(symbol)
 
 
 def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str) -> bool:
+    if session_name == "CLOSED":
+        return False
     if session_name == "WEEKEND" and is_currency_symbol(symbol):
         return False
     if session_name in {"DAY", "MORNING"}:
@@ -1363,6 +1373,16 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
         return
     session_name = get_market_session()
+    if session_name == "CLOSED":
+        closed_message = "Вне торговой сессии срочного рынка Мосбиржи."
+        if state.last_error != closed_message or state.last_signal != "HOLD":
+            state.last_error = closed_message
+            state.last_signal = "HOLD"
+            save_state(instrument.symbol, state)
+            logging.info("symbol=%s status=session_closed", instrument.symbol)
+        else:
+            state.last_error = closed_message
+        return
     if session_name == "WEEKEND" and is_currency_symbol(instrument.symbol):
         weekend_message = "Выходной день: валютный фьючерс не торгуется."
         if state.last_error != weekend_message or state.last_signal != "HOLD":
@@ -1403,7 +1423,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             )
         )
     except RuntimeError as error:
-        if "Недостаточно данных для стратегии" in str(error):
+        if "Недостаточно данных для стратегии" in str(error) or "API не вернул свечи" in str(error):
             state.last_error = str(error)
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=waiting_for_candles", instrument.symbol)
@@ -1430,7 +1450,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                 )
             )
         except RuntimeError as error:
-            if "Недостаточно данных для стратегии Williams" in str(error):
+            if "Недостаточно данных для стратегии Williams" in str(error) or "API не вернул свечи" in str(error):
                 williams_df = None
             else:
                 raise
@@ -1495,21 +1515,22 @@ def run_bot() -> int:
         raise RuntimeError("LIVE-режим заблокирован: сначала включи OIL_ALLOW_ORDERS=true осознанно.")
 
     mode = "DRY_RUN" if config.dry_run else "LIVE"
-    send_msg(
-        config,
-        build_telegram_card(
-            "Бот запущен",
-            "🤖",
-            [
-                f"Режим: {mode}",
-                f"Младший ТФ: {config.candle_interval_minutes} минут",
-                f"Старший ТФ: {config.higher_tf_interval_minutes} минут",
-                f"Инструменты: {', '.join(config.symbols)}",
-                "",
-                "Статусы будут приходить по закрытию каждой 5-минутной свечи.",
-            ],
-        ),
-    )
+    if get_market_session() != "CLOSED":
+        send_msg(
+            config,
+            build_telegram_card(
+                "Бот запущен",
+                "🤖",
+                [
+                    f"Режим: {mode}",
+                    f"Младший ТФ: {config.candle_interval_minutes} минут",
+                    f"Старший ТФ: {config.higher_tf_interval_minutes} минут",
+                    f"Инструменты: {', '.join(config.symbols)}",
+                    "",
+                    "Статусы будут приходить по закрытию каждой 5-минутной свечи.",
+                ],
+            ),
+        )
 
     consecutive_errors = 0
     cycle_count = 0
