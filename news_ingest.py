@@ -13,6 +13,7 @@ from news_bias import NewsBias, NewsMessage, detect_news_bias
 
 CHANNEL_URLS: dict[str, str] = {
     "markettwits": "https://t.me/s/markettwits",
+    "marketsnapshot": "https://t.me/s/marketsnapshot",
     "moex_derivatives": "https://t.me/s/moex_derivatives",
 }
 

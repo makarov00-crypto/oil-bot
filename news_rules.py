@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 MARKETTWITS = "markettwits"
 MOEX_DERIVATIVES = "moex_derivatives"
+MARKETSNAPSHOT = "marketsnapshot"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,12 @@ CHANNEL_RULES: dict[str, ChannelRule] = {
         channel=MARKETTWITS,
         source_weight=1,
         default_ttl_minutes=45,
+        can_block_entries=False,
+    ),
+    MARKETSNAPSHOT: ChannelRule(
+        channel=MARKETSNAPSHOT,
+        source_weight=2,
+        default_ttl_minutes=60,
         can_block_entries=False,
     ),
     MOEX_DERIVATIVES: ChannelRule(
@@ -101,17 +108,20 @@ NEWS_RULES: tuple[NewsRule, ...] = (
             "красное море",
             "ближний восток",
             "израиль",
+            "$103",
+            "$104",
+            "$105",
         ),
-        long_terms=COMMON_LONG_TERMS + ("сокращение добычи", "рост нефти", "дефицит нефти", "военная операция", "удары"),
-        short_terms=COMMON_SHORT_TERMS + ("рост запасов", "увеличение добычи", "избыток нефти"),
+        long_terms=COMMON_LONG_TERMS + ("сокращение добычи", "рост нефти", "дефицит нефти", "военная операция", "удары", "превысила", "превысил", "выше"),
+        short_terms=COMMON_SHORT_TERMS + ("рост запасов", "увеличение добычи", "избыток нефти", "снизилась до", "ниже"),
         block_terms=COMMON_BLOCK_TERMS,
         priority=2,
     ),
     NewsRule(
         symbol="NGJ6",
-        keywords=("газ", "lng", "спг", "хранилища", "поставки газа", "погода", "европа"),
-        long_terms=COMMON_LONG_TERMS + ("холод", "жара", "дефицит газа", "снижение запасов"),
-        short_terms=COMMON_SHORT_TERMS + ("тёплая погода", "рост запасов газа", "слабый спрос"),
+        keywords=("газ", "lng", "спг", "хранилища", "поставки газа", "погода", "европа", "бензина", "бензин"),
+        long_terms=COMMON_LONG_TERMS + ("холод", "жара", "дефицит газа", "снижение запасов", "превысила", "превысил"),
+        short_terms=COMMON_SHORT_TERMS + ("тёплая погода", "рост запасов газа", "слабый спрос", "снизилась до", "ниже"),
         block_terms=COMMON_BLOCK_TERMS,
         priority=2,
     ),
@@ -130,9 +140,10 @@ NEWS_RULES: tuple[NewsRule, ...] = (
             "израиль",
             "ближний восток",
             "хуситы",
+            "серебро",
         ),
-        long_terms=COMMON_LONG_TERMS + ("risk-off", "слабый доллар", "мягкая фрс", "геополитический риск", "военная операция"),
-        short_terms=COMMON_SHORT_TERMS + ("сильный доллар", "рост доходностей", "risk-on"),
+        long_terms=COMMON_LONG_TERMS + ("risk-off", "слабый доллар", "мягкая фрс", "геополитический риск", "военная операция", "превысило", "превысил"),
+        short_terms=COMMON_SHORT_TERMS + ("сильный доллар", "рост доходностей", "risk-on", "снизилось до", "ниже"),
         block_terms=COMMON_BLOCK_TERMS,
         priority=2,
     ),
@@ -146,9 +157,9 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="CNYRUBF",
-        keywords=("cny/rub", "юань", "китай", "расчеты", "китайская валюта"),
-        long_terms=COMMON_LONG_TERMS + ("ослабление рубля", "рост юаня", "спрос на юань"),
-        short_terms=COMMON_SHORT_TERMS + ("укрепление рубля", "слабость юаня"),
+        keywords=("cny/rub", "юань", "китай", "расчеты", "китайская валюта", "11.70", "11.80"),
+        long_terms=COMMON_LONG_TERMS + ("ослабление рубля", "рост юаня", "спрос на юань", "превысил", "превысила", "выше"),
+        short_terms=COMMON_SHORT_TERMS + ("укрепление рубля", "слабость юаня", "снизился до", "ниже"),
         block_terms=COMMON_BLOCK_TERMS,
         priority=3,
     ),

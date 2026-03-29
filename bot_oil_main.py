@@ -566,6 +566,13 @@ def get_candles(
     return df
 
 
+def get_lower_tf_lookback_hours(config: BotConfig) -> int:
+    base_hours = max(config.candle_hours, int((config.candle_interval_minutes * 240) / 60) + 1)
+    if get_market_session() == "WEEKEND":
+        return max(base_hours, 72)
+    return base_hours
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     if "time" in result.columns:
@@ -1386,7 +1393,15 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         return
 
     try:
-        lower_df = add_indicators(get_candles(client, config, instrument, config.candle_interval))
+        lower_df = add_indicators(
+            get_candles(
+                client,
+                config,
+                instrument,
+                config.candle_interval,
+                lookback_hours=get_lower_tf_lookback_hours(config),
+            )
+        )
     except RuntimeError as error:
         if "Недостаточно данных для стратегии" in str(error):
             state.last_error = str(error)
@@ -1405,7 +1420,15 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     compare_lines.append(f"News bias: {format_news_bias_label(news_bias)}")
     if "williams" in secondary_strategies:
         try:
-            williams_df = add_williams_indicators(get_candles(client, config, instrument, config.candle_interval))
+            williams_df = add_williams_indicators(
+                get_candles(
+                    client,
+                    config,
+                    instrument,
+                    config.candle_interval,
+                    lookback_hours=get_lower_tf_lookback_hours(config),
+                )
+            )
         except RuntimeError as error:
             if "Недостаточно данных для стратегии Williams" in str(error):
                 williams_df = None
