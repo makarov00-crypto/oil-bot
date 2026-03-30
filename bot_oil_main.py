@@ -1187,9 +1187,20 @@ def sync_state_with_portfolio(
     return qty
 
 
-def ensure_risk_limits(state: InstrumentState, config: BotConfig) -> bool:
+def ensure_risk_limits(
+    client: Client,
+    state: InstrumentState,
+    config: BotConfig,
+) -> bool:
     reset_daily_pnl_if_needed(state)
-    return state.realized_pnl > -abs(config.max_daily_loss)
+    if config.max_daily_loss <= 0:
+        return True
+    snapshot = get_account_snapshot(client, config)
+    equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
+    if equity <= 0:
+        return True
+    daily_loss_limit_rub = equity * (abs(config.max_daily_loss) / 100.0)
+    return state.realized_pnl > -daily_loss_limit_rub
 
 
 def get_account_snapshot(client: Client, config: BotConfig) -> AccountSnapshot:
@@ -1718,7 +1729,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             state.last_error = weekend_message
         state.last_signal = "HOLD"
         return
-    if not ensure_risk_limits(state, config):
+    if not ensure_risk_limits(client, state, config):
         today = datetime.now(UTC).date().isoformat()
         if state.last_risk_stop_day != today:
             send_msg(
