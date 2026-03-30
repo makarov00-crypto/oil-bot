@@ -41,6 +41,7 @@ from strategies import get_strategy_profile as get_primary_strategy_profile
 
 APP_NAME = "oil-bot-main"
 STATE_DIR = Path(__file__).with_name("bot_state")
+META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
@@ -176,6 +177,21 @@ def state_path_for(symbol: str) -> Path:
     safe_symbol = re.sub(r"[^A-Za-z0-9_-]+", "_", symbol)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return STATE_DIR / f"{safe_symbol}.json"
+
+
+def load_meta_state() -> dict[str, Any]:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if not META_STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(META_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_meta_state(meta: dict[str, Any]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    META_STATE_PATH.write_text(json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
 def load_state(symbol: str) -> InstrumentState:
@@ -318,6 +334,18 @@ def format_news_bias_label(news_bias: NewsBias | None) -> str:
     return f"{news_bias.bias}/{news_bias.strength}"
 
 
+def describe_news_bias_impact(signal: str, news_bias: NewsBias | None) -> str:
+    if news_bias is None or news_bias.bias == "NEUTRAL":
+        return "новости не вмешиваются"
+    if news_bias.bias == "BLOCK":
+        return "новости блокируют новый вход"
+    if signal == "HOLD":
+        return f"новости задают контекст {news_bias.bias}, но техника вход не подтвердила"
+    if news_bias.bias == signal:
+        return f"новости усиливают сигнал {signal}"
+    return f"новости конфликтуют с сигналом {signal}"
+
+
 def format_news_bias_lines(news_bias: NewsBias | None) -> list[str]:
     if news_bias is None:
         return ["• News bias: NEUTRAL"]
@@ -326,6 +354,16 @@ def format_news_bias_lines(news_bias: NewsBias | None) -> list[str]:
         f"• Источник: {news_bias.source}",
         f"• Причина: {news_bias.reason}",
     ]
+
+
+def floor_time_slot(dt: datetime, minutes: int) -> datetime:
+    floored_minute = (dt.minute // minutes) * minutes
+    return dt.replace(minute=floored_minute, second=0, microsecond=0)
+
+
+def get_status_slot(candle_time: str, minutes: int) -> str:
+    dt = datetime.strptime(candle_time, "%Y-%m-%d %H:%M")
+    return floor_time_slot(dt, minutes).strftime("%Y-%m-%d %H:%M")
 
 
 def format_reason_multiline(reason: str) -> list[str]:
@@ -802,6 +840,7 @@ def build_periodic_status_message(
         *build_market_view_lines(df, config, instrument, higher_tf_bias),
         "",
         "📰 Новостный фон",
+        f"• Влияние: {describe_news_bias_impact(signal, news_bias)}",
         *format_news_bias_lines(news_bias),
     ]
 
@@ -866,7 +905,8 @@ def notify_periodic_status(
     news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> None:
-    if candle_time == state.last_status_candle:
+    status_slot = get_status_slot(candle_time, 15)
+    if status_slot == state.last_status_candle:
         return
     send_msg(
         config,
@@ -884,7 +924,83 @@ def notify_periodic_status(
             compare_lines,
         ),
     )
-    state.last_status_candle = candle_time
+    state.last_status_candle = status_slot
+
+
+def build_global_diagnostic_message(
+    config: BotConfig,
+    client: Client,
+    watchlist: list[InstrumentConfig],
+) -> str:
+    news = get_active_news_biases()
+    session_name = get_market_session()
+    lines = [
+        f"🕒 Сессия: {session_name}",
+        f"🧭 Режим: {'DRY_RUN' if config.dry_run else 'LIVE'}",
+        "",
+    ]
+
+    for instrument in watchlist:
+        state = load_state(instrument.symbol)
+        news_bias = news.get(instrument.symbol)
+        try:
+            lower_df = add_indicators(
+                get_candles(
+                    client,
+                    config,
+                    instrument,
+                    config.candle_interval,
+                    lookback_hours=get_lower_tf_lookback_hours(config, instrument.symbol),
+                )
+            )
+            higher_tf_bias = get_higher_tf_bias(client, config, instrument)
+            signal, reason, strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
+            signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
+            long_blockers, short_blockers = extract_blocker_sections(reason)
+            blocker = long_blockers[0] if signal in {"HOLD", "LONG"} and long_blockers else ""
+            if signal == "HOLD" and not blocker and short_blockers:
+                blocker = short_blockers[0]
+            lines.extend(
+                [
+                    f"{signal_emoji(signal)} {instrument.symbol}: {signal}",
+                    f"• Стратегия: {strategy_name}",
+                    f"• Старший тренд: {higher_tf_bias}",
+                    f"• Новости: {format_news_bias_label(news_bias)}",
+                    f"• Влияние: {describe_news_bias_impact(signal, news_bias)}",
+                    f"• Главный блокер: {blocker or 'нет явного блокера'}",
+                    "",
+                ]
+            )
+        except RuntimeError as error:
+            lines.extend(
+                [
+                    f"{signal_emoji('HOLD')} {instrument.symbol}: HOLD",
+                    "• Стратегия: ожидание данных",
+                    f"• Новости: {format_news_bias_label(news_bias)}",
+                    f"• Влияние: {describe_news_bias_impact('HOLD', news_bias)}",
+                    f"• Статус: {str(error)}",
+                    "",
+                ]
+            )
+
+    return build_telegram_card("Общая диагностика", "📊", lines[:-1] if lines and lines[-1] == "" else lines)
+
+
+def maybe_send_global_diagnostic(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> None:
+    session_name = get_market_session()
+    if session_name == "CLOSED":
+        return
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    meta = load_meta_state()
+    if meta.get("last_global_status_slot") == now_slot:
+        return
+    send_msg(config, build_global_diagnostic_message(config, client, watchlist))
+    meta["last_global_status_slot"] = now_slot
+    save_meta_state(meta)
 
 
 def get_last_price(client: Client, instrument: InstrumentConfig) -> float:
@@ -1560,7 +1676,8 @@ def run_bot() -> int:
                     f"Старший ТФ: {config.higher_tf_interval_minutes} минут",
                     f"Инструменты: {', '.join(config.symbols)}",
                     "",
-                    "Статусы будут приходить по закрытию каждой 5-минутной свечи.",
+                    "Индивидуальные статусы будут приходить раз в 15 минут.",
+                    "Общая диагностика по рынку будет приходить раз в 30 минут.",
                 ],
             ),
         )
@@ -1573,6 +1690,7 @@ def run_bot() -> int:
             try:
                 for instrument in watchlist:
                     process_instrument(client, config, instrument)
+                maybe_send_global_diagnostic(client, config, watchlist)
                 consecutive_errors = 0
                 cycle_count += 1
                 if config.max_cycles > 0 and cycle_count >= config.max_cycles:
