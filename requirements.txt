@@ -2,5 +2,7 @@ pandas==2.3.3
 python-dotenv==1.1.1
 requests==2.32.5
 ta==0.11.0
+fastapi==0.116.1
+uvicorn==0.35.0
 https://files.pythonhosted.org/packages/99/b6/0abbb6570ab7f8623a55ed9d8e2c05594d7944ecc0b335a89addfb8f40e1/tinkoff-0.1.1-py3-none-any.whl
 https://files.pythonhosted.org/packages/f8/6d/4b66c8f5b041448e9095002fba59ab7474b50e2296f7c881c7fd23df70df/tinkoff_investments-0.2.0b118-py3-none-any.whl

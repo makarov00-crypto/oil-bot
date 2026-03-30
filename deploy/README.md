@@ -25,16 +25,21 @@ cp .env.example .env
 
 ```bash
 sudo cp /opt/oil-bot/deploy/oil-bot.service /etc/systemd/system/oil-bot.service
+sudo cp /opt/oil-bot/deploy/oil-bot-dashboard.service /etc/systemd/system/oil-bot-dashboard.service
 sudo systemctl daemon-reload
 sudo systemctl enable oil-bot
+sudo systemctl enable oil-bot-dashboard
 sudo systemctl start oil-bot
+sudo systemctl start oil-bot-dashboard
 ```
 
 ## 4. Проверка
 
 ```bash
 sudo systemctl status oil-bot
+sudo systemctl status oil-bot-dashboard
 journalctl -u oil-bot -f
+journalctl -u oil-bot-dashboard -f
 ```
 
 ## 5. Обновление
@@ -44,6 +49,7 @@ cd /opt/oil-bot
 git pull
 .venv/bin/pip install -r requirements.txt
 sudo systemctl restart oil-bot
+sudo systemctl restart oil-bot-dashboard
 ```
 
 ## 6. Что важно
@@ -51,3 +57,4 @@ sudo systemctl restart oil-bot
 - `.env` в git не хранить
 - на сервере использовать SSH-ключ для GitHub
 - если будет веб-панель, лучше поднимать её отдельным сервисом
+- панель по умолчанию слушает порт `8000`

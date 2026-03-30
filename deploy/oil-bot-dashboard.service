@@ -1,0 +1,20 @@
+[Unit]
+Description=Oil Bot Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oilbot
+Group=oilbot
+WorkingDirectory=/opt/oil-bot
+Environment=APP_DIR=/opt/oil-bot
+Environment=PYTHONUNBUFFERED=1
+Environment=DASHBOARD_HOST=0.0.0.0
+Environment=DASHBOARD_PORT=8000
+ExecStart=/opt/oil-bot/deploy/run_dashboard_server.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
