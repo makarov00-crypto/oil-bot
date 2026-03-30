@@ -537,6 +537,18 @@ def build_dashboard_html() -> str:
     </div>
 
     <section class="panel" style="margin-top:16px;">
+      <h2>Сигналы по инструментам</h2>
+      <table id="signalsTable">
+        <thead>
+          <tr>
+            <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>News bias</th><th>Влияние</th><th>Ключевая причина</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top:16px;">
       <h2>Состояние инструментов</h2>
       <table id="statesTable">
         <thead>
@@ -671,7 +683,22 @@ def build_dashboard_html() -> str:
 
       const stateBody = document.querySelector('#statesTable tbody');
       stateBody.innerHTML = '';
+      const signalBody = document.querySelector('#signalsTable tbody');
+      signalBody.innerHTML = '';
       for (const [symbol, state] of Object.entries(data.states)) {
+        const summary = Array.isArray(state.last_signal_summary) && state.last_signal_summary.length
+          ? state.last_signal_summary[0]
+          : (state.last_error || '-');
+        signalBody.insertAdjacentHTML('beforeend', `<tr>
+          <td class="mono">${escapeHtml(symbol)}</td>
+          <td>${signalBadge(state.last_signal || '-')}</td>
+          <td>${escapeHtml(state.last_strategy_name || state.entry_strategy || '-')}</td>
+          <td>${signalBadge(state.last_higher_tf_bias || '-')}</td>
+          <td>${escapeHtml(state.last_news_bias || 'NEUTRAL')}</td>
+          <td class="reason">${escapeHtml(state.last_news_impact || '-')}</td>
+          <td class="reason">${escapeHtml(summary)}</td>
+        </tr>`);
+
         stateBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(symbol)}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>

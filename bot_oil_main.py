@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -154,6 +154,11 @@ class InstrumentState:
     last_fill_price: float | None = None
     entry_time: str = ""
     entry_strategy: str = ""
+    last_strategy_name: str = ""
+    last_higher_tf_bias: str = ""
+    last_news_bias: str = "NEUTRAL"
+    last_news_impact: str = ""
+    last_signal_summary: list[str] = field(default_factory=list)
 
 
 
@@ -2100,6 +2105,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         if state.last_error != closed_message or state.last_signal != "HOLD":
             state.last_error = closed_message
             state.last_signal = "HOLD"
+            state.last_news_impact = "торговая сессия закрыта"
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=session_closed", instrument.symbol)
         else:
@@ -2110,6 +2116,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         if state.last_error != weekend_message or state.last_signal != "HOLD":
             state.last_error = weekend_message
             state.last_signal = "HOLD"
+            state.last_news_impact = "инструмент недоступен на выходных"
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=weekend_currency_closed", instrument.symbol)
         else:
@@ -2156,6 +2163,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     signal, reason, primary_strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
     news_bias = get_active_news_biases().get(instrument.symbol)
     signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
+    signal_summary = summarize_signal_reason(signal, reason)
     compare_lines: list[str] = []
     secondary_strategies = set(get_secondary_strategies(instrument.symbol))
     compare_lines.append(f"Основная: {signal_emoji(signal)} {signal} ({primary_strategy_name})")
@@ -2217,6 +2225,11 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
 
     state.last_error = ""
     state.last_signal = signal
+    state.last_strategy_name = primary_strategy_name
+    state.last_higher_tf_bias = higher_tf_bias
+    state.last_news_bias = format_news_bias_label(news_bias)
+    state.last_news_impact = describe_news_bias_impact(signal, news_bias)
+    state.last_signal_summary = signal_summary
 
     if signal_changed:
         logging.info("symbol=%s signal=%s side=%s qty=%s", instrument.symbol, signal, state.position_side, state.position_qty)
