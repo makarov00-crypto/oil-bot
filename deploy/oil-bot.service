@@ -1,0 +1,19 @@
+[Unit]
+Description=Oil Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oilbot
+Group=oilbot
+WorkingDirectory=/opt/oil-bot
+Environment=APP_DIR=/opt/oil-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/oil-bot/deploy/run_bot_server.sh
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
