@@ -19,47 +19,55 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     range_high = float(recent["high"].max())
     range_low = float(recent["low"].min())
-    breakout_up = close > range_high and close > ema20 and close > ema50
-    breakout_down = close < range_low and close < ema20 and close < ema50
-    volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
-    impulse_ok = body_avg > 0 and body >= body_avg * 0.95
-    macd_up = macd > macd_signal and macd >= prev_macd and prev_macd >= prev_macd_signal
-    macd_down = macd < macd_signal and macd <= prev_macd and prev_macd <= prev_macd_signal
-    volatility_ok = atr_pct >= 0.0012
-    rsi_long_ok = 48.0 <= rsi <= 75.0
-    rsi_short_ok = 25.0 <= rsi <= 52.0
+    close_above_trend = close > ema20 and close > ema50
+    close_below_trend = close < ema20 and close < ema50
+    breakout_up = close > range_high and close_above_trend
+    breakout_down = close < range_low and close_below_trend
+    soft_breakout_up = close > ema20 and close > ema50 and close >= range_high * 0.999
+    soft_breakout_down = close < ema20 and close < ema50 and close <= range_low * 1.001
+    volume_ok = volume_avg > 0 and volume >= volume_avg * 0.85
+    impulse_ok = body_avg > 0 and body >= body_avg * 0.70
+    macd_up = macd > macd_signal and macd >= prev_macd
+    macd_down = macd < macd_signal and macd <= prev_macd
+    volatility_ok = atr_pct >= 0.0010
+    rsi_long_ok = 46.0 <= rsi <= 78.0
+    rsi_short_ok = 22.0 <= rsi <= 54.0
+    higher_tf_long_ok = higher_tf_bias != "SHORT"
+    higher_tf_short_ok = higher_tf_bias != "LONG"
 
     long_reasons = [
         f"старший ТФ={higher_tf_bias}",
         f"пробой вверх диапазона {range_high:.4f}: {'да' if breakout_up else 'нет'}",
-        f"цена выше EMA20 и EMA50: {'да' if close > ema20 and close > ema50 else 'нет'}",
-        f"RSI={rsi:.2f} в рабочей зоне 48-75",
+        f"мягкий breakout вверх: {'да' if soft_breakout_up else 'нет'}",
+        f"цена выше EMA20 и EMA50: {'да' if close_above_trend else 'нет'}",
+        f"RSI={rsi:.2f} в рабочей зоне 46-78",
         "объём выше среднего" if volume_ok else "объём слабый",
-        "импульс сильный" if impulse_ok else "импульс слабый",
-        "MACD ускоряется вверх" if macd_up else "MACD не ускоряется вверх",
-        f"ATR%={atr_pct:.4f}, минимум 0.0012",
+        "импульс есть" if impulse_ok else "импульс слабый",
+        "MACD поддерживает рост" if macd_up else "MACD не поддерживает рост",
+        f"ATR%={atr_pct:.4f}, минимум 0.0010",
     ]
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
         f"пробой вниз диапазона {range_low:.4f}: {'да' if breakout_down else 'нет'}",
-        f"цена ниже EMA20 и EMA50: {'да' if close < ema20 and close < ema50 else 'нет'}",
-        f"RSI={rsi:.2f} в рабочей зоне 25-52",
+        f"мягкий breakout вниз: {'да' if soft_breakout_down else 'нет'}",
+        f"цена ниже EMA20 и EMA50: {'да' if close_below_trend else 'нет'}",
+        f"RSI={rsi:.2f} в рабочей зоне 22-54",
         "объём выше среднего" if volume_ok else "объём слабый",
-        "импульс сильный" if impulse_ok else "импульс слабый",
-        "MACD ускоряется вниз" if macd_down else "MACD не ускоряется вниз",
-        f"ATR%={atr_pct:.4f}, минимум 0.0012",
+        "импульс есть" if impulse_ok else "импульс слабый",
+        "MACD поддерживает снижение" if macd_down else "MACD не поддерживает снижение",
+        f"ATR%={atr_pct:.4f}, минимум 0.0010",
     ]
 
     long_blockers: list[str] = []
     short_blockers: list[str] = []
-    if higher_tf_bias != "LONG":
+    if not higher_tf_long_ok:
         long_blockers.append(f"старший ТФ не LONG, а {higher_tf_bias}")
-    if not breakout_up:
+    if not breakout_up and not soft_breakout_up:
         long_blockers.append("нет подтверждённого breakout вверх")
     if not rsi_long_ok:
-        long_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 48-75")
+        long_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 46-78")
     if not macd_up:
-        long_blockers.append("MACD не подтверждает ускорение вверх")
+        long_blockers.append("MACD не подтверждает рост")
     if not impulse_ok:
         long_blockers.append("импульс свечи слишком слабый")
     if not volume_ok:
@@ -67,14 +75,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if not volatility_ok:
         long_blockers.append("волатильность ниже минимума")
 
-    if higher_tf_bias != "SHORT":
+    if not higher_tf_short_ok:
         short_blockers.append(f"старший ТФ не SHORT, а {higher_tf_bias}")
-    if not breakout_down:
+    if not breakout_down and not soft_breakout_down:
         short_blockers.append("нет подтверждённого breakout вниз")
     if not rsi_short_ok:
-        short_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 25-52")
+        short_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 22-54")
     if not macd_down:
-        short_blockers.append("MACD не подтверждает ускорение вниз")
+        short_blockers.append("MACD не подтверждает снижение")
     if not impulse_ok:
         short_blockers.append("импульс свечи слишком слабый")
     if not volume_ok:
@@ -82,28 +90,33 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if not volatility_ok:
         short_blockers.append("волатильность ниже минимума")
 
-    long_ok = all(
+    long_score = sum(
         [
-            higher_tf_bias == "LONG",
-            breakout_up,
-            rsi_long_ok,
-            macd_up,
-            impulse_ok,
-            volume_ok,
-            volatility_ok,
+            0 if not higher_tf_long_ok else 1,
+            2 if breakout_up else 1 if soft_breakout_up else 0,
+            1 if close_above_trend else 0,
+            1 if rsi_long_ok else 0,
+            1 if macd_up else 0,
+            1 if impulse_ok else 0,
+            1 if volume_ok else 0,
+            1 if volatility_ok else 0,
         ]
     )
-    short_ok = all(
+    short_score = sum(
         [
-            higher_tf_bias == "SHORT",
-            breakout_down,
-            rsi_short_ok,
-            macd_down,
-            impulse_ok,
-            volume_ok,
-            volatility_ok,
+            0 if not higher_tf_short_ok else 1,
+            2 if breakout_down else 1 if soft_breakout_down else 0,
+            1 if close_below_trend else 0,
+            1 if rsi_short_ok else 0,
+            1 if macd_down else 0,
+            1 if impulse_ok else 0,
+            1 if volume_ok else 0,
+            1 if volatility_ok else 0,
         ]
     )
+
+    long_ok = higher_tf_long_ok and (breakout_up or soft_breakout_up) and close_above_trend and long_score >= 6
+    short_ok = higher_tf_short_ok and (breakout_down or soft_breakout_down) and close_below_trend and short_score >= 6
 
     if long_ok:
         return "LONG", "Сигнал LONG (momentum_breakout): " + "; ".join(long_reasons) + "."
