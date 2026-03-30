@@ -424,6 +424,23 @@ def extract_blocker_sections(reason: str) -> tuple[list[str], list[str]]:
     return long_blockers, short_blockers
 
 
+def summarize_signal_reason(signal: str, reason: str) -> list[str]:
+    if signal == "HOLD":
+        long_blockers, short_blockers = extract_blocker_sections(reason)
+        summary: list[str] = []
+        if long_blockers:
+            summary.append(f"Long: {', '.join(long_blockers[:2])}")
+        if short_blockers:
+            summary.append(f"Short: {', '.join(short_blockers[:2])}")
+        return summary[:2] or ["Нет подтверждённого входа"]
+
+    compact = compact_reason(reason)
+    compact = compact.split("Главные блокеры", 1)[0].strip().rstrip(".")
+    parts = [item.strip() for item in compact.split(";") if item.strip()]
+    filtered = [item for item in parts if not item.startswith(("Long:", "Short:"))]
+    return filtered[:3] or [compact]
+
+
 def is_currency_instrument(symbol: str) -> bool:
     return is_currency_symbol(symbol)
 
@@ -876,6 +893,7 @@ def notify_signal_change(
     if signal == state.last_signal:
         return
     mode = "DRY_RUN" if config.dry_run else "LIVE"
+    impact = describe_news_bias_impact(signal, news_bias)
     send_msg(
         config,
         build_telegram_card(
@@ -885,11 +903,12 @@ def notify_signal_change(
                 f"Инструмент: {format_instrument_title(instrument)}",
                 f"Режим: {mode}",
                 f"Цена: {price:.4f}",
-                f"Новый сигнал: {signal_emoji(signal)} {signal}",
-                f"News bias: {format_news_bias_label(news_bias)}",
+                f"Сигнал: {signal_emoji(signal)} {signal}",
+                f"Новости: {format_news_bias_label(news_bias)}",
+                f"Влияние: {impact}",
                 "",
-                "Причины:",
-                *format_reason_multiline(reason),
+                "Коротко почему:",
+                *[f"• {line}" for line in summarize_signal_reason(signal, reason)],
             ],
         ),
     )
@@ -1026,6 +1045,58 @@ def build_portfolio_snapshot_message(
     return build_telegram_card("Портфель бота", "💼", lines)
 
 
+def build_trade_results_message(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> str:
+    states = {instrument.symbol: load_state(instrument.symbol) for instrument in watchlist}
+    lines = []
+
+    realized_total = 0.0
+    realized_lines: list[str] = []
+    for instrument in watchlist:
+        state = states[instrument.symbol]
+        pnl = float(state.realized_pnl or 0.0)
+        realized_total += pnl
+        if abs(pnl) >= 0.01:
+            realized_lines.append(f"• {instrument.symbol}: {pnl:.2f} RUB")
+
+    unrealized_total = 0.0
+    open_lines: list[str] = []
+    for instrument in watchlist:
+        state = states[instrument.symbol]
+        if state.position_side == "FLAT" or state.position_qty <= 0 or state.entry_price is None:
+            continue
+        last_price = get_last_price(client, instrument)
+        unrealized = calculate_futures_pnl_rub(
+            instrument,
+            state.entry_price,
+            last_price,
+            state.position_qty,
+            state.position_side,
+        )
+        unrealized_total += unrealized
+        open_lines.append(
+            f"• {instrument.symbol}: {state.position_side} x{state.position_qty}, {unrealized:.2f} RUB"
+        )
+
+    lines.extend(
+        [
+            f"✅ Реализовано: {realized_total:.2f} RUB",
+            f"📈 Плавающий результат: {unrealized_total:.2f} RUB",
+            f"🧮 Итого: {realized_total + unrealized_total:.2f} RUB",
+            "",
+            "Закрытые результаты:",
+            *(realized_lines or ["• Пока нет закрытых результатов"]),
+            "",
+            "Открытые позиции:",
+            *(open_lines or ["• Сейчас открытых позиций нет"]),
+        ]
+    )
+    return build_telegram_card("Результат торговли", "📒", lines)
+
+
 def maybe_send_portfolio_snapshot(
     client: Client,
     config: BotConfig,
@@ -1040,6 +1111,23 @@ def maybe_send_portfolio_snapshot(
         return
     send_msg(config, build_portfolio_snapshot_message(client, config, watchlist))
     meta["last_portfolio_snapshot_slot"] = now_slot
+    save_meta_state(meta)
+
+
+def maybe_send_trade_results(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> None:
+    session_name = get_market_session()
+    if session_name == "CLOSED":
+        return
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    meta = load_meta_state()
+    if meta.get("last_trade_results_slot") == now_slot:
+        return
+    send_msg(config, build_trade_results_message(client, config, watchlist))
+    meta["last_trade_results_slot"] = now_slot
     save_meta_state(meta)
 
 
@@ -1777,6 +1865,7 @@ def run_bot() -> int:
                     process_instrument(client, config, instrument)
                 maybe_send_global_diagnostic(client, config, watchlist)
                 maybe_send_portfolio_snapshot(client, config, watchlist)
+                maybe_send_trade_results(client, config, watchlist)
                 consecutive_errors = 0
                 cycle_count += 1
                 if config.max_cycles > 0 and cycle_count >= config.max_cycles:
