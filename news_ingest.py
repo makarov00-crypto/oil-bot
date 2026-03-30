@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from html import unescape
 from typing import Iterable
 
 import requests
 
 from news_bias import NewsBias, NewsMessage, detect_news_bias
+
+
+UTC = timezone.utc
 
 
 CHANNEL_URLS: dict[str, str] = {

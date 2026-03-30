@@ -1,7 +1,10 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from news_rules import CHANNEL_RULES, COMMON_BLOCK_TERMS, MOEX_DERIVATIVES, NEWS_RULES
+
+
+UTC = timezone.utc
 
 
 @dataclass(frozen=True)

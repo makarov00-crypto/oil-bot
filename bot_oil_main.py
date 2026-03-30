@@ -5,7 +5,7 @@ import re
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -45,6 +45,7 @@ META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 LOG_DIR = Path(__file__).with_name("logs")
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 SUPPORTED_INTERVALS = {
