@@ -42,6 +42,7 @@ from strategies import get_strategy_profile as get_primary_strategy_profile
 APP_NAME = "oil-bot-main"
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
+PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 LOG_DIR = Path(__file__).with_name("logs")
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -208,6 +209,14 @@ def load_meta_state() -> dict[str, Any]:
 def save_meta_state(meta: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     META_STATE_PATH.write_text(json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def save_portfolio_snapshot(payload: dict[str, Any]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    PORTFOLIO_SNAPSHOT_PATH.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
 
 
 def load_state(symbol: str) -> InstrumentState:
@@ -1139,19 +1148,89 @@ def build_portfolio_snapshot_message(
     config: BotConfig,
     watchlist: list[InstrumentConfig],
 ) -> str:
-    snapshot = get_account_snapshot(client, config)
-    states = [load_state(instrument.symbol) for instrument in watchlist]
-    open_positions = sum(1 for state in states if state.position_side != "FLAT" and state.position_qty > 0)
-    realized_pnl = sum(float(state.realized_pnl or 0.0) for state in states)
+    payload = build_portfolio_snapshot_payload(client, config, watchlist)
     lines = [
         f"🧭 Режим: {'DRY_RUN' if config.dry_run else 'LIVE'}",
-        f"💼 Портфель: {snapshot.total_portfolio:.2f} RUB",
-        f"💵 Свободно: {snapshot.free_rub:.2f} RUB",
-        f"🛡 Гарантийное обеспечение: {snapshot.blocked_guarantee_rub:.2f} RUB",
-        f"📈 Открытых позиций бота: {open_positions}",
-        f"📊 Дневной результат бота: {realized_pnl:.2f} RUB",
+        f"💼 Портфель: {float(payload['total_portfolio_rub']):.2f} RUB",
+        f"💵 Свободно: {float(payload['free_rub']):.2f} RUB",
+        f"🛡 Гарантийное обеспечение: {float(payload['blocked_guarantee_rub']):.2f} RUB",
+        f"📈 Открытых позиций бота: {int(payload['open_positions_count'])}",
+        f"📊 Реализовано ботом: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
+        f"📈 Оценка вариационной маржи: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"🧮 Итого по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
     ]
     return build_telegram_card("Портфель бота", "💼", lines)
+
+
+def build_portfolio_snapshot_payload(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> dict[str, Any]:
+    snapshot = get_account_snapshot(client, config)
+    states = {instrument.symbol: load_state(instrument.symbol) for instrument in watchlist}
+    open_positions = 0
+    realized_pnl = 0.0
+    unrealized_pnl = 0.0
+
+    for instrument in watchlist:
+        state = states[instrument.symbol]
+        realized_pnl += float(state.realized_pnl or 0.0)
+        if state.position_side == "FLAT" or state.position_qty <= 0 or state.entry_price is None:
+            continue
+        open_positions += 1
+        try:
+            last_price = get_last_price(client, instrument)
+            unrealized_pnl += calculate_futures_pnl_rub(
+                instrument,
+                state.entry_price,
+                last_price,
+                state.position_qty,
+                state.position_side,
+            )
+        except Exception:
+            continue
+
+    generated_at = datetime.now(timezone.utc)
+    return {
+        "mode": "DRY_RUN" if config.dry_run else "LIVE",
+        "total_portfolio_rub": round(snapshot.total_portfolio, 2),
+        "free_rub": round(snapshot.free_rub, 2),
+        "blocked_guarantee_rub": round(snapshot.blocked_guarantee_rub, 2),
+        "open_positions_count": open_positions,
+        "bot_realized_pnl_rub": round(realized_pnl, 2),
+        "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
+        "bot_total_pnl_rub": round(realized_pnl + unrealized_pnl, 2),
+        "generated_at": generated_at.isoformat(),
+        "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+    }
+
+
+def maybe_refresh_portfolio_snapshot(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+    refresh_seconds: int = 60,
+) -> None:
+    session_name = get_market_session()
+    if session_name == "CLOSED":
+        return
+    meta = load_meta_state()
+    now = datetime.now(timezone.utc)
+    raw_ts = str(meta.get("portfolio_snapshot_refreshed_at") or "").strip()
+    if raw_ts:
+        try:
+            last_ts = datetime.fromisoformat(raw_ts)
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            if (now - last_ts).total_seconds() < refresh_seconds:
+                return
+        except Exception:
+            pass
+    payload = build_portfolio_snapshot_payload(client, config, watchlist)
+    save_portfolio_snapshot(payload)
+    meta["portfolio_snapshot_refreshed_at"] = now.isoformat()
+    save_meta_state(meta)
 
 
 def build_trade_results_message(
@@ -2191,6 +2270,7 @@ def run_bot() -> int:
                     try:
                         for instrument in watchlist:
                             process_instrument(client, config, instrument)
+                        maybe_refresh_portfolio_snapshot(client, config, watchlist)
                         maybe_send_global_diagnostic(client, config, watchlist)
                         maybe_send_portfolio_snapshot(client, config, watchlist)
                         maybe_send_trade_results(client, config, watchlist)

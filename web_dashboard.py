@@ -15,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent
 STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
+PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -45,6 +46,15 @@ def load_meta() -> dict:
         return {}
     try:
         return load_json(path)
+    except Exception:
+        return {}
+
+
+def load_portfolio_snapshot() -> dict:
+    if not PORTFOLIO_SNAPSHOT_PATH.exists():
+        return {}
+    try:
+        return load_json(PORTFOLIO_SNAPSHOT_PATH)
     except Exception:
         return {}
 
@@ -377,6 +387,47 @@ def build_dashboard_html() -> str:
       </section>
     </div>
 
+    <section class="panel" style="margin-bottom:16px;">
+      <div class="section-title">
+        <h2>Портфель</h2>
+        <div class="generated" id="portfolioGeneratedAt">Срез портфеля: -</div>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="muted">Режим</div>
+          <div class="metric" id="portfolioMode">-</div>
+        </div>
+        <div>
+          <div class="muted">Портфель</div>
+          <div class="metric" id="portfolioTotal">-</div>
+        </div>
+        <div>
+          <div class="muted">Свободно</div>
+          <div class="metric" id="portfolioFree">-</div>
+        </div>
+        <div>
+          <div class="muted">ГО</div>
+          <div class="metric" id="portfolioBlocked">-</div>
+        </div>
+        <div>
+          <div class="muted">Реализовано ботом</div>
+          <div class="metric" id="portfolioRealized">-</div>
+        </div>
+        <div>
+          <div class="muted">Вариационная маржа</div>
+          <div class="metric" id="portfolioVariation">-</div>
+        </div>
+        <div>
+          <div class="muted">Итог по боту</div>
+          <div class="metric" id="portfolioTotalPnl">-</div>
+        </div>
+        <div>
+          <div class="muted">Открытых позиций</div>
+          <div class="metric" id="portfolioOpenCount">-</div>
+        </div>
+      </div>
+    </section>
+
     <div class="grid">
       <section class="panel">
         <h2>Позиции</h2>
@@ -430,8 +481,16 @@ def build_dashboard_html() -> str:
 
     function signalBadge(value) {
       const raw = String(value || '-').toUpperCase();
-      const css = raw === 'LONG' ? 'long' : raw === 'SHORT' ? 'short' : 'hold';
+      const css = raw === 'LONG' || raw === 'ACTIVE' ? 'long' : raw === 'SHORT' || raw === 'FAILED' ? 'short' : 'hold';
       return `<span class="badge ${css}">${escapeHtml(raw)}</span>`;
+    }
+
+    function formatRub(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        return '-';
+      }
+      return `${num.toFixed(2)} RUB`;
     }
 
     async function loadData() {
@@ -446,6 +505,17 @@ def build_dashboard_html() -> str:
       document.getElementById('shortCount').textContent = data.summary.signal_counts.SHORT;
       document.getElementById('holdCount').textContent = data.summary.signal_counts.HOLD;
       document.getElementById('generatedAt').textContent = `Обновление: ${data.generated_at_moscow || '-'}`;
+
+      const portfolio = data.portfolio || {};
+      document.getElementById('portfolioGeneratedAt').textContent = `Срез портфеля: ${portfolio.generated_at_moscow || '-'}`;
+      document.getElementById('portfolioMode').textContent = portfolio.mode || '-';
+      document.getElementById('portfolioTotal').textContent = formatRub(portfolio.total_portfolio_rub);
+      document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_rub);
+      document.getElementById('portfolioBlocked').textContent = formatRub(portfolio.blocked_guarantee_rub);
+      document.getElementById('portfolioRealized').textContent = formatRub(portfolio.bot_realized_pnl_rub);
+      document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
+      document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
+      document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
 
       const posBody = document.querySelector('#positionsTable tbody');
       posBody.innerHTML = '';
@@ -529,6 +599,7 @@ def api_dashboard() -> dict:
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(states),
+        "portfolio": load_portfolio_snapshot(),
         "summary": summarize_states(states),
         "meta": load_meta(),
         "states": states,
