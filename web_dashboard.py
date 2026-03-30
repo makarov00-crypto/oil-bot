@@ -101,6 +101,66 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
     return normalized
 
 
+def load_trade_review(limit: int = 80) -> dict:
+    rows = load_trade_rows(limit)
+    open_by_symbol: dict[str, list[dict]] = {}
+    closed_reviews: list[dict] = []
+
+    for row in rows:
+        symbol = str(row.get("symbol", ""))
+        event = str(row.get("event", "")).upper()
+        if not symbol:
+            continue
+        if event == "OPEN":
+            open_by_symbol.setdefault(symbol, []).append(row)
+            continue
+        if event != "CLOSE":
+            continue
+        open_row = None
+        if open_by_symbol.get(symbol):
+            open_row = open_by_symbol[symbol].pop(0)
+        pnl_value = row.get("pnl_rub")
+        try:
+            pnl_numeric = float(pnl_value) if pnl_value not in (None, "", "-") else 0.0
+        except Exception:
+            pnl_numeric = 0.0
+        closed_reviews.append(
+            {
+                "symbol": symbol,
+                "side": row.get("side") or (open_row.get("side") if open_row else ""),
+                "strategy": row.get("strategy") or (open_row.get("strategy") if open_row else ""),
+                "session": row.get("session") or (open_row.get("session") if open_row else ""),
+                "entry_time": open_row.get("time") if open_row else "-",
+                "exit_time": row.get("time") or "-",
+                "entry_price": open_row.get("price") if open_row else "-",
+                "exit_price": row.get("price") or "-",
+                "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
+                "pnl_rub": f"{pnl_numeric:.2f}",
+                "entry_reason": open_row.get("reason") if open_row else "-",
+                "exit_reason": row.get("reason") or "-",
+            }
+        )
+
+    current_open = []
+    for symbol, items in open_by_symbol.items():
+        if not items:
+            continue
+        current_open.append(items[-1])
+
+    wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
+    losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
+    total = sum(float(item.get("pnl_rub") or 0.0) for item in closed_reviews)
+
+    return {
+        "closed_count": len(closed_reviews),
+        "wins": wins,
+        "losses": losses,
+        "closed_total_pnl_rub": round(total, 2),
+        "closed_reviews": closed_reviews[-20:],
+        "current_open": current_open[-20:],
+    }
+
+
 def get_service_status(service_name: str) -> dict:
     try:
         active = subprocess.run(
@@ -468,6 +528,36 @@ def build_dashboard_html() -> str:
         <tbody></tbody>
       </table>
     </section>
+
+    <section class="panel" style="margin-top:16px;">
+      <h2>Обзор сделок</h2>
+      <div class="grid">
+        <div>
+          <div class="muted">Закрыто</div>
+          <div class="metric" id="reviewClosed">-</div>
+        </div>
+        <div>
+          <div class="muted">Плюсовых</div>
+          <div class="metric" id="reviewWins">-</div>
+        </div>
+        <div>
+          <div class="muted">Минусовых</div>
+          <div class="metric" id="reviewLosses">-</div>
+        </div>
+        <div>
+          <div class="muted">Итог по закрытым</div>
+          <div class="metric" id="reviewPnl">-</div>
+        </div>
+      </div>
+      <table id="reviewTable" style="margin-top:16px;">
+        <thead>
+          <tr>
+            <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">PnL RUB</th><th>Выход</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
   </div>
   <script>
     function escapeHtml(value) {
@@ -577,6 +667,31 @@ def build_dashboard_html() -> str:
       if (!data.trades.length) {
         tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="9" class="muted">Журнал сделок пока пуст.</td></tr>');
       }
+
+      const review = data.trade_review || {};
+      document.getElementById('reviewClosed').textContent = review.closed_count ?? 0;
+      document.getElementById('reviewWins').textContent = review.wins ?? 0;
+      document.getElementById('reviewLosses').textContent = review.losses ?? 0;
+      document.getElementById('reviewPnl').textContent = formatRub(review.closed_total_pnl_rub);
+
+      const reviewBody = document.querySelector('#reviewTable tbody');
+      reviewBody.innerHTML = '';
+      for (const row of review.closed_reviews || []) {
+        const pnlNum = Number(row.pnl_rub);
+        const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
+        reviewBody.insertAdjacentHTML('beforeend', `<tr>
+          <td class="mono">${escapeHtml(row.symbol || '-')}</td>
+          <td>${signalBadge(row.side || '-')}</td>
+          <td>${escapeHtml(row.strategy || '-')}</td>
+          <td class="mono">${escapeHtml(row.entry_time || '-')}</td>
+          <td class="mono">${escapeHtml(row.exit_time || '-')}</td>
+          <td class="mono right ${pnlClass}">${escapeHtml(row.pnl_rub || '-')}</td>
+          <td class="reason">${escapeHtml(row.exit_reason || '-')}</td>
+        </tr>`);
+      }
+      if (!(review.closed_reviews || []).length) {
+        reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="7" class="muted">Закрытых сделок пока нет.</td></tr>');
+      }
     }
 
     loadData();
@@ -600,6 +715,7 @@ def api_dashboard() -> dict:
         "service": get_bot_service_status(),
         "health": build_health_payload(states),
         "portfolio": load_portfolio_snapshot(),
+        "trade_review": load_trade_review(120),
         "summary": summarize_states(states),
         "meta": load_meta(),
         "states": states,
