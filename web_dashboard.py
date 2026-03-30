@@ -5,6 +5,7 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -14,7 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent
 STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
-MOSCOW_TZ = timezone.utc
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 app = FastAPI(title="Oil Bot Dashboard")
@@ -64,7 +65,30 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
                     continue
     except Exception:
         return []
-    return rows[-limit:]
+    normalized: list[dict] = []
+    for row in rows[-limit:]:
+        item = dict(row)
+        raw_time = item.get("time")
+        if raw_time:
+            try:
+                dt = datetime.fromisoformat(raw_time)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                item["time"] = dt.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S")
+            except Exception:
+                pass
+        if item.get("price") is not None:
+            try:
+                item["price"] = f"{float(item['price']):.4f}"
+            except Exception:
+                pass
+        if item.get("pnl_rub") is not None:
+            try:
+                item["pnl_rub"] = f"{float(item['pnl_rub']):.2f}"
+            except Exception:
+                pass
+        normalized.append(item)
+    return normalized
 
 
 def get_bot_service_status() -> dict:
@@ -140,38 +164,61 @@ def build_dashboard_html() -> str:
   <title>Oil Bot Dashboard</title>
   <style>
     :root {
-      --bg: #f4efe6;
-      --panel: #fffaf2;
-      --ink: #1e1a17;
-      --muted: #756b61;
-      --line: #d9cbb8;
-      --good: #2f6d4f;
-      --bad: #9a3b2e;
-      --accent: #c26b2b;
+      --bg: #030711;
+      --bg2: #091120;
+      --panel: rgba(8, 14, 28, 0.88);
+      --panel-strong: rgba(10, 18, 34, 0.98);
+      --ink: #ebf4ff;
+      --muted: #7f95b3;
+      --line: rgba(102, 174, 255, 0.18);
+      --good: #37e6a4;
+      --bad: #ff6b87;
+      --warn: #ffca62;
+      --accent: #43c5ff;
+      --accent2: #7d8cff;
+      --accent3: #14f1ff;
+      --glow: rgba(67, 197, 255, 0.22);
+      --shadow: rgba(0, 0, 0, 0.45);
     }
     body {
       margin: 0;
-      font-family: Georgia, "Times New Roman", serif;
-      background: linear-gradient(180deg, #efe5d5 0%, var(--bg) 100%);
+      font-family: "Inter", "Segoe UI", Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(67, 197, 255, 0.18), transparent 24%),
+        radial-gradient(circle at top right, rgba(125, 140, 255, 0.16), transparent 20%),
+        radial-gradient(circle at 50% 0%, rgba(20, 241, 255, 0.08), transparent 28%),
+        linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%);
       color: var(--ink);
+      min-height: 100vh;
     }
     .wrap {
-      max-width: 1240px;
+      max-width: 1380px;
       margin: 0 auto;
-      padding: 24px;
+      padding: 28px;
     }
     h1, h2 { margin: 0 0 12px; }
+    h1 {
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 30px;
+      text-shadow: 0 0 28px var(--glow);
+    }
     .grid {
       display: grid;
       gap: 16px;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     }
     .panel {
-      background: var(--panel);
+      background: linear-gradient(180deg, var(--panel-strong) 0%, var(--panel) 100%);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 18px;
-      box-shadow: 0 8px 28px rgba(35, 24, 12, 0.08);
+      border-radius: 20px;
+      padding: 18px 20px;
+      box-shadow:
+        0 18px 50px var(--shadow),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 0 0 1px rgba(67, 197, 255, 0.03),
+        0 0 22px rgba(67, 197, 255, 0.05);
+      backdrop-filter: blur(14px);
     }
     .hero {
       display: grid;
@@ -180,8 +227,11 @@ def build_dashboard_html() -> str:
       margin-bottom: 16px;
     }
     .metric {
-      font-size: 28px;
-      font-weight: bold;
+      font-size: 31px;
+      font-weight: 700;
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      letter-spacing: -0.03em;
+      text-shadow: 0 0 18px var(--glow);
     }
     .muted { color: var(--muted); }
     .good { color: var(--good); }
@@ -193,17 +243,72 @@ def build_dashboard_html() -> str:
     }
     th, td {
       text-align: left;
-      padding: 8px 6px;
+      padding: 10px 8px;
       border-bottom: 1px solid var(--line);
       vertical-align: top;
+    }
+    th {
+      color: #b8cae3;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+    tr:hover td {
+      background: rgba(68, 184, 255, 0.04);
     }
     .badge {
       display: inline-block;
       padding: 3px 8px;
       border-radius: 999px;
-      background: #efe0cf;
-      color: #5a3820;
+      background: rgba(68, 184, 255, 0.12);
+      color: #9fdcff;
       font-size: 12px;
+      border: 1px solid rgba(68, 184, 255, 0.20);
+    }
+    .badge.long {
+      background: rgba(55, 230, 164, 0.12);
+      border-color: rgba(55, 230, 164, 0.22);
+      color: var(--good);
+    }
+    .badge.short {
+      background: rgba(255, 107, 135, 0.12);
+      border-color: rgba(255, 107, 135, 0.22);
+      color: var(--bad);
+    }
+    .badge.hold {
+      background: rgba(255, 202, 98, 0.12);
+      border-color: rgba(255, 202, 98, 0.18);
+      color: var(--warn);
+    }
+    .mono {
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+    .right {
+      text-align: right;
+    }
+    .reason {
+      max-width: 420px;
+      color: #c8d7ea;
+      line-height: 1.35;
+    }
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    .generated {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+    .hero p {
+      max-width: 62ch;
+      line-height: 1.5;
+    }
+    a {
+      color: var(--accent);
     }
     @media (max-width: 860px) {
       .hero { grid-template-columns: 1fr; }
@@ -214,7 +319,10 @@ def build_dashboard_html() -> str:
   <div class="wrap">
     <div class="hero">
       <section class="panel">
-        <h1>Oil Bot Dashboard</h1>
+        <div class="section-title">
+          <h1>Oil Bot Dashboard</h1>
+          <div class="generated" id="generatedAt">Обновление: -</div>
+        </div>
         <p class="muted">Мониторинг бота, сделок и состояния сервиса без графиков. Обновление каждые 15 секунд.</p>
         <div class="grid">
           <div>
@@ -279,7 +387,7 @@ def build_dashboard_html() -> str:
       <table id="tradesTable">
         <thead>
           <tr>
-            <th>Время</th><th>Инструмент</th><th>Событие</th><th>Сторона</th><th>Лоты</th><th>Цена</th><th>PnL RUB</th><th>Стратегия</th><th>Причина</th>
+            <th>Время</th><th>Инструмент</th><th>Событие</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">PnL RUB</th><th>Стратегия</th><th>Причина</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -287,6 +395,21 @@ def build_dashboard_html() -> str:
     </section>
   </div>
   <script>
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function signalBadge(value) {
+      const raw = String(value || '-').toUpperCase();
+      const css = raw === 'LONG' ? 'long' : raw === 'SHORT' ? 'short' : 'hold';
+      return `<span class="badge ${css}">${escapeHtml(raw)}</span>`;
+    }
+
     async function loadData() {
       const response = await fetch('/api/dashboard');
       const data = await response.json();
@@ -298,16 +421,17 @@ def build_dashboard_html() -> str:
       document.getElementById('longCount').textContent = data.summary.signal_counts.LONG;
       document.getElementById('shortCount').textContent = data.summary.signal_counts.SHORT;
       document.getElementById('holdCount').textContent = data.summary.signal_counts.HOLD;
+      document.getElementById('generatedAt').textContent = `Обновление: ${data.generated_at_moscow || '-'}`;
 
       const posBody = document.querySelector('#positionsTable tbody');
       posBody.innerHTML = '';
       for (const pos of data.summary.open_positions) {
         posBody.insertAdjacentHTML('beforeend', `<tr>
-          <td>${pos.symbol}</td>
-          <td>${pos.side}</td>
-          <td>${pos.qty}</td>
-          <td>${pos.strategy}</td>
-          <td>${pos.last_signal}</td>
+          <td class="mono">${escapeHtml(pos.symbol)}</td>
+          <td>${signalBadge(pos.side)}</td>
+          <td class="mono">${escapeHtml(pos.qty)}</td>
+          <td>${escapeHtml(pos.strategy)}</td>
+          <td>${signalBadge(pos.last_signal)}</td>
         </tr>`);
       }
       if (!data.summary.open_positions.length) {
@@ -325,30 +449,33 @@ def build_dashboard_html() -> str:
       stateBody.innerHTML = '';
       for (const [symbol, state] of Object.entries(data.states)) {
         stateBody.insertAdjacentHTML('beforeend', `<tr>
-          <td>${symbol}</td>
-          <td><span class="badge">${state.last_signal || '-'}</span></td>
-          <td>${state.position_side || 'FLAT'}</td>
-          <td>${state.position_qty || 0}</td>
-          <td>${state.entry_strategy || '-'}</td>
-          <td>${state.last_status_candle || '-'}</td>
-          <td>${Number(state.realized_pnl || 0).toFixed(2)}</td>
-          <td>${state.last_error || '-'}</td>
+          <td class="mono">${escapeHtml(symbol)}</td>
+          <td>${signalBadge(state.last_signal || '-')}</td>
+          <td>${signalBadge(state.position_side || 'FLAT')}</td>
+          <td class="mono">${escapeHtml(state.position_qty || 0)}</td>
+          <td>${escapeHtml(state.entry_strategy || '-')}</td>
+          <td class="mono">${escapeHtml(state.last_status_candle || '-')}</td>
+          <td class="mono right">${Number(state.realized_pnl || 0).toFixed(2)}</td>
+          <td class="reason">${escapeHtml(state.last_error || '-')}</td>
         </tr>`);
       }
 
       const tradeBody = document.querySelector('#tradesTable tbody');
       tradeBody.innerHTML = '';
       for (const row of data.trades.slice().reverse()) {
+        const pnl = row.pnl_rub ?? '-';
+        const pnlNum = Number(pnl);
+        const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
         tradeBody.insertAdjacentHTML('beforeend', `<tr>
-          <td>${row.time || '-'}</td>
-          <td>${row.symbol || '-'}</td>
-          <td>${row.event || '-'}</td>
-          <td>${row.side || '-'}</td>
-          <td>${row.qty_lots || '-'}</td>
-          <td>${row.price ?? '-'}</td>
-          <td>${row.pnl_rub ?? '-'}</td>
-          <td>${row.strategy || '-'}</td>
-          <td>${row.reason || '-'}</td>
+          <td class="mono">${escapeHtml(row.time || '-')}</td>
+          <td class="mono">${escapeHtml(row.symbol || '-')}</td>
+          <td>${escapeHtml(row.event || '-')}</td>
+          <td>${signalBadge(row.side || '-')}</td>
+          <td class="mono">${escapeHtml(row.qty_lots || '-')}</td>
+          <td class="mono right">${escapeHtml(row.price ?? '-')}</td>
+          <td class="mono right ${pnlClass}">${escapeHtml(pnl)}</td>
+          <td>${escapeHtml(row.strategy || '-')}</td>
+          <td class="reason">${escapeHtml(row.reason || '-')}</td>
         </tr>`);
       }
       if (!data.trades.length) {
@@ -372,13 +499,15 @@ def dashboard() -> str:
 @app.get("/api/dashboard", response_class=JSONResponse)
 def api_dashboard() -> dict:
     states = load_states()
+    generated_at = datetime.now(timezone.utc)
     return {
         "service": get_bot_service_status(),
         "summary": summarize_states(states),
         "meta": load_meta(),
         "states": states,
         "trades": load_trade_rows(80),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at.isoformat(),
+        "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
 
 
@@ -392,4 +521,3 @@ def api_health() -> dict:
         "symbols": sorted(states.keys()),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-
