@@ -15,7 +15,11 @@ import pandas as pd
 import requests
 import ta
 from dotenv import load_dotenv
-from instrument_groups import DEFAULT_SYMBOLS, is_currency_instrument as is_currency_symbol
+from instrument_groups import (
+    DEFAULT_SYMBOLS,
+    get_instrument_group,
+    is_currency_instrument as is_currency_symbol,
+)
 from news_bias import NewsBias, select_active_biases
 from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
 from strategy_registry import get_secondary_strategies
@@ -576,11 +580,15 @@ def get_candles(
     return df
 
 
-def get_lower_tf_lookback_hours(config: BotConfig) -> int:
+def get_lower_tf_lookback_hours(config: BotConfig, symbol: str | None = None) -> int:
     base_hours = max(config.candle_hours, int((config.candle_interval_minutes * 240) / 60) + 1)
     # For EMA200 on 5m candles, exchange session gaps mean a simple 30h wall-clock
     # lookback can still contain too few actual candles on mornings and after weekends.
     lookback_hours = max(base_hours, 72)
+    if symbol and get_instrument_group(symbol).name == "fx":
+        # Currency futures can start the week with a shorter effective trading history
+        # inside the same wall-clock window, so we keep a longer bootstrap window.
+        lookback_hours = max(lookback_hours, 120)
     if get_market_session() == "WEEKEND":
         return max(lookback_hours, 72)
     return lookback_hours
@@ -1426,7 +1434,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                 config,
                 instrument,
                 config.candle_interval,
-                lookback_hours=get_lower_tf_lookback_hours(config),
+                lookback_hours=get_lower_tf_lookback_hours(config, instrument.symbol),
             )
         )
     except RuntimeError as error:
@@ -1453,7 +1461,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                     config,
                     instrument,
                     config.candle_interval,
-                    lookback_hours=get_lower_tf_lookback_hours(config),
+                    lookback_hours=get_lower_tf_lookback_hours(config, instrument.symbol),
                 )
             )
         except RuntimeError as error:
