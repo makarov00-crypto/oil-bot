@@ -6,9 +6,9 @@ PRIMARY_STRATEGIES_BY_SYMBOL = {
 
 PRIMARY_STRATEGIES_BY_GROUP = {
     "commodities": ["trend_pullback"],
-    "fx": ["compression_breakout", "trend_pullback"],
-    "equity_index": ["failed_breakout", "trend_pullback"],
-    "equity_futures": ["failed_breakout", "trend_pullback"],
+    "fx": ["opening_range_breakout", "compression_breakout", "trend_pullback"],
+    "equity_index": ["breakdown_continuation", "failed_breakout", "trend_pullback"],
+    "equity_futures": ["breakdown_continuation", "failed_breakout", "trend_pullback"],
 }
 
 
