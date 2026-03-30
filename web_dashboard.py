@@ -8,7 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -184,6 +184,7 @@ def build_dashboard_html() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
   <title>Oil Bot Dashboard</title>
   <style>
     :root {
@@ -541,3 +542,8 @@ def api_dashboard() -> dict:
 def api_health() -> dict:
     states = load_states()
     return build_health_payload(states)
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots_txt() -> str:
+    return "User-agent: *\nDisallow: /\n"
