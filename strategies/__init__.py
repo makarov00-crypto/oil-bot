@@ -5,6 +5,7 @@ from strategies.compression_breakout import evaluate_signal as evaluate_compress
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range_breakout
+from strategies.trend_rollover import evaluate_signal as evaluate_trend_rollover
 
 __all__ = [
     "evaluate_signal",
@@ -13,6 +14,7 @@ __all__ = [
     "evaluate_failed_breakout",
     "evaluate_momentum_breakout",
     "evaluate_opening_range_breakout",
+    "evaluate_trend_rollover",
     "evaluate_williams_currency_signal",
     "get_strategy_profile",
 ]

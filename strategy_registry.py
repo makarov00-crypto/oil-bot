@@ -1,7 +1,7 @@
 from instrument_groups import get_instrument_group
 
 PRIMARY_STRATEGIES_BY_SYMBOL = {
-    "GNM6": ["momentum_breakout", "trend_pullback"],
+    "GNM6": ["trend_rollover", "momentum_breakout", "trend_pullback"],
 }
 
 PRIMARY_STRATEGIES_BY_GROUP = {

@@ -4,6 +4,7 @@ from strategies.compression_breakout import evaluate_signal as evaluate_compress
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range_breakout
+from strategies.trend_rollover import evaluate_signal as evaluate_trend_rollover
 from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
 
 
@@ -15,6 +16,7 @@ PRIMARY_EVALUATORS = {
     "breakdown_continuation": evaluate_breakdown_continuation,
     "failed_breakout": evaluate_failed_breakout,
     "momentum_breakout": evaluate_momentum_breakout,
+    "trend_rollover": evaluate_trend_rollover,
 }
 
 
