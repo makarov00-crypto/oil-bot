@@ -43,6 +43,7 @@ APP_NAME = "oil-bot-main"
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
+RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 LOG_DIR = Path(__file__).with_name("logs")
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -219,6 +220,14 @@ def save_meta_state(meta: dict[str, Any]) -> None:
 def save_portfolio_snapshot(payload: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     PORTFOLIO_SNAPSHOT_PATH.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+
+
+def save_runtime_status(payload: dict[str, Any]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    RUNTIME_STATUS_PATH.write_text(
         json.dumps(payload, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
@@ -1233,6 +1242,34 @@ def maybe_refresh_portfolio_snapshot(
     save_portfolio_snapshot(payload)
     meta["portfolio_snapshot_refreshed_at"] = now.isoformat()
     save_meta_state(meta)
+
+
+def build_runtime_status_payload(
+    *,
+    mode: str,
+    session_name: str,
+    started_at: datetime,
+    cycle_count: int,
+    consecutive_errors: int,
+    state: str,
+    last_cycle_at: datetime | None = None,
+    last_error: str = "",
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    return {
+        "mode": mode,
+        "state": state,
+        "session": session_name,
+        "started_at": started_at.isoformat(),
+        "started_at_moscow": started_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+        "updated_at": now.isoformat(),
+        "updated_at_moscow": now.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+        "last_cycle_at": last_cycle_at.isoformat() if last_cycle_at else "",
+        "last_cycle_at_moscow": last_cycle_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК") if last_cycle_at else "",
+        "cycle_count": cycle_count,
+        "consecutive_errors": consecutive_errors,
+        "last_error": last_error,
+    }
 
 
 def build_trade_results_message(
@@ -2250,6 +2287,18 @@ def run_bot() -> int:
         raise RuntimeError("LIVE-режим заблокирован: сначала включи OIL_ALLOW_ORDERS=true осознанно.")
 
     mode = "DRY_RUN" if config.dry_run else "LIVE"
+    started_at = datetime.now(timezone.utc)
+    last_cycle_at: datetime | None = None
+    save_runtime_status(
+        build_runtime_status_payload(
+            mode=mode,
+            session_name=get_market_session(),
+            started_at=started_at,
+            cycle_count=0,
+            consecutive_errors=0,
+            state="starting",
+        )
+    )
     if get_market_session() != "CLOSED":
         send_msg(
             config,
@@ -2287,6 +2336,18 @@ def run_bot() -> int:
                         maybe_send_trade_review(config)
                         consecutive_errors = 0
                         cycle_count += 1
+                        last_cycle_at = datetime.now(timezone.utc)
+                        save_runtime_status(
+                            build_runtime_status_payload(
+                                mode=mode,
+                                session_name=get_market_session(),
+                                started_at=started_at,
+                                cycle_count=cycle_count,
+                                consecutive_errors=0,
+                                state="running",
+                                last_cycle_at=last_cycle_at,
+                            )
+                        )
                         if config.max_cycles > 0 and cycle_count >= config.max_cycles:
                             send_msg(
                                 config,
@@ -2301,6 +2362,18 @@ def run_bot() -> int:
                     except RequestError as error:
                         consecutive_errors += 1
                         logging.exception("Ошибка API T-Invest")
+                        save_runtime_status(
+                            build_runtime_status_payload(
+                                mode=mode,
+                                session_name=get_market_session(),
+                                started_at=started_at,
+                                cycle_count=cycle_count,
+                                consecutive_errors=consecutive_errors,
+                                state="api_error",
+                                last_cycle_at=last_cycle_at,
+                                last_error=str(error),
+                            )
+                        )
                         send_msg(
                             config,
                             build_telegram_card(
@@ -2312,6 +2385,18 @@ def run_bot() -> int:
                     except Exception as error:
                         consecutive_errors += 1
                         logging.exception("Внутренняя ошибка бота")
+                        save_runtime_status(
+                            build_runtime_status_payload(
+                                mode=mode,
+                                session_name=get_market_session(),
+                                started_at=started_at,
+                                cycle_count=cycle_count,
+                                consecutive_errors=consecutive_errors,
+                                state="internal_error",
+                                last_cycle_at=last_cycle_at,
+                                last_error=str(error),
+                            )
+                        )
                         send_msg(
                             config,
                             build_telegram_card(
@@ -2321,6 +2406,18 @@ def run_bot() -> int:
                             ),
                         )
                     if consecutive_errors >= config.max_consecutive_errors:
+                        save_runtime_status(
+                            build_runtime_status_payload(
+                                mode=mode,
+                                session_name=get_market_session(),
+                                started_at=started_at,
+                                cycle_count=cycle_count,
+                                consecutive_errors=consecutive_errors,
+                                state="stopped_after_errors",
+                                last_cycle_at=last_cycle_at,
+                                last_error=f"Слишком много ошибок подряд: {consecutive_errors}",
+                            )
+                        )
                         send_msg(
                             config,
                             build_telegram_card(
@@ -2333,6 +2430,18 @@ def run_bot() -> int:
                     time.sleep(5)
         except RequestError as error:
             logging.exception("Стартовый сбой API T-Invest")
+            save_runtime_status(
+                build_runtime_status_payload(
+                    mode=mode,
+                    session_name=get_market_session(),
+                    started_at=started_at,
+                    cycle_count=cycle_count,
+                    consecutive_errors=consecutive_errors,
+                    state="startup_api_retry",
+                    last_cycle_at=last_cycle_at,
+                    last_error=str(error),
+                )
+            )
             if not startup_error_notified:
                 send_msg(
                     config,
@@ -2350,6 +2459,18 @@ def run_bot() -> int:
             time.sleep(config.startup_retry_seconds)
         except Exception as error:
             logging.exception("Стартовый внутренний сбой")
+            save_runtime_status(
+                build_runtime_status_payload(
+                    mode=mode,
+                    session_name=get_market_session(),
+                    started_at=started_at,
+                    cycle_count=cycle_count,
+                    consecutive_errors=consecutive_errors,
+                    state="startup_internal_retry",
+                    last_cycle_at=last_cycle_at,
+                    last_error=str(error),
+                )
+            )
             if not startup_error_notified:
                 send_msg(
                     config,

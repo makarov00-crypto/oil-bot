@@ -16,6 +16,7 @@ STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
+RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -55,6 +56,15 @@ def load_portfolio_snapshot() -> dict:
         return {}
     try:
         return load_json(PORTFOLIO_SNAPSHOT_PATH)
+    except Exception:
+        return {}
+
+
+def load_runtime_status() -> dict:
+    if not RUNTIME_STATUS_PATH.exists():
+        return {}
+    try:
+        return load_json(RUNTIME_STATUS_PATH)
     except Exception:
         return {}
 
@@ -549,6 +559,34 @@ def build_dashboard_html() -> str:
     </section>
 
     <section class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Мониторинг сервиса</h2>
+        <div class="generated" id="runtimeUpdatedAt">Runtime: -</div>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="muted">Состояние runtime</div>
+          <div class="metric" id="runtimeState">-</div>
+        </div>
+        <div>
+          <div class="muted">Сессия</div>
+          <div class="metric" id="runtimeSession">-</div>
+        </div>
+        <div>
+          <div class="muted">Циклов</div>
+          <div class="metric" id="runtimeCycles">-</div>
+        </div>
+        <div>
+          <div class="muted">Ошибок подряд</div>
+          <div class="metric" id="runtimeErrors">-</div>
+        </div>
+      </div>
+      <table id="runtimeTable" style="margin-top:16px;">
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top:16px;">
       <h2>Состояние инструментов</h2>
       <table id="statesTable">
         <thead>
@@ -656,6 +694,21 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
+
+      const runtime = data.runtime || {};
+      document.getElementById('runtimeUpdatedAt').textContent = `Runtime: ${runtime.updated_at_moscow || '-'}`;
+      document.getElementById('runtimeState').textContent = runtime.state || '-';
+      document.getElementById('runtimeSession').textContent = runtime.session || '-';
+      document.getElementById('runtimeCycles').textContent = runtime.cycle_count ?? '-';
+      document.getElementById('runtimeErrors').textContent = runtime.consecutive_errors ?? '-';
+
+      const runtimeBody = document.querySelector('#runtimeTable tbody');
+      runtimeBody.innerHTML = `
+        <tr><td>Режим</td><td>${escapeHtml(runtime.mode || '-')}</td></tr>
+        <tr><td>Старт</td><td class="mono">${escapeHtml(runtime.started_at_moscow || '-')}</td></tr>
+        <tr><td>Последний цикл</td><td class="mono">${escapeHtml(runtime.last_cycle_at_moscow || '-')}</td></tr>
+        <tr><td>Последняя ошибка</td><td class="reason">${escapeHtml(runtime.last_error || '-')}</td></tr>
+      `;
 
       const posBody = document.querySelector('#positionsTable tbody');
       posBody.innerHTML = '';
@@ -782,6 +835,7 @@ def api_dashboard() -> dict:
         "service": get_bot_service_status(),
         "health": build_health_payload(states),
         "portfolio": load_portfolio_snapshot(),
+        "runtime": load_runtime_status(),
         "trade_review": load_trade_review(120),
         "summary": summarize_states(states),
         "meta": load_meta(),
