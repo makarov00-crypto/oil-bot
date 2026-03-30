@@ -101,6 +101,37 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
     return normalized
 
 
+def annotate_trade_rows(rows: list[dict], states: dict[str, dict]) -> list[dict]:
+    annotated: list[dict] = []
+    open_by_symbol: dict[str, list[dict]] = {}
+
+    for row in rows:
+        item = dict(row)
+        symbol = str(item.get("symbol", ""))
+        event = str(item.get("event", "")).upper()
+        state = states.get(symbol, {})
+        side = str(item.get("side", "")).upper()
+        state_side = str(state.get("position_side", "FLAT")).upper()
+        state_qty = int(state.get("position_qty") or 0)
+
+        event_status = "history"
+        if event == "OPEN":
+            open_by_symbol.setdefault(symbol, []).append(item)
+            if state_side == side and state_side != "FLAT" and state_qty > 0:
+                event_status = "active"
+            else:
+                event_status = "closed"
+        elif event == "CLOSE":
+            if open_by_symbol.get(symbol):
+                open_by_symbol[symbol].pop(0)
+            event_status = "closed"
+
+        item["event_status"] = event_status
+        annotated.append(item)
+
+    return annotated
+
+
 def load_trade_review(limit: int = 80) -> dict:
     rows = load_trade_rows(limit)
     open_by_symbol: dict[str, list[dict]] = {}
@@ -518,11 +549,11 @@ def build_dashboard_html() -> str:
     </section>
 
     <section class="panel" style="margin-top:16px;">
-      <h2>Последние сделки</h2>
+      <h2>Лента событий</h2>
       <table id="tradesTable">
         <thead>
           <tr>
-            <th>Время</th><th>Инструмент</th><th>Событие</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">PnL RUB</th><th>Стратегия</th><th>Причина</th>
+            <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">PnL RUB</th><th>Стратегия</th><th>Причина</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -573,6 +604,13 @@ def build_dashboard_html() -> str:
       const raw = String(value || '-').toUpperCase();
       const css = raw === 'LONG' || raw === 'ACTIVE' ? 'long' : raw === 'SHORT' || raw === 'FAILED' ? 'short' : 'hold';
       return `<span class="badge ${css}">${escapeHtml(raw)}</span>`;
+    }
+
+    function eventStatusBadge(value) {
+      const raw = String(value || '-').toUpperCase();
+      const css = raw === 'ACTIVE' ? 'long' : raw === 'CLOSED' ? 'short' : 'hold';
+      const label = raw === 'ACTIVE' ? 'АКТИВНА' : raw === 'CLOSED' ? 'ЗАКРЫТА' : 'ИСТОРИЯ';
+      return `<span class="badge ${css}">${label}</span>`;
     }
 
     function formatRub(value) {
@@ -656,6 +694,7 @@ def build_dashboard_html() -> str:
           <td class="mono">${escapeHtml(row.time || '-')}</td>
           <td class="mono">${escapeHtml(row.symbol || '-')}</td>
           <td>${escapeHtml(row.event || '-')}</td>
+          <td>${eventStatusBadge(row.event_status || 'history')}</td>
           <td>${signalBadge(row.side || '-')}</td>
           <td class="mono">${escapeHtml(row.qty_lots || '-')}</td>
           <td class="mono right">${escapeHtml(row.price ?? '-')}</td>
@@ -665,7 +704,7 @@ def build_dashboard_html() -> str:
         </tr>`);
       }
       if (!data.trades.length) {
-        tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="9" class="muted">Журнал сделок пока пуст.</td></tr>');
+        tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Журнал сделок пока пуст.</td></tr>');
       }
 
       const review = data.trade_review || {};
@@ -711,6 +750,7 @@ def dashboard() -> str:
 def api_dashboard() -> dict:
     states = load_states()
     generated_at = datetime.now(timezone.utc)
+    trades = annotate_trade_rows(load_trade_rows(80), states)
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(states),
@@ -719,7 +759,7 @@ def api_dashboard() -> dict:
         "summary": summarize_states(states),
         "meta": load_meta(),
         "states": states,
-        "trades": load_trade_rows(80),
+        "trades": trades,
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
