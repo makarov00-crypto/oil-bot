@@ -3,5 +3,8 @@
 venv/
 __pycache__/
 bot_oil_state.json
-bot_state/
+bot_state/*
+!bot_state/.gitkeep
+logs/*
+!logs/.gitkeep
 .DS_Store
