@@ -76,6 +76,7 @@ class BotConfig:
     max_order_quantity: int
     risk_per_trade_pct: float
     poll_seconds: int
+    startup_retry_seconds: int
     candle_hours: int
     candle_interval: CandleInterval
     candle_interval_minutes: int
@@ -263,6 +264,7 @@ def load_config() -> BotConfig:
         max_order_quantity=parse_int_env("OIL_MAX_ORDER_QUANTITY", parse_int_env("OIL_ORDER_QUANTITY", 1)),
         risk_per_trade_pct=parse_float_env("OIL_RISK_PER_TRADE_PCT", 0.0),
         poll_seconds=parse_int_env("OIL_POLL_SECONDS", 10),
+        startup_retry_seconds=parse_int_env("OIL_STARTUP_RETRY_SECONDS", 15),
         candle_hours=parse_int_env("OIL_CANDLE_LOOKBACK_HOURS", 12),
         candle_interval=SUPPORTED_INTERVALS[tf_minutes],
         candle_interval_minutes=tf_minutes,
@@ -1084,7 +1086,7 @@ def build_trade_results_message(
     lines.extend(
         [
             f"✅ Реализовано: {realized_total:.2f} RUB",
-            f"📈 Плавающий результат: {unrealized_total:.2f} RUB",
+            f"📈 Оценка вариационной маржи: {unrealized_total:.2f} RUB",
             f"🧮 Итого: {realized_total + unrealized_total:.2f} RUB",
             "",
             "Закрытые результаты:",
@@ -1857,61 +1859,99 @@ def run_bot() -> int:
 
     consecutive_errors = 0
     cycle_count = 0
-    with Client(config.token, app_name=APP_NAME, target=config.target) as client:
-        watchlist = resolve_instruments(client, config)
-        while True:
-            try:
-                for instrument in watchlist:
-                    process_instrument(client, config, instrument)
-                maybe_send_global_diagnostic(client, config, watchlist)
-                maybe_send_portfolio_snapshot(client, config, watchlist)
-                maybe_send_trade_results(client, config, watchlist)
-                consecutive_errors = 0
-                cycle_count += 1
-                if config.max_cycles > 0 and cycle_count >= config.max_cycles:
-                    send_msg(
-                        config,
-                        build_telegram_card(
-                            "Тестовый прогон завершён",
-                            "🏁",
-                            [f"Количество циклов: {cycle_count}"],
-                        ),
-                    )
-                    return 0
-                time.sleep(config.poll_seconds)
-            except RequestError as error:
-                consecutive_errors += 1
-                logging.exception("Ошибка API T-Invest")
+    startup_error_notified = False
+    while True:
+        try:
+            with Client(config.token, app_name=APP_NAME, target=config.target) as client:
+                watchlist = resolve_instruments(client, config)
+                startup_error_notified = False
+                while True:
+                    try:
+                        for instrument in watchlist:
+                            process_instrument(client, config, instrument)
+                        maybe_send_global_diagnostic(client, config, watchlist)
+                        maybe_send_portfolio_snapshot(client, config, watchlist)
+                        maybe_send_trade_results(client, config, watchlist)
+                        consecutive_errors = 0
+                        cycle_count += 1
+                        if config.max_cycles > 0 and cycle_count >= config.max_cycles:
+                            send_msg(
+                                config,
+                                build_telegram_card(
+                                    "Тестовый прогон завершён",
+                                    "🏁",
+                                    [f"Количество циклов: {cycle_count}"],
+                                ),
+                            )
+                            return 0
+                        time.sleep(config.poll_seconds)
+                    except RequestError as error:
+                        consecutive_errors += 1
+                        logging.exception("Ошибка API T-Invest")
+                        send_msg(
+                            config,
+                            build_telegram_card(
+                                "Ошибка API T-Invest",
+                                "⚠️",
+                                [str(error)],
+                            ),
+                        )
+                    except Exception as error:
+                        consecutive_errors += 1
+                        logging.exception("Внутренняя ошибка бота")
+                        send_msg(
+                            config,
+                            build_telegram_card(
+                                "Внутренняя ошибка бота",
+                                "⚠️",
+                                [str(error)],
+                            ),
+                        )
+                    if consecutive_errors >= config.max_consecutive_errors:
+                        send_msg(
+                            config,
+                            build_telegram_card(
+                                "Бот остановлен",
+                                "🛑",
+                                [f"Слишком много ошибок подряд: {consecutive_errors}"],
+                            ),
+                        )
+                        return 1
+                    time.sleep(5)
+        except RequestError as error:
+            logging.exception("Стартовый сбой API T-Invest")
+            if not startup_error_notified:
                 send_msg(
                     config,
                     build_telegram_card(
-                        "Ошибка API T-Invest",
+                        "Проблема запуска",
                         "⚠️",
-                        [str(error)],
+                        [
+                            "Не удалось подключиться к T-Invest при старте.",
+                            str(error),
+                            f"Повторная попытка через {config.startup_retry_seconds} сек.",
+                        ],
                     ),
                 )
-            except Exception as error:
-                consecutive_errors += 1
-                logging.exception("Внутренняя ошибка бота")
+                startup_error_notified = True
+            time.sleep(config.startup_retry_seconds)
+        except Exception as error:
+            logging.exception("Стартовый внутренний сбой")
+            if not startup_error_notified:
                 send_msg(
                     config,
                     build_telegram_card(
-                        "Внутренняя ошибка бота",
+                        "Проблема запуска",
                         "⚠️",
-                        [str(error)],
+                        [
+                            "Бот не смог корректно стартовать.",
+                            str(error),
+                            f"Повторная попытка через {config.startup_retry_seconds} сек.",
+                        ],
                     ),
                 )
-            if consecutive_errors >= config.max_consecutive_errors:
-                send_msg(
-                    config,
-                    build_telegram_card(
-                        "Бот остановлен",
-                        "🛑",
-                        [f"Слишком много ошибок подряд: {consecutive_errors}"],
-                    ),
-                )
-                return 1
-            time.sleep(5)
+                startup_error_notified = True
+            time.sleep(config.startup_retry_seconds)
 
 
 if __name__ == "__main__":
