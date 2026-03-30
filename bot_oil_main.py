@@ -87,6 +87,7 @@ class BotConfig:
     stop_loss_pct: float
     trailing_stop_pct: float
     breakeven_profit_pct: float
+    min_hold_minutes: int
     ema_slope_threshold: float
     near_ema20_pct: float
     volume_factor: float
@@ -138,6 +139,7 @@ class InstrumentState:
     pending_order_qty: int = 0
     pending_exit_reason: str = ""
     last_fill_price: float | None = None
+    entry_time: str = ""
 
 
 
@@ -272,6 +274,7 @@ def load_config() -> BotConfig:
         stop_loss_pct=parse_float_env("OIL_STOP_LOSS_PCT", 0.007),
         trailing_stop_pct=parse_float_env("OIL_TRAILING_STOP_PCT", 0.004),
         breakeven_profit_pct=parse_float_env("OIL_BREAKEVEN_PROFIT_PCT", 0.005),
+        min_hold_minutes=parse_int_env("OIL_MIN_HOLD_MINUTES", 15),
         ema_slope_threshold=parse_float_env("OIL_EMA_SLOPE_THRESHOLD", 0.0005),
         near_ema20_pct=parse_float_env("OIL_NEAR_EMA20_PCT", 0.003),
         volume_factor=parse_float_env("OIL_VOLUME_FACTOR", 1.2),
@@ -1003,6 +1006,43 @@ def maybe_send_global_diagnostic(
     save_meta_state(meta)
 
 
+def build_portfolio_snapshot_message(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> str:
+    snapshot = get_account_snapshot(client, config)
+    states = [load_state(instrument.symbol) for instrument in watchlist]
+    open_positions = sum(1 for state in states if state.position_side != "FLAT" and state.position_qty > 0)
+    realized_pnl = sum(float(state.realized_pnl or 0.0) for state in states)
+    lines = [
+        f"🧭 Режим: {'DRY_RUN' if config.dry_run else 'LIVE'}",
+        f"💼 Портфель: {snapshot.total_portfolio:.2f} RUB",
+        f"💵 Свободно: {snapshot.free_rub:.2f} RUB",
+        f"🛡 Гарантийное обеспечение: {snapshot.blocked_guarantee_rub:.2f} RUB",
+        f"📈 Открытых позиций бота: {open_positions}",
+        f"📊 Дневной результат бота: {realized_pnl:.2f} RUB",
+    ]
+    return build_telegram_card("Портфель бота", "💼", lines)
+
+
+def maybe_send_portfolio_snapshot(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> None:
+    session_name = get_market_session()
+    if session_name == "CLOSED":
+        return
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    meta = load_meta_state()
+    if meta.get("last_portfolio_snapshot_slot") == now_slot:
+        return
+    send_msg(config, build_portfolio_snapshot_message(client, config, watchlist))
+    meta["last_portfolio_snapshot_slot"] = now_slot
+    save_meta_state(meta)
+
+
 def get_last_price(client: Client, instrument: InstrumentConfig) -> float:
     response = client.market_data.get_last_prices(figi=[instrument.figi])
     if not response.last_prices:
@@ -1039,6 +1079,7 @@ def sync_state_with_portfolio(
         state.min_price = None
         state.position_side = "FLAT"
         state.breakeven_armed = False
+        state.entry_time = ""
         return 0
     last_price = get_last_price(client, instrument)
     if state.entry_price is None:
@@ -1046,8 +1087,11 @@ def sync_state_with_portfolio(
         state.max_price = last_price
         state.min_price = last_price
         state.position_side = "LONG" if qty > 0 else "SHORT"
+        state.entry_time = datetime.now(UTC).isoformat()
     else:
         state.position_side = "LONG" if qty > 0 else "SHORT"
+        if not state.entry_time:
+            state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
     return qty
@@ -1179,6 +1223,35 @@ def build_position_sizing_lines(
     return lines
 
 
+def calculate_futures_pnl_rub(
+    instrument: InstrumentConfig,
+    entry_price: float,
+    exit_price: float,
+    qty: int,
+    side: str,
+) -> float:
+    if qty <= 0:
+        return 0.0
+    price_diff = exit_price - entry_price if side == "LONG" else entry_price - exit_price
+    if instrument.min_price_increment > 0 and instrument.min_price_increment_amount > 0:
+        ticks = price_diff / instrument.min_price_increment
+        return ticks * instrument.min_price_increment_amount * qty
+    return price_diff * qty
+
+
+def position_held_long_enough(state: InstrumentState, config: BotConfig) -> bool:
+    if not state.entry_time:
+        return True
+    try:
+        opened_at = datetime.fromisoformat(state.entry_time)
+    except ValueError:
+        return True
+    if opened_at.tzinfo is None:
+        opened_at = opened_at.replace(tzinfo=UTC)
+    held_for = datetime.now(UTC) - opened_at.astimezone(UTC)
+    return held_for >= timedelta(minutes=config.min_hold_minutes)
+
+
 def sync_pending_order(
     client: Client,
     config: BotConfig,
@@ -1210,6 +1283,7 @@ def sync_pending_order(
             state.position_qty = filled_qty
             state.position_side = state.pending_order_side
             state.breakeven_armed = False
+            state.entry_time = datetime.now(UTC).isoformat()
             send_msg(
                 config,
                 build_telegram_card(
@@ -1227,10 +1301,12 @@ def sync_pending_order(
         elif state.pending_order_action == "CLOSE":
             pnl = 0.0
             if state.entry_price is not None:
-                pnl = (
-                    (fill_price - state.entry_price) * state.position_qty
-                    if state.position_side == "LONG"
-                    else (state.entry_price - fill_price) * state.position_qty
+                pnl = calculate_futures_pnl_rub(
+                    instrument,
+                    state.entry_price,
+                    fill_price,
+                    state.position_qty,
+                    state.position_side,
                 )
             reset_daily_pnl_if_needed(state)
             state.realized_pnl += pnl
@@ -1244,7 +1320,7 @@ def sync_pending_order(
                         f"Инструмент: {format_instrument_title(instrument)}",
                         f"Причина выхода: {exit_reason}",
                         f"Цена исполнения: {fill_price:.4f}",
-                        f"Результат по позиции: {pnl:.4f}",
+                        f"Результат по позиции: {pnl:.2f} RUB",
                         f"ID заявки: {state.pending_order_id}",
                     ],
                 ),
@@ -1255,6 +1331,7 @@ def sync_pending_order(
             state.position_qty = 0
             state.position_side = "FLAT"
             state.breakeven_armed = False
+            state.entry_time = ""
 
         clear_pending_order(state)
         save_state(instrument.symbol, state)
@@ -1343,6 +1420,7 @@ def open_position(
         state.position_qty = quantity
         state.position_side = side
         state.breakeven_armed = False
+        state.entry_time = datetime.now(UTC).isoformat()
         save_state(instrument.symbol, state)
         send_msg(
             config,
@@ -1405,10 +1483,12 @@ def close_position(
     if config.dry_run:
         pnl = 0.0
         if state.entry_price is not None:
-            pnl = (
-                (price - state.entry_price) * qty
-                if state.position_side == "LONG"
-                else (state.entry_price - price) * qty
+            pnl = calculate_futures_pnl_rub(
+                instrument,
+                state.entry_price,
+                price,
+                qty,
+                state.position_side,
             )
         reset_daily_pnl_if_needed(state)
         state.realized_pnl += pnl
@@ -1418,6 +1498,7 @@ def close_position(
         state.position_qty = 0
         state.position_side = "FLAT"
         state.breakeven_armed = False
+        state.entry_time = ""
         save_state(instrument.symbol, state)
         text = build_telegram_card(
             "Тестовое закрытие позиции",
@@ -1426,7 +1507,7 @@ def close_position(
                 f"Инструмент: {format_instrument_title(instrument)}",
                 f"Причина выхода: {exit_reason}",
                 f"Ориентировочная цена: {price:.4f}",
-                f"Результат по позиции: {pnl:.4f}",
+                f"Результат по позиции: {pnl:.2f} RUB",
             ],
         )
         send_msg(config, text)
@@ -1466,6 +1547,8 @@ def check_exit(
         return
 
     price = get_last_price(client, instrument)
+    if not state.entry_time:
+        state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or price, price)
     state.min_price = min(state.min_price or price, price)
     last = df.iloc[-1]
@@ -1486,15 +1569,16 @@ def check_exit(
             stop_price = max(stop_price, state.entry_price)
         trailing_price = (state.max_price or price) * (1 - config.trailing_stop_pct)
         macd_down = prev_macd >= prev_macd_signal and macd < macd_signal
+        min_hold_passed = position_held_long_enough(state, config)
         if price <= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
         elif price <= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} <= {trailing_price:.4f}")
-        elif rsi >= profile.rsi_exit_long:
+        elif min_hold_passed and rsi >= profile.rsi_exit_long:
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
-        elif macd_down:
+        elif min_hold_passed and macd_down:
             close_position(client, config, instrument, state, "MACD развернулся вниз против позиции")
-        elif fresh_signal == "SHORT":
+        elif min_hold_passed and fresh_signal == "SHORT":
             close_position(client, config, instrument, state, "Появился противоположный сигнал SHORT")
     else:
         profit_pct = (state.entry_price - price) / state.entry_price
@@ -1505,15 +1589,16 @@ def check_exit(
             stop_price = min(stop_price, state.entry_price)
         trailing_price = (state.min_price or price) * (1 + config.trailing_stop_pct)
         macd_up = prev_macd <= prev_macd_signal and macd > macd_signal
+        min_hold_passed = position_held_long_enough(state, config)
         if price >= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
         elif price >= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} >= {trailing_price:.4f}")
-        elif rsi <= profile.rsi_exit_short:
+        elif min_hold_passed and rsi <= profile.rsi_exit_short:
             close_position(client, config, instrument, state, f"RSI вышел в зону перепроданности: {rsi:.2f} <= {profile.rsi_exit_short:.2f}")
-        elif macd_up:
+        elif min_hold_passed and macd_up:
             close_position(client, config, instrument, state, "MACD развернулся вверх против позиции")
-        elif fresh_signal == "LONG":
+        elif min_hold_passed and fresh_signal == "LONG":
             close_position(client, config, instrument, state, "Появился противоположный сигнал LONG")
 
 
@@ -1691,6 +1776,7 @@ def run_bot() -> int:
                 for instrument in watchlist:
                     process_instrument(client, config, instrument)
                 maybe_send_global_diagnostic(client, config, watchlist)
+                maybe_send_portfolio_snapshot(client, config, watchlist)
                 consecutive_errors = 0
                 cycle_count += 1
                 if config.max_cycles > 0 and cycle_count >= config.max_cycles:
