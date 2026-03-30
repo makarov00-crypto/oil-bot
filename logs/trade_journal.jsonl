@@ -1,0 +1,1 @@
+{"time": "2026-03-30T22:45:24.630872+03:00", "symbol": "USDRUBF", "display_name": "USDRUBF Доллар - Рубль", "event": "OPEN", "side": "SHORT", "qty_lots": 1, "lot_size": 1, "price": 81.3, "pnl_rub": null, "reason": "dry_run open", "strategy": "opening_range_breakout", "mode": "DRY_RUN", "session": "EVENING"}

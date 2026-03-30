@@ -42,6 +42,8 @@ from strategies import get_strategy_profile as get_primary_strategy_profile
 APP_NAME = "oil-bot-main"
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
+LOG_DIR = Path(__file__).with_name("logs")
+TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
@@ -141,10 +143,12 @@ class InstrumentState:
     pending_exit_reason: str = ""
     last_fill_price: float | None = None
     entry_time: str = ""
+    entry_strategy: str = ""
 
 
 
 def setup_logging() -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
@@ -225,6 +229,38 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_order_side = ""
     state.pending_order_qty = 0
     state.pending_exit_reason = ""
+
+
+def append_trade_journal(
+    instrument: InstrumentConfig,
+    event: str,
+    side: str,
+    qty: int,
+    price: float,
+    *,
+    pnl_rub: float | None = None,
+    reason: str = "",
+    strategy: str = "",
+    dry_run: bool = True,
+) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    row = {
+        "time": datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat(),
+        "symbol": instrument.symbol,
+        "display_name": instrument.display_name,
+        "event": event,
+        "side": side,
+        "qty_lots": qty,
+        "lot_size": instrument.lot,
+        "price": price,
+        "pnl_rub": pnl_rub,
+        "reason": reason,
+        "strategy": strategy,
+        "mode": "DRY_RUN" if dry_run else "LIVE",
+        "session": get_market_session(),
+    }
+    with TRADE_JOURNAL_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def load_config() -> BotConfig:
@@ -592,11 +628,13 @@ def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, 
     prev_macd = float(prev["macd"])
     prev_macd_signal = float(prev["macd_signal"])
 
-    volume_factor = 1.05
-    impulse_factor = 0.85
+    volume_factor = 1.0
+    impulse_factor = 0.75
+    min_score = 2
     if session_name == "WEEKEND":
         volume_factor = 1.10
         impulse_factor = 0.95
+        min_score = 3
 
     volume_ok = volume_avg > 0 and volume >= volume_avg * volume_factor
     impulse_ok = body_avg > 0 and body >= body_avg * impulse_factor
@@ -604,7 +642,7 @@ def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, 
         macd_ok = macd > macd_signal and macd >= prev_macd and prev_macd >= prev_macd_signal
     else:
         macd_ok = macd < macd_signal and macd <= prev_macd and prev_macd <= prev_macd_signal
-    return volume_ok and impulse_ok and macd_ok
+    return sum([volume_ok, impulse_ok, macd_ok]) >= min_score
 
 
 def get_candles(
@@ -848,7 +886,7 @@ def build_periodic_status_message(
     news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> str:
-    position_text = "нет" if state.position_side == "FLAT" else f"{state.position_side}, qty={state.position_qty}"
+    position_text = "нет" if state.position_side == "FLAT" else f"{state.position_side}, лотов={state.position_qty}"
     session_name = get_market_session()
     header = f"{signal_emoji(signal)} {instrument.symbol} — {signal}"
     lines = [
@@ -1080,7 +1118,7 @@ def build_trade_results_message(
         )
         unrealized_total += unrealized
         open_lines.append(
-            f"• {instrument.symbol}: {state.position_side} x{state.position_qty}, {unrealized:.2f} RUB"
+            f"• {instrument.symbol}: {state.position_side} {state.position_qty} лот., {unrealized:.2f} RUB"
         )
 
     lines.extend(
@@ -1170,6 +1208,7 @@ def sync_state_with_portfolio(
         state.position_side = "FLAT"
         state.breakeven_armed = False
         state.entry_time = ""
+        state.entry_strategy = ""
         return 0
     last_price = get_last_price(client, instrument)
     if state.entry_price is None:
@@ -1292,7 +1331,12 @@ def build_position_sizing_lines(
 ) -> list[str]:
     session_name = get_market_session()
     session_multiplier = get_session_position_multiplier(session_name, instrument.symbol)
-    lines = [f"Сессия: {session_name}", f"Множитель размера: {session_multiplier:.2f}", f"Количество: {quantity}"]
+    lines = [
+        f"Сессия: {session_name}",
+        f"Множитель размера: {session_multiplier:.2f}",
+        f"Лотов: {quantity}",
+        f"Размер биржевого лота: {instrument.lot}",
+    ]
     try:
         snapshot = get_account_snapshot(client, config)
         equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
@@ -1318,7 +1362,7 @@ def build_position_sizing_lines(
         else:
             broker_limit = int(getattr(getattr(max_lots, "sell_limits", None), "sell_max_lots", 0) or 0)
         if broker_limit > 0:
-            lines.append(f"Максимум у брокера: {broker_limit}")
+            lines.append(f"Максимум у брокера: {broker_limit} лотов")
     except Exception as error:
         logging.warning("Не удалось собрать sizing info для %s: %s", instrument.symbol, error)
     return lines
@@ -1385,6 +1429,16 @@ def sync_pending_order(
             state.position_side = state.pending_order_side
             state.breakeven_armed = False
             state.entry_time = datetime.now(UTC).isoformat()
+            append_trade_journal(
+                instrument,
+                "OPEN",
+                state.position_side,
+                filled_qty,
+                fill_price,
+                reason="live fill",
+                strategy=state.entry_strategy,
+                dry_run=False,
+            )
             send_msg(
                 config,
                 build_telegram_card(
@@ -1393,7 +1447,7 @@ def sync_pending_order(
                     [
                         f"Инструмент: {format_instrument_title(instrument)}",
                         f"Направление: {state.position_side}",
-                        f"Количество: {filled_qty}",
+                        f"Лотов: {filled_qty}",
                         f"Цена исполнения: {fill_price:.4f}",
                         f"ID заявки: {state.pending_order_id}",
                     ],
@@ -1412,6 +1466,17 @@ def sync_pending_order(
             reset_daily_pnl_if_needed(state)
             state.realized_pnl += pnl
             exit_reason = state.pending_exit_reason or "Заявка на закрытие исполнена"
+            append_trade_journal(
+                instrument,
+                "CLOSE",
+                state.position_side,
+                state.position_qty,
+                fill_price,
+                pnl_rub=pnl,
+                reason=exit_reason,
+                strategy=state.entry_strategy,
+                dry_run=False,
+            )
             send_msg(
                 config,
                 build_telegram_card(
@@ -1433,6 +1498,7 @@ def sync_pending_order(
             state.position_side = "FLAT"
             state.breakeven_armed = False
             state.entry_time = ""
+            state.entry_strategy = ""
 
         clear_pending_order(state)
         save_state(instrument.symbol, state)
@@ -1499,6 +1565,7 @@ def open_position(
     instrument: InstrumentConfig,
     state: InstrumentState,
     signal: str,
+    strategy_name: str = "",
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
@@ -1522,7 +1589,18 @@ def open_position(
         state.position_side = side
         state.breakeven_armed = False
         state.entry_time = datetime.now(UTC).isoformat()
+        state.entry_strategy = strategy_name
         save_state(instrument.symbol, state)
+        append_trade_journal(
+            instrument,
+            "OPEN",
+            side,
+            quantity,
+            price,
+            reason="dry_run open",
+            strategy=strategy_name,
+            dry_run=True,
+        )
         send_msg(
             config,
             build_telegram_card(
@@ -1531,6 +1609,7 @@ def open_position(
                 [
                     f"Инструмент: {format_instrument_title(instrument)}",
                     f"Направление: {side}",
+                    f"Стратегия: {strategy_name or 'unknown'}",
                     *sizing_lines,
                     f"Режим входа: {session_name}",
                     f"Ориентировочная цена: {price:.4f}",
@@ -1542,6 +1621,7 @@ def open_position(
         return
 
     order_id = place_market_order(client, config, instrument, quantity, direction)
+    state.entry_strategy = strategy_name
     state.pending_order_id = order_id
     state.pending_order_action = "OPEN"
     state.pending_order_side = side
@@ -1556,6 +1636,7 @@ def open_position(
             [
                 f"Инструмент: {format_instrument_title(instrument)}",
                 f"Направление: {side}",
+                f"Стратегия: {strategy_name or 'unknown'}",
                 *sizing_lines,
                 f"Режим входа: {session_name}",
                 f"Ориентировочная цена: {price:.4f}",
@@ -1593,6 +1674,17 @@ def close_position(
             )
         reset_daily_pnl_if_needed(state)
         state.realized_pnl += pnl
+        append_trade_journal(
+            instrument,
+            "CLOSE",
+            state.position_side,
+            qty,
+            price,
+            pnl_rub=pnl,
+            reason=exit_reason,
+            strategy=state.entry_strategy,
+            dry_run=True,
+        )
         state.entry_price = None
         state.max_price = None
         state.min_price = None
@@ -1600,6 +1692,7 @@ def close_position(
         state.position_side = "FLAT"
         state.breakeven_armed = False
         state.entry_time = ""
+        state.entry_strategy = ""
         save_state(instrument.symbol, state)
         text = build_telegram_card(
             "Тестовое закрытие позиции",
@@ -1836,7 +1929,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
 
     if state.position_side == "FLAT":
         if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol):
-            open_position(client, config, instrument, state, signal)
+            open_position(client, config, instrument, state, signal, primary_strategy_name)
     else:
         check_exit(client, config, instrument, state, lower_df, signal)
 
