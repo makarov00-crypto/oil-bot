@@ -578,9 +578,12 @@ def get_candles(
 
 def get_lower_tf_lookback_hours(config: BotConfig) -> int:
     base_hours = max(config.candle_hours, int((config.candle_interval_minutes * 240) / 60) + 1)
+    # For EMA200 on 5m candles, exchange session gaps mean a simple 30h wall-clock
+    # lookback can still contain too few actual candles on mornings and after weekends.
+    lookback_hours = max(base_hours, 72)
     if get_market_session() == "WEEKEND":
-        return max(base_hours, 72)
-    return base_hours
+        return max(lookback_hours, 72)
+    return lookback_hours
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -590,6 +593,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         result = result.sort_values("time").reset_index(drop=True)
     if "is_complete" in result.columns:
         result = result[result["is_complete"]].reset_index(drop=True)
+    # Early in the session the API can return only a short tail of completed candles.
+    # Guard before TA-lib style helpers to avoid window-size index errors.
+    if len(result) < 14:
+        raise RuntimeError("Недостаточно данных для стратегии")
     result["ema20"] = ta.trend.EMAIndicator(result["close"], window=20).ema_indicator()
     result["ema50"] = ta.trend.EMAIndicator(result["close"], window=50).ema_indicator()
     result["ema200"] = ta.trend.EMAIndicator(result["close"], window=200).ema_indicator()
