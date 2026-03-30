@@ -668,24 +668,42 @@ def add_williams_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_higher_tf_bias(client: Client, config: BotConfig, instrument: InstrumentConfig) -> str:
-    lookback_hours = max(config.candle_hours, int((config.higher_tf_interval_minutes * 80) / 60) + 1)
-    df = get_candles(client, config, instrument, config.higher_tf_interval, lookback_hours=lookback_hours)
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
-        df = df.sort_values("time").reset_index(drop=True)
-    if "is_complete" in df.columns:
-        df = df[df["is_complete"]].reset_index(drop=True)
-    df["ema50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
-    df["ema50_slope"] = df["ema50"].pct_change()
-    df = df.dropna().reset_index(drop=True)
-    if df.empty:
-        return "FLAT"
-    last = df.iloc[-1]
-    close = float(last["close"])
-    ema50 = float(last["ema50"])
-    if close > ema50:
+    tf_specs = [
+        (15, CandleInterval.CANDLE_INTERVAL_15_MIN, 1),
+        (30, CandleInterval.CANDLE_INTERVAL_30_MIN, 2),
+        (60, CandleInterval.CANDLE_INTERVAL_HOUR, 3),
+    ]
+    long_score = 0
+    short_score = 0
+
+    for interval_minutes, interval, weight in tf_specs:
+        try:
+            lookback_hours = max(120, int((interval_minutes * 120) / 60) + 1)
+            df = get_candles(client, config, instrument, interval, lookback_hours=lookback_hours)
+            if "time" in df.columns:
+                df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
+                df = df.sort_values("time").reset_index(drop=True)
+            if "is_complete" in df.columns:
+                df = df[df["is_complete"]].reset_index(drop=True)
+            if len(df) < 50:
+                continue
+            df["ema50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
+            df = df.dropna().reset_index(drop=True)
+            if df.empty:
+                continue
+            last = df.iloc[-1]
+            close = float(last["close"])
+            ema50 = float(last["ema50"])
+            if close > ema50:
+                long_score += weight
+            elif close < ema50:
+                short_score += weight
+        except RuntimeError:
+            continue
+
+    if long_score > short_score:
         return "LONG"
-    if close < ema50:
+    if short_score > long_score:
         return "SHORT"
     return "FLAT"
 
