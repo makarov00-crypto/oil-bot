@@ -1212,9 +1212,6 @@ def maybe_refresh_portfolio_snapshot(
     watchlist: list[InstrumentConfig],
     refresh_seconds: int = 60,
 ) -> None:
-    session_name = get_market_session()
-    if session_name == "CLOSED":
-        return
     meta = load_meta_state()
     now = datetime.now(timezone.utc)
     raw_ts = str(meta.get("portfolio_snapshot_refreshed_at") or "").strip()
