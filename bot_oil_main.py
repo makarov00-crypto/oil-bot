@@ -77,6 +77,7 @@ class BotConfig:
     order_quantity: int
     max_order_quantity: int
     risk_per_trade_pct: float
+    max_margin_usage_pct: float
     poll_seconds: int
     startup_retry_seconds: int
     candle_hours: int
@@ -365,6 +366,7 @@ def load_config() -> BotConfig:
         order_quantity=parse_int_env("OIL_ORDER_QUANTITY", 1),
         max_order_quantity=parse_int_env("OIL_MAX_ORDER_QUANTITY", parse_int_env("OIL_ORDER_QUANTITY", 1)),
         risk_per_trade_pct=parse_float_env("OIL_RISK_PER_TRADE_PCT", 0.0),
+        max_margin_usage_pct=parse_float_env("OIL_MAX_MARGIN_USAGE_PCT", 0.35),
         poll_seconds=parse_int_env("OIL_POLL_SECONDS", 10),
         startup_retry_seconds=parse_int_env("OIL_STARTUP_RETRY_SECONDS", 15),
         candle_hours=parse_int_env("OIL_CANDLE_LOOKBACK_HOURS", 12),
@@ -1391,6 +1393,16 @@ def get_account_snapshot(client: Client, config: BotConfig) -> AccountSnapshot:
     )
 
 
+def get_margin_per_lot(instrument: InstrumentConfig, signal: str) -> float:
+    margin = instrument.initial_margin_on_buy if signal == "LONG" else instrument.initial_margin_on_sell
+    if margin > 0:
+        return margin
+    fallback_margin = instrument.initial_margin_on_buy or instrument.initial_margin_on_sell
+    if fallback_margin > 0:
+        return fallback_margin
+    return 0.0
+
+
 def calculate_order_quantity(
     client: Client,
     config: BotConfig,
@@ -1425,6 +1437,17 @@ def calculate_order_quantity(
     raw_qty = int(risk_budget // money_risk_per_contract)
     if raw_qty < 1:
         raw_qty = 1
+
+    margin_per_lot = get_margin_per_lot(instrument, signal)
+    if margin_per_lot > 0 and config.max_margin_usage_pct > 0:
+        allowed_margin_total = equity * config.max_margin_usage_pct
+        available_margin_budget = allowed_margin_total - snapshot.blocked_guarantee_rub
+        if available_margin_budget <= 0:
+            return 0
+        margin_cap_qty = int(available_margin_budget // margin_per_lot)
+        if margin_cap_qty < 1:
+            return 0
+        raw_qty = min(raw_qty, margin_cap_qty)
 
     try:
         max_lots = client.orders.get_max_lots(
@@ -1469,8 +1492,9 @@ def build_position_sizing_lines(
         equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
         lines.append(f"Портфель: {equity:.2f} RUB")
         lines.append(f"Свободно: {snapshot.free_rub:.2f} RUB")
+        lines.append(f"ГО занято: {snapshot.blocked_guarantee_rub:.2f} RUB")
         if config.risk_per_trade_pct > 0:
-            risk_budget = equity * config.risk_per_trade_pct
+            risk_budget = equity * config.risk_per_trade_pct * session_multiplier
             stop_distance = entry_price * config.stop_loss_pct
             step_price = instrument.min_price_increment
             step_money = instrument.min_price_increment_amount
@@ -1478,6 +1502,13 @@ def build_position_sizing_lines(
                 money_risk_per_contract = (stop_distance / step_price) * step_money
                 lines.append(f"Риск на сделку: {risk_budget:.2f} RUB")
                 lines.append(f"Риск на 1 контракт: {money_risk_per_contract:.2f} RUB")
+        margin_per_lot = get_margin_per_lot(instrument, signal)
+        if margin_per_lot > 0:
+            allowed_margin_total = equity * config.max_margin_usage_pct
+            available_margin_budget = max(0.0, allowed_margin_total - snapshot.blocked_guarantee_rub)
+            lines.append(f"ГО на 1 лот: {margin_per_lot:.2f} RUB")
+            lines.append(f"Лимит ГО: {allowed_margin_total:.2f} RUB")
+            lines.append(f"Свободно под ГО: {available_margin_budget:.2f} RUB")
         max_lots = client.orders.get_max_lots(
             GetMaxLotsRequest(
                 account_id=config.account_id,

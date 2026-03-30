@@ -46,12 +46,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     opening_low = float(opening_range_df["low"].min())
     opening_mid = (opening_high + opening_low) / 2
     opening_width_pct = (opening_high - opening_low) / close if close else 0.0
-    range_compression_ok = opening_width_pct <= 0.0045
+    range_compression_ok = opening_width_pct <= 0.0060
 
     breakout_up = close > opening_high and close > ema20
     breakout_down = close < opening_low and close < ema20
-    volume_ok = volume_avg > 0 and volume >= volume_avg * 0.90
-    impulse_ok = body_avg > 0 and body >= body_avg * 0.60
+    soft_breakout_up = close >= opening_high * 0.999 and close > ema20
+    soft_breakout_down = close <= opening_low * 1.001 and close < ema20
+    volume_ok = volume_avg > 0 and volume >= volume_avg * 0.75
+    impulse_ok = body_avg > 0 and body >= body_avg * 0.55
     momentum_up = macd > macd_signal and macd >= prev_macd
     momentum_down = macd < macd_signal and macd <= prev_macd
     volatility_ok = atr_pct >= 0.0005
@@ -69,6 +71,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"opening range {opening_low:.4f}-{opening_high:.4f}",
         f"сжатие opening range: {'да' if range_compression_ok else 'нет'}",
         f"пробой вверх opening high: {'да' if breakout_up else 'нет'}",
+        f"мягкий breakout вверх: {'да' if soft_breakout_up else 'нет'}",
         f"цена выше EMA20 и EMA50: {'да' if trend_up else 'нет'}",
         f"RSI={rsi:.2f} в рабочей зоне 42-72",
         "объём достаточный" if volume_ok else "объём слабый",
@@ -81,6 +84,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"opening range {opening_low:.4f}-{opening_high:.4f}",
         f"сжатие opening range: {'да' if range_compression_ok else 'нет'}",
         f"пробой вниз opening low: {'да' if breakout_down else 'нет'}",
+        f"мягкий breakout вниз: {'да' if soft_breakout_down else 'нет'}",
         f"цена ниже EMA20 и EMA50: {'да' if trend_down else 'нет'}",
         f"RSI={rsi:.2f} в рабочей зоне 28-58",
         "объём достаточный" if volume_ok else "объём слабый",
@@ -96,7 +100,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append(f"старший ТФ против LONG: {higher_tf_bias}")
     if not range_compression_ok:
         long_blockers.append("opening range слишком широкий, нет чистого стартового сжатия")
-    if not breakout_up:
+    if not breakout_up and not soft_breakout_up:
         long_blockers.append("нет пробоя вверх opening range")
     if not trend_up:
         long_blockers.append("цена не удерживается выше EMA20 и EMA50")
@@ -117,7 +121,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_blockers.append(f"старший ТФ против SHORT: {higher_tf_bias}")
     if not range_compression_ok:
         short_blockers.append("opening range слишком широкий, нет чистого стартового сжатия")
-    if not breakout_down:
+    if not breakout_down and not soft_breakout_down:
         short_blockers.append("нет пробоя вниз opening range")
     if not trend_down:
         short_blockers.append("цена не удерживается ниже EMA20 и EMA50")
@@ -138,7 +142,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         [
             0 if not higher_tf_long_ok else 1,
             1 if range_compression_ok else 0,
-            2 if breakout_up else 0,
+            2 if breakout_up else 1 if soft_breakout_up else 0,
             1 if trend_up else 0,
             1 if hold_above_range else 0,
             1 if rsi_long_ok else 0,
@@ -152,7 +156,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         [
             0 if not higher_tf_short_ok else 1,
             1 if range_compression_ok else 0,
-            2 if breakout_down else 0,
+            2 if breakout_down else 1 if soft_breakout_down else 0,
             1 if trend_down else 0,
             1 if hold_below_range else 0,
             1 if rsi_short_ok else 0,
@@ -163,8 +167,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         ]
     )
 
-    long_ok = higher_tf_long_ok and breakout_up and trend_up and hold_above_range and long_score >= 7
-    short_ok = higher_tf_short_ok and breakout_down and trend_down and hold_below_range and short_score >= 7
+    long_ok = higher_tf_long_ok and (breakout_up or soft_breakout_up) and trend_up and hold_above_range and long_score >= 6
+    short_ok = higher_tf_short_ok and (breakout_down or soft_breakout_down) and trend_down and hold_below_range and short_score >= 6
 
     if long_ok:
         return "LONG", "Сигнал LONG (opening_range_breakout): " + "; ".join(long_reasons) + "."
