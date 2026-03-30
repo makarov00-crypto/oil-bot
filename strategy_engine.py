@@ -11,6 +11,7 @@ PRIMARY_EVALUATORS = {
     "trend_pullback": evaluate_trend_pullback,
     "compression_breakout": evaluate_compression_breakout,
     "opening_range_breakout": evaluate_opening_range_breakout,
+    "range_break_continuation": evaluate_breakdown_continuation,
     "breakdown_continuation": evaluate_breakdown_continuation,
     "failed_breakout": evaluate_failed_breakout,
     "momentum_breakout": evaluate_momentum_breakout,

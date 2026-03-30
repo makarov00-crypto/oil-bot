@@ -132,12 +132,12 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     long_ok = higher_tf_long_ok and breakout_up and continuation_long and trend_long and long_score >= 7
 
     if short_ok:
-        return "SHORT", "Сигнал SHORT (breakdown_continuation): " + "; ".join(short_reasons) + "."
+        return "SHORT", "Сигнал SHORT (range_break_continuation): " + "; ".join(short_reasons) + "."
     if long_ok:
-        return "LONG", "Сигнал LONG (breakdown_continuation): " + "; ".join(long_reasons) + "."
+        return "LONG", "Сигнал LONG (range_break_continuation): " + "; ".join(long_reasons) + "."
     return (
         "HOLD",
-        "Сигнал HOLD (breakdown_continuation): long не подтверждён ["
+        "Сигнал HOLD (range_break_continuation): long не подтверждён ["
         + "; ".join(long_reasons)
         + "] short не подтверждён ["
         + "; ".join(short_reasons)

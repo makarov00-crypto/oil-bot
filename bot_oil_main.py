@@ -263,6 +263,65 @@ def append_trade_journal(
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def load_trade_journal() -> list[dict[str, Any]]:
+    if not TRADE_JOURNAL_PATH.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in TRADE_JOURNAL_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception as error:
+            logging.warning("Не удалось прочитать строку журнала сделок: %s", error)
+    return rows
+
+
+def get_today_trade_journal_rows() -> list[dict[str, Any]]:
+    today = datetime.now(MOSCOW_TZ).date().isoformat()
+    rows = []
+    for row in load_trade_journal():
+        row_time = str(row.get("time", ""))
+        if row_time.startswith(today):
+            rows.append(row)
+    return rows
+
+
+def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    open_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    closed_reviews: list[dict[str, Any]] = []
+    for row in rows:
+        symbol = str(row.get("symbol", ""))
+        event = str(row.get("event", "")).upper()
+        if not symbol:
+            continue
+        if event == "OPEN":
+            open_by_symbol.setdefault(symbol, []).append(row)
+            continue
+        if event != "CLOSE":
+            continue
+        open_row = None
+        if open_by_symbol.get(symbol):
+            open_row = open_by_symbol[symbol].pop(0)
+        closed_reviews.append(
+            {
+                "symbol": symbol,
+                "side": row.get("side", open_row.get("side") if open_row else ""),
+                "strategy": row.get("strategy") or (open_row.get("strategy") if open_row else ""),
+                "entry_time": open_row.get("time") if open_row else "",
+                "exit_time": row.get("time", ""),
+                "entry_price": open_row.get("price") if open_row else None,
+                "exit_price": row.get("price"),
+                "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
+                "pnl_rub": row.get("pnl_rub"),
+                "entry_reason": open_row.get("reason") if open_row else "",
+                "exit_reason": row.get("reason", ""),
+            }
+        )
+    current_open = {symbol: items[-1] for symbol, items in open_by_symbol.items() if items}
+    return closed_reviews, current_open
+
+
 def load_config() -> BotConfig:
     token = os.getenv("T_INVEST_TOKEN", "").strip()
     account_id = os.getenv("T_INVEST_ACCOUNT_ID", "").strip()
@@ -1137,6 +1196,54 @@ def build_trade_results_message(
     return build_telegram_card("Результат торговли", "📒", lines)
 
 
+def build_trade_review_message() -> str:
+    rows = get_today_trade_journal_rows()
+    closed_reviews, current_open = pair_trade_journal_rows(rows)
+
+    closed_total = len(closed_reviews)
+    wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
+    losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
+    pnl_total = sum(float(item.get("pnl_rub") or 0.0) for item in closed_reviews)
+
+    lines = [
+        f"📘 Закрыто сделок: {closed_total}",
+        f"✅ Плюсовых: {wins}",
+        f"⚠️ Минусовых: {losses}",
+        f"💰 Итог по закрытым: {pnl_total:.2f} RUB",
+        "",
+    ]
+
+    if closed_reviews:
+        lines.append("Последние закрытые:")
+        for item in closed_reviews[-5:]:
+            pnl = float(item.get("pnl_rub") or 0.0)
+            entry_price = item.get("entry_price")
+            exit_price = item.get("exit_price")
+            lines.append(
+                f"• {item['symbol']} {item['side']} | {item['strategy'] or 'unknown'} | "
+                f"{entry_price if entry_price is not None else '?'} -> {exit_price if exit_price is not None else '?'} | "
+                f"{pnl:.2f} RUB"
+            )
+            exit_reason = str(item.get("exit_reason") or "").strip()
+            if exit_reason:
+                lines.append(f"  Выход: {compact_reason(exit_reason)[:120]}")
+        lines.append("")
+    else:
+        lines.extend(["Последние закрытые:", "• Пока нет закрытых сделок в журнале", ""])
+
+    if current_open:
+        lines.append("Текущие открытые по журналу:")
+        for symbol, row in current_open.items():
+            lines.append(
+                f"• {symbol} {row.get('side', '')} | {row.get('strategy') or 'unknown'} | "
+                f"{row.get('qty_lots', 0)} лот. | вход {row.get('price')}"
+            )
+    else:
+        lines.extend(["Текущие открытые по журналу:", "• Нет открытых записей в журнале"])
+
+    return build_telegram_card("Trade Review", "🧾", lines)
+
+
 def maybe_send_portfolio_snapshot(
     client: Client,
     config: BotConfig,
@@ -1168,6 +1275,19 @@ def maybe_send_trade_results(
         return
     send_msg(config, build_trade_results_message(client, config, watchlist))
     meta["last_trade_results_slot"] = now_slot
+    save_meta_state(meta)
+
+
+def maybe_send_trade_review(config: BotConfig) -> None:
+    session_name = get_market_session()
+    if session_name == "CLOSED":
+        return
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    meta = load_meta_state()
+    if meta.get("last_trade_review_slot") == now_slot:
+        return
+    send_msg(config, build_trade_review_message())
+    meta["last_trade_review_slot"] = now_slot
     save_meta_state(meta)
 
 
@@ -1976,6 +2096,7 @@ def run_bot() -> int:
                         maybe_send_global_diagnostic(client, config, watchlist)
                         maybe_send_portfolio_snapshot(client, config, watchlist)
                         maybe_send_trade_results(client, config, watchlist)
+                        maybe_send_trade_review(config)
                         consecutive_errors = 0
                         cycle_count += 1
                         if config.max_cycles > 0 and cycle_count >= config.max_cycles:
