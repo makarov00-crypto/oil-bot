@@ -123,6 +123,13 @@ class AccountSnapshot:
 
 
 @dataclass
+class ExitProfile:
+    min_hold_minutes: int
+    breakeven_profit_pct: float
+    trailing_stop_pct: float
+
+
+@dataclass
 class InstrumentState:
     entry_price: float | None = None
     max_price: float | None = None
@@ -1504,7 +1511,46 @@ def calculate_futures_pnl_rub(
     return price_diff * qty
 
 
-def position_held_long_enough(state: InstrumentState, config: BotConfig) -> bool:
+def get_exit_profile(config: BotConfig, strategy_name: str) -> ExitProfile:
+    strategy = (strategy_name or "").strip()
+    if strategy == "opening_range_breakout":
+        return ExitProfile(
+            min_hold_minutes=max(config.min_hold_minutes, 25),
+            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0075),
+            trailing_stop_pct=max(config.trailing_stop_pct, 0.0055),
+        )
+    if strategy in {"range_break_continuation", "breakdown_continuation"}:
+        return ExitProfile(
+            min_hold_minutes=max(config.min_hold_minutes, 25),
+            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0080),
+            trailing_stop_pct=max(config.trailing_stop_pct, 0.0060),
+        )
+    if strategy == "momentum_breakout":
+        return ExitProfile(
+            min_hold_minutes=max(config.min_hold_minutes, 25),
+            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0090),
+            trailing_stop_pct=max(config.trailing_stop_pct, 0.0070),
+        )
+    if strategy == "trend_rollover":
+        return ExitProfile(
+            min_hold_minutes=max(config.min_hold_minutes, 35),
+            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0100),
+            trailing_stop_pct=max(config.trailing_stop_pct, 0.0075),
+        )
+    if strategy == "trend_pullback":
+        return ExitProfile(
+            min_hold_minutes=max(config.min_hold_minutes, 30),
+            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0090),
+            trailing_stop_pct=max(config.trailing_stop_pct, 0.0065),
+        )
+    return ExitProfile(
+        min_hold_minutes=config.min_hold_minutes,
+        breakeven_profit_pct=config.breakeven_profit_pct,
+        trailing_stop_pct=config.trailing_stop_pct,
+    )
+
+
+def position_held_long_enough(state: InstrumentState, config: BotConfig, min_hold_minutes: int | None = None) -> bool:
     if not state.entry_time:
         return True
     try:
@@ -1514,7 +1560,8 @@ def position_held_long_enough(state: InstrumentState, config: BotConfig) -> bool
     if opened_at.tzinfo is None:
         opened_at = opened_at.replace(tzinfo=UTC)
     held_for = datetime.now(UTC) - opened_at.astimezone(UTC)
-    return held_for >= timedelta(minutes=config.min_hold_minutes)
+    required_minutes = min_hold_minutes if min_hold_minutes is not None else config.min_hold_minutes
+    return held_for >= timedelta(minutes=required_minutes)
 
 
 def sync_pending_order(
@@ -1867,53 +1914,72 @@ def check_exit(
     state.min_price = min(state.min_price or price, price)
     last = df.iloc[-1]
     profile = get_strategy_profile(config, instrument)
+    exit_profile = get_exit_profile(config, state.entry_strategy)
     prev = df.iloc[-2]
+    prev2 = df.iloc[-3]
     macd = float(last["macd"])
     macd_signal = float(last["macd_signal"])
     prev_macd = float(prev["macd"])
     prev_macd_signal = float(prev["macd_signal"])
+    prev2_macd = float(prev2["macd"])
+    prev2_macd_signal = float(prev2["macd_signal"])
     rsi = float(last["rsi"])
+    ema20 = float(last["ema20"])
+    prev_close = float(prev["close"])
+    close = float(last["close"])
 
     if state.position_side == "LONG":
         profit_pct = (price - state.entry_price) / state.entry_price
-        if profit_pct >= config.breakeven_profit_pct:
+        if profit_pct >= exit_profile.breakeven_profit_pct:
             state.breakeven_armed = True
         stop_price = state.entry_price * (1 - config.stop_loss_pct)
         if state.breakeven_armed:
             stop_price = max(stop_price, state.entry_price)
-        trailing_price = (state.max_price or price) * (1 - config.trailing_stop_pct)
-        macd_down = prev_macd >= prev_macd_signal and macd < macd_signal
-        min_hold_passed = position_held_long_enough(state, config)
+        trailing_price = (state.max_price or price) * (1 - exit_profile.trailing_stop_pct)
+        macd_down = (
+            prev2_macd >= prev2_macd_signal
+            and prev_macd < prev_macd_signal
+            and macd < macd_signal
+            and close < ema20
+        )
+        opposite_signal_confirmed = fresh_signal == "SHORT" and close < ema20 and close <= prev_close
+        min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         if price <= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
         elif price <= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} <= {trailing_price:.4f}")
-        elif min_hold_passed and rsi >= profile.rsi_exit_long:
+        elif min_hold_passed and state.breakeven_armed and rsi >= profile.rsi_exit_long:
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
         elif min_hold_passed and macd_down:
-            close_position(client, config, instrument, state, "MACD развернулся вниз против позиции")
-        elif min_hold_passed and fresh_signal == "SHORT":
-            close_position(client, config, instrument, state, "Появился противоположный сигнал SHORT")
+            close_position(client, config, instrument, state, "MACD подтверждённо развернулся вниз и цена потеряла EMA20")
+        elif min_hold_passed and opposite_signal_confirmed:
+            close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал SHORT")
     else:
         profit_pct = (state.entry_price - price) / state.entry_price
-        if profit_pct >= config.breakeven_profit_pct:
+        if profit_pct >= exit_profile.breakeven_profit_pct:
             state.breakeven_armed = True
         stop_price = state.entry_price * (1 + config.stop_loss_pct)
         if state.breakeven_armed:
             stop_price = min(stop_price, state.entry_price)
-        trailing_price = (state.min_price or price) * (1 + config.trailing_stop_pct)
-        macd_up = prev_macd <= prev_macd_signal and macd > macd_signal
-        min_hold_passed = position_held_long_enough(state, config)
+        trailing_price = (state.min_price or price) * (1 + exit_profile.trailing_stop_pct)
+        macd_up = (
+            prev2_macd <= prev2_macd_signal
+            and prev_macd > prev_macd_signal
+            and macd > macd_signal
+            and close > ema20
+        )
+        opposite_signal_confirmed = fresh_signal == "LONG" and close > ema20 and close >= prev_close
+        min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         if price >= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
         elif price >= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} >= {trailing_price:.4f}")
-        elif min_hold_passed and rsi <= profile.rsi_exit_short:
+        elif min_hold_passed and state.breakeven_armed and rsi <= profile.rsi_exit_short:
             close_position(client, config, instrument, state, f"RSI вышел в зону перепроданности: {rsi:.2f} <= {profile.rsi_exit_short:.2f}")
         elif min_hold_passed and macd_up:
-            close_position(client, config, instrument, state, "MACD развернулся вверх против позиции")
-        elif min_hold_passed and fresh_signal == "LONG":
-            close_position(client, config, instrument, state, "Появился противоположный сигнал LONG")
+            close_position(client, config, instrument, state, "MACD подтверждённо развернулся вверх и цена вернулась выше EMA20")
+        elif min_hold_passed and opposite_signal_confirmed:
+            close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал LONG")
 
 
 def process_instrument(client: Client, config: BotConfig, instrument: InstrumentConfig) -> None:
