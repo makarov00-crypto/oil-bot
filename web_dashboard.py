@@ -91,8 +91,7 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
     return normalized
 
 
-def get_bot_service_status() -> dict:
-    service_name = os.getenv("OIL_SERVICE_NAME", "oil-bot")
+def get_service_status(service_name: str) -> dict:
     try:
         active = subprocess.run(
             ["systemctl", "is-active", service_name],
@@ -120,6 +119,16 @@ def get_bot_service_status() -> dict:
             "enabled": "unknown",
             "error": str(error),
         }
+
+
+def get_bot_service_status() -> dict:
+    service_name = os.getenv("OIL_SERVICE_NAME", "oil-bot")
+    return get_service_status(service_name)
+
+
+def get_dashboard_service_status() -> dict:
+    service_name = os.getenv("OIL_DASHBOARD_SERVICE_NAME", "oil-bot-dashboard")
+    return get_service_status(service_name)
 
 
 def summarize_states(states: dict[str, dict]) -> dict:
@@ -151,6 +160,20 @@ def summarize_states(states: dict[str, dict]) -> dict:
         "open_positions": open_positions,
         "signal_counts": signals,
         "symbols_total": len(states),
+    }
+
+
+def build_health_payload(states: dict[str, dict]) -> dict:
+    bot_service = get_bot_service_status()
+    dashboard_service = get_dashboard_service_status()
+    return {
+        "ok": bot_service.get("active") == "active" and dashboard_service.get("active") == "active",
+        "bot_service": bot_service,
+        "dashboard_service": dashboard_service,
+        "symbols": sorted(states.keys()),
+        "symbols_count": len(states),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at_moscow": datetime.now(timezone.utc).astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
 
 
@@ -440,9 +463,11 @@ def build_dashboard_html() -> str:
 
       const svcBody = document.querySelector('#serviceTable tbody');
       svcBody.innerHTML = `
-        <tr><td>Имя</td><td>${data.service.service}</td></tr>
-        <tr><td>Active</td><td>${data.service.active}</td></tr>
-        <tr><td>Enabled</td><td>${data.service.enabled}</td></tr>
+        <tr><td>Бот</td><td>${signalBadge(data.health.bot_service.active || '-')}</td></tr>
+        <tr><td>Dashboard</td><td>${signalBadge(data.health.dashboard_service.active || '-')}</td></tr>
+        <tr><td>Health</td><td>${data.health.ok ? '<span class="good mono">OK</span>' : '<span class="bad mono">FAIL</span>'}</td></tr>
+        <tr><td>Инструментов</td><td class="mono">${data.health.symbols_count}</td></tr>
+        <tr><td>Срез</td><td class="mono">${escapeHtml(data.health.generated_at_moscow || '-')}</td></tr>
       `;
 
       const stateBody = document.querySelector('#statesTable tbody');
@@ -502,6 +527,7 @@ def api_dashboard() -> dict:
     generated_at = datetime.now(timezone.utc)
     return {
         "service": get_bot_service_status(),
+        "health": build_health_payload(states),
         "summary": summarize_states(states),
         "meta": load_meta(),
         "states": states,
@@ -514,10 +540,4 @@ def api_dashboard() -> dict:
 @app.get("/api/health", response_class=JSONResponse)
 def api_health() -> dict:
     states = load_states()
-    service = get_bot_service_status()
-    return {
-        "ok": service.get("active") == "active",
-        "service": service,
-        "symbols": sorted(states.keys()),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    return build_health_payload(states)
