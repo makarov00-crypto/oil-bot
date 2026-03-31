@@ -338,7 +338,10 @@ def build_dashboard_html() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
-  <title>Oil Bot Dashboard</title>
+  <title>Панель Oil Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #030711;
@@ -359,7 +362,7 @@ def build_dashboard_html() -> str:
     }
     body {
       margin: 0;
-      font-family: "Inter", "Segoe UI", Arial, sans-serif;
+      font-family: "Manrope", "Segoe UI", Arial, sans-serif;
       background:
         radial-gradient(circle at top left, rgba(67, 197, 255, 0.18), transparent 24%),
         radial-gradient(circle at top right, rgba(125, 140, 255, 0.16), transparent 20%),
@@ -377,7 +380,8 @@ def build_dashboard_html() -> str:
     h1 {
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      font-size: 30px;
+      font-family: "Orbitron", "Manrope", sans-serif;
+      font-size: 28px;
       text-shadow: 0 0 28px var(--glow);
     }
     .grid {
@@ -406,7 +410,7 @@ def build_dashboard_html() -> str:
     .metric {
       font-size: 31px;
       font-weight: 700;
-      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      font-family: "Orbitron", "JetBrains Mono", monospace;
       letter-spacing: -0.03em;
       text-shadow: 0 0 18px var(--glow);
     }
@@ -497,10 +501,10 @@ def build_dashboard_html() -> str:
     <div class="hero">
       <section class="panel">
         <div class="section-title">
-          <h1>Oil Bot Dashboard</h1>
+          <h1>Панель Oil Bot</h1>
           <div class="generated" id="generatedAt">Обновление: -</div>
         </div>
-        <p class="muted">Мониторинг бота, сделок и состояния сервиса без графиков. Обновление каждые 15 секунд.</p>
+        <p class="muted">Живой обзор бота, позиций, новостей и состояния сервиса. Обновление каждые 15 секунд.</p>
         <div class="grid">
           <div>
             <div class="muted">Реализовано</div>
@@ -523,9 +527,9 @@ def build_dashboard_html() -> str:
       <section class="panel">
         <h2>Сигналы</h2>
         <div class="grid">
-          <div><div class="muted">LONG</div><div class="metric" id="longCount">-</div></div>
-          <div><div class="muted">SHORT</div><div class="metric" id="shortCount">-</div></div>
-          <div><div class="muted">HOLD</div><div class="metric" id="holdCount">-</div></div>
+          <div><div class="muted">Лонг</div><div class="metric" id="longCount">-</div></div>
+          <div><div class="muted">Шорт</div><div class="metric" id="shortCount">-</div></div>
+          <div><div class="muted">Ожидание</div><div class="metric" id="holdCount">-</div></div>
         </div>
       </section>
     </div>
@@ -662,18 +666,6 @@ def build_dashboard_html() -> str:
     </section>
 
     <section class="panel" style="margin-top:16px;">
-      <h2>Состояние инструментов</h2>
-      <table id="statesTable">
-        <thead>
-          <tr>
-            <th>Инструмент</th><th>Сигнал</th><th>Позиция</th><th>Лоты</th><th>Стратегия</th><th>Свеча</th><th>PnL RUB</th><th>Ошибка</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <section class="panel" style="margin-top:16px;">
       <h2>Лента событий</h2>
       <table id="tradesTable">
         <thead>
@@ -748,7 +740,17 @@ def build_dashboard_html() -> str:
     function signalBadge(value) {
       const raw = String(value || '-').toUpperCase();
       const css = raw === 'LONG' || raw === 'ACTIVE' ? 'long' : raw === 'SHORT' || raw === 'FAILED' ? 'short' : 'hold';
-      return `<span class="badge ${css}">${escapeHtml(raw)}</span>`;
+      const labelMap = {
+        LONG: 'ЛОНГ',
+        SHORT: 'ШОРТ',
+        HOLD: 'ОЖИДАНИЕ',
+        FLAT: 'ВНЕ ПОЗИЦИИ',
+        ACTIVE: 'АКТИВЕН',
+        FAILED: 'ОШИБКА',
+        CLOSED: 'ЗАКРЫТ',
+        BLOCK: 'БЛОК',
+      };
+      return `<span class="badge ${css}">${escapeHtml(labelMap[raw] || raw)}</span>`;
     }
 
     function eventStatusBadge(value) {
@@ -766,13 +768,62 @@ def build_dashboard_html() -> str:
       return `${num.toFixed(2)} RUB`;
     }
 
+    function formatStrength(value) {
+      const raw = String(value || '').toUpperCase();
+      const map = { HIGH: 'СИЛЬНЫЙ', MEDIUM: 'СРЕДНИЙ', LOW: 'СЛАБЫЙ' };
+      return map[raw] || raw || '-';
+    }
+
+    function formatRuntimeState(value) {
+      const raw = String(value || '').toLowerCase();
+      const map = {
+        starting: 'СТАРТ',
+        running: 'РАБОТАЕТ',
+        api_error: 'СБОЙ API',
+        internal_error: 'ВНУТРЕННЯЯ ОШИБКА',
+        stopped_after_errors: 'ОСТАНОВЛЕН',
+        startup_api_retry: 'ПОВТОР API',
+        startup_internal_retry: 'ПОВТОР СТАРТА',
+      };
+      return map[raw] || (value || '-');
+    }
+
+    function formatEventLabel(value) {
+      const raw = String(value || '').toUpperCase();
+      const map = { OPEN: 'ОТКРЫТИЕ', CLOSE: 'ЗАКРЫТИЕ' };
+      return map[raw] || raw || '-';
+    }
+
+    function formatBiasLabel(value) {
+      const raw = String(value || '').toUpperCase();
+      if (!raw || raw === 'NEUTRAL') return 'НЕЙТРАЛЬНО';
+      const [bias, strength] = raw.split('/');
+      const biasMap = { LONG: 'ЛОНГ', SHORT: 'ШОРТ', BLOCK: 'БЛОК' };
+      if (strength) {
+        return `${biasMap[bias] || bias} / ${formatStrength(strength)}`;
+      }
+      return biasMap[raw] || raw;
+    }
+
+    function formatSessionLabel(value) {
+      const raw = String(value || '').toUpperCase();
+      const map = {
+        MORNING: 'УТРО',
+        DAY: 'ДЕНЬ',
+        EVENING: 'ВЕЧЕР',
+        CLOSED: 'ЗАКРЫТО',
+        WEEKEND: 'ВЫХОДНОЙ',
+      };
+      return map[raw] || raw || '-';
+    }
+
     async function loadData() {
       const response = await fetch('/api/dashboard');
       const data = await response.json();
 
       document.getElementById('realized').textContent = `${data.summary.realized_pnl_rub.toFixed(2)} RUB`;
       document.getElementById('openCount').textContent = data.summary.open_positions.length;
-      document.getElementById('serviceState').textContent = data.service.active;
+      document.getElementById('serviceState').textContent = formatRuntimeState(data.runtime?.state || data.service.active);
       document.getElementById('symbolsTotal').textContent = data.summary.symbols_total;
       document.getElementById('longCount').textContent = data.summary.signal_counts.LONG;
       document.getElementById('shortCount').textContent = data.summary.signal_counts.SHORT;
@@ -781,7 +832,7 @@ def build_dashboard_html() -> str:
 
       const portfolio = data.portfolio || {};
       document.getElementById('portfolioGeneratedAt').textContent = `Срез портфеля: ${portfolio.generated_at_moscow || '-'}`;
-      document.getElementById('portfolioMode').textContent = portfolio.mode || '-';
+      document.getElementById('portfolioMode').textContent = portfolio.mode === 'DRY_RUN' ? 'ТЕСТ' : (portfolio.mode || '-');
       document.getElementById('portfolioTotal').textContent = formatRub(portfolio.total_portfolio_rub);
       document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_rub);
       document.getElementById('portfolioBlocked').textContent = formatRub(portfolio.blocked_guarantee_rub);
@@ -792,14 +843,14 @@ def build_dashboard_html() -> str:
 
       const runtime = data.runtime || {};
       document.getElementById('runtimeUpdatedAt').textContent = `Runtime: ${runtime.updated_at_moscow || '-'}`;
-      document.getElementById('runtimeState').textContent = runtime.state || '-';
-      document.getElementById('runtimeSession').textContent = runtime.session || '-';
+      document.getElementById('runtimeState').textContent = formatRuntimeState(runtime.state || '-');
+      document.getElementById('runtimeSession').textContent = formatSessionLabel(runtime.session || '-');
       document.getElementById('runtimeCycles').textContent = runtime.cycle_count ?? '-';
       document.getElementById('runtimeErrors').textContent = runtime.consecutive_errors ?? '-';
 
       const runtimeBody = document.querySelector('#runtimeTable tbody');
       runtimeBody.innerHTML = `
-        <tr><td>Режим</td><td>${escapeHtml(runtime.mode || '-')}</td></tr>
+        <tr><td>Режим</td><td>${escapeHtml(runtime.mode === 'DRY_RUN' ? 'ТЕСТ' : (runtime.mode || '-'))}</td></tr>
         <tr><td>Старт</td><td class="mono">${escapeHtml(runtime.started_at_moscow || '-')}</td></tr>
         <tr><td>Последний цикл</td><td class="mono">${escapeHtml(runtime.last_cycle_at_moscow || '-')}</td></tr>
         <tr><td>Последняя ошибка</td><td class="reason">${escapeHtml(runtime.last_error || '-')}</td></tr>
@@ -819,7 +870,7 @@ def build_dashboard_html() -> str:
         newsBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(item.symbol || '-')}</td>
           <td>${signalBadge(item.bias || '-')}</td>
-          <td>${escapeHtml(item.strength || '-')}</td>
+          <td>${escapeHtml(formatStrength(item.strength || '-'))}</td>
           <td>${escapeHtml(item.source || '-')}</td>
           <td class="mono">${escapeHtml(item.expires_at_moscow || '-')}</td>
           <td class="reason">${escapeHtml(item.reason || '-')}</td>
@@ -853,8 +904,6 @@ def build_dashboard_html() -> str:
         <tr><td>Срез</td><td class="mono">${escapeHtml(data.health.generated_at_moscow || '-')}</td></tr>
       `;
 
-      const stateBody = document.querySelector('#statesTable tbody');
-      stateBody.innerHTML = '';
       const signalBody = document.querySelector('#signalsTable tbody');
       signalBody.innerHTML = '';
       for (const [symbol, state] of Object.entries(data.states)) {
@@ -866,20 +915,9 @@ def build_dashboard_html() -> str:
           <td>${signalBadge(state.last_signal || '-')}</td>
           <td>${escapeHtml(state.last_strategy_name || state.entry_strategy || '-')}</td>
           <td>${signalBadge(state.last_higher_tf_bias || '-')}</td>
-          <td>${escapeHtml(state.last_news_bias || 'NEUTRAL')}</td>
+          <td>${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</td>
           <td class="reason">${escapeHtml(state.last_news_impact || '-')}</td>
           <td class="reason">${escapeHtml(summary)}</td>
-        </tr>`);
-
-        stateBody.insertAdjacentHTML('beforeend', `<tr>
-          <td class="mono">${escapeHtml(symbol)}</td>
-          <td>${signalBadge(state.last_signal || '-')}</td>
-          <td>${signalBadge(state.position_side || 'FLAT')}</td>
-          <td class="mono">${escapeHtml(state.position_qty || 0)}</td>
-          <td>${escapeHtml(state.entry_strategy || '-')}</td>
-          <td class="mono">${escapeHtml(state.last_status_candle || '-')}</td>
-          <td class="mono right">${Number(state.realized_pnl || 0).toFixed(2)}</td>
-          <td class="reason">${escapeHtml(state.last_error || '-')}</td>
         </tr>`);
       }
 
@@ -892,7 +930,7 @@ def build_dashboard_html() -> str:
         tradeBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(row.time || '-')}</td>
           <td class="mono">${escapeHtml(row.symbol || '-')}</td>
-          <td>${escapeHtml(row.event || '-')}</td>
+          <td>${escapeHtml(formatEventLabel(row.event || '-'))}</td>
           <td>${eventStatusBadge(row.event_status || 'history')}</td>
           <td>${signalBadge(row.side || '-')}</td>
           <td class="mono">${escapeHtml(row.qty_lots || '-')}</td>
