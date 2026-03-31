@@ -655,7 +655,7 @@ def build_dashboard_html() -> str:
       <section class="panel">
         <h2>Позиции</h2>
         <table id="positionsTable">
-          <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход</th><th>Текущая</th><th>В позиции</th><th>Вар. маржа</th><th>Изм. %</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
+          <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход</th><th>Текущая</th><th>Стоимость</th><th>Вар. маржа</th><th>Изм. %</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>

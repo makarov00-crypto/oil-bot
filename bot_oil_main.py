@@ -1725,6 +1725,19 @@ def calculate_futures_pnl_rub(
     return price_diff * qty
 
 
+def calculate_futures_notional_rub(
+    instrument: InstrumentConfig,
+    current_price: float,
+    qty: int,
+) -> float:
+    if qty <= 0 or current_price <= 0:
+        return 0.0
+    if instrument.min_price_increment > 0 and instrument.min_price_increment_amount > 0:
+        ticks = current_price / instrument.min_price_increment
+        return ticks * instrument.min_price_increment_amount * qty
+    return current_price * qty
+
+
 def refresh_position_snapshot(state: InstrumentState, instrument: InstrumentConfig, current_price: float) -> None:
     state.last_market_price = current_price
     if state.position_side == "FLAT" or state.position_qty <= 0 or state.entry_price is None:
@@ -1733,7 +1746,11 @@ def refresh_position_snapshot(state: InstrumentState, instrument: InstrumentConf
         state.position_pnl_pct = 0.0
         return
 
-    state.position_notional_rub = current_price * state.position_qty * max(1, instrument.lot)
+    state.position_notional_rub = calculate_futures_notional_rub(
+        instrument,
+        current_price,
+        state.position_qty,
+    )
     state.position_variation_margin_rub = calculate_futures_pnl_rub(
         instrument,
         state.entry_price,
