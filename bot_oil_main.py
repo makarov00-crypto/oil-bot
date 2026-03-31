@@ -1272,6 +1272,24 @@ def maybe_refresh_portfolio_snapshot(
     save_meta_state(meta)
 
 
+def maybe_refresh_news_snapshot(refresh_seconds: int = 300) -> None:
+    meta = load_meta_state()
+    now = datetime.now(timezone.utc)
+    raw_ts = str(meta.get("news_snapshot_refreshed_at") or "").strip()
+    if raw_ts:
+        try:
+            last_ts = datetime.fromisoformat(raw_ts)
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            if (now - last_ts).total_seconds() < refresh_seconds:
+                return
+        except Exception:
+            pass
+    get_active_news_biases(force=True)
+    meta["news_snapshot_refreshed_at"] = now.isoformat()
+    save_meta_state(meta)
+
+
 def build_runtime_status_payload(
     *,
     mode: str,
@@ -2355,6 +2373,7 @@ def run_bot() -> int:
                 startup_error_notified = False
                 while True:
                     try:
+                        maybe_refresh_news_snapshot()
                         for instrument in watchlist:
                             process_instrument(client, config, instrument)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist)
