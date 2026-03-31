@@ -157,6 +157,18 @@ def load_trade_review(limit: int = 80) -> dict:
     open_by_symbol: dict[str, list[dict]] = {}
     closed_reviews: list[dict] = []
 
+    def classify_verdict(pnl_numeric: float, exit_reason: str) -> str:
+        text = str(exit_reason or "").lower()
+        if pnl_numeric > 0:
+            return "хорошая сделка"
+        if "стоп" in text or "трейлинг" in text:
+            return "нормальная убыточная"
+        if "macd" in text or "rsi" in text:
+            return "возможно ранний выход"
+        if "противоположный сигнал" in text:
+            return "закрыта по смене режима"
+        return "требует разбора"
+
     for row in rows:
         symbol = str(row.get("symbol", ""))
         event = str(row.get("event", "")).upper()
@@ -189,6 +201,7 @@ def load_trade_review(limit: int = 80) -> dict:
                 "pnl_rub": f"{pnl_numeric:.2f}",
                 "entry_reason": open_row.get("reason") if open_row else "-",
                 "exit_reason": row.get("reason") or "-",
+                "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
             }
         )
 
@@ -201,12 +214,31 @@ def load_trade_review(limit: int = 80) -> dict:
     wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
     losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
     total = sum(float(item.get("pnl_rub") or 0.0) for item in closed_reviews)
+    win_rate = round((wins / len(closed_reviews)) * 100, 1) if closed_reviews else 0.0
+
+    by_symbol: dict[str, float] = {}
+    by_strategy: dict[str, float] = {}
+    for item in closed_reviews:
+        pnl = float(item.get("pnl_rub") or 0.0)
+        by_symbol[item["symbol"]] = by_symbol.get(item["symbol"], 0.0) + pnl
+        strategy = item.get("strategy") or "-"
+        by_strategy[strategy] = by_strategy.get(strategy, 0.0) + pnl
+
+    best_symbol = max(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
+    worst_symbol = min(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
+    best_strategy = max(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
+    worst_strategy = min(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
 
     return {
         "closed_count": len(closed_reviews),
         "wins": wins,
         "losses": losses,
+        "win_rate": win_rate,
         "closed_total_pnl_rub": round(total, 2),
+        "best_symbol": {"symbol": best_symbol[0], "pnl_rub": round(best_symbol[1], 2)} if best_symbol else None,
+        "worst_symbol": {"symbol": worst_symbol[0], "pnl_rub": round(worst_symbol[1], 2)} if worst_symbol else None,
+        "best_strategy": {"strategy": best_strategy[0], "pnl_rub": round(best_strategy[1], 2)} if best_strategy else None,
+        "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
         "closed_reviews": closed_reviews[-20:],
         "current_open": current_open[-20:],
     }
@@ -672,11 +704,31 @@ def build_dashboard_html() -> str:
           <div class="muted">Итог по закрытым</div>
           <div class="metric" id="reviewPnl">-</div>
         </div>
+        <div>
+          <div class="muted">Win rate</div>
+          <div class="metric" id="reviewWinRate">-</div>
+        </div>
+        <div>
+          <div class="muted">Лучший инструмент</div>
+          <div class="metric" id="reviewBestSymbol">-</div>
+        </div>
+        <div>
+          <div class="muted">Худший инструмент</div>
+          <div class="metric" id="reviewWorstSymbol">-</div>
+        </div>
+        <div>
+          <div class="muted">Лучшая стратегия</div>
+          <div class="metric" id="reviewBestStrategy">-</div>
+        </div>
+        <div>
+          <div class="muted">Худшая стратегия</div>
+          <div class="metric" id="reviewWorstStrategy">-</div>
+        </div>
       </div>
       <table id="reviewTable" style="margin-top:16px;">
         <thead>
           <tr>
-            <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">PnL RUB</th><th>Выход</th>
+            <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">PnL RUB</th><th>Выход</th><th>Вердикт</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -859,6 +911,11 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewWins').textContent = review.wins ?? 0;
       document.getElementById('reviewLosses').textContent = review.losses ?? 0;
       document.getElementById('reviewPnl').textContent = formatRub(review.closed_total_pnl_rub);
+      document.getElementById('reviewWinRate').textContent = `${Number(review.win_rate || 0).toFixed(1)}%`;
+      document.getElementById('reviewBestSymbol').textContent = review.best_symbol ? `${review.best_symbol.symbol} (${Number(review.best_symbol.pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewWorstSymbol').textContent = review.worst_symbol ? `${review.worst_symbol.symbol} (${Number(review.worst_symbol.pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewBestStrategy').textContent = review.best_strategy ? `${review.best_strategy.strategy} (${Number(review.best_strategy.pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewWorstStrategy').textContent = review.worst_strategy ? `${review.worst_strategy.strategy} (${Number(review.worst_strategy.pnl_rub).toFixed(2)})` : '-';
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       reviewBody.innerHTML = '';
@@ -873,10 +930,11 @@ def build_dashboard_html() -> str:
           <td class="mono">${escapeHtml(row.exit_time || '-')}</td>
           <td class="mono right ${pnlClass}">${escapeHtml(row.pnl_rub || '-')}</td>
           <td class="reason">${escapeHtml(row.exit_reason || '-')}</td>
+          <td>${escapeHtml(row.verdict || '-')}</td>
         </tr>`);
       }
       if (!(review.closed_reviews || []).length) {
-        reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="7" class="muted">Закрытых сделок пока нет.</td></tr>');
+        reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="8" class="muted">Закрытых сделок пока нет.</td></tr>');
       }
     }
 
