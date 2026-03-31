@@ -161,6 +161,10 @@ class InstrumentState:
     last_news_bias: str = "NEUTRAL"
     last_news_impact: str = ""
     last_signal_summary: list[str] = field(default_factory=list)
+    last_exit_time: str = ""
+    last_exit_side: str = ""
+    last_exit_reason: str = ""
+    last_exit_pnl_rub: float = 0.0
 
 
 
@@ -1760,6 +1764,40 @@ def position_held_long_enough(state: InstrumentState, config: BotConfig, min_hol
     return held_for >= timedelta(minutes=required_minutes)
 
 
+def position_reentry_allowed(state: InstrumentState, instrument: InstrumentConfig, signal: str) -> tuple[bool, str]:
+    if instrument.symbol != "GNM6":
+        return True, ""
+    if not state.last_exit_time:
+        return True, ""
+    try:
+        last_exit_at = datetime.fromisoformat(state.last_exit_time)
+    except ValueError:
+        return True, ""
+    if last_exit_at.tzinfo is None:
+        last_exit_at = last_exit_at.replace(tzinfo=UTC)
+
+    cooldown_minutes = 0
+    if state.last_exit_pnl_rub < 0:
+        cooldown_minutes = 45
+    if "Стоп-лосс" in state.last_exit_reason:
+        cooldown_minutes = max(cooldown_minutes, 75)
+    if "противоположный сигнал" in state.last_exit_reason.lower():
+        cooldown_minutes = max(cooldown_minutes, 60)
+    if state.last_exit_side and state.last_exit_side != signal:
+        cooldown_minutes = max(cooldown_minutes, 75)
+
+    if cooldown_minutes <= 0:
+        return True, ""
+
+    next_allowed = last_exit_at + timedelta(minutes=cooldown_minutes)
+    now = datetime.now(UTC)
+    if now >= next_allowed:
+        return True, ""
+
+    remaining = int((next_allowed - now).total_seconds() // 60) + 1
+    return False, f"для {instrument.symbol} действует cooldown после выхода: ждать ещё ~{remaining} мин."
+
+
 def sync_pending_order(
     client: Client,
     config: BotConfig,
@@ -1840,6 +1878,10 @@ def sync_pending_order(
                 strategy=state.entry_strategy,
                 dry_run=False,
             )
+            state.last_exit_time = datetime.now(UTC).isoformat()
+            state.last_exit_side = state.position_side
+            state.last_exit_reason = exit_reason
+            state.last_exit_pnl_rub = pnl
             send_msg(
                 config,
                 build_telegram_card(
@@ -2048,6 +2090,10 @@ def close_position(
             strategy=state.entry_strategy,
             dry_run=True,
         )
+        state.last_exit_time = datetime.now(UTC).isoformat()
+        state.last_exit_side = state.position_side
+        state.last_exit_reason = exit_reason
+        state.last_exit_pnl_rub = pnl
         state.entry_price = None
         state.max_price = None
         state.min_price = None
@@ -2319,7 +2365,12 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
 
     if state.position_side == "FLAT":
         if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol):
-            open_position(client, config, instrument, state, signal, primary_strategy_name)
+            reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal)
+            if reentry_allowed:
+                open_position(client, config, instrument, state, signal, primary_strategy_name)
+            else:
+                logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
+                state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
     else:
         check_exit(client, config, instrument, state, lower_df, signal)
 
