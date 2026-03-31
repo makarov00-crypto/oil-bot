@@ -165,6 +165,10 @@ class InstrumentState:
     last_exit_side: str = ""
     last_exit_reason: str = ""
     last_exit_pnl_rub: float = 0.0
+    last_market_price: float | None = None
+    position_notional_rub: float = 0.0
+    position_variation_margin_rub: float = 0.0
+    position_pnl_pct: float = 0.0
 
 
 
@@ -1507,6 +1511,9 @@ def sync_state_with_portfolio(
         state.breakeven_armed = False
         state.entry_time = ""
         state.entry_strategy = ""
+        state.position_notional_rub = 0.0
+        state.position_variation_margin_rub = 0.0
+        state.position_pnl_pct = 0.0
         return 0
     last_price = get_last_price(client, instrument)
     if state.entry_price is None:
@@ -1717,6 +1724,31 @@ def calculate_futures_pnl_rub(
     return price_diff * qty
 
 
+def refresh_position_snapshot(state: InstrumentState, instrument: InstrumentConfig, current_price: float) -> None:
+    state.last_market_price = current_price
+    if state.position_side == "FLAT" or state.position_qty <= 0 or state.entry_price is None:
+        state.position_notional_rub = 0.0
+        state.position_variation_margin_rub = 0.0
+        state.position_pnl_pct = 0.0
+        return
+
+    state.position_notional_rub = current_price * state.position_qty * max(1, instrument.lot)
+    state.position_variation_margin_rub = calculate_futures_pnl_rub(
+        instrument,
+        state.entry_price,
+        current_price,
+        state.position_qty,
+        state.position_side,
+    )
+    if state.entry_price > 0:
+        if state.position_side == "LONG":
+            state.position_pnl_pct = ((current_price - state.entry_price) / state.entry_price) * 100.0
+        else:
+            state.position_pnl_pct = ((state.entry_price - current_price) / state.entry_price) * 100.0
+    else:
+        state.position_pnl_pct = 0.0
+
+
 def get_exit_profile(config: BotConfig, strategy_name: str) -> ExitProfile:
     strategy = (strategy_name or "").strip()
     if strategy == "opening_range_breakout":
@@ -1851,6 +1883,7 @@ def sync_pending_order(
             state.position_side = state.pending_order_side
             state.breakeven_armed = False
             state.entry_time = datetime.now(UTC).isoformat()
+            refresh_position_snapshot(state, instrument, fill_price)
             append_trade_journal(
                 instrument,
                 "OPEN",
@@ -1903,6 +1936,9 @@ def sync_pending_order(
             state.last_exit_side = state.position_side
             state.last_exit_reason = exit_reason
             state.last_exit_pnl_rub = pnl
+            state.position_notional_rub = 0.0
+            state.position_variation_margin_rub = 0.0
+            state.position_pnl_pct = 0.0
             send_msg(
                 config,
                 build_telegram_card(
@@ -2123,6 +2159,9 @@ def close_position(
         state.breakeven_armed = False
         state.entry_time = ""
         state.entry_strategy = ""
+        state.position_notional_rub = 0.0
+        state.position_variation_margin_rub = 0.0
+        state.position_pnl_pct = 0.0
         save_state(instrument.symbol, state)
         text = build_telegram_card(
             "Тестовое закрытие позиции",
@@ -2343,6 +2382,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                 ]
             )
     current_price = float(lower_df.iloc[-1]["close"])
+    refresh_position_snapshot(state, instrument, current_price)
     candle_time_value = lower_df.iloc[-1].get("time")
     candle_time = (
         candle_time_value.tz_convert("Europe/Moscow").strftime("%Y-%m-%d %H:%M")

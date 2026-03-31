@@ -123,31 +123,45 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
 
 def annotate_trade_rows(rows: list[dict], states: dict[str, dict]) -> list[dict]:
     annotated: list[dict] = []
-    open_by_symbol: dict[str, list[dict]] = {}
+    open_by_key: dict[tuple[str, str], list[dict]] = {}
 
-    for row in rows:
+    for idx, row in enumerate(rows):
         item = dict(row)
+        item["_row_id"] = idx
+        item["event_status"] = "history"
+        annotated.append(item)
+
+    for item in annotated:
         symbol = str(item.get("symbol", ""))
         event = str(item.get("event", "")).upper()
-        state = states.get(symbol, {})
         side = str(item.get("side", "")).upper()
+        key = (symbol, side)
+
+        if event == "OPEN":
+            open_by_key.setdefault(key, []).append(item)
+        elif event == "CLOSE":
+            item["event_status"] = "closed"
+            if open_by_key.get(key):
+                open_item = open_by_key[key].pop(0)
+                open_item["event_status"] = "closed"
+
+    for item in annotated:
+        if str(item.get("event", "")).upper() != "OPEN":
+            continue
+        if item.get("event_status") == "closed":
+            continue
+        symbol = str(item.get("symbol", ""))
+        side = str(item.get("side", "")).upper()
+        state = states.get(symbol, {})
         state_side = str(state.get("position_side", "FLAT")).upper()
         state_qty = int(state.get("position_qty") or 0)
+        if state_side == side and state_side != "FLAT" and state_qty > 0:
+            item["event_status"] = "active"
+        else:
+            item["event_status"] = "history"
 
-        event_status = "history"
-        if event == "OPEN":
-            open_by_symbol.setdefault(symbol, []).append(item)
-            if state_side == side and state_side != "FLAT" and state_qty > 0:
-                event_status = "active"
-            else:
-                event_status = "closed"
-        elif event == "CLOSE":
-            if open_by_symbol.get(symbol):
-                open_by_symbol[symbol].pop(0)
-            event_status = "closed"
-
-        item["event_status"] = event_status
-        annotated.append(item)
+    for item in annotated:
+        item.pop("_row_id", None)
 
     return annotated
 
@@ -303,6 +317,10 @@ def summarize_states(states: dict[str, dict]) -> dict:
                     "side": side,
                     "qty": qty,
                     "entry_price": state.get("entry_price"),
+                    "current_price": state.get("last_market_price"),
+                    "notional_rub": state.get("position_notional_rub") or 0.0,
+                    "variation_margin_rub": state.get("position_variation_margin_rub") or 0.0,
+                    "pnl_pct": state.get("position_pnl_pct") or 0.0,
                     "strategy": state.get("entry_strategy") or "-",
                     "last_signal": signal,
                 }
@@ -429,6 +447,11 @@ def build_dashboard_html() -> str:
       line-height: 1.2;
       letter-spacing: -0.01em;
     }
+    .metric-compact {
+      font-size: clamp(16px, 1.35vw, 24px);
+      line-height: 1.18;
+      letter-spacing: -0.01em;
+    }
     .muted { color: var(--muted); }
     .good { color: var(--good); }
     .bad { color: var(--bad); }
@@ -436,6 +459,11 @@ def build_dashboard_html() -> str:
       width: 100%;
       border-collapse: collapse;
       font-size: 14px;
+    }
+    .table-scroll {
+      max-height: 460px;
+      overflow: auto;
+      border-radius: 14px;
     }
     th, td {
       text-align: left;
@@ -586,17 +614,11 @@ def build_dashboard_html() -> str:
       <section class="panel">
         <h2>Позиции</h2>
         <table id="positionsTable">
-          <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
+          <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход</th><th>Текущая</th><th>В позиции</th><th>Вар. маржа</th><th>Изм. %</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
 
-      <section class="panel">
-        <h2>Сервис</h2>
-        <table id="serviceTable">
-          <tbody></tbody>
-        </table>
-      </section>
     </div>
 
     <section class="panel" style="margin-top:16px;">
@@ -673,15 +695,27 @@ def build_dashboard_html() -> str:
     </section>
 
     <section class="panel" style="margin-top:16px;">
-      <h2>Лента событий</h2>
-      <table id="tradesTable">
-        <thead>
-          <tr>
-            <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">PnL RUB</th><th>Стратегия</th><th>Причина</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div class="section-title">
+        <h2>Лента событий</h2>
+        <label class="muted" for="eventStatusFilter">Статус:
+          <select id="eventStatusFilter" style="margin-left:8px; background:#0b1324; color:#ebf4ff; border:1px solid rgba(102,174,255,0.18); border-radius:10px; padding:6px 10px;">
+            <option value="all">Все</option>
+            <option value="active">Активные</option>
+            <option value="closed">Закрытые</option>
+            <option value="history">История</option>
+          </select>
+        </label>
+      </div>
+      <div class="table-scroll">
+        <table id="tradesTable">
+          <thead>
+            <tr>
+              <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">PnL RUB</th><th>Стратегия</th><th>Причина</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" style="margin-top:16px;">
@@ -689,39 +723,39 @@ def build_dashboard_html() -> str:
       <div class="grid">
         <div>
           <div class="muted">Закрыто</div>
-          <div class="metric" id="reviewClosed">-</div>
+          <div class="metric metric-compact" id="reviewClosed">-</div>
         </div>
         <div>
           <div class="muted">Плюсовых</div>
-          <div class="metric" id="reviewWins">-</div>
+          <div class="metric metric-compact" id="reviewWins">-</div>
         </div>
         <div>
           <div class="muted">Минусовых</div>
-          <div class="metric" id="reviewLosses">-</div>
+          <div class="metric metric-compact" id="reviewLosses">-</div>
         </div>
         <div>
           <div class="muted">Итог по закрытым</div>
-          <div class="metric" id="reviewPnl">-</div>
+          <div class="metric metric-compact" id="reviewPnl">-</div>
         </div>
         <div>
           <div class="muted">Win rate</div>
-          <div class="metric" id="reviewWinRate">-</div>
+          <div class="metric metric-compact" id="reviewWinRate">-</div>
         </div>
         <div>
           <div class="muted">Лучший инструмент</div>
-          <div class="metric metric-wide" id="reviewBestSymbol">-</div>
+          <div class="metric metric-wide metric-compact" id="reviewBestSymbol">-</div>
         </div>
         <div>
           <div class="muted">Худший инструмент</div>
-          <div class="metric metric-wide" id="reviewWorstSymbol">-</div>
+          <div class="metric metric-wide metric-compact" id="reviewWorstSymbol">-</div>
         </div>
         <div>
           <div class="muted">Лучшая стратегия</div>
-          <div class="metric metric-wide" id="reviewBestStrategy">-</div>
+          <div class="metric metric-wide metric-compact" id="reviewBestStrategy">-</div>
         </div>
         <div>
           <div class="muted">Худшая стратегия</div>
-          <div class="metric metric-wide" id="reviewWorstStrategy">-</div>
+          <div class="metric metric-wide metric-compact" id="reviewWorstStrategy">-</div>
         </div>
       </div>
       <table id="reviewTable" style="margin-top:16px;">
@@ -775,6 +809,23 @@ def build_dashboard_html() -> str:
       return `${num.toFixed(2)} RUB`;
     }
 
+    function formatPrice(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        return '-';
+      }
+      return num.toFixed(4);
+    }
+
+    function formatPct(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        return '-';
+      }
+      const sign = num > 0 ? '+' : '';
+      return `${sign}${num.toFixed(2)}%`;
+    }
+
     function formatStrength(value) {
       const raw = String(value || '').toUpperCase();
       const map = { HIGH: 'СИЛЬНЫЙ', MEDIUM: 'СРЕДНИЙ', LOW: 'СЛАБЫЙ' };
@@ -824,6 +875,14 @@ def build_dashboard_html() -> str:
       return map[raw] || raw || '-';
     }
 
+    function filterTradeRows(rows) {
+      const select = document.getElementById('eventStatusFilter');
+      if (!select) return rows;
+      const value = select.value || 'all';
+      if (value === 'all') return rows;
+      return rows.filter((row) => String(row.event_status || '').toLowerCase() === value);
+    }
+
     async function loadData() {
       const response = await fetch('/api/dashboard');
       const data = await response.json();
@@ -854,6 +913,11 @@ def build_dashboard_html() -> str:
 
       const runtimeBody = document.querySelector('#runtimeTable tbody');
       runtimeBody.innerHTML = `
+        <tr><td>Бот</td><td>${signalBadge(data.health.bot_service.active || '-')}</td></tr>
+        <tr><td>Панель</td><td>${signalBadge(data.health.dashboard_service.active || '-')}</td></tr>
+        <tr><td>Health</td><td>${data.health.ok ? '<span class="good mono">OK</span>' : '<span class="bad mono">FAIL</span>'}</td></tr>
+        <tr><td>Инструментов</td><td class="mono">${data.health.symbols_count}</td></tr>
+        <tr><td>Срез health</td><td class="mono">${escapeHtml(data.health.generated_at_moscow || '-')}</td></tr>
         <tr><td>Режим</td><td>${escapeHtml(runtime.mode === 'DRY_RUN' ? 'ТЕСТ' : (runtime.mode || '-'))}</td></tr>
         <tr><td>Старт</td><td class="mono">${escapeHtml(runtime.started_at_moscow || '-')}</td></tr>
         <tr><td>Последний цикл</td><td class="mono">${escapeHtml(runtime.last_cycle_at_moscow || '-')}</td></tr>
@@ -887,26 +951,26 @@ def build_dashboard_html() -> str:
       const posBody = document.querySelector('#positionsTable tbody');
       posBody.innerHTML = '';
       for (const pos of data.summary.open_positions) {
+        const vm = Number(pos.variation_margin_rub || 0);
+        const pct = Number(pos.pnl_pct || 0);
+        const vmClass = vm > 0 ? 'good' : vm < 0 ? 'bad' : 'muted';
+        const pctClass = pct > 0 ? 'good' : pct < 0 ? 'bad' : 'muted';
         posBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(pos.symbol)}</td>
           <td>${signalBadge(pos.side)}</td>
           <td class="mono">${escapeHtml(pos.qty)}</td>
+          <td class="mono">${escapeHtml(formatPrice(pos.entry_price))}</td>
+          <td class="mono">${escapeHtml(formatPrice(pos.current_price))}</td>
+          <td class="mono right">${escapeHtml(formatRub(pos.notional_rub))}</td>
+          <td class="mono right ${vmClass}">${escapeHtml(formatRub(pos.variation_margin_rub))}</td>
+          <td class="mono right ${pctClass}">${escapeHtml(formatPct(pos.pnl_pct))}</td>
           <td>${escapeHtml(pos.strategy)}</td>
           <td>${signalBadge(pos.last_signal)}</td>
         </tr>`);
       }
       if (!data.summary.open_positions.length) {
-        posBody.insertAdjacentHTML('beforeend', '<tr><td colspan="5" class="muted">Открытых позиций нет.</td></tr>');
+        posBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Открытых позиций нет.</td></tr>');
       }
-
-      const svcBody = document.querySelector('#serviceTable tbody');
-      svcBody.innerHTML = `
-        <tr><td>Бот</td><td>${signalBadge(data.health.bot_service.active || '-')}</td></tr>
-        <tr><td>Dashboard</td><td>${signalBadge(data.health.dashboard_service.active || '-')}</td></tr>
-        <tr><td>Health</td><td>${data.health.ok ? '<span class="good mono">OK</span>' : '<span class="bad mono">FAIL</span>'}</td></tr>
-        <tr><td>Инструментов</td><td class="mono">${data.health.symbols_count}</td></tr>
-        <tr><td>Срез</td><td class="mono">${escapeHtml(data.health.generated_at_moscow || '-')}</td></tr>
-      `;
 
       const signalBody = document.querySelector('#signalsTable tbody');
       signalBody.innerHTML = '';
@@ -927,7 +991,8 @@ def build_dashboard_html() -> str:
 
       const tradeBody = document.querySelector('#tradesTable tbody');
       tradeBody.innerHTML = '';
-      for (const row of data.trades.slice().reverse()) {
+      const filteredTrades = filterTradeRows(data.trades.slice().reverse());
+      for (const row of filteredTrades) {
         const pnl = row.pnl_rub ?? '-';
         const pnlNum = Number(pnl);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
@@ -944,7 +1009,7 @@ def build_dashboard_html() -> str:
           <td class="reason">${escapeHtml(row.reason || '-')}</td>
         </tr>`);
       }
-      if (!data.trades.length) {
+      if (!filteredTrades.length) {
         tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Журнал сделок пока пуст.</td></tr>');
       }
 
@@ -961,7 +1026,7 @@ def build_dashboard_html() -> str:
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       reviewBody.innerHTML = '';
-      for (const row of review.closed_reviews || []) {
+      for (const row of (review.closed_reviews || []).slice().reverse()) {
         const pnlNum = Number(row.pnl_rub);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
         reviewBody.insertAdjacentHTML('beforeend', `<tr>
@@ -980,8 +1045,14 @@ def build_dashboard_html() -> str:
       }
     }
 
-    loadData();
-    setInterval(loadData, 15000);
+    document.addEventListener('DOMContentLoaded', () => {
+      const filter = document.getElementById('eventStatusFilter');
+      if (filter) {
+        filter.addEventListener('change', loadData);
+      }
+      loadData();
+      setInterval(loadData, 15000);
+    });
   </script>
 </body>
 </html>
