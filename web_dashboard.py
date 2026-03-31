@@ -341,7 +341,7 @@ def build_dashboard_html() -> str:
   <title>Панель Oil Bot</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #030711;
@@ -378,11 +378,17 @@ def build_dashboard_html() -> str:
     }
     h1, h2 { margin: 0 0 12px; }
     h1 {
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      font-family: "Orbitron", "Manrope", sans-serif;
-      font-size: 28px;
+      letter-spacing: 0.01em;
+      font-family: "Sora", "Manrope", sans-serif;
+      font-size: 30px;
+      line-height: 1.1;
       text-shadow: 0 0 28px var(--glow);
+    }
+    h2 {
+      font-family: "Sora", "Manrope", sans-serif;
+      font-size: 24px;
+      line-height: 1.15;
+      letter-spacing: 0.01em;
     }
     .grid {
       display: grid;
@@ -408,11 +414,20 @@ def build_dashboard_html() -> str:
       margin-bottom: 16px;
     }
     .metric {
-      font-size: 31px;
+      font-size: clamp(22px, 2.2vw, 34px);
       font-weight: 700;
-      font-family: "Orbitron", "JetBrains Mono", monospace;
-      letter-spacing: -0.03em;
-      text-shadow: 0 0 18px var(--glow);
+      font-family: "Sora", "Manrope", sans-serif;
+      letter-spacing: -0.02em;
+      line-height: 1.12;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      text-wrap: balance;
+      text-shadow: 0 0 12px var(--glow);
+    }
+    .metric-wide {
+      font-size: clamp(17px, 1.5vw, 24px);
+      line-height: 1.2;
+      letter-spacing: -0.01em;
     }
     .muted { color: var(--muted); }
     .good { color: var(--good); }
@@ -542,7 +557,7 @@ def build_dashboard_html() -> str:
       <div class="grid">
         <div>
           <div class="muted">Режим</div>
-          <div class="metric" id="portfolioMode">-</div>
+            <div class="metric metric-wide" id="portfolioMode">-</div>
         </div>
         <div>
           <div class="muted">Портфель</div>
@@ -612,11 +627,11 @@ def build_dashboard_html() -> str:
       <div class="grid">
         <div>
           <div class="muted">Состояние runtime</div>
-          <div class="metric" id="runtimeState">-</div>
+          <div class="metric metric-wide" id="runtimeState">-</div>
         </div>
         <div>
           <div class="muted">Сессия</div>
-          <div class="metric" id="runtimeSession">-</div>
+          <div class="metric metric-wide" id="runtimeSession">-</div>
         </div>
         <div>
           <div class="muted">Циклов</div>
@@ -702,19 +717,19 @@ def build_dashboard_html() -> str:
         </div>
         <div>
           <div class="muted">Лучший инструмент</div>
-          <div class="metric" id="reviewBestSymbol">-</div>
+          <div class="metric metric-wide" id="reviewBestSymbol">-</div>
         </div>
         <div>
           <div class="muted">Худший инструмент</div>
-          <div class="metric" id="reviewWorstSymbol">-</div>
+          <div class="metric metric-wide" id="reviewWorstSymbol">-</div>
         </div>
         <div>
           <div class="muted">Лучшая стратегия</div>
-          <div class="metric" id="reviewBestStrategy">-</div>
+          <div class="metric metric-wide" id="reviewBestStrategy">-</div>
         </div>
         <div>
           <div class="muted">Худшая стратегия</div>
-          <div class="metric" id="reviewWorstStrategy">-</div>
+          <div class="metric metric-wide" id="reviewWorstStrategy">-</div>
         </div>
       </div>
       <table id="reviewTable" style="margin-top:16px;">
