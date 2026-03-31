@@ -1771,7 +1771,7 @@ def position_held_long_enough(state: InstrumentState, config: BotConfig, min_hol
 
 
 def position_reentry_allowed(state: InstrumentState, instrument: InstrumentConfig, signal: str) -> tuple[bool, str]:
-    if instrument.symbol != "GNM6":
+    if instrument.symbol not in {"GNM6", "USDRUBF", "SRM6"}:
         return True, ""
     if not state.last_exit_time:
         return True, ""
@@ -1783,14 +1783,29 @@ def position_reentry_allowed(state: InstrumentState, instrument: InstrumentConfi
         last_exit_at = last_exit_at.replace(tzinfo=UTC)
 
     cooldown_minutes = 0
-    if state.last_exit_pnl_rub < 0:
-        cooldown_minutes = 45
-    if "Стоп-лосс" in state.last_exit_reason:
-        cooldown_minutes = max(cooldown_minutes, 75)
-    if "противоположный сигнал" in state.last_exit_reason.lower():
-        cooldown_minutes = max(cooldown_minutes, 60)
-    if state.last_exit_side and state.last_exit_side != signal:
-        cooldown_minutes = max(cooldown_minutes, 75)
+    if instrument.symbol == "GNM6":
+        if state.last_exit_pnl_rub < 0:
+            cooldown_minutes = 45
+        if "Стоп-лосс" in state.last_exit_reason:
+            cooldown_minutes = max(cooldown_minutes, 75)
+        if "противоположный сигнал" in state.last_exit_reason.lower():
+            cooldown_minutes = max(cooldown_minutes, 60)
+        if state.last_exit_side and state.last_exit_side != signal:
+            cooldown_minutes = max(cooldown_minutes, 75)
+    elif instrument.symbol == "USDRUBF":
+        if state.last_exit_pnl_rub < 0:
+            cooldown_minutes = 60
+        if "Трейлинг-стоп" in state.last_exit_reason or "MACD" in state.last_exit_reason:
+            cooldown_minutes = max(cooldown_minutes, 45)
+        if state.last_exit_side and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            cooldown_minutes = max(cooldown_minutes, 75)
+    elif instrument.symbol == "SRM6":
+        if state.last_exit_pnl_rub < 0:
+            cooldown_minutes = 45
+        if "противоположный сигнал" in state.last_exit_reason.lower():
+            cooldown_minutes = max(cooldown_minutes, 60)
+        if state.last_exit_side and state.last_exit_side != signal:
+            cooldown_minutes = max(cooldown_minutes, 75)
 
     if cooldown_minutes <= 0:
         return True, ""

@@ -37,8 +37,12 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     volatility_ok = atr_pct >= 0.0004
     rsi_short_ok = 28.0 <= rsi <= 58.0
     rsi_long_ok = 42.0 <= rsi <= 72.0
-    higher_tf_short_ok = higher_tf_bias != "LONG"
-    higher_tf_long_ok = higher_tf_bias != "SHORT"
+    if instrument.symbol == "SRM6":
+        higher_tf_short_ok = higher_tf_bias == "SHORT"
+        higher_tf_long_ok = higher_tf_bias == "LONG"
+    else:
+        higher_tf_short_ok = higher_tf_bias != "LONG"
+        higher_tf_long_ok = higher_tf_bias != "SHORT"
 
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",

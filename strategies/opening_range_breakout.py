@@ -7,6 +7,7 @@ import pandas as pd
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 FX_OPENING_RANGE_START = time(9, 0)
 FX_OPENING_RANGE_CANDLES = 6
+FX_OPENING_RANGE_CUTOFF = time(14, 0)
 
 
 def _get_today_opening_range(df: pd.DataFrame) -> pd.DataFrame:
@@ -23,6 +24,10 @@ def _get_today_opening_range(df: pd.DataFrame) -> pd.DataFrame:
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
     last = df.iloc[-1]
     prev = df.iloc[-2]
+    time_msk = last["time"].tz_convert(MOSCOW_TZ)
+
+    if time_msk.time() > FX_OPENING_RANGE_CUTOFF:
+        return "HOLD", "Сигнал HOLD (opening_range_breakout): режим opening range активен только до 14:00 МСК."
 
     opening_range_df = _get_today_opening_range(df)
     if len(opening_range_df) < 3:
