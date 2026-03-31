@@ -576,6 +576,57 @@ def build_dashboard_html() -> str:
       align-items: center;
       gap: 16px;
     }
+    .mobile-cards {
+      display: none;
+      gap: 12px;
+    }
+    .mobile-card {
+      background: rgba(10, 18, 34, 0.72);
+      border: 1px solid rgba(102, 174, 255, 0.14);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    }
+    .mobile-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .mobile-card-title {
+      font-family: "Sora", "Manrope", sans-serif;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .mobile-card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 14px;
+      margin-bottom: 10px;
+    }
+    .mobile-card-item .muted {
+      display: block;
+      font-size: 11px;
+      margin-bottom: 3px;
+    }
+    .mobile-card-value {
+      font-size: 13px;
+      line-height: 1.35;
+      color: #dbe9f8;
+    }
+    .mobile-card-footer {
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid rgba(102, 174, 255, 0.10);
+      padding-top: 10px;
+    }
+    .mobile-card-text {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #c8d7ea;
+    }
     .generated {
       font-size: 12px;
       color: var(--muted);
@@ -637,6 +688,15 @@ def build_dashboard_html() -> str:
       .table-scroll {
         margin: 0 -4px;
         padding-bottom: 2px;
+      }
+      .desktop-table {
+        display: none;
+      }
+      .mobile-cards {
+        display: grid;
+      }
+      .mobile-card-grid {
+        grid-template-columns: 1fr 1fr;
       }
     }
   </style>
@@ -715,7 +775,8 @@ def build_dashboard_html() -> str:
     <div class="grid">
       <section class="panel">
         <h2>Позиции</h2>
-        <div class="table-scroll">
+        <div id="positionsCards" class="mobile-cards"></div>
+        <div class="table-scroll desktop-table">
           <table id="positionsTable">
             <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход</th><th>Текущая</th><th>Стоимость</th><th>Вар. маржа</th><th>Изм. %</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
             <tbody></tbody>
@@ -727,7 +788,8 @@ def build_dashboard_html() -> str:
 
     <section class="panel" style="margin-top:16px;">
       <h2>Сигналы по инструментам</h2>
-      <div class="table-scroll">
+      <div id="signalsCards" class="mobile-cards"></div>
+      <div class="table-scroll desktop-table">
         <table id="signalsTable">
           <thead>
             <tr>
@@ -1106,7 +1168,9 @@ def build_dashboard_html() -> str:
       }
 
       const posBody = document.querySelector('#positionsTable tbody');
+      const posCards = document.getElementById('positionsCards');
       posBody.innerHTML = '';
+      posCards.innerHTML = '';
       for (const pos of data.summary.open_positions) {
         const vm = Number(pos.variation_margin_rub || 0);
         const pct = Number(pos.pnl_pct || 0);
@@ -1124,13 +1188,32 @@ def build_dashboard_html() -> str:
           <td>${escapeHtml(pos.strategy)}</td>
           <td>${signalBadge(pos.last_signal)}</td>
         </tr>`);
+        posCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
+          <div class="mobile-card-head">
+            <div class="mobile-card-title mono">${escapeHtml(pos.symbol)}</div>
+            ${signalBadge(pos.side)}
+          </div>
+          <div class="mobile-card-grid">
+            <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(pos.qty)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Сигнал</span><div class="mobile-card-value">${signalBadge(pos.last_signal)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Вход</span><div class="mobile-card-value mono">${escapeHtml(formatPrice(pos.entry_price))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Текущая</span><div class="mobile-card-value mono">${escapeHtml(formatPrice(pos.current_price))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стоимость</span><div class="mobile-card-value mono">${escapeHtml(formatRub(pos.notional_rub))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Изм. %</span><div class="mobile-card-value mono ${pctClass}">${escapeHtml(formatPct(pos.pnl_pct))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Вар. маржа</span><div class="mobile-card-value mono ${vmClass}">${escapeHtml(formatRub(pos.variation_margin_rub))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(pos.strategy)}</div></div>
+          </div>
+        </article>`);
       }
       if (!data.summary.open_positions.length) {
         posBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Открытых позиций нет.</td></tr>');
+        posCards.insertAdjacentHTML('beforeend', '<div class="muted">Открытых позиций нет.</div>');
       }
 
       const signalBody = document.querySelector('#signalsTable tbody');
+      const signalCards = document.getElementById('signalsCards');
       signalBody.innerHTML = '';
+      signalCards.innerHTML = '';
       for (const [symbol, state] of Object.entries(data.states)) {
         const summary = Array.isArray(state.last_signal_summary) && state.last_signal_summary.length
           ? state.last_signal_summary[0]
@@ -1144,6 +1227,21 @@ def build_dashboard_html() -> str:
           <td class="reason">${escapeHtml(state.last_news_impact || '-')}</td>
           <td class="reason">${escapeHtml(summary)}</td>
         </tr>`);
+        signalCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
+          <div class="mobile-card-head">
+            <div class="mobile-card-title mono">${escapeHtml(symbol)}</div>
+            ${signalBadge(state.last_signal || '-')}
+          </div>
+          <div class="mobile-card-grid">
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(state.last_strategy_name || state.entry_strategy || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Старший ТФ</span><div class="mobile-card-value">${signalBadge(state.last_higher_tf_bias || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Влияние</span><div class="mobile-card-value">${escapeHtml(state.last_news_impact || '-')}</div></div>
+          </div>
+          <div class="mobile-card-footer">
+            <div class="mobile-card-text"><span class="muted">Ключевая причина</span><br>${escapeHtml(summary)}</div>
+          </div>
+        </article>`);
       }
 
       const tradeBody = document.querySelector('#tradesTable tbody');
