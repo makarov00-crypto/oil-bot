@@ -1612,10 +1612,16 @@ def calculate_order_quantity(
         allowed_margin_total = equity * config.max_margin_usage_pct
         available_margin_budget = allowed_margin_total - snapshot.blocked_guarantee_rub
         if available_margin_budget <= 0:
-            return 0
-        margin_cap_qty = int(available_margin_budget // margin_per_lot)
-        if margin_cap_qty < 1:
-            return 0
+            if snapshot.free_rub >= margin_per_lot:
+                margin_cap_qty = 1
+            else:
+                return 0
+        else:
+            margin_cap_qty = int(available_margin_budget // margin_per_lot)
+            if margin_cap_qty < 1 and snapshot.free_rub >= margin_per_lot:
+                margin_cap_qty = 1
+            if margin_cap_qty < 1:
+                return 0
         raw_qty = min(raw_qty, margin_cap_qty)
 
     try:
