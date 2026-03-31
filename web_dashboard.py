@@ -426,9 +426,6 @@ def build_dashboard_html() -> str:
       backdrop-filter: blur(14px);
     }
     .hero {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: 2fr 1fr;
       margin-bottom: 16px;
     }
     .metric {
@@ -534,9 +531,6 @@ def build_dashboard_html() -> str:
     a {
       color: var(--accent);
     }
-    @media (max-width: 860px) {
-      .hero { grid-template-columns: 1fr; }
-    }
   </style>
 </head>
 <body>
@@ -629,34 +623,6 @@ def build_dashboard_html() -> str:
             <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>News bias</th><th>Влияние</th><th>Ключевая причина</th>
           </tr>
         </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <section class="panel" style="margin-top:16px;">
-      <div class="section-title">
-        <h2>Мониторинг сервиса</h2>
-        <div class="generated" id="runtimeUpdatedAt">Runtime: -</div>
-      </div>
-      <div class="grid">
-        <div>
-          <div class="muted">Состояние runtime</div>
-          <div class="metric metric-wide" id="runtimeState">-</div>
-        </div>
-        <div>
-          <div class="muted">Сессия</div>
-          <div class="metric metric-wide" id="runtimeSession">-</div>
-        </div>
-        <div>
-          <div class="muted">Циклов</div>
-          <div class="metric" id="runtimeCycles">-</div>
-        </div>
-        <div>
-          <div class="muted">Ошибок подряд</div>
-          <div class="metric" id="runtimeErrors">-</div>
-        </div>
-      </div>
-      <table id="runtimeTable" style="margin-top:16px;">
         <tbody></tbody>
       </table>
     </section>
@@ -764,6 +730,34 @@ def build_dashboard_html() -> str:
             <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">PnL RUB</th><th>Выход</th><th>Вердикт</th>
           </tr>
         </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Мониторинг сервиса</h2>
+        <div class="generated" id="runtimeUpdatedAt">Runtime: -</div>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="muted">Состояние runtime</div>
+          <div class="metric metric-wide" id="runtimeState">-</div>
+        </div>
+        <div>
+          <div class="muted">Сессия</div>
+          <div class="metric metric-wide" id="runtimeSession">-</div>
+        </div>
+        <div>
+          <div class="muted">Циклов</div>
+          <div class="metric" id="runtimeCycles">-</div>
+        </div>
+        <div>
+          <div class="muted">Ошибок подряд</div>
+          <div class="metric" id="runtimeErrors">-</div>
+        </div>
+      </div>
+      <table id="runtimeTable" style="margin-top:16px;">
         <tbody></tbody>
       </table>
     </section>
