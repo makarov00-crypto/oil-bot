@@ -824,7 +824,8 @@ def build_dashboard_html() -> str:
           <div class="metric" id="newsBlockCount">-</div>
         </div>
       </div>
-      <div class="table-scroll">
+      <div id="newsCards" class="mobile-cards" style="margin-top:16px;"></div>
+      <div class="table-scroll desktop-table">
         <table id="newsTable" style="margin-top:16px;">
           <thead>
             <tr>
@@ -848,7 +849,8 @@ def build_dashboard_html() -> str:
           </select>
         </label>
       </div>
-      <div class="table-scroll">
+      <div id="tradesCards" class="mobile-cards" style="margin-top:16px;"></div>
+      <div class="table-scroll desktop-table">
         <table id="tradesTable">
           <thead>
             <tr>
@@ -900,7 +902,8 @@ def build_dashboard_html() -> str:
           <div class="metric metric-wide metric-compact" id="reviewWorstStrategy">-</div>
         </div>
       </div>
-      <div class="table-scroll">
+      <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
+      <div class="table-scroll desktop-table">
         <table id="reviewTable" style="margin-top:16px;">
           <thead>
             <tr>
@@ -1146,7 +1149,9 @@ def build_dashboard_html() -> str:
       document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
 
       const newsBody = document.querySelector('#newsTable tbody');
+      const newsCards = document.getElementById('newsCards');
       newsBody.innerHTML = '';
+      newsCards.innerHTML = '';
       for (const item of activeBiases) {
         const hasMessage = String(item.message_text || '').trim().length > 0;
         const reasonText = humanizeNewsReason(item.reason || '-');
@@ -1162,9 +1167,25 @@ def build_dashboard_html() -> str:
           <td class="mono">${escapeHtml(item.expires_at_moscow || '-')}</td>
           <td><div class="news-reason"><span class="reason">${escapeHtml(reasonText)}</span>${detailsButton}</div></td>
         </tr>`);
+        newsCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
+          <div class="mobile-card-head">
+            <div class="mobile-card-title mono">${escapeHtml(item.symbol || '-')}</div>
+            ${signalBadge(item.bias || '-')}
+          </div>
+          <div class="mobile-card-grid">
+            <div class="mobile-card-item"><span class="muted">Сила</span><div class="mobile-card-value">${escapeHtml(formatStrength(item.strength || '-'))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Источник</span><div class="mobile-card-value">${escapeHtml(item.source || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Актуально до</span><div class="mobile-card-value mono">${escapeHtml(item.expires_at_moscow || '-')}</div></div>
+          </div>
+          <div class="mobile-card-footer">
+            <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(reasonText)}</div>
+            ${hasMessage ? `<div class="mobile-card-text">${detailsButton}</div>` : ''}
+          </div>
+        </article>`);
       }
       if (!activeBiases.length) {
         newsBody.insertAdjacentHTML('beforeend', '<tr><td colspan="6" class="muted">Активных news bias сейчас нет.</td></tr>');
+        newsCards.insertAdjacentHTML('beforeend', '<div class="muted">Активных news bias сейчас нет.</div>');
       }
 
       const posBody = document.querySelector('#positionsTable tbody');
@@ -1245,7 +1266,9 @@ def build_dashboard_html() -> str:
       }
 
       const tradeBody = document.querySelector('#tradesTable tbody');
+      const tradeCards = document.getElementById('tradesCards');
       tradeBody.innerHTML = '';
+      tradeCards.innerHTML = '';
       const filteredTrades = filterTradeRows(data.trades.slice().reverse());
       for (const row of filteredTrades) {
         const pnl = row.pnl_rub ?? '-';
@@ -1263,9 +1286,28 @@ def build_dashboard_html() -> str:
           <td>${escapeHtml(row.strategy || '-')}</td>
           <td class="reason">${escapeHtml(row.reason || '-')}</td>
         </tr>`);
+        tradeCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
+          <div class="mobile-card-head">
+            <div class="mobile-card-title mono">${escapeHtml(row.symbol || '-')}</div>
+            ${eventStatusBadge(row.event_status || 'history')}
+          </div>
+          <div class="mobile-card-grid">
+            <div class="mobile-card-item"><span class="muted">Время</span><div class="mobile-card-value mono">${escapeHtml(row.time || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Событие</span><div class="mobile-card-value">${escapeHtml(formatEventLabel(row.event || '-'))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Сторона</span><div class="mobile-card-value">${signalBadge(row.side || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(row.qty_lots || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Цена</span><div class="mobile-card-value mono">${escapeHtml(row.price ?? '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">PnL</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(pnl)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
+          </div>
+          <div class="mobile-card-footer">
+            <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason || '-')}</div>
+          </div>
+        </article>`);
       }
       if (!filteredTrades.length) {
         tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Журнал сделок пока пуст.</td></tr>');
+        tradeCards.insertAdjacentHTML('beforeend', '<div class="muted">Журнал сделок пока пуст.</div>');
       }
 
       const review = data.trade_review || {};
@@ -1280,7 +1322,9 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewWorstStrategy').textContent = review.worst_strategy ? `${review.worst_strategy.strategy} (${Number(review.worst_strategy.pnl_rub).toFixed(2)})` : '-';
 
       const reviewBody = document.querySelector('#reviewTable tbody');
+      const reviewCards = document.getElementById('reviewCards');
       reviewBody.innerHTML = '';
+      reviewCards.innerHTML = '';
       for (const row of (review.closed_reviews || []).slice().reverse()) {
         const pnlNum = Number(row.pnl_rub);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
@@ -1294,9 +1338,26 @@ def build_dashboard_html() -> str:
           <td class="reason">${escapeHtml(row.exit_reason || '-')}</td>
           <td>${escapeHtml(row.verdict || '-')}</td>
         </tr>`);
+        reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
+          <div class="mobile-card-head">
+            <div class="mobile-card-title mono">${escapeHtml(row.symbol || '-')}</div>
+            ${signalBadge(row.side || '-')}
+          </div>
+          <div class="mobile-card-grid">
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">PnL</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.pnl_rub || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Вход</span><div class="mobile-card-value mono">${escapeHtml(row.entry_time || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Выход</span><div class="mobile-card-value mono">${escapeHtml(row.exit_time || '-')}</div></div>
+          </div>
+          <div class="mobile-card-footer">
+            <div class="mobile-card-text"><span class="muted">Причина выхода</span><br>${escapeHtml(row.exit_reason || '-')}</div>
+            <div class="mobile-card-text"><span class="muted">Вердикт</span><br>${escapeHtml(row.verdict || '-')}</div>
+          </div>
+        </article>`);
       }
       if (!(review.closed_reviews || []).length) {
         reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="8" class="muted">Закрытых сделок пока нет.</td></tr>');
+        reviewCards.insertAdjacentHTML('beforeend', '<div class="muted">Закрытых сделок пока нет.</div>');
       }
     }
 
