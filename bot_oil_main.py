@@ -44,6 +44,7 @@ STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
+NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 LOG_DIR = Path(__file__).with_name("logs")
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -228,6 +229,14 @@ def save_portfolio_snapshot(payload: dict[str, Any]) -> None:
 def save_runtime_status(payload: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     RUNTIME_STATUS_PATH.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+
+
+def save_news_snapshot(payload: dict[str, Any]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    NEWS_SNAPSHOT_PATH.write_text(
         json.dumps(payload, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
@@ -603,6 +612,25 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
     active = select_active_biases(all_biases, now=now)
     NEWS_CACHE["fetched_at"] = now
     NEWS_CACHE["biases"] = active
+    save_news_snapshot(
+        {
+            "fetched_at": now.isoformat(),
+            "fetched_at_moscow": now.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+            "active_biases": [
+                {
+                    "symbol": item.symbol,
+                    "bias": item.bias,
+                    "strength": item.strength,
+                    "source": item.source,
+                    "reason": item.reason,
+                    "expires_at": item.expires_at.isoformat(),
+                    "expires_at_moscow": item.expires_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+                    "score": item.score,
+                }
+                for item in sorted(active.values(), key=lambda x: (-x.score, x.symbol))
+            ],
+        }
+    )
     return active
 
 

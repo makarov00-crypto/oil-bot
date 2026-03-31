@@ -17,6 +17,7 @@ LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
+NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -65,6 +66,15 @@ def load_runtime_status() -> dict:
         return {}
     try:
         return load_json(RUNTIME_STATUS_PATH)
+    except Exception:
+        return {}
+
+
+def load_news_snapshot() -> dict:
+    if not NEWS_SNAPSHOT_PATH.exists():
+        return {}
+    try:
+        return load_json(NEWS_SNAPSHOT_PATH)
     except Exception:
         return {}
 
@@ -587,6 +597,39 @@ def build_dashboard_html() -> str:
     </section>
 
     <section class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Новости</h2>
+        <div class="generated" id="newsUpdatedAt">Новости: -</div>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="muted">Активных bias</div>
+          <div class="metric" id="newsCount">-</div>
+        </div>
+        <div>
+          <div class="muted">LONG</div>
+          <div class="metric" id="newsLongCount">-</div>
+        </div>
+        <div>
+          <div class="muted">SHORT</div>
+          <div class="metric" id="newsShortCount">-</div>
+        </div>
+        <div>
+          <div class="muted">BLOCK</div>
+          <div class="metric" id="newsBlockCount">-</div>
+        </div>
+      </div>
+      <table id="newsTable" style="margin-top:16px;">
+        <thead>
+          <tr>
+            <th>Инструмент</th><th>Bias</th><th>Сила</th><th>Источник</th><th>Актуально до</th><th>Причина</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top:16px;">
       <h2>Состояние инструментов</h2>
       <table id="statesTable">
         <thead>
@@ -709,6 +752,30 @@ def build_dashboard_html() -> str:
         <tr><td>Последний цикл</td><td class="mono">${escapeHtml(runtime.last_cycle_at_moscow || '-')}</td></tr>
         <tr><td>Последняя ошибка</td><td class="reason">${escapeHtml(runtime.last_error || '-')}</td></tr>
       `;
+
+      const news = data.news || {};
+      const activeBiases = Array.isArray(news.active_biases) ? news.active_biases : [];
+      document.getElementById('newsUpdatedAt').textContent = `Новости: ${news.fetched_at_moscow || '-'}`;
+      document.getElementById('newsCount').textContent = activeBiases.length;
+      document.getElementById('newsLongCount').textContent = activeBiases.filter((item) => item.bias === 'LONG').length;
+      document.getElementById('newsShortCount').textContent = activeBiases.filter((item) => item.bias === 'SHORT').length;
+      document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
+
+      const newsBody = document.querySelector('#newsTable tbody');
+      newsBody.innerHTML = '';
+      for (const item of activeBiases) {
+        newsBody.insertAdjacentHTML('beforeend', `<tr>
+          <td class="mono">${escapeHtml(item.symbol || '-')}</td>
+          <td>${signalBadge(item.bias || '-')}</td>
+          <td>${escapeHtml(item.strength || '-')}</td>
+          <td>${escapeHtml(item.source || '-')}</td>
+          <td class="mono">${escapeHtml(item.expires_at_moscow || '-')}</td>
+          <td class="reason">${escapeHtml(item.reason || '-')}</td>
+        </tr>`);
+      }
+      if (!activeBiases.length) {
+        newsBody.insertAdjacentHTML('beforeend', '<tr><td colspan="6" class="muted">Активных news bias сейчас нет.</td></tr>');
+      }
 
       const posBody = document.querySelector('#positionsTable tbody');
       posBody.innerHTML = '';
@@ -836,6 +903,7 @@ def api_dashboard() -> dict:
         "health": build_health_payload(states),
         "portfolio": load_portfolio_snapshot(),
         "runtime": load_runtime_status(),
+        "news": load_news_snapshot(),
         "trade_review": load_trade_review(120),
         "summary": summarize_states(states),
         "meta": load_meta(),
