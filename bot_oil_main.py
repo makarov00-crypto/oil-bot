@@ -1836,6 +1836,8 @@ def position_reentry_allowed(state: InstrumentState, instrument: InstrumentConfi
     if instrument.symbol == "GNM6":
         if state.last_exit_pnl_rub < 0:
             cooldown_minutes = 45
+        if "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            cooldown_minutes = max(cooldown_minutes, 45)
         if "Стоп-лосс" in state.last_exit_reason:
             cooldown_minutes = max(cooldown_minutes, 75)
         if "противоположный сигнал" in state.last_exit_reason.lower():
@@ -2235,6 +2237,7 @@ def check_exit(
     last = df.iloc[-1]
     profile = get_strategy_profile(config, instrument)
     exit_profile = get_exit_profile(config, state.entry_strategy)
+    is_trend_rollover = state.entry_strategy == "trend_rollover"
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
     macd = float(last["macd"])
@@ -2268,7 +2271,7 @@ def check_exit(
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
         elif price <= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} <= {trailing_price:.4f}")
-        elif min_hold_passed and state.breakeven_armed and rsi >= profile.rsi_exit_long:
+        elif min_hold_passed and state.breakeven_armed and rsi >= profile.rsi_exit_long and not is_trend_rollover:
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
         elif min_hold_passed and macd_down:
             close_position(client, config, instrument, state, "MACD подтверждённо развернулся вниз и цена потеряла EMA20")
@@ -2294,7 +2297,7 @@ def check_exit(
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
         elif price >= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} >= {trailing_price:.4f}")
-        elif min_hold_passed and state.breakeven_armed and rsi <= profile.rsi_exit_short:
+        elif min_hold_passed and state.breakeven_armed and rsi <= profile.rsi_exit_short and not is_trend_rollover:
             close_position(client, config, instrument, state, f"RSI вышел в зону перепроданности: {rsi:.2f} <= {profile.rsi_exit_short:.2f}")
         elif min_hold_passed and macd_up:
             close_position(client, config, instrument, state, "MACD подтверждённо развернулся вверх и цена вернулась выше EMA20")
