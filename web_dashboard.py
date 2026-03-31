@@ -461,6 +461,7 @@ def build_dashboard_html() -> str:
       max-height: 460px;
       overflow: auto;
       border-radius: 14px;
+      -webkit-overflow-scrolling: touch;
     }
     th, td {
       text-align: left;
@@ -477,6 +478,15 @@ def build_dashboard_html() -> str:
     }
     tr:hover td {
       background: rgba(68, 184, 255, 0.04);
+    }
+    #positionsTable,
+    #signalsTable,
+    #newsTable,
+    #reviewTable {
+      min-width: 880px;
+    }
+    #tradesTable {
+      min-width: 1100px;
     }
     .badge {
       display: inline-block;
@@ -578,6 +588,57 @@ def build_dashboard_html() -> str:
     a {
       color: var(--accent);
     }
+    @media (max-width: 860px) {
+      .wrap {
+        padding: 14px;
+      }
+      h1 {
+        font-size: 24px;
+      }
+      h2 {
+        font-size: 20px;
+      }
+      .panel {
+        padding: 14px 14px;
+        border-radius: 16px;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+      .metric {
+        font-size: clamp(20px, 7vw, 28px);
+      }
+      .metric-wide,
+      .metric-compact {
+        font-size: clamp(15px, 4.6vw, 20px);
+      }
+      .section-title {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .generated {
+        font-size: 11px;
+      }
+      table {
+        font-size: 13px;
+      }
+      th, td {
+        padding: 8px 6px;
+      }
+      .badge {
+        font-size: 11px;
+        padding: 3px 7px;
+      }
+      .reason {
+        max-width: 220px;
+      }
+      .table-scroll {
+        margin: 0 -4px;
+        padding-bottom: 2px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -654,24 +715,28 @@ def build_dashboard_html() -> str:
     <div class="grid">
       <section class="panel">
         <h2>Позиции</h2>
-        <table id="positionsTable">
-          <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход</th><th>Текущая</th><th>Стоимость</th><th>Вар. маржа</th><th>Изм. %</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <div class="table-scroll">
+          <table id="positionsTable">
+            <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход</th><th>Текущая</th><th>Стоимость</th><th>Вар. маржа</th><th>Изм. %</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </section>
 
     </div>
 
     <section class="panel" style="margin-top:16px;">
       <h2>Сигналы по инструментам</h2>
-      <table id="signalsTable">
-        <thead>
-          <tr>
-            <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>News bias</th><th>Влияние</th><th>Ключевая причина</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="signalsTable">
+          <thead>
+            <tr>
+              <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>News bias</th><th>Влияние</th><th>Ключевая причина</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" style="margin-top:16px;">
@@ -697,14 +762,16 @@ def build_dashboard_html() -> str:
           <div class="metric" id="newsBlockCount">-</div>
         </div>
       </div>
-      <table id="newsTable" style="margin-top:16px;">
-        <thead>
-          <tr>
-            <th>Инструмент</th><th>Bias</th><th>Сила</th><th>Источник</th><th>Актуально до</th><th>Причина</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="newsTable" style="margin-top:16px;">
+          <thead>
+            <tr>
+              <th>Инструмент</th><th>Bias</th><th>Сила</th><th>Источник</th><th>Актуально до</th><th>Причина</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" style="margin-top:16px;">
@@ -771,14 +838,16 @@ def build_dashboard_html() -> str:
           <div class="metric metric-wide metric-compact" id="reviewWorstStrategy">-</div>
         </div>
       </div>
-      <table id="reviewTable" style="margin-top:16px;">
-        <thead>
-          <tr>
-            <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">PnL RUB</th><th>Выход</th><th>Вердикт</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="reviewTable" style="margin-top:16px;">
+          <thead>
+            <tr>
+              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">PnL RUB</th><th>Выход</th><th>Вердикт</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" style="margin-top:16px;">
