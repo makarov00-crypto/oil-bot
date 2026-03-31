@@ -539,14 +539,6 @@ def build_dashboard_html() -> str:
           </div>
         </div>
       </section>
-      <section class="panel">
-        <h2>Сигналы</h2>
-        <div class="grid">
-          <div><div class="muted">Лонг</div><div class="metric" id="longCount">-</div></div>
-          <div><div class="muted">Шорт</div><div class="metric" id="shortCount">-</div></div>
-          <div><div class="muted">Ожидание</div><div class="metric" id="holdCount">-</div></div>
-        </div>
-      </section>
     </div>
 
     <section class="panel" style="margin-bottom:16px;">
@@ -840,9 +832,6 @@ def build_dashboard_html() -> str:
       document.getElementById('openCount').textContent = data.summary.open_positions.length;
       document.getElementById('serviceState').textContent = formatRuntimeState(data.runtime?.state || data.service.active);
       document.getElementById('symbolsTotal').textContent = data.summary.symbols_total;
-      document.getElementById('longCount').textContent = data.summary.signal_counts.LONG;
-      document.getElementById('shortCount').textContent = data.summary.signal_counts.SHORT;
-      document.getElementById('holdCount').textContent = data.summary.signal_counts.HOLD;
       document.getElementById('generatedAt').textContent = `Обновление: ${data.generated_at_moscow || '-'}`;
 
       const portfolio = data.portfolio || {};
