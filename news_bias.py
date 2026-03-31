@@ -24,6 +24,27 @@ class NewsBias:
     reason: str
     expires_at: datetime
     score: int
+    message_text: str = ""
+
+
+def build_reason(
+    bias: str,
+    keyword_hits: list[str],
+    long_hits: list[str],
+    short_hits: list[str],
+    block_hits: list[str],
+) -> str:
+    topics = ", ".join(keyword_hits[:3])
+    if bias == "BLOCK":
+        blocks = ", ".join(block_hits[:2])
+        return f"Биржевое или риск-событие: {blocks}. Темы: {topics}." if blocks else f"Риск-событие по теме: {topics}."
+    if bias == "LONG":
+        positives = ", ".join(long_hits[:2])
+        return f"Позитивный контекст: {positives}. Темы: {topics}." if positives else f"Позитивный новостной контекст. Темы: {topics}."
+    if bias == "SHORT":
+        negatives = ", ".join(short_hits[:2])
+        return f"Негативный контекст: {negatives}. Темы: {topics}." if negatives else f"Негативный новостной контекст. Темы: {topics}."
+    return f"Нейтральный новостной фон. Темы: {topics}."
 
 
 def normalize_text(text: str) -> str:
@@ -81,9 +102,10 @@ def detect_news_bias(message: NewsMessage) -> list[NewsBias]:
                 bias=bias,
                 strength=strength,
                 source=message.channel,
-                reason=f"keywords={', '.join(keyword_hits[:3])}",
+                reason=build_reason(bias, keyword_hits, long_hits, short_hits, block_hits),
                 expires_at=message.created_at.astimezone(UTC) + ttl,
                 score=score * channel_rule.source_weight,
+                message_text=message.text,
             )
         )
 

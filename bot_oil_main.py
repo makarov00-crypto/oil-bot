@@ -631,6 +631,7 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
                     "strength": item.strength,
                     "source": item.source,
                     "reason": item.reason,
+                    "message_text": item.message_text,
                     "expires_at": item.expires_at.isoformat(),
                     "expires_at_moscow": item.expires_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
                     "score": item.score,

@@ -513,6 +513,53 @@ def build_dashboard_html() -> str:
       color: #c8d7ea;
       line-height: 1.35;
     }
+    .news-reason {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .hint-button {
+      flex: 0 0 auto;
+      appearance: none;
+      border: 1px solid rgba(102, 174, 255, 0.22);
+      background: rgba(67, 197, 255, 0.10);
+      color: #bfe8ff;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font: 600 12px/1 "Manrope", sans-serif;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .hint-button:hover {
+      background: rgba(67, 197, 255, 0.16);
+      border-color: rgba(102, 174, 255, 0.32);
+    }
+    .news-popover {
+      position: fixed;
+      z-index: 1000;
+      width: min(420px, calc(100vw - 32px));
+      background: linear-gradient(180deg, rgba(9, 16, 31, 0.98) 0%, rgba(6, 12, 25, 0.98) 100%);
+      border: 1px solid rgba(102, 174, 255, 0.22);
+      border-radius: 16px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 24px rgba(67, 197, 255, 0.10);
+      padding: 14px 16px;
+      display: none;
+    }
+    .news-popover.open {
+      display: block;
+    }
+    .news-popover-title {
+      font-family: "Sora", "Manrope", sans-serif;
+      font-size: 13px;
+      color: #d8ecff;
+      margin-bottom: 8px;
+    }
+    .news-popover-text {
+      white-space: pre-wrap;
+      line-height: 1.45;
+      color: #c8d7ea;
+      font-size: 13px;
+    }
     .section-title {
       display: flex;
       justify-content: space-between;
@@ -762,6 +809,10 @@ def build_dashboard_html() -> str:
       </table>
     </section>
   </div>
+  <div id="newsPopover" class="news-popover" role="dialog" aria-hidden="true">
+    <div class="news-popover-title" id="newsPopoverTitle">Текст новости</div>
+    <div class="news-popover-text" id="newsPopoverText"></div>
+  </div>
   <script>
     function escapeHtml(value) {
       return String(value ?? '')
@@ -869,6 +920,43 @@ def build_dashboard_html() -> str:
       return map[raw] || raw || '-';
     }
 
+    function humanizeNewsReason(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '-';
+      if (raw.startsWith('keywords=')) {
+        const parts = raw.slice(9).split(',').map((item) => item.trim()).filter(Boolean);
+        return parts.length ? `Ключевые темы: ${parts.join(', ')}` : '-';
+      }
+      return raw;
+    }
+
+    function closeNewsPopover() {
+      const popover = document.getElementById('newsPopover');
+      if (!popover) return;
+      popover.classList.remove('open');
+      popover.setAttribute('aria-hidden', 'true');
+    }
+
+    function openNewsPopover(trigger) {
+      const popover = document.getElementById('newsPopover');
+      const title = document.getElementById('newsPopoverTitle');
+      const text = document.getElementById('newsPopoverText');
+      if (!popover || !title || !text) return;
+
+      const source = trigger.dataset.source || 'Новость';
+      const newsText = trigger.dataset.newsText || 'Текст новости недоступен.';
+      title.textContent = source;
+      text.textContent = newsText;
+
+      const rect = trigger.getBoundingClientRect();
+      const top = Math.min(rect.bottom + 10, window.innerHeight - 220);
+      const left = Math.min(rect.left, window.innerWidth - Math.min(420, window.innerWidth - 32) - 16);
+      popover.style.top = `${Math.max(16, top)}px`;
+      popover.style.left = `${Math.max(16, left)}px`;
+      popover.classList.add('open');
+      popover.setAttribute('aria-hidden', 'false');
+    }
+
     function filterTradeRows(rows) {
       const select = document.getElementById('eventStatusFilter');
       if (!select) return rows;
@@ -929,13 +1017,19 @@ def build_dashboard_html() -> str:
       const newsBody = document.querySelector('#newsTable tbody');
       newsBody.innerHTML = '';
       for (const item of activeBiases) {
+        const hasMessage = String(item.message_text || '').trim().length > 0;
+        const reasonText = humanizeNewsReason(item.reason || '-');
+        const sourceLabel = String(item.source || '-').replaceAll('_', ' ');
+        const detailsButton = hasMessage
+          ? `<button type="button" class="hint-button js-news-popover" data-source="${escapeHtml(sourceLabel)}" data-news-text="${escapeHtml(item.message_text)}">текст</button>`
+          : '';
         newsBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(item.symbol || '-')}</td>
           <td>${signalBadge(item.bias || '-')}</td>
           <td>${escapeHtml(formatStrength(item.strength || '-'))}</td>
           <td>${escapeHtml(item.source || '-')}</td>
           <td class="mono">${escapeHtml(item.expires_at_moscow || '-')}</td>
-          <td class="reason">${escapeHtml(item.reason || '-')}</td>
+          <td><div class="news-reason"><span class="reason">${escapeHtml(reasonText)}</span>${detailsButton}</div></td>
         </tr>`);
       }
       if (!activeBiases.length) {
@@ -1044,6 +1138,17 @@ def build_dashboard_html() -> str:
       if (filter) {
         filter.addEventListener('change', loadData);
       }
+      document.addEventListener('click', (event) => {
+        const trigger = event.target.closest('.js-news-popover');
+        if (trigger) {
+          event.stopPropagation();
+          openNewsPopover(trigger);
+          return;
+        }
+        if (!event.target.closest('#newsPopover')) {
+          closeNewsPopover();
+        }
+      });
       loadData();
       setInterval(loadData, 15000);
     });
