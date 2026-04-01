@@ -166,6 +166,9 @@ class InstrumentState:
     last_exit_reason: str = ""
     last_exit_pnl_rub: float = 0.0
     last_exit_price: float | None = None
+    entry_commission_rub: float = 0.0
+    realized_gross_pnl_rub: float = 0.0
+    realized_commission_rub: float = 0.0
     last_market_price: float | None = None
     position_notional_rub: float = 0.0
     position_variation_margin_rub: float = 0.0
@@ -289,6 +292,9 @@ def append_trade_journal(
     price: float,
     *,
     pnl_rub: float | None = None,
+    gross_pnl_rub: float | None = None,
+    commission_rub: float | None = None,
+    net_pnl_rub: float | None = None,
     reason: str = "",
     strategy: str = "",
     dry_run: bool = True,
@@ -304,6 +310,9 @@ def append_trade_journal(
         "lot_size": instrument.lot,
         "price": price,
         "pnl_rub": pnl_rub,
+        "gross_pnl_rub": gross_pnl_rub,
+        "commission_rub": commission_rub,
+        "net_pnl_rub": net_pnl_rub,
         "reason": reason,
         "strategy": strategy,
         "mode": "DRY_RUN" if dry_run else "LIVE",
@@ -364,6 +373,9 @@ def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, 
                 "exit_price": row.get("price"),
                 "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
                 "pnl_rub": row.get("pnl_rub"),
+                "gross_pnl_rub": row.get("gross_pnl_rub"),
+                "commission_rub": row.get("commission_rub"),
+                "net_pnl_rub": row.get("net_pnl_rub"),
                 "entry_reason": open_row.get("reason") if open_row else "",
                 "exit_reason": row.get("reason", ""),
             }
@@ -440,6 +452,12 @@ def quotation_to_float(value: Any) -> float:
     if value is None:
         return 0.0
     return float(getattr(value, "units", 0) or 0) + float(getattr(value, "nano", 0) or 0) / 1e9
+
+
+def extract_order_commission_rub(order_state: Any) -> float:
+    executed_commission = quotation_to_float(getattr(order_state, "executed_commission", None))
+    service_commission = quotation_to_float(getattr(order_state, "service_commission", None))
+    return executed_commission + service_commission
 
 
 def send_msg(config: BotConfig, text: str) -> None:
@@ -694,6 +712,8 @@ def reset_daily_pnl_if_needed(state: InstrumentState) -> None:
     if state.trading_day != today:
         state.trading_day = today
         state.realized_pnl = 0.0
+        state.realized_gross_pnl_rub = 0.0
+        state.realized_commission_rub = 0.0
         state.last_risk_stop_day = ""
 
 
@@ -1207,7 +1227,9 @@ def build_portfolio_snapshot_message(
         f"💵 Свободно: {float(payload['free_rub']):.2f} RUB",
         f"🛡 Гарантийное обеспечение: {float(payload['blocked_guarantee_rub']):.2f} RUB",
         f"📈 Открытых позиций бота: {int(payload['open_positions_count'])}",
-        f"📊 Реализовано ботом: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
+        f"📊 Gross по закрытым: {float(payload['bot_realized_gross_pnl_rub']):.2f} RUB",
+        f"💸 Комиссии: {float(payload['bot_realized_commission_rub']):.2f} RUB",
+        f"📊 Net реализовано ботом: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
         f"📈 Оценка вариационной маржи: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
         f"🧮 Итого по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
     ]
@@ -1223,11 +1245,15 @@ def build_portfolio_snapshot_payload(
     states = {instrument.symbol: load_state(instrument.symbol) for instrument in watchlist}
     open_positions = 0
     realized_pnl = 0.0
+    realized_gross_pnl = 0.0
+    realized_commission = 0.0
     unrealized_pnl = 0.0
 
     for instrument in watchlist:
         state = states[instrument.symbol]
         realized_pnl += float(state.realized_pnl or 0.0)
+        realized_gross_pnl += float(state.realized_gross_pnl_rub or 0.0)
+        realized_commission += float(state.realized_commission_rub or 0.0)
         if state.position_side == "FLAT" or state.position_qty <= 0 or state.entry_price is None:
             continue
         open_positions += 1
@@ -1250,6 +1276,8 @@ def build_portfolio_snapshot_payload(
         "free_rub": round(snapshot.free_rub, 2),
         "blocked_guarantee_rub": round(snapshot.blocked_guarantee_rub, 2),
         "open_positions_count": open_positions,
+        "bot_realized_gross_pnl_rub": round(realized_gross_pnl, 2),
+        "bot_realized_commission_rub": round(realized_commission, 2),
         "bot_realized_pnl_rub": round(realized_pnl, 2),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
         "bot_total_pnl_rub": round(realized_pnl + unrealized_pnl, 2),
@@ -1337,13 +1365,21 @@ def build_trade_results_message(
     lines = []
 
     realized_total = 0.0
+    realized_gross_total = 0.0
+    realized_commission_total = 0.0
     realized_lines: list[str] = []
     for instrument in watchlist:
         state = states[instrument.symbol]
         pnl = float(state.realized_pnl or 0.0)
+        gross = float(state.realized_gross_pnl_rub or 0.0)
+        commission = float(state.realized_commission_rub or 0.0)
         realized_total += pnl
-        if abs(pnl) >= 0.01:
-            realized_lines.append(f"• {instrument.symbol}: {pnl:.2f} RUB")
+        realized_gross_total += gross
+        realized_commission_total += commission
+        if abs(pnl) >= 0.01 or abs(gross) >= 0.01 or abs(commission) >= 0.01:
+            realized_lines.append(
+                f"• {instrument.symbol}: gross {gross:.2f} | комисс. {commission:.2f} | net {pnl:.2f} RUB"
+            )
 
     unrealized_total = 0.0
     open_lines: list[str] = []
@@ -1366,7 +1402,9 @@ def build_trade_results_message(
 
     lines.extend(
         [
-            f"✅ Реализовано: {realized_total:.2f} RUB",
+            f"✅ Gross по закрытым: {realized_gross_total:.2f} RUB",
+            f"💸 Комиссии: {realized_commission_total:.2f} RUB",
+            f"✅ Net реализовано: {realized_total:.2f} RUB",
             f"📈 Оценка вариационной маржи: {unrealized_total:.2f} RUB",
             f"🧮 Итого: {realized_total + unrealized_total:.2f} RUB",
             "",
@@ -1507,6 +1545,7 @@ def sync_state_with_portfolio(
     state.position_qty = abs(qty)
     if qty == 0:
         state.entry_price = None
+        state.entry_commission_rub = 0.0
         state.max_price = None
         state.min_price = None
         state.position_side = "FLAT"
@@ -1940,16 +1979,21 @@ def sync_pending_order(
         if fill_price <= 0:
             fill_price = get_last_price(client, instrument)
         filled_qty = int(getattr(order_state, "lots_executed", 0) or 0) or state.pending_order_qty
+        fill_commission_rub = extract_order_commission_rub(order_state)
         state.last_fill_price = fill_price
 
         if state.pending_order_action == "OPEN":
             state.entry_price = fill_price
+            state.entry_commission_rub = fill_commission_rub
             state.max_price = fill_price
             state.min_price = fill_price
             state.position_qty = filled_qty
             state.position_side = state.pending_order_side
             state.breakeven_armed = False
             state.entry_time = datetime.now(UTC).isoformat()
+            reset_daily_pnl_if_needed(state)
+            state.realized_commission_rub += fill_commission_rub
+            state.realized_pnl -= fill_commission_rub
             refresh_position_snapshot(state, instrument, fill_price)
             append_trade_journal(
                 instrument,
@@ -1957,6 +2001,9 @@ def sync_pending_order(
                 state.position_side,
                 filled_qty,
                 fill_price,
+                gross_pnl_rub=0.0,
+                commission_rub=fill_commission_rub,
+                net_pnl_rub=-fill_commission_rub,
                 reason="live fill",
                 strategy=state.entry_strategy,
                 dry_run=False,
@@ -1971,14 +2018,15 @@ def sync_pending_order(
                         f"Направление: {state.position_side}",
                         f"Лотов: {filled_qty}",
                         f"Цена исполнения: {fill_price:.4f}",
+                        f"Комиссия: {fill_commission_rub:.2f} RUB",
                         f"ID заявки: {state.pending_order_id}",
                     ],
                 ),
             )
         elif state.pending_order_action == "CLOSE":
-            pnl = 0.0
+            gross_pnl = 0.0
             if state.entry_price is not None:
-                pnl = calculate_futures_pnl_rub(
+                gross_pnl = calculate_futures_pnl_rub(
                     instrument,
                     state.entry_price,
                     fill_price,
@@ -1986,7 +2034,11 @@ def sync_pending_order(
                     state.position_side,
                 )
             reset_daily_pnl_if_needed(state)
-            state.realized_pnl += pnl
+            total_trade_commission = float(state.entry_commission_rub or 0.0) + fill_commission_rub
+            net_trade_pnl = gross_pnl - total_trade_commission
+            state.realized_gross_pnl_rub += gross_pnl
+            state.realized_commission_rub += fill_commission_rub
+            state.realized_pnl += gross_pnl - fill_commission_rub
             exit_reason = state.pending_exit_reason or "Заявка на закрытие исполнена"
             append_trade_journal(
                 instrument,
@@ -1994,7 +2046,10 @@ def sync_pending_order(
                 state.position_side,
                 state.position_qty,
                 fill_price,
-                pnl_rub=pnl,
+                pnl_rub=net_trade_pnl,
+                gross_pnl_rub=gross_pnl,
+                commission_rub=total_trade_commission,
+                net_pnl_rub=net_trade_pnl,
                 reason=exit_reason,
                 strategy=state.entry_strategy,
                 dry_run=False,
@@ -2002,7 +2057,7 @@ def sync_pending_order(
             state.last_exit_time = datetime.now(UTC).isoformat()
             state.last_exit_side = state.position_side
             state.last_exit_reason = exit_reason
-            state.last_exit_pnl_rub = pnl
+            state.last_exit_pnl_rub = net_trade_pnl
             state.last_exit_price = fill_price
             state.position_notional_rub = 0.0
             state.position_variation_margin_rub = 0.0
@@ -2011,17 +2066,20 @@ def sync_pending_order(
                 config,
                 build_telegram_card(
                     "Позиция закрыта",
-                    "✅" if pnl >= 0 else "⚠️",
+                    "✅" if net_trade_pnl >= 0 else "⚠️",
                     [
                         f"Инструмент: {format_instrument_title(instrument)}",
                         f"Причина выхода: {exit_reason}",
                         f"Цена исполнения: {fill_price:.4f}",
-                        f"Результат по позиции: {pnl:.2f} RUB",
+                        f"Gross: {gross_pnl:.2f} RUB",
+                        f"Комиссия: {total_trade_commission:.2f} RUB",
+                        f"Net: {net_trade_pnl:.2f} RUB",
                         f"ID заявки: {state.pending_order_id}",
                     ],
                 ),
             )
             state.entry_price = None
+            state.entry_commission_rub = 0.0
             state.max_price = None
             state.min_price = None
             state.position_qty = 0
@@ -2113,6 +2171,7 @@ def open_position(
     )
     if config.dry_run:
         state.entry_price = price
+        state.entry_commission_rub = 0.0
         state.max_price = price
         state.min_price = price
         state.position_qty = quantity
@@ -2127,6 +2186,9 @@ def open_position(
             side,
             quantity,
             price,
+            gross_pnl_rub=0.0,
+            commission_rub=0.0,
+            net_pnl_rub=0.0,
             reason="dry_run open",
             strategy=strategy_name,
             dry_run=True,
@@ -2203,6 +2265,7 @@ def close_position(
                 state.position_side,
             )
         reset_daily_pnl_if_needed(state)
+        state.realized_gross_pnl_rub += pnl
         state.realized_pnl += pnl
         append_trade_journal(
             instrument,
@@ -2211,6 +2274,9 @@ def close_position(
             qty,
             price,
             pnl_rub=pnl,
+            gross_pnl_rub=pnl,
+            commission_rub=0.0,
+            net_pnl_rub=pnl,
             reason=exit_reason,
             strategy=state.entry_strategy,
             dry_run=True,
@@ -2221,6 +2287,7 @@ def close_position(
         state.last_exit_pnl_rub = pnl
         state.last_exit_price = price
         state.entry_price = None
+        state.entry_commission_rub = 0.0
         state.max_price = None
         state.min_price = None
         state.position_qty = 0
