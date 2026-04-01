@@ -1,77 +1,226 @@
 import SwiftUI
 
 struct TradesScreen: View {
-    @Bindable var store: DashboardStore
+    @ObservedObject var store: DashboardStore
+    @State private var segment = 0
+    @State private var eventFilter = 0
+
+    private let eventFilters = ["Все", "Активные", "Закрытые", "История"]
 
     var body: some View {
         NavigationStack {
             Group {
                 if let payload = store.payload {
-                    List {
-                        Section("Сводка") {
-                            row("Закрыто", "\(payload.tradeReview.closedCount)")
-                            row("Плюсовых", "\(payload.tradeReview.wins)")
-                            row("Минусовых", "\(payload.tradeReview.losses)")
-                            row("Win rate", String(format: "%.1f%%", payload.tradeReview.winRate))
-                            row("Итог", formatRub(payload.tradeReview.closedTotalPnlRub))
-                        }
-
-                        Section("Последние закрытия") {
-                            if payload.tradeReview.closedReviews.isEmpty {
-                                Text("Закрытых сделок пока нет.")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(payload.tradeReview.closedReviews.reversed()) { trade in
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        HStack {
-                                            Text(trade.symbol)
-                                                .font(.headline)
-                                            Spacer()
-                                            Text(trade.pnlRub)
-                                                .foregroundStyle((Double(trade.pnlRub) ?? 0) >= 0 ? .green : .red)
-                                        }
-                                        Text(trade.strategy)
-                                            .font(.subheadline)
-                                        Text("Вход: \(trade.entryTime)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Text("Выход: \(trade.exitTime)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Text(trade.exitReason)
-                                            .font(.caption)
-                                        Text("Вердикт: \(trade.verdict)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.vertical, 6)
-                                }
+                    ScreenContainer {
+                        if let error = store.errorMessage {
+                            GlassCard {
+                                Label(error, systemImage: "wifi.exclamationmark")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.orange)
                             }
                         }
+
+                        DateFilterBar(
+                            dates: payload.daily.availableDates,
+                            selectedDate: store.selectedDate
+                        ) { newDate in
+                            Task { await store.selectDate(newDate) }
+                        }
+
+                        GlassCard {
+                            SegmentedGlassPicker(title: "Раздел", selection: $segment, items: ["События", "Обзор"])
+                        }
+
+                        if segment == 0 {
+                            eventsContent(payload: payload)
+                        } else {
+                            reviewsContent(payload: payload)
+                        }
                     }
+                    .refreshable { await store.load(date: store.selectedDate) }
                 } else if store.isLoading {
-                    ProgressView("Загружаю сделки…")
+                    loadingView("Загружаю сделки…")
                 } else {
-                    ContentUnavailableView(
-                        "Нет данных по сделкам",
-                        systemImage: "list.bullet.rectangle",
-                        description: Text(store.errorMessage ?? "Когда появятся закрытые сделки, они будут видны здесь.")
+                    EmptyGlassState(
+                        title: "Нет данных по сделкам",
+                        subtitle: store.errorMessage ?? "Когда появятся сделки, они будут видны здесь.",
+                        systemImage: "list.bullet.rectangle"
                     )
+                    .padding()
+                    .background(LiquidGlassBackground())
                 }
             }
             .navigationTitle("Сделки")
-            .refreshable {
-                await store.load()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await store.load(date: store.selectedDate) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
             }
         }
     }
 
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack {
+    private func eventsContent(payload: DashboardPayload) -> some View {
+        VStack(spacing: 16) {
+            GlassCard {
+                SegmentedGlassPicker(title: "Статус событий", selection: $eventFilter, items: eventFilters)
+            }
+
+            if filteredTrades(payload.trades).isEmpty {
+                EmptyGlassState(
+                    title: "Событий по фильтру нет",
+                    subtitle: "Смени статус или выбери другую дату.",
+                    systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90"
+                )
+            } else {
+                ForEach(filteredTrades(payload.trades)) { trade in
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(trade.symbol)
+                                        .font(.title3.weight(.semibold))
+                                    Text(trade.time ?? "-")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    SignalPill(text: displayEvent(trade.event), raw: trade.event)
+                                    SignalPill(text: displaySignal(trade.eventStatus), raw: trade.eventStatus)
+                                }
+                            }
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                                compactInfo("Сторона", displaySignal(trade.side))
+                                compactInfo("Лоты", formatInt(trade.qtyLots))
+                                compactInfo("Цена", trade.price ?? "-")
+                                compactInfo("PnL", formatTradePnl(trade.pnlRub), tone: statusTone(forString: trade.pnlRub))
+                                compactInfo("Стратегия", trade.strategy ?? "-")
+                                compactInfo("Причина", trade.reason ?? "-")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func reviewsContent(payload: DashboardPayload) -> some View {
+        VStack(spacing: 16) {
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    SectionHeader(title: "Обзор сделок", subtitle: "Итог по закрытым сделкам выбранного дня")
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        MetricGlassTile(title: "Закрыто", value: "\(payload.tradeReview.closedCount)")
+                        MetricGlassTile(title: "Win rate", value: String(format: "%.1f%%", payload.tradeReview.winRate))
+                        MetricGlassTile(title: "Плюсовых", value: "\(payload.tradeReview.wins)", tone: .green)
+                        MetricGlassTile(title: "Минусовых", value: "\(payload.tradeReview.losses)", tone: .red)
+                        MetricGlassTile(title: "Итог по закрытым", value: formatRub(payload.tradeReview.closedTotalPnlRub), tone: statusTone(for: payload.tradeReview.closedTotalPnlRub))
+                        MetricGlassTile(title: "Лучшая стратегия", value: bestStrategyText(payload.tradeReview.bestStrategy))
+                    }
+                }
+            }
+
+            if payload.tradeReview.closedReviews.isEmpty {
+                EmptyGlassState(
+                    title: "Закрытых сделок пока нет",
+                    subtitle: "Когда появятся закрытия, они будут разобраны здесь.",
+                    systemImage: "chart.bar.doc.horizontal"
+                )
+            } else {
+                ForEach(payload.tradeReview.closedReviews.reversed()) { trade in
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(trade.symbol)
+                                        .font(.title3.weight(.semibold))
+                                    Text(trade.strategy)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    SignalPill(text: displaySignal(trade.side), raw: trade.side)
+                                    Text(formatTradePnl(trade.pnlRub))
+                                        .font(.headline.weight(.semibold))
+                                        .foregroundStyle(statusTone(forString: trade.pnlRub))
+                                }
+                            }
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                                compactInfo("Вход", trade.entryTime)
+                                compactInfo("Выход", trade.exitTime)
+                                compactInfo("Цена входа", trade.entryPrice ?? "-")
+                                compactInfo("Цена выхода", trade.exitPrice ?? "-")
+                                compactInfo("Лоты", formatInt(trade.qtyLots))
+                                compactInfo("Сессия", displaySession(trade.session))
+                            }
+
+                            Divider().overlay(Color.white.opacity(0.08))
+
+                            compactBlock(title: "Причина выхода", value: trade.exitReason)
+                            compactBlock(title: "Вердикт", value: trade.verdict)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func filteredTrades(_ rows: [TradeEvent]) -> [TradeEvent] {
+        let base = rows.reversed()
+        switch eventFilter {
+        case 1:
+            return base.filter { ($0.eventStatus ?? "").lowercased() == "active" }
+        case 2:
+            return base.filter { ($0.eventStatus ?? "").lowercased() == "closed" }
+        case 3:
+            return base.filter { ($0.eventStatus ?? "").lowercased() == "history" }
+        default:
+            return Array(base)
+        }
+    }
+
+    private func compactInfo(_ title: String, _ value: String, tone: Color = .white) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-            Spacer()
-            Text(value)
+                .font(.caption)
                 .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(tone)
+                .lineLimit(3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func compactBlock(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline)
+        }
+    }
+
+    private func bestStrategyText(_ bestStrategy: NamedStrategyPnl?) -> String {
+        guard let bestStrategy else { return "-" }
+        return "\(bestStrategy.strategy) (\(String(format: "%.2f", bestStrategy.pnlRub)))"
+    }
+
+    private func loadingView(_ text: String) -> some View {
+        ZStack {
+            LiquidGlassBackground()
+            ProgressView(text)
         }
     }
 }

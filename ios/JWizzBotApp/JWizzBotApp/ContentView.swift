@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var store = DashboardStore()
+    @StateObject private var store = DashboardStore()
 
     var body: some View {
         TabView {
@@ -15,23 +15,27 @@ struct ContentView: View {
                     Label("Позиции", systemImage: "briefcase")
                 }
 
+            SignalsScreen(store: store)
+                .tabItem {
+                    Label("Сигналы", systemImage: "waveform.path.ecg")
+                }
+
             TradesScreen(store: store)
                 .tabItem {
                     Label("Сделки", systemImage: "list.bullet.rectangle")
                 }
 
-            NewsScreen(store: store)
+            MoreScreen(store: store)
                 .tabItem {
-                    Label("Новости", systemImage: "newspaper")
+                    Label("Ещё", systemImage: "ellipsis.circle")
                 }
         }
-        .tint(Color.cyan)
+        .preferredColorScheme(.dark)
+        .tint(.cyan)
+        .toolbarBackground(.ultraThinMaterial, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
         .task {
             await store.load()
         }
     }
-}
-
-#Preview {
-    ContentView()
 }

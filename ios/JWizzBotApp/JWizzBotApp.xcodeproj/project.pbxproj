@@ -17,6 +17,10 @@
 		A10000000000000000000019 /* PositionsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000000B /* PositionsScreen.swift */; };
 		A1000000000000000000001A /* TradesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000000C /* TradesScreen.swift */; };
 		A1000000000000000000001B /* NewsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000000D /* NewsScreen.swift */; };
+		A10000000000000000000070 /* SignalsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000071 /* SignalsScreen.swift */; };
+		A10000000000000000000072 /* GlassUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000073 /* GlassUI.swift */; };
+		A10000000000000000000074 /* MoreScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000075 /* MoreScreen.swift */; };
+		A10000000000000000000076 /* AIReviewScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000077 /* AIReviewScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +36,10 @@
 		A1000000000000000000000B /* PositionsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionsScreen.swift; sourceTree = "<group>"; };
 		A1000000000000000000000C /* TradesScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradesScreen.swift; sourceTree = "<group>"; };
 		A1000000000000000000000D /* NewsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewsScreen.swift; sourceTree = "<group>"; };
+		A10000000000000000000071 /* SignalsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalsScreen.swift; sourceTree = "<group>"; };
+		A10000000000000000000073 /* GlassUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassUI.swift; sourceTree = "<group>"; };
+		A10000000000000000000075 /* MoreScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoreScreen.swift; sourceTree = "<group>"; };
+		A10000000000000000000077 /* AIReviewScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIReviewScreen.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,9 +69,13 @@
 				A10000000000000000000002 /* ContentView.swift */,
 				A10000000000000000000008 /* DashboardStore.swift */,
 				A10000000000000000000009 /* Formatters.swift */,
+				A10000000000000000000073 /* GlassUI.swift */,
+				A10000000000000000000077 /* AIReviewScreen.swift */,
+				A10000000000000000000075 /* MoreScreen.swift */,
 				A1000000000000000000000D /* NewsScreen.swift */,
 				A1000000000000000000000A /* OverviewScreen.swift */,
 				A1000000000000000000000B /* PositionsScreen.swift */,
+				A10000000000000000000071 /* SignalsScreen.swift */,
 				A1000000000000000000000C /* TradesScreen.swift */,
 				A10000000000000000000004 /* Assets.xcassets */,
 				A10000000000000000000005 /* Info.plist */,
@@ -153,9 +165,13 @@
 				A10000000000000000000012 /* ContentView.swift in Sources */,
 				A10000000000000000000016 /* DashboardStore.swift in Sources */,
 				A10000000000000000000017 /* Formatters.swift in Sources */,
+				A10000000000000000000072 /* GlassUI.swift in Sources */,
+				A10000000000000000000076 /* AIReviewScreen.swift in Sources */,
+				A10000000000000000000074 /* MoreScreen.swift in Sources */,
 				A1000000000000000000001B /* NewsScreen.swift in Sources */,
 				A10000000000000000000018 /* OverviewScreen.swift in Sources */,
 				A10000000000000000000019 /* PositionsScreen.swift in Sources */,
+				A10000000000000000000070 /* SignalsScreen.swift in Sources */,
 				A1000000000000000000001A /* TradesScreen.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

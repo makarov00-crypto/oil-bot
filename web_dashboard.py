@@ -469,16 +469,35 @@ def load_ai_review(target_day: date) -> dict:
     latest_path = AI_REVIEW_DIR / "latest_review.md"
     source_path = dated_path if dated_path.exists() else latest_path
     if not source_path.exists():
-        return {"available": False, "date": target_day.isoformat(), "content": ""}
+        return {
+            "available": False,
+            "date": target_day.isoformat(),
+            "content": "",
+            "updated_at_moscow": None,
+            "status": "missing",
+        }
     try:
         content = source_path.read_text(encoding="utf-8").strip()
     except Exception:
-        return {"available": False, "date": target_day.isoformat(), "content": ""}
+        return {
+            "available": False,
+            "date": target_day.isoformat(),
+            "content": "",
+            "updated_at_moscow": None,
+            "status": "error",
+        }
+    try:
+        modified = datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc).astimezone(MOSCOW_TZ)
+        modified_text = modified.strftime("%d.%m %H:%M:%S МСК")
+    except Exception:
+        modified_text = None
     return {
         "available": bool(content),
         "date": target_day.isoformat(),
         "source": source_path.name,
         "content": content,
+        "updated_at_moscow": modified_text,
+        "status": "ready" if content else "empty",
     }
 
 
@@ -1836,8 +1855,8 @@ def build_dashboard_html() -> str:
 
       const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available
-        ? `AI review: ${aiReview.source || '-'}`
-        : 'AI review: пока нет';
+        ? `AI review: ${aiReview.source || '-'} • обновлено ${aiReview.updated_at_moscow || '-'}`
+        : `AI review: пока нет${aiReview.updated_at_moscow ? ` • последняя попытка ${aiReview.updated_at_moscow}` : ''}`;
       document.getElementById('aiReviewContent').innerHTML = markdownToHtml(aiReview.content || '');
     }
 

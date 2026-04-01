@@ -1,110 +1,128 @@
 import SwiftUI
 
 struct NewsScreen: View {
-    @Bindable var store: DashboardStore
+    @ObservedObject var store: DashboardStore
     @State private var selectedText: String?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let payload = store.payload {
-                    List {
-                        Section("Сводка") {
-                            row("Обновлено", payload.news.fetchedAtMoscow ?? "-")
-                            row("Активных bias", "\(payload.news.activeBiases.count)")
-                        }
+        Group {
+            if let payload = store.payload {
+                ScreenContainer {
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            SectionHeader(title: "Новости", subtitle: payload.news.fetchedAtMoscow.map { "Обновлено: \($0)" })
 
-                        Section("Активные новости") {
-                            if payload.news.activeBiases.isEmpty {
-                                Text("Активных новостных сигналов нет.")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(payload.news.activeBiases) { item in
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        HStack {
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                MetricGlassTile(title: "Активных bias", value: "\(payload.news.activeBiases.count)")
+                                MetricGlassTile(title: "Выбрана дата", value: displayDate(store.selectedDate ?? payload.daily.selectedDate))
+                            }
+                        }
+                    }
+
+                    if payload.news.activeBiases.isEmpty {
+                        EmptyGlassState(
+                            title: "Активных новостей нет",
+                            subtitle: "Когда news bias появятся, они будут видны здесь.",
+                            systemImage: "newspaper"
+                        )
+                    } else {
+                        ForEach(payload.news.activeBiases) { item in
+                            GlassCard {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 4) {
                                             Text(item.symbol)
-                                                .font(.headline)
-                                            Spacer()
-                                            Text(item.bias)
-                                                .font(.caption.weight(.bold))
-                                                .padding(.horizontal, 10)
-                                                .padding(.vertical, 5)
-                                                .background(badgeColor(for: item.bias).opacity(0.18), in: Capsule())
+                                                .font(.title3.weight(.semibold))
+                                            Text(item.source)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
                                         }
-                                        Text(item.reason)
-                                            .font(.subheadline)
-                                        if let text = item.messageText, !text.isEmpty {
-                                            Button {
-                                                selectedText = text
-                                            } label: {
-                                                Label("Показать текст новости", systemImage: "text.quote")
-                                                    .font(.caption)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .foregroundStyle(.cyan)
+                                        Spacer()
+                                        VStack(alignment: .trailing, spacing: 6) {
+                                            SignalPill(text: displayBias(item.bias), raw: item.bias)
+                                            SignalPill(text: displayBias(item.strength), raw: item.strength)
                                         }
-                                        Text("Источник: \(item.source)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Text("Актуально до: \(item.expiresAtMoscow ?? "-")")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
                                     }
-                                    .padding(.vertical, 6)
+
+                                    Text(item.reason)
+                                        .font(.subheadline)
+
+                                    if let text = item.messageText, !text.isEmpty {
+                                        Button {
+                                            selectedText = text
+                                        } label: {
+                                            Label("Открыть текст новости", systemImage: "text.quote")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(.cyan)
+                                        }
+                                    }
+
+                                    if let expires = item.expiresAtMoscow, !expires.isEmpty {
+                                        InfoRow(title: "Актуально до", value: expires)
+                                    }
                                 }
                             }
                         }
                     }
-                } else if store.isLoading {
+                }
+                .refreshable { await store.load(date: store.selectedDate) }
+            } else if store.isLoading {
+                ZStack {
+                    LiquidGlassBackground()
                     ProgressView("Загружаю новости…")
-                } else {
-                    ContentUnavailableView(
-                        "Нет данных по новостям",
-                        systemImage: "newspaper",
-                        description: Text(store.errorMessage ?? "Активные news bias появятся здесь.")
-                    )
+                }
+            } else {
+                EmptyGlassState(
+                    title: "Нет данных по новостям",
+                    subtitle: store.errorMessage ?? "Активные news bias появятся здесь.",
+                    systemImage: "newspaper"
+                )
+                .padding()
+                .background(LiquidGlassBackground())
+            }
+        }
+        .navigationTitle("Новости")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await store.load(date: store.selectedDate) }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
             }
-            .navigationTitle("Новости")
-            .refreshable {
-                await store.load()
-            }
-            .sheet(item: Binding(
-                get: { selectedText.map(SelectableText.init(text:)) },
-                set: { selectedText = $0?.text }
-            )) { item in
-                NavigationStack {
+        }
+        .sheet(item: Binding(
+            get: { selectedText.map(SelectableText.init(text:)) },
+            set: { selectedText = $0?.text }
+        )) { item in
+            NavigationStack {
+                ZStack {
+                    LiquidGlassBackground()
                     ScrollView {
-                        Text(item.text)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
+                        GlassCard {
+                            Text(item.text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .padding()
                     }
-                    .navigationTitle("Текст новости")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Закрыть") {
-                                selectedText = nil
-                            }
+                }
+                .navigationTitle("Текст новости")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Закрыть") {
+                            selectedText = nil
                         }
                     }
                 }
-                .presentationDetents([.medium, .large])
             }
+            .presentationDetents([.medium, .large])
         }
     }
 
     private struct SelectableText: Identifiable {
         let text: String
         var id: String { text }
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value)
-                .foregroundStyle(.secondary)
-        }
     }
 }

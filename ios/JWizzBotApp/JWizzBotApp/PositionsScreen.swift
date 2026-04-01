@@ -1,83 +1,89 @@
 import SwiftUI
 
 struct PositionsScreen: View {
-    @Bindable var store: DashboardStore
+    @ObservedObject var store: DashboardStore
 
     var body: some View {
         NavigationStack {
             Group {
                 if let payload = store.payload, !payload.summary.openPositions.isEmpty {
-                    List {
+                    ScreenContainer {
                         if let error = store.errorMessage {
-                            errorBanner(error)
-                                .listRowBackground(Color.clear)
-                                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
+                            GlassCard {
+                                Label(error, systemImage: "wifi.exclamationmark")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.orange)
+                            }
                         }
 
                         ForEach(payload.summary.openPositions) { position in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Text(position.symbol)
-                                        .font(.headline)
-                                    Spacer()
-                                    Text(position.side)
-                                        .font(.caption.weight(.bold))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(badgeColor(for: position.side).opacity(0.18), in: Capsule())
-                                }
-                                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                                    GridRow { label("Лоты"); value("\(position.qty)") }
-                                    GridRow { label("Вход"); value(formatPrice(position.entryPrice)) }
-                                    GridRow { label("Текущая"); value(formatPrice(position.currentPrice)) }
-                                    GridRow { label("Стоимость"); value(formatRub(position.notionalRub)) }
-                                    GridRow { label("Вар. маржа"); value(formatRub(position.variationMarginRub)) }
-                                    GridRow { label("Изм. %"); value(formatPct(position.pnlPct)) }
-                                    GridRow { label("Стратегия"); value(position.strategy) }
-                                    GridRow { label("Сигнал"); value(position.lastSignal) }
+                            GlassCard {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(position.symbol)
+                                                .font(.title3.weight(.semibold))
+                                            Text(position.strategy)
+                                                .font(.subheadline)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        SignalPill(text: displaySignal(position.side), raw: position.side)
+                                    }
+
+                                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                                        compactInfo("Лоты", "\(position.qty)")
+                                        compactInfo("Сигнал", displaySignal(position.lastSignal))
+                                        compactInfo("Вход", formatPrice(position.entryPrice))
+                                        compactInfo("Текущая", formatPrice(position.currentPrice))
+                                        compactInfo("Стоимость", formatRub(position.notionalRub))
+                                        compactInfo("Вар. маржа", formatRub(position.variationMarginRub), tone: statusTone(for: position.variationMarginRub))
+                                        compactInfo("Изм. %", formatPct(position.pnlPct), tone: statusTone(for: position.pnlPct))
+                                    }
                                 }
                             }
-                            .padding(.vertical, 6)
                         }
                     }
+                    .refreshable { await store.load(date: store.selectedDate) }
                 } else if store.isLoading {
-                    ProgressView("Загружаю позиции…")
+                    ZStack {
+                        LiquidGlassBackground()
+                        ProgressView("Загружаю позиции…")
+                    }
                 } else {
-                    ContentUnavailableView(
-                        "Открытых позиций нет",
-                        systemImage: "briefcase",
-                        description: Text(store.errorMessage ?? "Когда бот откроет сделку, она появится здесь.")
+                    EmptyGlassState(
+                        title: "Открытых позиций нет",
+                        subtitle: store.errorMessage ?? "Когда бот откроет сделку, она появится здесь.",
+                        systemImage: "briefcase"
                     )
+                    .padding()
+                    .background(LiquidGlassBackground())
                 }
             }
             .navigationTitle("Позиции")
-            .refreshable {
-                await store.load()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await store.load(date: store.selectedDate) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
             }
         }
     }
 
-    private func errorBanner(_ text: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "wifi.exclamationmark")
-                .foregroundStyle(.orange)
-            Text(text)
+    private func compactInfo(_ title: String, _ value: String, tone: Color = .white) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(tone)
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func label(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-    }
-
-    private func value(_ text: String) -> some View {
-        Text(text)
-            .font(.subheadline)
+        .padding(12)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
