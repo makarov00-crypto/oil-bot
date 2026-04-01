@@ -21,39 +21,43 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_MODEL = "gpt-5-mini"
 DEFAULT_OUTPUT_PATH = BASE_DIR / "logs" / "ai_reviews" / "latest_review.md"
 
-SYSTEM_INSTRUCTIONS = """Ты торговый аналитик для фьючерсного бота на Мосбирже.
+SYSTEM_INSTRUCTIONS = """Ты рыночный аналитик для фьючерсного бота на Мосбирже.
 
 Твоя задача:
-проанализировать торговый день по журналу сделок, текущим результатам, сигналам и новостному фону.
+дать сводку по рынку и по тому, как бот воспользовался рыночными движениями в течение дня.
+Не оценивай качество разработки стратегии и не предлагай изменения в коде. Не выступай как ревьюер бота.
 Не придумывай данные. Опирайся только на переданный контекст.
 
 Что нужно вернуть:
-1. Короткий итог дня в 3-5 предложениях.
-2. Лучшие инструменты дня.
-3. Худшие инструменты дня.
-4. Главные ошибки:
-   - ошибка входа
-   - ошибка выхода
-   - переторговка / churn
-   - слишком жёсткий или слишком слабый фильтр
-5. Что менять завтра:
-   - не больше 3 конкретных изменений
-6. Что НЕ менять завтра:
-   - не больше 3 пунктов
-7. Уровень риска на завтра:
-   - низкий / средний / высокий
-   - и почему
+1. Короткий итог дня в 3-5 предложениях:
+   - какая была рыночная картина
+   - где были направленные движения
+   - как бот в целом участвовал в них
+2. Картина по инструментам:
+   - по каждому ключевому инструменту кратко:
+     - что делал рынок
+     - где был хороший вход
+     - где был хороший выход
+     - как этим воспользовался бот
+3. Хорошо реализованные моменты:
+   - где бот вошёл/вышел уместно
+   - где сигнал был использован по делу
+4. Упущенные или спорные моменты:
+   - где движение было, но бот использовал его слабо
+   - где был лишний вход/выход
+   - где бот вышел слишком рано или вошёл поздно
+5. Текущая картина на конец среза:
+   - какие инструменты ещё выглядят направленно
+   - где бот уже в позиции
+   - где сигнал есть, но участия нет
 
 Правила:
 - Пиши кратко, по делу, без воды.
-- Не советуй полностью переписывать стратегию, если проблема локальная.
-- Разделяй:
-  - нормальную убыточную сделку
-  - плохой вход
-  - плохой выход
-  - переторговку
+- Не делай разделы "лучшие/худшие инструменты", "ошибки", "что менять завтра", "уровень риска".
+- Не оценивай работу бота как правильную или неправильную в общем виде.
+- Анализируй связку: рынок -> сигнал/движение -> действие бота.
 - Если данных недостаточно, скажи это явно.
-- Не делай общих выводов о всей системе по одному инструменту, если остальные инструменты вели себя иначе.
+- Не делай общих выводов о всей системе по одному инструменту.
 - Ответ дай на русском языке, в Markdown.
 """
 
@@ -239,30 +243,34 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
         "losses": losses,
         "total_pnl_rub": total,
         "win_rate": win_rate,
-        "best_symbol": max(by_symbol.items(), key=lambda item: item[1]) if by_symbol else None,
-        "worst_symbol": min(by_symbol.items(), key=lambda item: item[1]) if by_symbol else None,
-        "best_strategy": max(by_strategy.items(), key=lambda item: item[1]) if by_strategy else None,
-        "worst_strategy": min(by_strategy.items(), key=lambda item: item[1]) if by_strategy else None,
-        "churn_symbols": sorted(by_opens.items(), key=lambda item: item[1], reverse=True)[:3],
+        "by_symbol": dict(sorted(by_symbol.items())),
+        "by_strategy": dict(sorted(by_strategy.items())),
+        "trade_count_by_symbol": dict(sorted(by_opens.items())),
     }
 
 
-def build_known_issues(trades: list[ClosedTrade]) -> list[str]:
-    issues: list[str] = []
-    by_symbol_count: dict[str, int] = defaultdict(int)
-    by_symbol_negative: dict[str, float] = defaultdict(float)
-
+def build_market_observations(trades: list[ClosedTrade], states: dict[str, dict[str, Any]]) -> list[str]:
+    notes: list[str] = []
+    by_symbol: dict[str, list[ClosedTrade]] = defaultdict(list)
     for trade in trades:
-        by_symbol_count[trade.symbol] += 1
-        by_symbol_negative[trade.symbol] += trade.pnl_rub
+        by_symbol[trade.symbol].append(trade)
 
-    for symbol, count in sorted(by_symbol_count.items(), key=lambda item: item[1], reverse=True):
-        if count >= 4:
-            issues.append(f"{symbol}: повышенная частота сделок ({count})")
-    for symbol, pnl in sorted(by_symbol_negative.items(), key=lambda item: item[1]):
-        if pnl < -100:
-            issues.append(f"{symbol}: существенный минус за день ({pnl:.2f} RUB)")
-    return issues[:6]
+    for symbol in sorted(set(by_symbol.keys()) | set(states.keys())):
+        symbol_trades = by_symbol.get(symbol, [])
+        state = states.get(symbol, {})
+        if symbol_trades:
+            total_pnl = sum(item.pnl_rub for item in symbol_trades)
+            notes.append(
+                f"{symbol}: закрытых сделок {len(symbol_trades)}, итог {total_pnl:.2f} RUB, "
+                f"последняя стратегия {state.get('last_strategy_name') or state.get('entry_strategy') or '-'}, "
+                f"текущий сигнал {state.get('last_signal','-')}, позиция {state.get('position_side','FLAT')}."
+            )
+        else:
+            notes.append(
+                f"{symbol}: закрытых сделок нет, текущий сигнал {state.get('last_signal','-')}, "
+                f"позиция {state.get('position_side','FLAT')}."
+            )
+    return notes[:12]
 
 
 def build_prompt(
@@ -274,7 +282,7 @@ def build_prompt(
 ) -> str:
     summary = summarize_closed_trades(closed_trades)
     active_news = list(news.get("active_biases") or [])
-    known_issues = build_known_issues(closed_trades)
+    market_notes = build_market_observations(closed_trades, states)
 
     portfolio_lines = [
         f"- реализовано: {format_rub(portfolio.get('bot_realized_pnl_rub'))}",
@@ -294,6 +302,19 @@ def build_prompt(
     if not trades_lines:
         trades_lines.append("- Закрытых сделок за день нет.")
 
+    open_positions_lines = []
+    for symbol, state in sorted(states.items()):
+        if state.get("position_side") and state.get("position_side") != "FLAT":
+            open_positions_lines.append(
+                f"- {symbol}: {state.get('position_side')} {state.get('position_qty', 0)} | "
+                f"вход {format_price(safe_float(state.get('entry_price')))} | "
+                f"текущая {format_price(safe_float(state.get('last_market_price')))} | "
+                f"вар. маржа {format_rub(state.get('position_variation_margin_rub'))} | "
+                f"стратегия {state.get('entry_strategy') or state.get('last_strategy_name') or '-'}"
+            )
+    if not open_positions_lines:
+        open_positions_lines.append("- Открытых позиций нет.")
+
     signal_lines = []
     for symbol, state in sorted(states.items()):
         signal_lines.append(
@@ -311,7 +332,13 @@ def build_prompt(
     if not news_lines:
         news_lines.append("- Активных news bias сейчас нет.")
 
-    issues_lines = [f"- {item}" for item in known_issues] if known_issues else ["- Явных проблем не выделено автоматически."]
+    by_symbol_lines = [f"- {symbol}: {pnl:.2f} RUB" for symbol, pnl in summary["by_symbol"].items()]
+    if not by_symbol_lines:
+        by_symbol_lines = ["- Нет закрытых сделок."]
+
+    by_strategy_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_strategy"].items()]
+    if not by_strategy_lines:
+        by_strategy_lines = ["- Нет данных по стратегиям."]
 
     review_lines = [
         f"Дата: {target_day.isoformat()}",
@@ -319,14 +346,19 @@ def build_prompt(
         "Портфель:",
         *portfolio_lines,
         "",
-        "Обзор сделок:",
+        "Сводка по дню:",
         f"- закрыто: {summary['closed_count']}",
         f"- win rate: {summary['win_rate']:.1f}%",
         f"- итог по закрытым: {summary['total_pnl_rub']:.2f} RUB",
-        f"- лучший инструмент: {format_named_pnl(summary['best_symbol'])}",
-        f"- худший инструмент: {format_named_pnl(summary['worst_symbol'])}",
-        f"- лучшая стратегия: {format_named_pnl(summary['best_strategy'])}",
-        f"- худшая стратегия: {format_named_pnl(summary['worst_strategy'])}",
+        "",
+        "Итог по инструментам:",
+        *by_symbol_lines,
+        "",
+        "Итог по стратегиям:",
+        *by_strategy_lines,
+        "",
+        "Открытые позиции:",
+        *open_positions_lines,
         "",
         "Сделки:",
         *trades_lines,
@@ -337,8 +369,8 @@ def build_prompt(
         "Новости:",
         *news_lines,
         "",
-        "Известные проблемы:",
-        *issues_lines,
+        "Наблюдения по инструментам:",
+        *[f"- {item}" for item in market_notes],
     ]
     return "\n".join(review_lines)
 
@@ -348,13 +380,6 @@ def first_summary_line(state: dict[str, Any]) -> str:
     if isinstance(summary, list) and summary:
         return str(summary[0])
     return str(state.get("last_error") or "-")
-
-
-def format_named_pnl(item: tuple[str, float] | None) -> str:
-    if not item:
-        return "-"
-    name, value = item
-    return f"{name} ({value:.2f} RUB)"
 
 
 def extract_output_text(payload: dict[str, Any]) -> str:
