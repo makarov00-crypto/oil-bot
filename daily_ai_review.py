@@ -15,17 +15,11 @@ from dotenv import load_dotenv
 
 
 BASE_DIR = Path(__file__).resolve().parent
-STATE_DIR = BASE_DIR / "bot_state"
-LOG_DIR = BASE_DIR / "logs"
-TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
-PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
-NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
-OUTPUT_DIR = LOG_DIR / "ai_reviews"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 DEFAULT_MODEL = "gpt-5-mini"
-DEFAULT_OUTPUT_PATH = OUTPUT_DIR / "latest_review.md"
+DEFAULT_OUTPUT_PATH = BASE_DIR / "logs" / "ai_reviews" / "latest_review.md"
 
 SYSTEM_INSTRUCTIONS = """Ты торговый аналитик для фьючерсного бота на Мосбирже.
 
@@ -83,7 +77,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date", dest="target_date", help="Дата в формате YYYY-MM-DD, по умолчанию сегодня по Москве")
     parser.add_argument("--preview", action="store_true", help="Только показать подготовленный prompt без вызова OpenAI")
     parser.add_argument("--model", default=os.getenv("OIL_AI_MODEL", DEFAULT_MODEL), help="Модель OpenAI")
-    parser.add_argument("--output", default=os.getenv("OIL_AI_REVIEW_OUTPUT", str(DEFAULT_OUTPUT_PATH)), help="Куда сохранить итоговый review")
+    parser.add_argument("--output", default=os.getenv("OIL_AI_REVIEW_OUTPUT", str((BASE_DIR / "logs" / "ai_reviews" / "latest_review.md"))), help="Куда сохранить итоговый review")
+    parser.add_argument("--base-dir", default=str(BASE_DIR), help="Каталог с bot_state и logs")
     return parser.parse_args()
 
 
@@ -100,11 +95,32 @@ def load_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def load_states() -> dict[str, dict[str, Any]]:
+def get_state_dir(base_dir: Path) -> Path:
+    return base_dir / "bot_state"
+
+
+def get_log_dir(base_dir: Path) -> Path:
+    return base_dir / "logs"
+
+
+def get_trade_journal_path(base_dir: Path) -> Path:
+    return get_log_dir(base_dir) / "trade_journal.jsonl"
+
+
+def get_portfolio_snapshot_path(base_dir: Path) -> Path:
+    return get_state_dir(base_dir) / "_portfolio_snapshot.json"
+
+
+def get_news_snapshot_path(base_dir: Path) -> Path:
+    return get_state_dir(base_dir) / "_news_snapshot.json"
+
+
+def load_states(base_dir: Path) -> dict[str, dict[str, Any]]:
     states: dict[str, dict[str, Any]] = {}
-    if not STATE_DIR.exists():
+    state_dir = get_state_dir(base_dir)
+    if not state_dir.exists():
         return states
-    for path in sorted(STATE_DIR.glob("*.json")):
+    for path in sorted(state_dir.glob("*.json")):
         if path.name.startswith("_"):
             continue
         try:
@@ -114,11 +130,12 @@ def load_states() -> dict[str, dict[str, Any]]:
     return states
 
 
-def load_trade_rows(target_day: date) -> list[dict[str, Any]]:
+def load_trade_rows(base_dir: Path, target_day: date) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if not TRADE_JOURNAL_PATH.exists():
+    trade_journal_path = get_trade_journal_path(base_dir)
+    if not trade_journal_path.exists():
         return rows
-    for line in TRADE_JOURNAL_PATH.read_text(encoding="utf-8").splitlines():
+    for line in trade_journal_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -388,17 +405,21 @@ def save_review(output_path: Path, target_day: date, model: str, review_text: st
     dated_path.write_text(content, encoding="utf-8")
 
 
+def build_review_prompt(base_dir: Path, target_day: date) -> str:
+    portfolio = load_json(get_portfolio_snapshot_path(base_dir))
+    news = load_json(get_news_snapshot_path(base_dir))
+    states = load_states(base_dir)
+    trade_rows = load_trade_rows(base_dir, target_day)
+    closed_trades = pair_closed_trades(trade_rows)
+    return build_prompt(target_day, portfolio, news, states, closed_trades)
+
+
 def main() -> int:
     load_dotenv(BASE_DIR / ".env")
     args = parse_args()
     target_day = parse_target_date(args.target_date)
-
-    portfolio = load_json(PORTFOLIO_SNAPSHOT_PATH)
-    news = load_json(NEWS_SNAPSHOT_PATH)
-    states = load_states()
-    trade_rows = load_trade_rows(target_day)
-    closed_trades = pair_closed_trades(trade_rows)
-    prompt = build_prompt(target_day, portfolio, news, states, closed_trades)
+    base_dir = Path(args.base_dir).expanduser().resolve()
+    prompt = build_review_prompt(base_dir, target_day)
 
     if args.preview:
         print("=== SYSTEM ===")

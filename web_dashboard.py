@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,7 @@ TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
+AI_REVIEW_DIR = LOG_DIR / "ai_reviews"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -107,6 +108,66 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
                 item["time"] = dt.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S")
             except Exception:
                 pass
+        if item.get("price") is not None:
+            try:
+                item["price"] = f"{float(item['price']):.4f}"
+            except Exception:
+                pass
+        if item.get("pnl_rub") is not None:
+            try:
+                item["pnl_rub"] = f"{float(item['pnl_rub']):.2f}"
+            except Exception:
+                pass
+        normalized.append(item)
+    return normalized
+
+
+def parse_trade_time(raw_value: str | None) -> datetime | None:
+    if not raw_value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw_value))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(MOSCOW_TZ)
+
+
+def load_all_trade_rows() -> list[dict]:
+    if not TRADE_JOURNAL_PATH.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        with TRADE_JOURNAL_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                dt = parse_trade_time(row.get("time"))
+                if not dt:
+                    continue
+                row["_dt"] = dt
+                row["_date"] = dt.date().isoformat()
+                rows.append(row)
+    except Exception:
+        return []
+    return rows
+
+
+def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
+    rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()]
+    normalized: list[dict] = []
+    for row in rows[-limit:]:
+        item = dict(row)
+        dt = item.pop("_dt", None)
+        item.pop("_date", None)
+        if dt:
+            item["time"] = dt.strftime("%d.%m %H:%M:%S")
         if item.get("price") is not None:
             try:
                 item["price"] = f"{float(item['price']):.4f}"
@@ -255,6 +316,169 @@ def load_trade_review(limit: int = 80) -> dict:
         "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
         "closed_reviews": closed_reviews[-20:],
         "current_open": current_open[-20:],
+    }
+
+
+def load_trade_review_for_day(target_day: date, limit: int = 200) -> dict:
+    rows = load_trade_rows_for_day(target_day, limit)
+    open_by_symbol: dict[str, list[dict]] = {}
+    closed_reviews: list[dict] = []
+
+    def classify_verdict(pnl_numeric: float, exit_reason: str) -> str:
+        text = str(exit_reason or "").lower()
+        if pnl_numeric > 0:
+            return "хорошая сделка"
+        if "стоп" in text or "трейлинг" in text:
+            return "нормальная убыточная"
+        if "macd" in text or "rsi" in text:
+            return "возможно ранний выход"
+        if "противоположный сигнал" in text:
+            return "закрыта по смене режима"
+        return "требует разбора"
+
+    for row in rows:
+        symbol = str(row.get("symbol", ""))
+        event = str(row.get("event", "")).upper()
+        if not symbol:
+            continue
+        if event == "OPEN":
+            open_by_symbol.setdefault(symbol, []).append(row)
+            continue
+        if event != "CLOSE":
+            continue
+        open_row = None
+        if open_by_symbol.get(symbol):
+            open_row = open_by_symbol[symbol].pop(0)
+        pnl_value = row.get("pnl_rub")
+        try:
+            pnl_numeric = float(pnl_value) if pnl_value not in (None, "", "-") else 0.0
+        except Exception:
+            pnl_numeric = 0.0
+        closed_reviews.append(
+            {
+                "symbol": symbol,
+                "side": row.get("side") or (open_row.get("side") if open_row else ""),
+                "strategy": row.get("strategy") or (open_row.get("strategy") if open_row else ""),
+                "session": row.get("session") or (open_row.get("session") if open_row else ""),
+                "entry_time": open_row.get("time") if open_row else "-",
+                "exit_time": row.get("time") or "-",
+                "entry_price": open_row.get("price") if open_row else "-",
+                "exit_price": row.get("price") or "-",
+                "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
+                "pnl_rub": f"{pnl_numeric:.2f}",
+                "entry_reason": open_row.get("reason") if open_row else "-",
+                "exit_reason": row.get("reason") or "-",
+                "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
+            }
+        )
+
+    wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
+    losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
+    total = sum(float(item.get("pnl_rub") or 0.0) for item in closed_reviews)
+    win_rate = round((wins / len(closed_reviews)) * 100, 1) if closed_reviews else 0.0
+
+    by_symbol: dict[str, float] = {}
+    by_strategy: dict[str, float] = {}
+    for item in closed_reviews:
+        pnl = float(item.get("pnl_rub") or 0.0)
+        by_symbol[item["symbol"]] = by_symbol.get(item["symbol"], 0.0) + pnl
+        strategy = item.get("strategy") or "-"
+        by_strategy[strategy] = by_strategy.get(strategy, 0.0) + pnl
+
+    best_symbol = max(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
+    worst_symbol = min(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
+    best_strategy = max(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
+    worst_strategy = min(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
+
+    return {
+        "closed_count": len(closed_reviews),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": win_rate,
+        "closed_total_pnl_rub": round(total, 2),
+        "best_symbol": {"symbol": best_symbol[0], "pnl_rub": round(best_symbol[1], 2)} if best_symbol else None,
+        "worst_symbol": {"symbol": worst_symbol[0], "pnl_rub": round(worst_symbol[1], 2)} if worst_symbol else None,
+        "best_strategy": {"strategy": best_strategy[0], "pnl_rub": round(best_strategy[1], 2)} if best_strategy else None,
+        "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
+        "closed_reviews": closed_reviews[-20:],
+    }
+
+
+def build_daily_performance(portfolio: dict, target_day: date) -> dict:
+    current_portfolio = float(portfolio.get("total_portfolio_rub") or 0.0)
+    rows = load_all_trade_rows()
+    by_day: dict[str, dict[str, float]] = {}
+    cumulative = 0.0
+
+    days = sorted({row["_date"] for row in rows})
+    for day_key in days:
+        day_rows = []
+        for row in rows:
+            if row.get("_date") == day_key and str(row.get("event", "")).upper() == "CLOSE":
+                day_rows.append(row)
+        pnl = 0.0
+        wins = 0
+        losses = 0
+        for row in day_rows:
+            try:
+                trade_pnl = float(row.get("pnl_rub") or 0.0)
+            except Exception:
+                trade_pnl = 0.0
+            pnl += trade_pnl
+            if trade_pnl > 0:
+                wins += 1
+            elif trade_pnl < 0:
+                losses += 1
+        cumulative += pnl
+        pct = (pnl / current_portfolio * 100.0) if current_portfolio else 0.0
+        cumulative_pct = (cumulative / current_portfolio * 100.0) if current_portfolio else 0.0
+        by_day[day_key] = {
+            "date": day_key,
+            "closed_count": len(day_rows),
+            "wins": wins,
+            "losses": losses,
+            "pnl_rub": round(pnl, 2),
+            "pnl_pct": round(pct, 2),
+            "cumulative_pnl_rub": round(cumulative, 2),
+            "cumulative_pnl_pct": round(cumulative_pct, 2),
+        }
+
+    selected_key = target_day.isoformat()
+    return {
+        "selected_date": selected_key,
+        "available_dates": days,
+        "selected": by_day.get(
+            selected_key,
+            {
+                "date": selected_key,
+                "closed_count": 0,
+                "wins": 0,
+                "losses": 0,
+                "pnl_rub": 0.0,
+                "pnl_pct": 0.0,
+                "cumulative_pnl_rub": 0.0,
+                "cumulative_pnl_pct": 0.0,
+            },
+        ),
+        "series": [by_day[day_key] for day_key in days],
+    }
+
+
+def load_ai_review(target_day: date) -> dict:
+    dated_path = AI_REVIEW_DIR / f"{target_day.isoformat()}_review.md"
+    latest_path = AI_REVIEW_DIR / "latest_review.md"
+    source_path = dated_path if dated_path.exists() else latest_path
+    if not source_path.exists():
+        return {"available": False, "date": target_day.isoformat(), "content": ""}
+    try:
+        content = source_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return {"available": False, "date": target_day.isoformat(), "content": ""}
+    return {
+        "available": bool(content),
+        "date": target_day.isoformat(),
+        "source": source_path.name,
+        "content": content,
     }
 
 
@@ -632,6 +856,78 @@ def build_dashboard_html() -> str:
       color: var(--muted);
       font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
     }
+    .toolbar-inline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .toolbar-inline input,
+    .toolbar-inline select {
+      background: #0b1324;
+      color: #ebf4ff;
+      border: 1px solid rgba(102,174,255,0.18);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font: 500 13px/1 "Manrope", sans-serif;
+    }
+    .chart-wrap {
+      margin-top: 18px;
+      border: 1px solid rgba(102, 174, 255, 0.14);
+      border-radius: 16px;
+      background: rgba(7, 13, 24, 0.72);
+      padding: 14px;
+    }
+    .chart-legend {
+      display: flex;
+      gap: 18px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+      margin-right: 6px;
+    }
+    #pnlChart {
+      width: 100%;
+      height: 280px;
+      display: block;
+    }
+    .prose-review {
+      font-size: 14px;
+      line-height: 1.6;
+      color: #dbe9f8;
+      white-space: pre-wrap;
+    }
+    .prose-review h1,
+    .prose-review h2,
+    .prose-review h3,
+    .prose-review h4 {
+      font-family: "Sora", "Manrope", sans-serif;
+      margin: 18px 0 8px;
+      font-size: 18px;
+    }
+    .prose-review ul,
+    .prose-review ol {
+      margin: 8px 0 12px 18px;
+      padding: 0;
+    }
+    .prose-review li {
+      margin: 4px 0;
+    }
+    .prose-review code {
+      font-family: "JetBrains Mono", monospace;
+      background: rgba(67, 197, 255, 0.10);
+      border: 1px solid rgba(67, 197, 255, 0.12);
+      border-radius: 8px;
+      padding: 1px 6px;
+      color: #bfe8ff;
+    }
     .hero p {
       max-width: 62ch;
       line-height: 1.5;
@@ -671,6 +967,13 @@ def build_dashboard_html() -> str:
       }
       .generated {
         font-size: 11px;
+      }
+      .toolbar-inline {
+        width: 100%;
+      }
+      .toolbar-inline input,
+      .toolbar-inline select {
+        width: 100%;
       }
       table {
         font-size: 13px;
@@ -768,6 +1071,45 @@ def build_dashboard_html() -> str:
         <div>
           <div class="muted">Открытых позиций</div>
           <div class="metric" id="portfolioOpenCount">-</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom:16px;">
+      <div class="section-title">
+        <h2>Дневная аналитика</h2>
+        <div class="toolbar-inline">
+          <label class="muted" for="selectedDate">Дата:</label>
+          <input id="selectedDate" type="date" />
+        </div>
+      </div>
+      <div class="grid">
+        <div>
+          <div class="muted">Итог за день</div>
+          <div class="metric" id="dayPnlRub">-</div>
+        </div>
+        <div>
+          <div class="muted">Итог за день, %</div>
+          <div class="metric" id="dayPnlPct">-</div>
+        </div>
+        <div>
+          <div class="muted">Сделок закрыто</div>
+          <div class="metric" id="dayClosedCount">-</div>
+        </div>
+        <div>
+          <div class="muted">Накопленный итог</div>
+          <div class="metric" id="cumPnlRub">-</div>
+        </div>
+        <div>
+          <div class="muted">Накопленный итог, %</div>
+          <div class="metric" id="cumPnlPct">-</div>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="pnlChart" width="1200" height="280"></canvas>
+        <div class="chart-legend">
+          <span><span class="legend-dot" style="background:#43c5ff;"></span>Итог за день, RUB</span>
+          <span><span class="legend-dot" style="background:#37e6a4;"></span>Накопленный итог, RUB</span>
         </div>
       </div>
     </section>
@@ -942,6 +1284,14 @@ def build_dashboard_html() -> str:
         <tbody></tbody>
       </table>
     </section>
+
+    <section class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>AI-разбор дня</h2>
+        <div class="generated" id="aiReviewMeta">AI review: -</div>
+      </div>
+      <div id="aiReviewContent" class="prose-review muted">AI-review пока не загружен.</div>
+    </section>
   </div>
   <div id="newsPopover" class="news-popover" role="dialog" aria-hidden="true">
     <div class="news-popover-title" id="newsPopoverTitle">Текст новости</div>
@@ -1099,9 +1449,124 @@ def build_dashboard_html() -> str:
       return rows.filter((row) => String(row.event_status || '').toLowerCase() === value);
     }
 
+    function markdownToHtml(value) {
+      const text = String(value || '').trim();
+      if (!text) return '<span class="muted">AI-review для выбранной даты пока не найден.</span>';
+      let html = escapeHtml(text);
+      html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+      html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+      html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+      html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+      html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+      html = html.replace(/(<li>.*<\\/li>)/gs, '<ul>$1</ul>');
+      html = html.replace(/<\\/ul>\\s*<ul>/g, '');
+      html = html.replace(/\\n{2,}/g, '</p><p>');
+      html = `<p>${html}</p>`;
+      html = html.replace(/<p>\\s*(<h[1-3]>)/g, '$1');
+      html = html.replace(/(<\\/h[1-3]>)\\s*<\\/p>/g, '$1');
+      html = html.replace(/<p>\\s*(<ul>)/g, '$1');
+      html = html.replace(/(<\\/ul>)\\s*<\\/p>/g, '$1');
+      return html;
+    }
+
+    function renderPnlChart(series, selectedDate) {
+      const canvas = document.getElementById('pnlChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.clearRect(0, 0, width, height);
+
+      if (!Array.isArray(series) || !series.length) {
+        ctx.fillStyle = '#7f95b3';
+        ctx.font = '14px Manrope';
+        ctx.fillText('История по дням пока пуста.', 24, 40);
+        return;
+      }
+
+      const values = [];
+      for (const item of series) {
+        values.push(Number(item.pnl_rub || 0));
+        values.push(Number(item.cumulative_pnl_rub || 0));
+      }
+      const min = Math.min(...values, 0);
+      const max = Math.max(...values, 0);
+      const range = Math.max(1, max - min);
+      const left = 56;
+      const right = width - 24;
+      const top = 18;
+      const bottom = height - 44;
+      const plotWidth = right - left;
+      const plotHeight = bottom - top;
+
+      const yFor = (value) => bottom - ((value - min) / range) * plotHeight;
+      const xFor = (index) => left + (plotWidth / Math.max(1, series.length - 1)) * index;
+      const zeroY = yFor(0);
+
+      ctx.strokeStyle = 'rgba(102, 174, 255, 0.14)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 4; i += 1) {
+        const y = top + (plotHeight / 3) * i;
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+      ctx.beginPath();
+      ctx.moveTo(left, zeroY);
+      ctx.lineTo(right, zeroY);
+      ctx.stroke();
+
+      ctx.fillStyle = '#7f95b3';
+      ctx.font = '12px JetBrains Mono';
+      ctx.fillText(`${max.toFixed(0)} RUB`, 4, top + 6);
+      ctx.fillText(`${min.toFixed(0)} RUB`, 4, bottom);
+
+      const drawLine = (key, color) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        series.forEach((item, idx) => {
+          const x = xFor(idx);
+          const y = yFor(Number(item[key] || 0));
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        series.forEach((item, idx) => {
+          const x = xFor(idx);
+          const y = yFor(Number(item[key] || 0));
+          ctx.fillStyle = item.date === selectedDate ? '#ffffff' : color;
+          ctx.beginPath();
+          ctx.arc(x, y, item.date === selectedDate ? 5 : 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      };
+
+      drawLine('pnl_rub', '#43c5ff');
+      drawLine('cumulative_pnl_rub', '#37e6a4');
+
+      ctx.fillStyle = '#9db1cb';
+      ctx.font = '11px JetBrains Mono';
+      series.forEach((item, idx) => {
+        const x = xFor(idx);
+        ctx.fillText(String(item.date || '').slice(5), x - 18, height - 16);
+      });
+    }
+
     async function loadData() {
-      const response = await fetch('/api/dashboard');
+      const dateInput = document.getElementById('selectedDate');
+      const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
+      const response = await fetch(`/api/dashboard${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`);
       const data = await response.json();
+
+      if (dateInput && data.daily && data.daily.selected_date) {
+        dateInput.value = data.daily.selected_date;
+      }
 
       document.getElementById('realized').textContent = `${data.summary.realized_pnl_rub.toFixed(2)} RUB`;
       document.getElementById('openCount').textContent = data.summary.open_positions.length;
@@ -1119,6 +1584,15 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
+
+      const daily = data.daily || {};
+      const daySelected = daily.selected || {};
+      document.getElementById('dayPnlRub').textContent = formatRub(daySelected.pnl_rub);
+      document.getElementById('dayPnlPct').textContent = formatPct(daySelected.pnl_pct);
+      document.getElementById('dayClosedCount').textContent = daySelected.closed_count ?? 0;
+      document.getElementById('cumPnlRub').textContent = formatRub(daySelected.cumulative_pnl_rub);
+      document.getElementById('cumPnlPct').textContent = formatPct(daySelected.cumulative_pnl_pct);
+      renderPnlChart(daily.series || [], daily.selected_date || '');
 
       const runtime = data.runtime || {};
       document.getElementById('runtimeUpdatedAt').textContent = `Runtime: ${runtime.updated_at_moscow || '-'}`;
@@ -1269,7 +1743,7 @@ def build_dashboard_html() -> str:
       const tradeCards = document.getElementById('tradesCards');
       tradeBody.innerHTML = '';
       tradeCards.innerHTML = '';
-      const filteredTrades = filterTradeRows(data.trades.slice().reverse());
+      const filteredTrades = filterTradeRows((data.trades || []).slice().reverse());
       for (const row of filteredTrades) {
         const pnl = row.pnl_rub ?? '-';
         const pnlNum = Number(pnl);
@@ -1359,12 +1833,22 @@ def build_dashboard_html() -> str:
         reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="8" class="muted">Закрытых сделок пока нет.</td></tr>');
         reviewCards.insertAdjacentHTML('beforeend', '<div class="muted">Закрытых сделок пока нет.</div>');
       }
+
+      const aiReview = data.ai_review || {};
+      document.getElementById('aiReviewMeta').textContent = aiReview.available
+        ? `AI review: ${aiReview.source || '-'}`
+        : 'AI review: пока нет';
+      document.getElementById('aiReviewContent').innerHTML = markdownToHtml(aiReview.content || '');
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       const filter = document.getElementById('eventStatusFilter');
+      const dateInput = document.getElementById('selectedDate');
       if (filter) {
         filter.addEventListener('change', loadData);
+      }
+      if (dateInput) {
+        dateInput.addEventListener('change', loadData);
       }
       document.addEventListener('click', (event) => {
         const trigger = event.target.closest('.js-news-popover');
@@ -1392,21 +1876,30 @@ def dashboard() -> str:
 
 
 @app.get("/api/dashboard", response_class=JSONResponse)
-def api_dashboard() -> dict:
+def api_dashboard(date: str | None = None) -> dict:
     states = load_states()
     generated_at = datetime.now(timezone.utc)
-    trades = annotate_trade_rows(load_trade_rows(80), states)
+    portfolio = load_portfolio_snapshot()
+    target_day = datetime.now(MOSCOW_TZ).date()
+    if date:
+        try:
+            target_day = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    trades = annotate_trade_rows(load_trade_rows_for_day(target_day, 200), states)
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(states),
-        "portfolio": load_portfolio_snapshot(),
+        "portfolio": portfolio,
         "runtime": load_runtime_status(),
         "news": load_news_snapshot(),
-        "trade_review": load_trade_review(120),
+        "trade_review": load_trade_review_for_day(target_day, 200),
         "summary": summarize_states(states),
         "meta": load_meta(),
         "states": states,
         "trades": trades,
+        "daily": build_daily_performance(portfolio, target_day),
+        "ai_review": load_ai_review(target_day),
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
