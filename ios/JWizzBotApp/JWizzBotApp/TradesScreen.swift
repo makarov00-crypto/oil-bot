@@ -98,7 +98,9 @@ struct TradesScreen: View {
                                 compactInfo("Сторона", displaySignal(trade.side))
                                 compactInfo("Лоты", formatInt(trade.qtyLots))
                                 compactInfo("Цена", trade.price ?? "-")
-                                compactInfo("PnL", formatTradePnl(trade.pnlRub), tone: statusTone(forString: trade.pnlRub))
+                                compactInfo("Gross", formatTradePnl(trade.grossPnlRub))
+                                compactInfo("Комиссия", formatTradePnl(trade.commissionRub), tone: statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
+                                compactInfo("Net", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                                 compactInfo("Стратегия", trade.strategy ?? "-")
                                 compactInfo("Причина", trade.reason ?? "-")
                             }
@@ -147,9 +149,9 @@ struct TradesScreen: View {
                                 Spacer()
                                 VStack(alignment: .trailing, spacing: 6) {
                                     SignalPill(text: displaySignal(trade.side), raw: trade.side)
-                                    Text(formatTradePnl(trade.pnlRub))
+                                    Text(formatTradePnl(trade.netPnlRub ?? trade.pnlRub))
                                         .font(.headline.weight(.semibold))
-                                        .foregroundStyle(statusTone(forString: trade.pnlRub))
+                                        .foregroundStyle(statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                                 }
                             }
 
@@ -160,6 +162,9 @@ struct TradesScreen: View {
                                 compactInfo("Цена выхода", trade.exitPrice ?? "-")
                                 compactInfo("Лоты", formatInt(trade.qtyLots))
                                 compactInfo("Сессия", displaySession(trade.session))
+                                compactInfo("Gross", formatTradePnl(trade.grossPnlRub))
+                                compactInfo("Комиссия", formatTradePnl(trade.commissionRub), tone: statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
+                                compactInfo("Net", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                             }
 
                             Divider().overlay(Color.white.opacity(0.08))

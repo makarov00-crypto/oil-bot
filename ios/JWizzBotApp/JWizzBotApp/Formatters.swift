@@ -143,6 +143,11 @@ func formatTradePnl(_ raw: String?) -> String {
     return raw
 }
 
+func safeDouble(_ raw: String?) -> Double? {
+    guard let raw, !raw.isEmpty else { return nil }
+    return Double(raw)
+}
+
 func formatInt(_ value: Int?) -> String {
     guard let value else { return "-" }
     return "\(value)"

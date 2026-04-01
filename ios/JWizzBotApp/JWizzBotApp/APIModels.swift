@@ -306,6 +306,9 @@ struct ClosedReview: Decodable, Identifiable {
     let exitPrice: String?
     let qtyLots: Int?
     let pnlRub: String
+    let grossPnlRub: String?
+    let commissionRub: String?
+    let netPnlRub: String?
     let entryReason: String?
     let exitReason: String
     let verdict: String
@@ -323,6 +326,9 @@ struct ClosedReview: Decodable, Identifiable {
         case exitPrice = "exit_price"
         case qtyLots = "qty_lots"
         case pnlRub = "pnl_rub"
+        case grossPnlRub = "gross_pnl_rub"
+        case commissionRub = "commission_rub"
+        case netPnlRub = "net_pnl_rub"
         case entryReason = "entry_reason"
         case exitReason = "exit_reason"
         case verdict
@@ -338,6 +344,9 @@ struct TradeEvent: Decodable, Identifiable {
     let qtyLots: Int?
     let price: String?
     let pnlRub: String?
+    let grossPnlRub: String?
+    let commissionRub: String?
+    let netPnlRub: String?
     let strategy: String?
     let reason: String?
 
@@ -352,6 +361,9 @@ struct TradeEvent: Decodable, Identifiable {
         case qtyLots = "qty_lots"
         case price
         case pnlRub = "pnl_rub"
+        case grossPnlRub = "gross_pnl_rub"
+        case commissionRub = "commission_rub"
+        case netPnlRub = "net_pnl_rub"
         case strategy
         case reason
     }

@@ -118,6 +118,21 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
                 item["pnl_rub"] = f"{float(item['pnl_rub']):.2f}"
             except Exception:
                 pass
+        if item.get("gross_pnl_rub") is not None:
+            try:
+                item["gross_pnl_rub"] = f"{float(item['gross_pnl_rub']):.2f}"
+            except Exception:
+                pass
+        if item.get("commission_rub") is not None:
+            try:
+                item["commission_rub"] = f"{float(item['commission_rub']):.2f}"
+            except Exception:
+                pass
+        if item.get("net_pnl_rub") is not None:
+            try:
+                item["net_pnl_rub"] = f"{float(item['net_pnl_rub']):.2f}"
+            except Exception:
+                pass
         normalized.append(item)
     return normalized
 
@@ -176,6 +191,21 @@ def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
         if item.get("pnl_rub") is not None:
             try:
                 item["pnl_rub"] = f"{float(item['pnl_rub']):.2f}"
+            except Exception:
+                pass
+        if item.get("gross_pnl_rub") is not None:
+            try:
+                item["gross_pnl_rub"] = f"{float(item['gross_pnl_rub']):.2f}"
+            except Exception:
+                pass
+        if item.get("commission_rub") is not None:
+            try:
+                item["commission_rub"] = f"{float(item['commission_rub']):.2f}"
+            except Exception:
+                pass
+        if item.get("net_pnl_rub") is not None:
+            try:
+                item["net_pnl_rub"] = f"{float(item['net_pnl_rub']):.2f}"
             except Exception:
                 pass
         normalized.append(item)
@@ -274,6 +304,9 @@ def load_trade_review(limit: int = 80) -> dict:
                 "exit_price": row.get("price") or "-",
                 "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
                 "pnl_rub": f"{pnl_numeric:.2f}",
+                "gross_pnl_rub": row.get("gross_pnl_rub") or "-",
+                "commission_rub": row.get("commission_rub") or "-",
+                "net_pnl_rub": row.get("net_pnl_rub") or row.get("pnl_rub") or "-",
                 "entry_reason": open_row.get("reason") if open_row else "-",
                 "exit_reason": row.get("reason") or "-",
                 "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
@@ -366,6 +399,9 @@ def load_trade_review_for_day(target_day: date, limit: int = 200) -> dict:
                 "exit_price": row.get("price") or "-",
                 "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
                 "pnl_rub": f"{pnl_numeric:.2f}",
+                "gross_pnl_rub": row.get("gross_pnl_rub") or "-",
+                "commission_rub": row.get("commission_rub") or "-",
+                "net_pnl_rub": row.get("net_pnl_rub") or row.get("pnl_rub") or "-",
                 "entry_reason": open_row.get("reason") if open_row else "-",
                 "exit_reason": row.get("reason") or "-",
                 "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
@@ -1076,7 +1112,7 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioBlocked">-</div>
         </div>
         <div>
-          <div class="muted">Реализовано ботом</div>
+          <div class="muted">Net по сделкам</div>
           <div class="metric" id="portfolioRealized">-</div>
         </div>
         <div>
@@ -1096,7 +1132,7 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioCashEffect">-</div>
         </div>
         <div>
-          <div class="muted">Вариационная маржа</div>
+          <div class="muted">Оценка открытых позиций</div>
           <div class="metric" id="portfolioVariation">-</div>
         </div>
         <div>
@@ -1231,7 +1267,7 @@ def build_dashboard_html() -> str:
         <table id="tradesTable">
           <thead>
             <tr>
-              <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">PnL RUB</th><th>Стратегия</th><th>Причина</th>
+              <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">Gross</th><th class="right">Комиссия</th><th class="right">Net</th><th>Стратегия</th><th>Причина</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -1284,7 +1320,7 @@ def build_dashboard_html() -> str:
         <table id="reviewTable" style="margin-top:16px;">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">PnL RUB</th><th>Выход</th><th>Вердикт</th>
+              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">Gross</th><th class="right">Комиссия</th><th class="right">Net</th><th>Выход</th><th>Вердикт</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -1795,7 +1831,9 @@ def build_dashboard_html() -> str:
           <td>${signalBadge(row.side || '-')}</td>
           <td class="mono">${escapeHtml(row.qty_lots || '-')}</td>
           <td class="mono right">${escapeHtml(row.price ?? '-')}</td>
-          <td class="mono right ${pnlClass}">${escapeHtml(pnl)}</td>
+          <td class="mono right">${escapeHtml(row.gross_pnl_rub ?? '-')}</td>
+          <td class="mono right">${escapeHtml(row.commission_rub ?? '-')}</td>
+          <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? pnl)}</td>
           <td>${escapeHtml(row.strategy || '-')}</td>
           <td class="reason">${escapeHtml(row.reason || '-')}</td>
         </tr>`);
@@ -1810,7 +1848,9 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">Сторона</span><div class="mobile-card-value">${signalBadge(row.side || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(row.qty_lots || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Цена</span><div class="mobile-card-value mono">${escapeHtml(row.price ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">PnL</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(pnl)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub ?? '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub ?? '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? pnl)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
           </div>
           <div class="mobile-card-footer">
@@ -1819,7 +1859,7 @@ def build_dashboard_html() -> str:
         </article>`);
       }
       if (!filteredTrades.length) {
-        tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Журнал сделок пока пуст.</td></tr>');
+        tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="12" class="muted">Журнал сделок пока пуст.</td></tr>');
         tradeCards.insertAdjacentHTML('beforeend', '<div class="muted">Журнал сделок пока пуст.</div>');
       }
 
@@ -1847,7 +1887,9 @@ def build_dashboard_html() -> str:
           <td>${escapeHtml(row.strategy || '-')}</td>
           <td class="mono">${escapeHtml(row.entry_time || '-')}</td>
           <td class="mono">${escapeHtml(row.exit_time || '-')}</td>
-          <td class="mono right ${pnlClass}">${escapeHtml(row.pnl_rub || '-')}</td>
+          <td class="mono right">${escapeHtml(row.gross_pnl_rub || '-')}</td>
+          <td class="mono right">${escapeHtml(row.commission_rub || '-')}</td>
+          <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub || row.pnl_rub || '-')}</td>
           <td class="reason">${escapeHtml(row.exit_reason || '-')}</td>
           <td>${escapeHtml(row.verdict || '-')}</td>
         </tr>`);
@@ -1858,7 +1900,9 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">PnL</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.pnl_rub || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub || row.pnl_rub || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Вход</span><div class="mobile-card-value mono">${escapeHtml(row.entry_time || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Выход</span><div class="mobile-card-value mono">${escapeHtml(row.exit_time || '-')}</div></div>
           </div>
@@ -1869,7 +1913,7 @@ def build_dashboard_html() -> str:
         </article>`);
       }
       if (!(review.closed_reviews || []).length) {
-        reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="8" class="muted">Закрытых сделок пока нет.</td></tr>');
+        reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Закрытых сделок пока нет.</td></tr>');
         reviewCards.insertAdjacentHTML('beforeend', '<div class="muted">Закрытых сделок пока нет.</div>');
       }
 
