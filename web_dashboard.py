@@ -1080,6 +1080,22 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioRealized">-</div>
         </div>
         <div>
+          <div class="muted">Gross по сделкам</div>
+          <div class="metric" id="portfolioGross">-</div>
+        </div>
+        <div>
+          <div class="muted">Комиссии</div>
+          <div class="metric" id="portfolioCommission">-</div>
+        </div>
+        <div>
+          <div class="muted">Факт. вар. маржа</div>
+          <div class="metric" id="portfolioActualVm">-</div>
+        </div>
+        <div>
+          <div class="muted">Факт. эффект счёта</div>
+          <div class="metric" id="portfolioCashEffect">-</div>
+        </div>
+        <div>
           <div class="muted">Вариационная маржа</div>
           <div class="metric" id="portfolioVariation">-</div>
         </div>
@@ -1600,6 +1616,10 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_rub);
       document.getElementById('portfolioBlocked').textContent = formatRub(portfolio.blocked_guarantee_rub);
       document.getElementById('portfolioRealized').textContent = formatRub(portfolio.bot_realized_pnl_rub);
+      document.getElementById('portfolioGross').textContent = formatRub(portfolio.bot_realized_gross_pnl_rub);
+      document.getElementById('portfolioCommission').textContent = formatRub(portfolio.bot_realized_commission_rub);
+      document.getElementById('portfolioActualVm').textContent = formatRub(portfolio.bot_actual_varmargin_rub);
+      document.getElementById('portfolioCashEffect').textContent = formatRub(portfolio.bot_actual_cash_effect_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';

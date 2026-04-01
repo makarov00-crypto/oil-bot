@@ -28,9 +28,12 @@ from tinkoff.invest import (
     CandleInterval,
     Client,
     GetMaxLotsRequest,
+    GetOperationsByCursorRequest,
     OrderDirection,
     OrderExecutionReportStatus,
     OrderType,
+    OperationState,
+    OperationType,
     RequestError,
 )
 from tinkoff.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
@@ -59,6 +62,17 @@ SUPPORTED_INTERVALS = {
     10: CandleInterval.CANDLE_INTERVAL_10_MIN,
     15: CandleInterval.CANDLE_INTERVAL_15_MIN,
     30: CandleInterval.CANDLE_INTERVAL_30_MIN,
+}
+
+VARMARGIN_OPERATION_TYPES = {
+    OperationType.OPERATION_TYPE_ACCRUING_VARMARGIN,
+    OperationType.OPERATION_TYPE_WRITING_OFF_VARMARGIN,
+}
+
+FEE_OPERATION_TYPES = {
+    OperationType.OPERATION_TYPE_BROKER_FEE,
+    OperationType.OPERATION_TYPE_SERVICE_FEE,
+    OperationType.OPERATION_TYPE_MARGIN_FEE,
 }
 
 if hasattr(CandleInterval, "CANDLE_INTERVAL_HOUR"):
@@ -721,6 +735,12 @@ def current_moscow_time() -> datetime:
     return datetime.now(MOSCOW_TZ)
 
 
+def get_moscow_day_bounds_utc(now: datetime | None = None) -> tuple[datetime, datetime]:
+    now_msk = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
+    start_msk = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_msk.astimezone(UTC), now_msk.astimezone(UTC)
+
+
 def get_market_session(now: datetime | None = None) -> str:
     now = now or current_moscow_time()
     if now.weekday() >= 5:
@@ -1230,6 +1250,8 @@ def build_portfolio_snapshot_message(
         f"📊 Gross по закрытым: {float(payload['bot_realized_gross_pnl_rub']):.2f} RUB",
         f"💸 Комиссии: {float(payload['bot_realized_commission_rub']):.2f} RUB",
         f"📊 Net реализовано ботом: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
+        f"🏦 Факт. вар. маржа по операциям: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
+        f"🏦 Факт. денежный эффект счёта: {float(payload['bot_actual_cash_effect_rub']):.2f} RUB",
         f"📈 Оценка вариационной маржи: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
         f"🧮 Итого по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
     ]
@@ -1242,6 +1264,7 @@ def build_portfolio_snapshot_payload(
     watchlist: list[InstrumentConfig],
 ) -> dict[str, Any]:
     snapshot = get_account_snapshot(client, config)
+    accounting = get_today_accounting_snapshot(client, config)
     states = {instrument.symbol: load_state(instrument.symbol) for instrument in watchlist}
     open_positions = 0
     realized_pnl = 0.0
@@ -1279,6 +1302,9 @@ def build_portfolio_snapshot_payload(
         "bot_realized_gross_pnl_rub": round(realized_gross_pnl, 2),
         "bot_realized_commission_rub": round(realized_commission, 2),
         "bot_realized_pnl_rub": round(realized_pnl, 2),
+        "bot_actual_varmargin_rub": float(accounting["actual_varmargin_rub"]),
+        "bot_actual_fee_rub": float(accounting["actual_fee_expense_rub"]),
+        "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
         "bot_total_pnl_rub": round(realized_pnl + unrealized_pnl, 2),
         "generated_at": generated_at.isoformat(),
@@ -1608,6 +1634,49 @@ def get_account_snapshot(client: Client, config: BotConfig) -> AccountSnapshot:
         free_rub=free_rub,
         blocked_guarantee_rub=blocked_guarantee_rub,
     )
+
+
+def get_today_accounting_snapshot(client: Client, config: BotConfig) -> dict[str, float]:
+    from_utc, to_utc = get_moscow_day_bounds_utc()
+    cursor = ""
+    actual_varmargin_rub = 0.0
+    actual_fee_expense_rub = 0.0
+    actual_fee_cash_effect_rub = 0.0
+
+    while True:
+        response = client.operations.get_operations_by_cursor(
+            GetOperationsByCursorRequest(
+                account_id=config.account_id,
+                from_=from_utc,
+                to=to_utc,
+                cursor=cursor,
+                limit=200,
+                state=OperationState.OPERATION_STATE_EXECUTED,
+                without_commissions=False,
+                without_overnights=False,
+                without_trades=False,
+            )
+        )
+        for item in getattr(response, "items", []) or []:
+            op_type = getattr(item, "type", None)
+            payment = quotation_to_float(getattr(item, "payment", None))
+            if op_type in VARMARGIN_OPERATION_TYPES:
+                actual_varmargin_rub += payment
+            elif op_type in FEE_OPERATION_TYPES:
+                actual_fee_cash_effect_rub += payment
+                actual_fee_expense_rub += abs(payment)
+
+        next_cursor = str(getattr(response, "next_cursor", "") or "")
+        if not getattr(response, "has_next", False) or not next_cursor:
+            break
+        cursor = next_cursor
+
+    return {
+        "actual_varmargin_rub": round(actual_varmargin_rub, 2),
+        "actual_fee_expense_rub": round(actual_fee_expense_rub, 2),
+        "actual_fee_cash_effect_rub": round(actual_fee_cash_effect_rub, 2),
+        "actual_account_cash_effect_rub": round(actual_varmargin_rub + actual_fee_cash_effect_rub, 2),
+    }
 
 
 def get_margin_per_lot(instrument: InstrumentConfig, signal: str) -> float:
