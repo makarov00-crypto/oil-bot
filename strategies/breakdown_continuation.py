@@ -44,6 +44,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         higher_tf_short_ok = higher_tf_bias != "LONG"
         higher_tf_long_ok = higher_tf_bias != "SHORT"
 
+    strict_imoexf_long = instrument.symbol == "IMOEXF"
+
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
         f"пробой вниз диапазона {range_low:.4f}: {'да' if breakdown_down else 'нет'}",
@@ -92,7 +94,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     if not higher_tf_long_ok:
         long_blockers.append(f"старший ТФ против LONG: {higher_tf_bias}")
-    if not breakout_up and not soft_breakout_up:
+    if strict_imoexf_long:
+        if not breakout_up:
+            long_blockers.append("для IMOEXF нужен подтверждённый пробой вверх локального диапазона")
+        if not volume_ok:
+            long_blockers.append("для IMOEXF LONG нужен подтверждающий объём")
+        if not impulse_ok:
+            long_blockers.append("для IMOEXF LONG нужен более сильный импульс свечи")
+    elif not breakout_up and not soft_breakout_up:
         long_blockers.append("нет пробоя вверх локального диапазона")
     if not continuation_long:
         long_blockers.append("нет подтверждённого продолжения вверх после пробоя")
@@ -137,7 +146,19 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     )
 
     short_ok = higher_tf_short_ok and (breakdown_down or soft_breakdown_down) and continuation_short and trend_short and short_score >= 6
-    long_ok = higher_tf_long_ok and (breakout_up or soft_breakout_up) and continuation_long and trend_long and long_score >= 6
+    if strict_imoexf_long:
+        long_ok = (
+            higher_tf_long_ok
+            and breakout_up
+            and continuation_long
+            and trend_long
+            and momentum_up
+            and volume_ok
+            and impulse_ok
+            and long_score >= 7
+        )
+    else:
+        long_ok = higher_tf_long_ok and (breakout_up or soft_breakout_up) and continuation_long and trend_long and long_score >= 6
 
     if short_ok:
         return "SHORT", "Сигнал SHORT (range_break_continuation): " + "; ".join(short_reasons) + "."

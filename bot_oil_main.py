@@ -165,6 +165,7 @@ class InstrumentState:
     last_exit_side: str = ""
     last_exit_reason: str = ""
     last_exit_pnl_rub: float = 0.0
+    last_exit_price: float | None = None
     last_market_price: float | None = None
     position_notional_rub: float = 0.0
     position_variation_margin_rub: float = 0.0
@@ -1820,8 +1821,31 @@ def position_held_long_enough(state: InstrumentState, config: BotConfig, min_hol
     return held_for >= timedelta(minutes=required_minutes)
 
 
-def position_reentry_allowed(state: InstrumentState, instrument: InstrumentConfig, signal: str) -> tuple[bool, str]:
-    if instrument.symbol not in {"GNM6", "USDRUBF", "SRM6"}:
+def price_has_new_extreme_since_exit(
+    instrument: InstrumentConfig,
+    signal: str,
+    current_price: float,
+    last_exit_price: float | None,
+    min_steps: int = 1,
+) -> bool:
+    if last_exit_price is None:
+        return True
+    step = instrument.min_price_increment if instrument.min_price_increment > 0 else max(abs(last_exit_price) * 0.0002, 0.0001)
+    threshold = step * max(min_steps, 1)
+    if signal == "SHORT":
+        return current_price <= last_exit_price - threshold
+    if signal == "LONG":
+        return current_price >= last_exit_price + threshold
+    return True
+
+
+def position_reentry_allowed(
+    state: InstrumentState,
+    instrument: InstrumentConfig,
+    signal: str,
+    current_price: float,
+) -> tuple[bool, str]:
+    if instrument.symbol not in {"GNM6", "USDRUBF", "SRM6", "BRK6"}:
         return True, ""
     if not state.last_exit_time:
         return True, ""
@@ -1845,6 +1869,8 @@ def position_reentry_allowed(state: InstrumentState, instrument: InstrumentConfi
         if state.last_exit_side and state.last_exit_side != signal:
             cooldown_minutes = max(cooldown_minutes, 75)
     elif instrument.symbol == "USDRUBF":
+        if "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            cooldown_minutes = max(cooldown_minutes, 25)
         if state.last_exit_pnl_rub < 0:
             cooldown_minutes = 60
         if "Трейлинг-стоп" in state.last_exit_reason or "MACD" in state.last_exit_reason:
@@ -1852,19 +1878,40 @@ def position_reentry_allowed(state: InstrumentState, instrument: InstrumentConfi
         if state.last_exit_side and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             cooldown_minutes = max(cooldown_minutes, 75)
     elif instrument.symbol == "SRM6":
+        if "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            cooldown_minutes = max(cooldown_minutes, 25)
         if state.last_exit_pnl_rub < 0:
             cooldown_minutes = 45
         if "противоположный сигнал" in state.last_exit_reason.lower():
             cooldown_minutes = max(cooldown_minutes, 60)
         if state.last_exit_side and state.last_exit_side != signal:
             cooldown_minutes = max(cooldown_minutes, 75)
+    elif instrument.symbol == "BRK6":
+        if state.last_exit_pnl_rub < 0:
+            cooldown_minutes = 45
+        if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            cooldown_minutes = max(cooldown_minutes, 60)
+        if "Трейлинг-стоп" in state.last_exit_reason or "Стоп-лосс" in state.last_exit_reason:
+            cooldown_minutes = max(cooldown_minutes, 60)
 
     if cooldown_minutes <= 0:
+        if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
+                return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
+        if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
+                return False, "для BRK6 повторный вход после убыточного выхода разрешён только после обновления экстремума."
         return True, ""
 
     next_allowed = last_exit_at + timedelta(minutes=cooldown_minutes)
     now = datetime.now(UTC)
     if now >= next_allowed:
+        if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
+                return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
+        if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
+                return False, "для BRK6 повторный вход после убыточного выхода разрешён только после обновления экстремума."
         return True, ""
 
     remaining = int((next_allowed - now).total_seconds() // 60) + 1
@@ -1956,6 +2003,7 @@ def sync_pending_order(
             state.last_exit_side = state.position_side
             state.last_exit_reason = exit_reason
             state.last_exit_pnl_rub = pnl
+            state.last_exit_price = fill_price
             state.position_notional_rub = 0.0
             state.position_variation_margin_rub = 0.0
             state.position_pnl_pct = 0.0
@@ -2171,6 +2219,7 @@ def close_position(
         state.last_exit_side = state.position_side
         state.last_exit_reason = exit_reason
         state.last_exit_pnl_rub = pnl
+        state.last_exit_price = price
         state.entry_price = None
         state.max_price = None
         state.min_price = None
@@ -2447,7 +2496,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
 
     if state.position_side == "FLAT":
         if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol):
-            reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal)
+            reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
             if reentry_allowed:
                 open_position(client, config, instrument, state, signal, primary_strategy_name)
             else:
