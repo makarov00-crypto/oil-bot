@@ -322,6 +322,7 @@ struct NamedStrategyPnl: Decodable {
 }
 
 struct OpenTradeStub: Decodable, Identifiable {
+    let id: String
     let symbol: String
     let side: String?
     let strategy: String?
@@ -331,10 +332,9 @@ struct OpenTradeStub: Decodable, Identifiable {
     let reason: String?
     let reasonDisplay: String?
 
-    var id: String { "\(symbol)-\(time ?? UUID().uuidString)" }
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = UUID().uuidString
         symbol = try container.decode(String.self, forKey: .symbol)
         side = try container.decodeIfPresent(String.self, forKey: .side)
         strategy = try container.decodeIfPresent(String.self, forKey: .strategy)
@@ -358,6 +358,7 @@ struct OpenTradeStub: Decodable, Identifiable {
 }
 
 struct ClosedReview: Decodable, Identifiable {
+    let id: String
     let symbol: String
     let side: String
     let strategy: String
@@ -375,10 +376,9 @@ struct ClosedReview: Decodable, Identifiable {
     let exitReason: String
     let verdict: String
 
-    var id: String { "\(symbol)-\(entryTime)-\(exitTime)" }
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = UUID().uuidString
         symbol = try container.decode(String.self, forKey: .symbol)
         side = try container.decode(String.self, forKey: .side)
         strategy = try container.decode(String.self, forKey: .strategy)
@@ -418,6 +418,7 @@ struct ClosedReview: Decodable, Identifiable {
 }
 
 struct TradeEvent: Decodable, Identifiable {
+    let id: String
     let time: String?
     let symbol: String
     let event: String?
@@ -433,10 +434,9 @@ struct TradeEvent: Decodable, Identifiable {
     let reason: String?
     let reasonDisplay: String?
 
-    var id: String { "\(symbol)-\(time ?? UUID().uuidString)-\(event ?? "-")" }
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = UUID().uuidString
         time = try container.decodeIfPresent(String.self, forKey: .time)
         symbol = try container.decode(String.self, forKey: .symbol)
         event = try container.decodeIfPresent(String.self, forKey: .event)
