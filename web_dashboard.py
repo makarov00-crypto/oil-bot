@@ -371,6 +371,7 @@ def build_trade_review(rows: list[dict], states: dict[str, dict] | None = None) 
     open_by_key: dict[tuple[str, str], list[dict]] = {}
     closed_reviews: list[dict] = []
     last_orphan_close_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    last_kept_close_by_key: dict[tuple[str, str], dict[str, Any]] = {}
 
     def classify_verdict(pnl_numeric: float, exit_reason: str) -> str:
         text = str(exit_reason or "").lower()
@@ -386,6 +387,25 @@ def build_trade_review(rows: list[dict], states: dict[str, dict] | None = None) 
 
     def is_probable_duplicate_orphan(close_row: dict[str, Any], key: tuple[str, str]) -> bool:
         previous = last_orphan_close_by_key.get(key)
+        if not previous:
+            return False
+        current_dt = close_row.get("_dt")
+        previous_dt = previous.get("_dt")
+        if not current_dt or not previous_dt:
+            return False
+        if abs((current_dt - previous_dt).total_seconds()) > 90:
+            return False
+        if int(close_row.get("qty_lots") or 0) != int(previous.get("qty_lots") or 0):
+            return False
+        try:
+            current_price = round(float(close_row.get("price") or 0.0), 4)
+            previous_price = round(float(previous.get("price") or 0.0), 4)
+        except Exception:
+            return False
+        return current_price == previous_price
+
+    def is_probable_duplicate_close(close_row: dict[str, Any], key: tuple[str, str]) -> bool:
+        previous = last_kept_close_by_key.get(key)
         if not previous:
             return False
         current_dt = close_row.get("_dt")
@@ -420,7 +440,7 @@ def build_trade_review(rows: list[dict], states: dict[str, dict] | None = None) 
         open_row = None
         if open_by_key.get(key):
             open_row = open_by_key[key].pop(0)
-        elif is_probable_duplicate_orphan(row, key):
+        elif is_probable_duplicate_orphan(row, key) or is_probable_duplicate_close(row, key):
             continue
 
         pnl_value = row.get("pnl_rub")
@@ -439,6 +459,7 @@ def build_trade_review(rows: list[dict], states: dict[str, dict] | None = None) 
         )
         if open_row is None:
             last_orphan_close_by_key[key] = row
+        last_kept_close_by_key[key] = row
 
     current_open = []
     for (_, _), items in open_by_key.items():
