@@ -99,9 +99,9 @@ struct TradesScreen: View {
                                 compactInfo("Сторона", displaySignal(trade.side))
                                 compactInfo("Лоты", formatInt(trade.qtyLots))
                                 compactInfo("Цена", trade.price ?? "-")
-                                compactInfo("Gross", isOpenEvent ? "-" : formatTradePnl(trade.grossPnlRub))
-                                compactInfo("Комиссия", formatTradePnl(trade.commissionRub), tone: statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
-                                compactInfo("Net", isOpenEvent ? "-" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
+                                compactInfo("Gross", isOpenEvent ? "не применяется" : formatTradePnl(trade.grossPnlRub))
+                                compactInfo("Комиссия", isOpenEvent ? entryCommissionText(trade.commissionRub) : formatTradePnl(trade.commissionRub), tone: isOpenEvent ? .white : statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
+                                compactInfo("Net", isOpenEvent ? "не применяется" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                                 compactInfo("Стратегия", trade.strategy ?? "-")
                                 compactInfo("Причина", trade.reason ?? "-")
                             }
@@ -253,6 +253,11 @@ struct TradesScreen: View {
     private func bestStrategyText(_ bestStrategy: NamedStrategyPnl?) -> String {
         guard let bestStrategy else { return "-" }
         return "\(bestStrategy.strategy) (\(String(format: "%.2f", bestStrategy.pnlRub)))"
+    }
+
+    private func entryCommissionText(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "уточняется" }
+        return formatTradePnl(value)
     }
 
     private func loadingView(_ text: String) -> some View {

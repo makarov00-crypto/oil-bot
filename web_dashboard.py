@@ -1967,9 +1967,11 @@ def build_dashboard_html() -> str:
         const pnl = row.pnl_rub ?? '-';
         const pnlNum = Number(pnl);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
-        const grossText = isOpenEvent ? '-' : (row.gross_pnl_rub ?? '-');
-        const commissionText = row.commission_rub ?? '-';
-        const netText = isOpenEvent ? '-' : (row.net_pnl_rub ?? pnl);
+        const grossText = isOpenEvent ? 'не применяется' : (row.gross_pnl_rub ?? '-');
+        const commissionText = isOpenEvent
+          ? (row.commission_rub ?? 'уточняется')
+          : (row.commission_rub ?? '-');
+        const netText = isOpenEvent ? 'не применяется' : (row.net_pnl_rub ?? pnl);
         tradeBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(row.time || '-')}</td>
           <td class="mono">${escapeHtml(row.symbol || '-')}</td>
@@ -2066,7 +2068,7 @@ def build_dashboard_html() -> str:
           : 'Закрытых сделок пока нет.';
         reviewBody.insertAdjacentHTML('beforeend', `<tr><td colspan="10" class="muted">${escapeHtml(hint)}</td></tr>`);
         reviewCards.insertAdjacentHTML('beforeend', `<div class="muted">${escapeHtml(hint)}</div>`);
-        for (const row of currentOpen.slice().reverse()) {
+        for (const row of currentOpen) {
           const openCommissionText = row.commission_rub ?? '-';
           reviewBody.insertAdjacentHTML('beforeend', `<tr>
             <td class="mono">${escapeHtml(row.symbol || '-')}</td>
