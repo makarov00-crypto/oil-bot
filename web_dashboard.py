@@ -338,10 +338,39 @@ def filter_current_open_rows(rows: list[dict], states: dict[str, dict] | None = 
     return filtered
 
 
-def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) -> dict:
-    rows = load_trade_rows(limit)
-    open_by_symbol: dict[str, list[dict]] = {}
+def format_trade_review_row(
+    close_row: dict[str, Any],
+    open_row: dict[str, Any] | None,
+    pnl_numeric: float,
+    verdict: str,
+) -> dict[str, Any]:
+    entry_dt = open_row.get("_dt") if open_row else None
+    exit_dt = close_row.get("_dt")
+    return {
+        "symbol": str(close_row.get("symbol", "")),
+        "side": close_row.get("side") or (open_row.get("side") if open_row else ""),
+        "strategy": close_row.get("strategy") or (open_row.get("strategy") if open_row else ""),
+        "session": close_row.get("session") or (open_row.get("session") if open_row else ""),
+        "entry_time": entry_dt.strftime("%d.%m %H:%M:%S") if entry_dt else "-",
+        "exit_time": exit_dt.strftime("%d.%m %H:%M:%S") if exit_dt else (close_row.get("time") or "-"),
+        "entry_price": f"{float(open_row['price']):.4f}" if open_row and open_row.get("price") is not None else "-",
+        "exit_price": f"{float(close_row['price']):.4f}" if close_row.get("price") is not None else "-",
+        "qty_lots": close_row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
+        "pnl_rub": f"{pnl_numeric:.2f}",
+        "gross_pnl_rub": stringify_money(close_row.get("gross_pnl_rub")),
+        "commission_rub": stringify_money(close_row.get("commission_rub")),
+        "net_pnl_rub": stringify_money(close_row.get("net_pnl_rub"), stringify_money(close_row.get("pnl_rub"))),
+        "entry_reason": open_row.get("reason") if open_row else "-",
+        "exit_reason": close_row.get("reason") or "-",
+        "verdict": verdict,
+        "_exit_dt": exit_dt,
+    }
+
+
+def build_trade_review(rows: list[dict], states: dict[str, dict] | None = None) -> dict:
+    open_by_key: dict[tuple[str, str], list[dict]] = {}
     closed_reviews: list[dict] = []
+    last_orphan_close_by_key: dict[tuple[str, str], dict[str, Any]] = {}
 
     def classify_verdict(pnl_numeric: float, exit_reason: str) -> str:
         text = str(exit_reason or "").lower()
@@ -355,51 +384,73 @@ def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) ->
             return "закрыта по смене режима"
         return "требует разбора"
 
-    for row in rows:
+    def is_probable_duplicate_orphan(close_row: dict[str, Any], key: tuple[str, str]) -> bool:
+        previous = last_orphan_close_by_key.get(key)
+        if not previous:
+            return False
+        current_dt = close_row.get("_dt")
+        previous_dt = previous.get("_dt")
+        if not current_dt or not previous_dt:
+            return False
+        if abs((current_dt - previous_dt).total_seconds()) > 90:
+            return False
+        if int(close_row.get("qty_lots") or 0) != int(previous.get("qty_lots") or 0):
+            return False
+        try:
+            current_price = round(float(close_row.get("price") or 0.0), 4)
+            previous_price = round(float(previous.get("price") or 0.0), 4)
+        except Exception:
+            return False
+        return current_price == previous_price
+
+    ordered_rows = sorted(rows, key=lambda row: row.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ))
+    for row in ordered_rows:
         symbol = str(row.get("symbol", ""))
         event = str(row.get("event", "")).upper()
-        if not symbol:
+        side = str(row.get("side", "")).upper()
+        if not symbol or not side:
             continue
+        key = (symbol, side)
         if event == "OPEN":
-            open_by_symbol.setdefault(symbol, []).append(row)
+            open_by_key.setdefault(key, []).append(row)
             continue
         if event != "CLOSE":
             continue
+
         open_row = None
-        if open_by_symbol.get(symbol):
-            open_row = open_by_symbol[symbol].pop(0)
+        if open_by_key.get(key):
+            open_row = open_by_key[key].pop(0)
+        elif is_probable_duplicate_orphan(row, key):
+            continue
+
         pnl_value = row.get("pnl_rub")
         try:
             pnl_numeric = float(pnl_value) if pnl_value not in (None, "", "-") else 0.0
         except Exception:
             pnl_numeric = 0.0
+
         closed_reviews.append(
-            {
-                "symbol": symbol,
-                "side": row.get("side") or (open_row.get("side") if open_row else ""),
-                "strategy": row.get("strategy") or (open_row.get("strategy") if open_row else ""),
-                "session": row.get("session") or (open_row.get("session") if open_row else ""),
-                "entry_time": open_row.get("time") if open_row else "-",
-                "exit_time": row.get("time") or "-",
-                "entry_price": open_row.get("price") if open_row else "-",
-                "exit_price": row.get("price") or "-",
-                "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
-                "pnl_rub": f"{pnl_numeric:.2f}",
-                "gross_pnl_rub": stringify_money(row.get("gross_pnl_rub")),
-                "commission_rub": stringify_money(row.get("commission_rub")),
-                "net_pnl_rub": stringify_money(row.get("net_pnl_rub"), stringify_money(row.get("pnl_rub"))),
-                "entry_reason": open_row.get("reason") if open_row else "-",
-                "exit_reason": row.get("reason") or "-",
-                "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
-            }
+            format_trade_review_row(
+                row,
+                open_row,
+                pnl_numeric,
+                classify_verdict(pnl_numeric, row.get("reason") or ""),
+            )
         )
+        if open_row is None:
+            last_orphan_close_by_key[key] = row
 
     current_open = []
-    for symbol, items in open_by_symbol.items():
+    for (_, _), items in open_by_key.items():
         if not items:
             continue
         current_open.append(items[-1])
     current_open = filter_current_open_rows(current_open, states)
+    current_open.sort(key=lambda row: row.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ), reverse=True)
+
+    closed_reviews.sort(key=lambda item: item.get("_exit_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ), reverse=True)
+    for item in closed_reviews:
+        item.pop("_exit_dt", None)
 
     wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
     losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
@@ -429,104 +480,19 @@ def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) ->
         "worst_symbol": {"symbol": worst_symbol[0], "pnl_rub": round(worst_symbol[1], 2)} if worst_symbol else None,
         "best_strategy": {"strategy": best_strategy[0], "pnl_rub": round(best_strategy[1], 2)} if best_strategy else None,
         "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
-        "closed_reviews": closed_reviews[-20:],
-        "current_open": current_open[-20:],
+        "closed_reviews": closed_reviews[:20],
+        "current_open": current_open[:20],
     }
+
+
+def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) -> dict:
+    rows = load_all_trade_rows()[-limit:]
+    return build_trade_review(rows, states)
 
 
 def load_trade_review_for_day(target_day: date, limit: int = 200, states: dict[str, dict] | None = None) -> dict:
-    rows = load_trade_rows_for_day(target_day, limit)
-    open_by_symbol: dict[str, list[dict]] = {}
-    closed_reviews: list[dict] = []
-
-    def classify_verdict(pnl_numeric: float, exit_reason: str) -> str:
-        text = str(exit_reason or "").lower()
-        if pnl_numeric > 0:
-            return "хорошая сделка"
-        if "стоп" in text or "трейлинг" in text:
-            return "нормальная убыточная"
-        if "macd" in text or "rsi" in text:
-            return "возможно ранний выход"
-        if "противоположный сигнал" in text:
-            return "закрыта по смене режима"
-        return "требует разбора"
-
-    for row in rows:
-        symbol = str(row.get("symbol", ""))
-        event = str(row.get("event", "")).upper()
-        if not symbol:
-            continue
-        if event == "OPEN":
-            open_by_symbol.setdefault(symbol, []).append(row)
-            continue
-        if event != "CLOSE":
-            continue
-        open_row = None
-        if open_by_symbol.get(symbol):
-            open_row = open_by_symbol[symbol].pop(0)
-        pnl_value = row.get("pnl_rub")
-        try:
-            pnl_numeric = float(pnl_value) if pnl_value not in (None, "", "-") else 0.0
-        except Exception:
-            pnl_numeric = 0.0
-        closed_reviews.append(
-            {
-                "symbol": symbol,
-                "side": row.get("side") or (open_row.get("side") if open_row else ""),
-                "strategy": row.get("strategy") or (open_row.get("strategy") if open_row else ""),
-                "session": row.get("session") or (open_row.get("session") if open_row else ""),
-                "entry_time": open_row.get("time") if open_row else "-",
-                "exit_time": row.get("time") or "-",
-                "entry_price": open_row.get("price") if open_row else "-",
-                "exit_price": row.get("price") or "-",
-                "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
-                "pnl_rub": f"{pnl_numeric:.2f}",
-                "gross_pnl_rub": stringify_money(row.get("gross_pnl_rub")),
-                "commission_rub": stringify_money(row.get("commission_rub")),
-                "net_pnl_rub": stringify_money(row.get("net_pnl_rub"), stringify_money(row.get("pnl_rub"))),
-                "entry_reason": open_row.get("reason") if open_row else "-",
-                "exit_reason": row.get("reason") or "-",
-                "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
-            }
-        )
-
-    wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
-    losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
-    total = sum(float(item.get("pnl_rub") or 0.0) for item in closed_reviews)
-    win_rate = round((wins / len(closed_reviews)) * 100, 1) if closed_reviews else 0.0
-
-    by_symbol: dict[str, float] = {}
-    by_strategy: dict[str, float] = {}
-    for item in closed_reviews:
-        pnl = float(item.get("pnl_rub") or 0.0)
-        by_symbol[item["symbol"]] = by_symbol.get(item["symbol"], 0.0) + pnl
-        strategy = item.get("strategy") or "-"
-        by_strategy[strategy] = by_strategy.get(strategy, 0.0) + pnl
-
-    best_symbol = max(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
-    worst_symbol = min(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
-    best_strategy = max(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
-    worst_strategy = min(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
-    current_open = []
-    for symbol, items in open_by_symbol.items():
-        if not items:
-            continue
-        current_open.append(items[-1])
-    current_open = filter_current_open_rows(current_open, states)
-
-    return {
-        "closed_count": len(closed_reviews),
-        "wins": wins,
-        "losses": losses,
-        "win_rate": win_rate,
-        "closed_total_pnl_rub": round(total, 2),
-        "best_symbol": {"symbol": best_symbol[0], "pnl_rub": round(best_symbol[1], 2)} if best_symbol else None,
-        "worst_symbol": {"symbol": worst_symbol[0], "pnl_rub": round(worst_symbol[1], 2)} if worst_symbol else None,
-        "best_strategy": {"strategy": best_strategy[0], "pnl_rub": round(best_strategy[1], 2)} if best_strategy else None,
-        "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
-        "closed_reviews": closed_reviews[-20:],
-        "current_open": current_open[-20:],
-    }
+    rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()][-limit:]
+    return build_trade_review(rows, states)
 
 
 def build_daily_performance(portfolio: dict, target_day: date) -> dict:
