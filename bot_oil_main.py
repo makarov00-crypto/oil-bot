@@ -5,7 +5,7 @@ import re
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -47,6 +47,7 @@ WATCHLIST_REFRESH_SECONDS = 300
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
+ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 LOG_DIR = Path(__file__).with_name("logs")
@@ -252,6 +253,24 @@ def save_portfolio_snapshot(payload: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     PORTFOLIO_SNAPSHOT_PATH.write_text(
         json.dumps(payload, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_accounting_history() -> dict[str, Any]:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if not ACCOUNTING_HISTORY_PATH.exists():
+        return {}
+    try:
+        return json.loads(ACCOUNTING_HISTORY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_accounting_history(history: dict[str, Any]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    ACCOUNTING_HISTORY_PATH.write_text(
+        json.dumps(history, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
 
@@ -1209,6 +1228,20 @@ def get_moscow_day_bounds_utc(now: datetime | None = None) -> tuple[datetime, da
     return start_msk.astimezone(UTC), now_msk.astimezone(UTC)
 
 
+def get_day_bounds_utc_for_date(target_day: date) -> tuple[datetime, datetime]:
+    start_msk = datetime(
+        target_day.year,
+        target_day.month,
+        target_day.day,
+        0,
+        0,
+        0,
+        tzinfo=MOSCOW_TZ,
+    )
+    end_msk = start_msk + timedelta(days=1)
+    return start_msk.astimezone(UTC), end_msk.astimezone(UTC)
+
+
 def get_market_session(now: datetime | None = None) -> str:
     now = now or current_moscow_time()
     if now.weekday() >= 5:
@@ -1732,7 +1765,7 @@ def build_portfolio_snapshot_payload(
     watchlist: list[InstrumentConfig],
 ) -> dict[str, Any]:
     snapshot = get_account_snapshot(client, config)
-    accounting = get_today_accounting_snapshot(client, config)
+    accounting = get_today_accounting_snapshot(client, config, watchlist)
     live_positions = get_live_portfolio_positions(client, config, watchlist)
     closed_totals = calculate_closed_trade_totals()
     open_positions = len(live_positions)
@@ -1754,6 +1787,7 @@ def build_portfolio_snapshot_payload(
         "bot_actual_varmargin_rub": float(accounting["actual_varmargin_rub"]),
         "bot_actual_fee_rub": float(accounting["actual_fee_expense_rub"]),
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
+        "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
         "bot_total_pnl_rub": round(realized_pnl + unrealized_pnl, 2),
         "broker_open_positions": list(live_positions.values()),
@@ -1782,8 +1816,43 @@ def maybe_refresh_portfolio_snapshot(
             pass
     payload = build_portfolio_snapshot_payload(client, config, watchlist)
     save_portfolio_snapshot(payload)
+    history = load_accounting_history()
+    today_key = current_moscow_time().date().isoformat()
+    history[today_key] = {
+        "date": today_key,
+        "generated_at": payload.get("generated_at"),
+        "generated_at_moscow": payload.get("generated_at_moscow"),
+        "actual_varmargin_rub": payload.get("bot_actual_varmargin_rub", 0.0),
+        "actual_fee_expense_rub": payload.get("bot_actual_fee_rub", 0.0),
+        "actual_account_cash_effect_rub": payload.get("bot_actual_cash_effect_rub", 0.0),
+        "varmargin_by_symbol": payload.get("bot_actual_varmargin_by_symbol", {}),
+    }
+    save_accounting_history(history)
     meta["portfolio_snapshot_refreshed_at"] = now.isoformat()
     save_meta_state(meta)
+
+
+def update_accounting_history_for_day(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+    target_day: date,
+) -> dict[str, Any]:
+    accounting = get_accounting_snapshot_for_day(client, config, target_day, watchlist)
+    generated_at = datetime.now(timezone.utc)
+    entry = {
+        "date": target_day.isoformat(),
+        "generated_at": generated_at.isoformat(),
+        "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+        "actual_varmargin_rub": float(accounting["actual_varmargin_rub"]),
+        "actual_fee_expense_rub": float(accounting["actual_fee_expense_rub"]),
+        "actual_account_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
+        "varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
+    }
+    history = load_accounting_history()
+    history[target_day.isoformat()] = entry
+    save_accounting_history(history)
+    return entry
 
 
 def maybe_refresh_news_snapshot(refresh_seconds: int = 300) -> None:
@@ -2181,12 +2250,19 @@ def get_account_snapshot(client: Client, config: BotConfig) -> AccountSnapshot:
     )
 
 
-def get_today_accounting_snapshot(client: Client, config: BotConfig) -> dict[str, float]:
-    from_utc, to_utc = get_moscow_day_bounds_utc()
+def get_accounting_snapshot_for_day(
+    client: Client,
+    config: BotConfig,
+    target_day: date,
+    watchlist: list[InstrumentConfig] | None = None,
+) -> dict[str, Any]:
+    from_utc, to_utc = get_day_bounds_utc_for_date(target_day)
     cursor = ""
     actual_varmargin_rub = 0.0
     actual_fee_expense_rub = 0.0
     actual_fee_cash_effect_rub = 0.0
+    figi_to_symbol = {item.figi: item.symbol for item in (watchlist or []) if item.figi}
+    varmargin_by_symbol: dict[str, float] = {}
 
     while True:
         response = client.operations.get_operations_by_cursor(
@@ -2205,8 +2281,12 @@ def get_today_accounting_snapshot(client: Client, config: BotConfig) -> dict[str
         for item in getattr(response, "items", []) or []:
             op_type = getattr(item, "type", None)
             payment = quotation_to_float(getattr(item, "payment", None))
+            figi = str(getattr(item, "figi", "") or "")
+            symbol = figi_to_symbol.get(figi)
             if op_type in VARMARGIN_OPERATION_TYPES:
                 actual_varmargin_rub += payment
+                if symbol:
+                    varmargin_by_symbol[symbol] = round(varmargin_by_symbol.get(symbol, 0.0) + payment, 2)
             elif op_type in FEE_OPERATION_TYPES:
                 actual_fee_cash_effect_rub += payment
                 actual_fee_expense_rub += abs(payment)
@@ -2217,11 +2297,21 @@ def get_today_accounting_snapshot(client: Client, config: BotConfig) -> dict[str
         cursor = next_cursor
 
     return {
+        "date": target_day.isoformat(),
         "actual_varmargin_rub": round(actual_varmargin_rub, 2),
         "actual_fee_expense_rub": round(actual_fee_expense_rub, 2),
         "actual_fee_cash_effect_rub": round(actual_fee_cash_effect_rub, 2),
         "actual_account_cash_effect_rub": round(actual_varmargin_rub + actual_fee_cash_effect_rub, 2),
+        "varmargin_by_symbol": varmargin_by_symbol,
     }
+
+
+def get_today_accounting_snapshot(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig] | None = None,
+) -> dict[str, Any]:
+    return get_accounting_snapshot_for_day(client, config, current_moscow_time().date(), watchlist)
 
 
 def describe_capacity_block_reason(

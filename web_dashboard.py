@@ -16,6 +16,7 @@ STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
+ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 AI_REVIEW_DIR = LOG_DIR / "ai_reviews"
@@ -65,6 +66,15 @@ def load_portfolio_snapshot() -> dict:
         return {}
     try:
         return load_json(PORTFOLIO_SNAPSHOT_PATH)
+    except Exception:
+        return {}
+
+
+def load_accounting_history() -> dict:
+    if not ACCOUNTING_HISTORY_PATH.exists():
+        return {}
+    try:
+        return json.loads(ACCOUNTING_HISTORY_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -583,13 +593,13 @@ def load_trade_review_for_day(
     return build_trade_review(rows, states, live_positions)
 
 
-def build_daily_performance(portfolio: dict, target_day: date) -> dict:
+def build_daily_performance(portfolio: dict, target_day: date, accounting_history: dict[str, Any] | None = None) -> dict:
     current_portfolio = float(portfolio.get("total_portfolio_rub") or 0.0)
     rows = load_all_trade_rows()
     by_day: dict[str, dict[str, float]] = {}
     cumulative = 0.0
 
-    days = sorted({row["_date"] for row in rows})
+    days = sorted({row["_date"] for row in rows} | set((accounting_history or {}).keys()))
     for day_key in days:
         day_rows = []
         for row in rows:
@@ -641,6 +651,88 @@ def build_daily_performance(portfolio: dict, target_day: date) -> dict:
         ),
         "series": [by_day[day_key] for day_key in days],
     }
+
+
+def build_portfolio_view_for_day(
+    portfolio: dict,
+    target_day: date,
+    accounting_history: dict[str, Any],
+) -> dict[str, Any]:
+    view = dict(portfolio or {})
+    day_key = target_day.isoformat()
+    history_entry = dict((accounting_history or {}).get(day_key) or {})
+    rows = load_trade_rows_for_day(target_day, 300)
+    closed_totals = {
+        "gross_pnl_rub": 0.0,
+        "commission_rub": 0.0,
+        "net_pnl_rub": 0.0,
+    }
+    for row in rows:
+        if str(row.get("event", "")).upper() != "CLOSE":
+            continue
+        try:
+            closed_totals["gross_pnl_rub"] += float(row.get("gross_pnl_rub") or 0.0)
+        except Exception:
+            pass
+        try:
+            closed_totals["commission_rub"] += float(row.get("commission_rub") or 0.0)
+        except Exception:
+            pass
+        try:
+            closed_totals["net_pnl_rub"] += float(row.get("net_pnl_rub") or row.get("pnl_rub") or 0.0)
+        except Exception:
+            pass
+
+    selected_is_today = target_day == datetime.now(MOSCOW_TZ).date()
+    selected_actual_vm = float(
+        history_entry.get(
+            "actual_varmargin_rub",
+            portfolio.get("bot_actual_varmargin_rub") if selected_is_today else 0.0,
+        )
+        or 0.0
+    )
+    selected_actual_fee = float(
+        history_entry.get(
+            "actual_fee_expense_rub",
+            portfolio.get("bot_actual_fee_rub") if selected_is_today else 0.0,
+        )
+        or 0.0
+    )
+    selected_cash_effect = float(
+        history_entry.get(
+            "actual_account_cash_effect_rub",
+            portfolio.get("bot_actual_cash_effect_rub") if selected_is_today else (selected_actual_vm - selected_actual_fee),
+        )
+        or 0.0
+    )
+
+    view["selected_date"] = day_key
+    view["selected_date_moscow"] = target_day.strftime("%d.%m.%Y")
+    view["selected_is_today"] = selected_is_today
+    view["bot_realized_gross_pnl_rub"] = round(closed_totals["gross_pnl_rub"], 2)
+    view["bot_realized_commission_rub"] = round(closed_totals["commission_rub"], 2)
+    view["bot_realized_pnl_rub"] = round(closed_totals["net_pnl_rub"], 2)
+    view["bot_actual_varmargin_rub"] = round(selected_actual_vm, 2)
+    view["bot_actual_fee_rub"] = round(selected_actual_fee, 2)
+    view["bot_actual_cash_effect_rub"] = round(selected_cash_effect, 2)
+    if selected_is_today:
+        estimated_variation = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
+        open_positions_count = portfolio.get("open_positions_count")
+    else:
+        estimated_variation = 0.0
+        open_positions_count = 0
+    view["bot_estimated_variation_margin_rub"] = round(estimated_variation, 2)
+    view["open_positions_count"] = open_positions_count
+    view["bot_total_pnl_rub"] = round(
+        float(view.get("bot_realized_pnl_rub") or 0.0) + float(view.get("bot_actual_varmargin_rub") or 0.0),
+        2,
+    )
+    view["bot_actual_varmargin_by_symbol"] = history_entry.get(
+        "varmargin_by_symbol",
+        portfolio.get("bot_actual_varmargin_by_symbol") if selected_is_today else {},
+    ) or {}
+    view["generated_at_moscow"] = history_entry.get("generated_at_moscow") or portfolio.get("generated_at_moscow")
+    return view
 
 
 def load_ai_review(target_day: date) -> dict:
@@ -1350,6 +1442,7 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioOpenCount">-</div>
         </div>
       </div>
+      <div class="muted" id="portfolioVmBreakdown" style="margin-top:12px;">Клиринговая ВМ по инструментам: -</div>
     </section>
 
     <section class="panel alert-panel is-hidden" id="capitalAlertPanel" style="margin-bottom:16px;">
@@ -1866,7 +1959,8 @@ def build_dashboard_html() -> str:
       document.getElementById('generatedAt').textContent = `Обновление: ${data.generated_at_moscow || '-'}`;
 
       const portfolio = data.portfolio || {};
-      document.getElementById('portfolioGeneratedAt').textContent = `Срез портфеля: ${portfolio.generated_at_moscow || '-'}`;
+      const selectedDateLabel = portfolio.selected_date_moscow ? ` | Дата отчёта: ${portfolio.selected_date_moscow}` : '';
+      document.getElementById('portfolioGeneratedAt').textContent = `Срез портфеля: ${portfolio.generated_at_moscow || '-'}${selectedDateLabel}`;
       document.getElementById('portfolioMode').textContent = portfolio.mode === 'DRY_RUN' ? 'ТЕСТ' : (portfolio.mode || '-');
       document.getElementById('portfolioTotal').textContent = formatRub(portfolio.total_portfolio_rub);
       document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_rub);
@@ -1877,6 +1971,11 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
+      const vmBySymbol = portfolio.bot_actual_varmargin_by_symbol || {};
+      const vmEntries = Object.entries(vmBySymbol);
+      document.getElementById('portfolioVmBreakdown').textContent = vmEntries.length
+        ? `Клиринговая ВМ по инструментам: ${vmEntries.map(([symbol, value]) => `${symbol} ${formatRub(value)}`).join(' | ')}`
+        : 'Клиринговая ВМ по инструментам: -';
 
       const capitalAlert = data.capital_alert || {};
       const capitalPanel = document.getElementById('capitalAlertPanel');
@@ -2237,6 +2336,7 @@ def api_dashboard(date: str | None = None) -> dict:
     states = load_states()
     generated_at = datetime.now(timezone.utc)
     portfolio = load_portfolio_snapshot()
+    accounting_history = load_accounting_history()
     broker_positions = {
         str(item.get("symbol", "")): item
         for item in ((portfolio or {}).get("broker_open_positions") or [])
@@ -2259,20 +2359,21 @@ def api_dashboard(date: str | None = None) -> dict:
             target_day = datetime.strptime(date, "%Y-%m-%d").date()
         except ValueError:
             pass
+    portfolio_view = build_portfolio_view_for_day(portfolio, target_day, accounting_history)
     trades = annotate_trade_rows(load_trade_rows_for_day(target_day, 200), display_states, broker_positions)
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(display_states),
         "capital_alert": build_capital_alert(display_states),
-        "portfolio": portfolio,
+        "portfolio": portfolio_view,
         "runtime": load_runtime_status(),
         "news": load_news_snapshot(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
-        "summary": summarize_states(display_states, portfolio),
+        "summary": summarize_states(display_states, portfolio_view),
         "meta": load_meta(),
         "states": display_states,
         "trades": trades,
-        "daily": build_daily_performance(portfolio, target_day),
+        "daily": build_daily_performance(portfolio, target_day, accounting_history),
         "ai_review": load_ai_review(target_day),
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
