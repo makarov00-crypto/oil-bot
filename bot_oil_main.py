@@ -3156,6 +3156,7 @@ def check_exit(
 
 def process_instrument(client: Client, config: BotConfig, instrument: InstrumentConfig) -> None:
     state = load_state(instrument.symbol)
+    reconcile_state_accounting(instrument.symbol, state)
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
         return
     session_name = get_market_session()
