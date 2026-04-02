@@ -80,6 +80,58 @@ def load_news_snapshot() -> dict:
         return {}
 
 
+CAPITAL_ALERT_PATTERNS = (
+    "не хватает средств/го",
+    "ограничений по го/марже",
+    "внутренний лимит го",
+    "доступный лимит по заявке сейчас 0 лотов",
+    "риск-бюджет слишком мал",
+)
+
+
+def build_capital_alert(states: dict[str, dict]) -> dict:
+    affected: list[dict] = []
+    for symbol, state in states.items():
+        candidates: list[str] = []
+        last_error = str(state.get("last_error") or "").strip()
+        if last_error:
+            candidates.append(last_error)
+        for item in state.get("last_signal_summary") or []:
+            text = str(item or "").strip()
+            if text:
+                candidates.append(text)
+
+        matched_reason = ""
+        for text in candidates:
+            lowered = text.lower()
+            if any(pattern in lowered for pattern in CAPITAL_ALERT_PATTERNS):
+                matched_reason = text
+                break
+        if matched_reason:
+            affected.append({"symbol": symbol, "reason": matched_reason})
+
+    if not affected:
+        return {"active": False, "title": "", "message": "", "symbols": [], "count": 0}
+
+    symbols = [item["symbol"] for item in affected]
+    first_reason = affected[0]["reason"]
+    if len(affected) == 1:
+        message = f"{symbols[0]} не открыл сделку: {first_reason}"
+    else:
+        joined = ", ".join(symbols)
+        message = (
+            f"Части сигналов не хватило капитала/ГО: {joined}. "
+            f"Последняя причина: {first_reason}"
+        )
+    return {
+        "active": True,
+        "title": "Не хватает капитала для части сделок",
+        "message": message,
+        "symbols": symbols,
+        "count": len(symbols),
+    }
+
+
 def load_trade_rows(limit: int = 50) -> list[dict]:
     if not TRADE_JOURNAL_PATH.exists():
         return []
@@ -911,6 +963,54 @@ def build_dashboard_html() -> str:
       color: var(--muted);
       font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
     }
+    .alert-panel {
+      border-color: rgba(255, 202, 98, 0.28);
+      box-shadow:
+        0 18px 50px rgba(0, 0, 0, 0.22),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 0 0 1px rgba(255, 202, 98, 0.05),
+        0 0 28px rgba(255, 202, 98, 0.08);
+    }
+    .alert-row {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .alert-icon {
+      flex: 0 0 auto;
+      width: 40px;
+      height: 40px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 202, 98, 0.12);
+      border: 1px solid rgba(255, 202, 98, 0.18);
+      color: var(--warn);
+      font-size: 18px;
+    }
+    .alert-title {
+      font-family: "Sora", "Manrope", sans-serif;
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #f4fbff;
+    }
+    .alert-message {
+      color: #d8e3ef;
+      line-height: 1.5;
+      max-width: 90ch;
+    }
+    .alert-meta {
+      margin-top: 10px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .is-hidden {
+      display: none !important;
+    }
     .toolbar-inline {
       display: flex;
       align-items: center;
@@ -1142,6 +1242,20 @@ def build_dashboard_html() -> str:
         <div>
           <div class="muted">Открытых позиций</div>
           <div class="metric" id="portfolioOpenCount">-</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel alert-panel is-hidden" id="capitalAlertPanel" style="margin-bottom:16px;">
+      <div class="alert-row">
+        <div class="alert-icon">!</div>
+        <div>
+          <div class="alert-title" id="capitalAlertTitle">Не хватает капитала для части сделок</div>
+          <div class="alert-message" id="capitalAlertMessage">-</div>
+          <div class="alert-meta">
+            <span id="capitalAlertCount">-</span>
+            <span id="capitalAlertSymbols">-</span>
+          </div>
         </div>
       </div>
     </section>
@@ -1660,6 +1774,21 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
 
+      const capitalAlert = data.capital_alert || {};
+      const capitalPanel = document.getElementById('capitalAlertPanel');
+      if (capitalPanel && capitalAlert.active) {
+        capitalPanel.classList.remove('is-hidden');
+        document.getElementById('capitalAlertTitle').textContent = capitalAlert.title || 'Не хватает капитала для части сделок';
+        document.getElementById('capitalAlertMessage').textContent = capitalAlert.message || '-';
+        document.getElementById('capitalAlertCount').textContent = `Задето инструментов: ${capitalAlert.count ?? 0}`;
+        const symbolsText = Array.isArray(capitalAlert.symbols) && capitalAlert.symbols.length
+          ? `Инструменты: ${capitalAlert.symbols.join(', ')}`
+          : 'Инструменты: -';
+        document.getElementById('capitalAlertSymbols').textContent = symbolsText;
+      } else if (capitalPanel) {
+        capitalPanel.classList.add('is-hidden');
+      }
+
       const daily = data.daily || {};
       const daySelected = daily.selected || {};
       document.getElementById('dayPnlRub').textContent = formatRub(daySelected.pnl_rub);
@@ -1973,6 +2102,7 @@ def api_dashboard(date: str | None = None) -> dict:
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(states),
+        "capital_alert": build_capital_alert(states),
         "portfolio": portfolio,
         "runtime": load_runtime_status(),
         "news": load_news_snapshot(),

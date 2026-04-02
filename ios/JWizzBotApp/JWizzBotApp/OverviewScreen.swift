@@ -23,6 +23,10 @@ struct OverviewScreen: View {
                             Task { await store.selectDate(newDate) }
                         }
 
+                        if let capitalAlert = payload.capitalAlert, capitalAlert.active {
+                            capitalAlertCard(capitalAlert)
+                        }
+
                         headlineCard(payload: payload)
                         portfolioCard(payload: payload)
                         dailyCard(payload: payload)
@@ -197,6 +201,28 @@ struct OverviewScreen: View {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func capitalAlertCard(_ alert: CapitalAlert) -> some View {
+        GlassCard {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(alert.title ?? "Не хватает капитала для части сделок")
+                        .font(.subheadline.weight(.semibold))
+                    Text(alert.message ?? "Бот упёрся в ограничение по капиталу или ГО.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let symbols = alert.symbols, !symbols.isEmpty {
+                        Text("Инструменты: \(symbols.joined(separator: ", "))")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
         }

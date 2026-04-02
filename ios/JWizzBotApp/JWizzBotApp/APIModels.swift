@@ -3,6 +3,7 @@ import Foundation
 struct DashboardPayload: Decodable {
     let generatedAtMoscow: String?
     let health: HealthPayload?
+    let capitalAlert: CapitalAlert?
     let portfolio: PortfolioSnapshot
     let runtime: RuntimeStatus
     let summary: SummaryData
@@ -16,6 +17,7 @@ struct DashboardPayload: Decodable {
     enum CodingKeys: String, CodingKey {
         case generatedAtMoscow = "generated_at_moscow"
         case health
+        case capitalAlert = "capital_alert"
         case portfolio
         case runtime
         case summary
@@ -26,6 +28,14 @@ struct DashboardPayload: Decodable {
         case states
         case trades
     }
+}
+
+struct CapitalAlert: Decodable {
+    let active: Bool
+    let title: String?
+    let message: String?
+    let symbols: [String]?
+    let count: Int?
 }
 
 struct HealthPayload: Decodable {
