@@ -194,6 +194,7 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
                 item["net_pnl_rub"] = f"{float(item['net_pnl_rub']):.2f}"
             except Exception:
                 pass
+        item["reason_display"] = humanize_trade_reason(item.get("reason"), item.get("source"), item.get("event"))
         normalized.append(item)
     return normalized
 
@@ -205,6 +206,21 @@ def stringify_money(value: Any, default: str = "-") -> str:
         return f"{float(value):.2f}"
     except Exception:
         return str(value)
+
+
+def humanize_trade_reason(reason: str | None, source: str | None, event: str | None) -> str:
+    reason_text = str(reason or "").strip()
+    source_text = str(source or "").strip().lower()
+    event_name = str(event or "").strip().upper()
+    if source_text == "pending_order_recovery" and event_name == "OPEN":
+        return "Подтверждено по портфелю после потери статуса заявки."
+    if source_text == "portfolio_recovery" and event_name == "OPEN":
+        return "Восстановлено после рестарта по брокерскому портфелю."
+    if source_text == "order_fill" and event_name == "OPEN":
+        return "Исполнение заявки подтверждено брокером."
+    if source_text == "dry_run":
+        return "Тестовая запись DRY_RUN."
+    return reason_text or "-"
 
 
 def parse_trade_time(raw_value: str | None) -> datetime | None:
@@ -278,6 +294,7 @@ def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
                 item["net_pnl_rub"] = f"{float(item['net_pnl_rub']):.2f}"
             except Exception:
                 pass
+        item["reason_display"] = humanize_trade_reason(item.get("reason"), item.get("source"), item.get("event"))
         normalized.append(item)
     return normalized
 
@@ -2051,7 +2068,7 @@ def build_dashboard_html() -> str:
           <td class="mono right">${escapeHtml(commissionText)}</td>
           <td class="mono right ${pnlClass}">${escapeHtml(netText)}</td>
           <td>${escapeHtml(row.strategy || '-')}</td>
-          <td class="reason">${escapeHtml(row.reason || '-')}</td>
+          <td class="reason">${escapeHtml(row.reason_display || row.reason || '-')}</td>
         </tr>`);
         tradeCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
@@ -2070,7 +2087,7 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
           </div>
           <div class="mobile-card-footer">
-            <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason || '-')}</div>
+            <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason_display || row.reason || '-')}</div>
           </div>
         </article>`);
       }
@@ -2146,7 +2163,7 @@ def build_dashboard_html() -> str:
             <td class="mono right">-</td>
             <td class="mono right">${escapeHtml(openCommissionText)}</td>
             <td class="mono right">-</td>
-            <td class="reason">${escapeHtml(row.reason || 'позиция открыта')}</td>
+            <td class="reason">${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}</td>
             <td>открыта</td>
           </tr>`);
           reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -2162,7 +2179,7 @@ def build_dashboard_html() -> str:
               <div class="mobile-card-item"><span class="muted">Комиссия входа</span><div class="mobile-card-value mono">${escapeHtml(openCommissionText)}</div></div>
             </div>
             <div class="mobile-card-footer">
-              <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason || 'позиция открыта')}</div>
+              <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}</div>
             </div>
           </article>`);
         }

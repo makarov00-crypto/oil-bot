@@ -313,6 +313,7 @@ def append_trade_journal(
     commission_rub: float | None = None,
     net_pnl_rub: float | None = None,
     reason: str = "",
+    source: str = "",
     strategy: str = "",
     dry_run: bool = True,
 ) -> None:
@@ -327,6 +328,7 @@ def append_trade_journal(
     side_name = str(side).upper()
     strategy_name = str(strategy or "")
     reason_text = str(reason or "")
+    source_text = str(source or "")
     try:
         existing_rows = load_trade_journal()[-20:]
     except Exception:
@@ -344,6 +346,7 @@ def append_trade_journal(
             and int(existing.get("qty_lots") or 0) == int(qty)
             and same_price
             and str(existing.get("reason", "") or "") == reason_text
+            and str(existing.get("source", "") or "") == source_text
             and str(existing.get("strategy", "") or "") == strategy_name
         ):
             logging.info(
@@ -369,6 +372,7 @@ def append_trade_journal(
         "commission_rub": commission_rub,
         "net_pnl_rub": net_pnl_rub,
         "reason": reason,
+        "source": source,
         "strategy": strategy,
         "mode": "DRY_RUN" if dry_run else "LIVE",
         "session": get_market_session(),
@@ -1926,6 +1930,12 @@ def sync_state_with_portfolio(
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
     if state.position_side != "FLAT" and not has_today_active_open_journal_entry(instrument.symbol, state.position_side):
+        if state.pending_order_id and state.pending_order_action == "OPEN":
+            recovery_reason = "Подтверждено по портфелю после потери статуса заявки."
+            recovery_source = "pending_order_recovery"
+        else:
+            recovery_reason = "Восстановлено после рестарта по брокерскому портфелю."
+            recovery_source = "portfolio_recovery"
         operation_time, entry_fee_rub = find_recent_live_open_details(
             client,
             config,
@@ -1952,7 +1962,8 @@ def sync_state_with_portfolio(
             gross_pnl_rub=None,
             commission_rub=entry_fee_rub,
             net_pnl_rub=-entry_fee_rub if entry_fee_rub is not None else None,
-            reason="восстановлено из портфеля после потери статуса заявки",
+            reason=recovery_reason,
+            source=recovery_source,
             strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
             dry_run=config.dry_run,
         )
@@ -2585,6 +2596,7 @@ def sync_pending_order(
                     commission_rub=total_trade_commission,
                     net_pnl_rub=net_trade_pnl,
                     reason=previous_exit_reason,
+                    source="pending_order_recovery",
                     strategy=previous_strategy,
                     dry_run=False,
                 )
@@ -2654,6 +2666,7 @@ def sync_pending_order(
                 commission_rub=fill_commission_rub,
                 net_pnl_rub=-fill_commission_rub,
                 reason="live fill",
+                source="order_fill",
                 strategy=state.entry_strategy,
                 dry_run=False,
             )
@@ -2700,6 +2713,7 @@ def sync_pending_order(
                 commission_rub=total_trade_commission,
                 net_pnl_rub=net_trade_pnl,
                 reason=exit_reason,
+                source="order_fill",
                 strategy=state.entry_strategy,
                 dry_run=False,
             )
@@ -2880,6 +2894,7 @@ def open_position(
             commission_rub=0.0,
             net_pnl_rub=0.0,
             reason="dry_run open",
+            source="dry_run",
             strategy=strategy_name,
             dry_run=True,
         )
@@ -2989,6 +3004,7 @@ def close_position(
             commission_rub=0.0,
             net_pnl_rub=pnl,
             reason=exit_reason,
+            source="dry_run",
             strategy=state.entry_strategy,
             dry_run=True,
         )
