@@ -324,18 +324,27 @@ def annotate_trade_rows(rows: list[dict], states: dict[str, dict]) -> list[dict]
     return annotated
 
 
-def filter_current_open_rows(rows: list[dict], states: dict[str, dict] | None = None) -> list[dict]:
-    if not states:
+def filter_current_open_rows(
+    rows: list[dict],
+    states: dict[str, dict] | None = None,
+    live_positions: dict[str, dict] | None = None,
+) -> list[dict]:
+    if not states and not live_positions:
         return rows
     filtered: list[dict] = []
     for row in rows:
         symbol = str(row.get("symbol", ""))
         if not symbol:
             continue
-        state = states.get(symbol, {})
         side = str(row.get("side", "")).upper()
-        live_side = str(state.get("position_side", "FLAT")).upper()
-        live_qty = int(state.get("position_qty") or 0)
+        live = (live_positions or {}).get(symbol)
+        if live is not None:
+            live_side = str(live.get("side", "FLAT")).upper()
+            live_qty = int(live.get("qty") or 0)
+        else:
+            state = (states or {}).get(symbol, {})
+            live_side = str(state.get("position_side", "FLAT")).upper()
+            live_qty = int(state.get("position_qty") or 0)
         if live_side == "FLAT" or live_qty <= 0:
             continue
         if side and live_side and side != live_side:
@@ -373,7 +382,11 @@ def format_trade_review_row(
     }
 
 
-def build_trade_review(rows: list[dict], states: dict[str, dict] | None = None) -> dict:
+def build_trade_review(
+    rows: list[dict],
+    states: dict[str, dict] | None = None,
+    live_positions: dict[str, dict] | None = None,
+) -> dict:
     open_by_key: dict[tuple[str, str], list[dict]] = {}
     closed_reviews: list[dict] = []
     last_orphan_close_by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -472,7 +485,7 @@ def build_trade_review(rows: list[dict], states: dict[str, dict] | None = None) 
         if not items:
             continue
         current_open.append(items[-1])
-    current_open = filter_current_open_rows(current_open, states)
+    current_open = filter_current_open_rows(current_open, states, live_positions)
     current_open.sort(key=lambda row: row.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ), reverse=True)
 
     closed_reviews.sort(key=lambda item: item.get("_exit_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ), reverse=True)
@@ -517,9 +530,14 @@ def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) ->
     return build_trade_review(rows, states)
 
 
-def load_trade_review_for_day(target_day: date, limit: int = 200, states: dict[str, dict] | None = None) -> dict:
+def load_trade_review_for_day(
+    target_day: date,
+    limit: int = 200,
+    states: dict[str, dict] | None = None,
+    live_positions: dict[str, dict] | None = None,
+) -> dict:
     rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()][-limit:]
-    return build_trade_review(rows, states)
+    return build_trade_review(rows, states, live_positions)
 
 
 def build_daily_performance(portfolio: dict, target_day: date) -> dict:
@@ -2174,6 +2192,11 @@ def api_dashboard(date: str | None = None) -> dict:
     states = load_states()
     generated_at = datetime.now(timezone.utc)
     portfolio = load_portfolio_snapshot()
+    broker_positions = {
+        str(item.get("symbol", "")): item
+        for item in ((portfolio or {}).get("broker_open_positions") or [])
+        if str(item.get("symbol", ""))
+    }
     target_day = datetime.now(MOSCOW_TZ).date()
     if date:
         try:
@@ -2188,7 +2211,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "portfolio": portfolio,
         "runtime": load_runtime_status(),
         "news": load_news_snapshot(),
-        "trade_review": load_trade_review_for_day(target_day, 200, states),
+        "trade_review": load_trade_review_for_day(target_day, 200, states, broker_positions),
         "summary": summarize_states(states, portfolio),
         "meta": load_meta(),
         "states": states,
