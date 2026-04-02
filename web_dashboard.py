@@ -20,6 +20,7 @@ RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 AI_REVIEW_DIR = LOG_DIR / "ai_reviews"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+STATE_STALE_MINUTES = 20
 
 
 app = FastAPI(title="Oil Bot Dashboard")
@@ -33,11 +34,17 @@ def load_states() -> dict[str, dict]:
     states: dict[str, dict] = {}
     if not STATE_DIR.exists():
         return states
+    now = datetime.now(timezone.utc)
     for path in sorted(STATE_DIR.glob("*.json")):
         if path.name.startswith("_"):
             continue
         try:
-            states[path.stem] = load_json(path)
+            payload = load_json(path)
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            payload["_state_updated_at"] = mtime.isoformat()
+            payload["_state_updated_at_moscow"] = mtime.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК")
+            payload["_state_stale"] = (now - mtime).total_seconds() > STATE_STALE_MINUTES * 60
+            states[path.stem] = payload
         except Exception:
             continue
     return states
@@ -92,6 +99,8 @@ CAPITAL_ALERT_PATTERNS = (
 def build_capital_alert(states: dict[str, dict]) -> dict:
     affected: list[dict] = []
     for symbol, state in states.items():
+        if state.get("_state_stale"):
+            continue
         candidates: list[str] = []
         last_error = str(state.get("last_error") or "").strip()
         if last_error:
@@ -273,7 +282,11 @@ def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
     return normalized
 
 
-def annotate_trade_rows(rows: list[dict], states: dict[str, dict]) -> list[dict]:
+def annotate_trade_rows(
+    rows: list[dict],
+    states: dict[str, dict],
+    live_positions: dict[str, dict] | None = None,
+) -> list[dict]:
     annotated: list[dict] = []
     open_by_key: dict[tuple[str, str], list[dict]] = {}
 
@@ -302,9 +315,14 @@ def annotate_trade_rows(rows: list[dict], states: dict[str, dict]) -> list[dict]
         if not items:
             continue
         symbol, side = key
-        state = states.get(symbol, {})
-        state_side = str(state.get("position_side", "FLAT")).upper()
-        state_qty = int(state.get("position_qty") or 0)
+        broker_position = (live_positions or {}).get(symbol)
+        if broker_position:
+            state_side = str(broker_position.get("side") or "FLAT").upper()
+            state_qty = int(broker_position.get("qty") or 0)
+        else:
+            state = states.get(symbol, {})
+            state_side = str(state.get("position_side", "FLAT")).upper()
+            state_qty = int(state.get("position_qty") or 0)
         if state_side == side and state_side != "FLAT" and state_qty > 0:
             active_open_ids.add(int(items[-1].get("_row_id")))
 
@@ -685,6 +703,8 @@ def summarize_states(states: dict[str, dict], portfolio: dict | None = None) -> 
     signals = {"LONG": 0, "SHORT": 0, "HOLD": 0}
 
     for symbol, state in states.items():
+        if state.get("_state_stale"):
+            continue
         signal = (state.get("last_signal") or "HOLD").upper()
         if signal in signals:
             signals[signal] += 1
@@ -2199,24 +2219,35 @@ def api_dashboard(date: str | None = None) -> dict:
         for item in ((portfolio or {}).get("broker_open_positions") or [])
         if str(item.get("symbol", ""))
     }
+    display_states: dict[str, dict] = {}
+    for symbol, state in states.items():
+        item = dict(state)
+        if item.get("_state_stale") and symbol not in broker_positions:
+            stale_at = item.get("_state_updated_at_moscow") or "-"
+            item["last_signal"] = "HOLD"
+            item["last_strategy_name"] = item.get("last_strategy_name") or item.get("entry_strategy") or "-"
+            item["last_signal_summary"] = [f"Данные по инструменту устарели: последнее обновление {stale_at}."]
+            item["last_news_impact"] = "стейт не обновляется"
+            item["last_error"] = f"State stale с {stale_at}"
+        display_states[symbol] = item
     target_day = datetime.now(MOSCOW_TZ).date()
     if date:
         try:
             target_day = datetime.strptime(date, "%Y-%m-%d").date()
         except ValueError:
             pass
-    trades = annotate_trade_rows(load_trade_rows_for_day(target_day, 200), states)
+    trades = annotate_trade_rows(load_trade_rows_for_day(target_day, 200), display_states, broker_positions)
     return {
         "service": get_bot_service_status(),
-        "health": build_health_payload(states),
-        "capital_alert": build_capital_alert(states),
+        "health": build_health_payload(display_states),
+        "capital_alert": build_capital_alert(display_states),
         "portfolio": portfolio,
         "runtime": load_runtime_status(),
         "news": load_news_snapshot(),
-        "trade_review": load_trade_review_for_day(target_day, 200, states, broker_positions),
-        "summary": summarize_states(states, portfolio),
+        "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
+        "summary": summarize_states(display_states, portfolio),
         "meta": load_meta(),
-        "states": states,
+        "states": display_states,
         "trades": trades,
         "daily": build_daily_performance(portfolio, target_day),
         "ai_review": load_ai_review(target_day),
