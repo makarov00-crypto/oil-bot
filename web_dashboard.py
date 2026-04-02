@@ -337,8 +337,10 @@ def filter_current_open_rows(
         if not symbol:
             continue
         side = str(row.get("side", "")).upper()
-        live = (live_positions or {}).get(symbol)
-        if live is not None:
+        if live_positions is not None:
+            live = live_positions.get(symbol)
+            if live is None:
+                continue
             live_side = str(live.get("side", "FLAT")).upper()
             live_qty = int(live.get("qty") or 0)
         else:
