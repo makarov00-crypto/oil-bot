@@ -2,16 +2,16 @@ import Foundation
 
 private extension KeyedDecodingContainer {
     func decodeLossyStringIfPresent(forKey key: Key) throws -> String? {
-        if let value = try decodeIfPresent(String.self, forKey: key) {
+        if let value = try? decodeIfPresent(String.self, forKey: key) {
             return value
         }
-        if let value = try decodeIfPresent(Double.self, forKey: key) {
+        if let value = try? decodeIfPresent(Double.self, forKey: key) {
             return String(format: "%.2f", value)
         }
-        if let value = try decodeIfPresent(Int.self, forKey: key) {
+        if let value = try? decodeIfPresent(Int.self, forKey: key) {
             return String(value)
         }
-        if let value = try decodeIfPresent(Bool.self, forKey: key) {
+        if let value = try? decodeIfPresent(Bool.self, forKey: key) {
             return value ? "true" : "false"
         }
         return nil
