@@ -1,5 +1,23 @@
 import Foundation
 
+private extension KeyedDecodingContainer {
+    func decodeLossyStringIfPresent(forKey key: Key) throws -> String? {
+        if let value = try decodeIfPresent(String.self, forKey: key) {
+            return value
+        }
+        if let value = try decodeIfPresent(Double.self, forKey: key) {
+            return String(format: "%.2f", value)
+        }
+        if let value = try decodeIfPresent(Int.self, forKey: key) {
+            return String(value)
+        }
+        if let value = try decodeIfPresent(Bool.self, forKey: key) {
+            return value ? "true" : "false"
+        }
+        return nil
+    }
+}
+
 struct DashboardPayload: Decodable {
     let generatedAtMoscow: String?
     let health: HealthPayload?
@@ -315,6 +333,18 @@ struct OpenTradeStub: Decodable, Identifiable {
 
     var id: String { "\(symbol)-\(time ?? UUID().uuidString)" }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbol = try container.decode(String.self, forKey: .symbol)
+        side = try container.decodeIfPresent(String.self, forKey: .side)
+        strategy = try container.decodeIfPresent(String.self, forKey: .strategy)
+        time = try container.decodeIfPresent(String.self, forKey: .time)
+        price = try container.decodeIfPresent(Double.self, forKey: .price)
+        commissionRub = try container.decodeLossyStringIfPresent(forKey: .commissionRub)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        reasonDisplay = try container.decodeIfPresent(String.self, forKey: .reasonDisplay)
+    }
+
     enum CodingKeys: String, CodingKey {
         case symbol
         case side
@@ -346,6 +376,26 @@ struct ClosedReview: Decodable, Identifiable {
     let verdict: String
 
     var id: String { "\(symbol)-\(entryTime)-\(exitTime)" }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbol = try container.decode(String.self, forKey: .symbol)
+        side = try container.decode(String.self, forKey: .side)
+        strategy = try container.decode(String.self, forKey: .strategy)
+        session = try container.decodeIfPresent(String.self, forKey: .session)
+        entryTime = try container.decode(String.self, forKey: .entryTime)
+        exitTime = try container.decode(String.self, forKey: .exitTime)
+        entryPrice = try container.decodeLossyStringIfPresent(forKey: .entryPrice)
+        exitPrice = try container.decodeLossyStringIfPresent(forKey: .exitPrice)
+        qtyLots = try container.decodeIfPresent(Int.self, forKey: .qtyLots)
+        pnlRub = try container.decodeLossyStringIfPresent(forKey: .pnlRub) ?? "-"
+        grossPnlRub = try container.decodeLossyStringIfPresent(forKey: .grossPnlRub)
+        commissionRub = try container.decodeLossyStringIfPresent(forKey: .commissionRub)
+        netPnlRub = try container.decodeLossyStringIfPresent(forKey: .netPnlRub)
+        entryReason = try container.decodeIfPresent(String.self, forKey: .entryReason)
+        exitReason = try container.decode(String.self, forKey: .exitReason)
+        verdict = try container.decode(String.self, forKey: .verdict)
+    }
 
     enum CodingKeys: String, CodingKey {
         case symbol
@@ -384,6 +434,24 @@ struct TradeEvent: Decodable, Identifiable {
     let reasonDisplay: String?
 
     var id: String { "\(symbol)-\(time ?? UUID().uuidString)-\(event ?? "-")" }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        time = try container.decodeIfPresent(String.self, forKey: .time)
+        symbol = try container.decode(String.self, forKey: .symbol)
+        event = try container.decodeIfPresent(String.self, forKey: .event)
+        eventStatus = try container.decodeIfPresent(String.self, forKey: .eventStatus)
+        side = try container.decodeIfPresent(String.self, forKey: .side)
+        qtyLots = try container.decodeIfPresent(Int.self, forKey: .qtyLots)
+        price = try container.decodeLossyStringIfPresent(forKey: .price)
+        pnlRub = try container.decodeLossyStringIfPresent(forKey: .pnlRub)
+        grossPnlRub = try container.decodeLossyStringIfPresent(forKey: .grossPnlRub)
+        commissionRub = try container.decodeLossyStringIfPresent(forKey: .commissionRub)
+        netPnlRub = try container.decodeLossyStringIfPresent(forKey: .netPnlRub)
+        strategy = try container.decodeIfPresent(String.self, forKey: .strategy)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        reasonDisplay = try container.decodeIfPresent(String.self, forKey: .reasonDisplay)
+    }
 
     enum CodingKeys: String, CodingKey {
         case time
