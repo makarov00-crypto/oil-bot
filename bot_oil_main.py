@@ -447,6 +447,68 @@ def find_recent_live_open_details(
     return op_time, fee_by_parent.get(op_id)
 
 
+def find_recent_live_close_details(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    previous_side: str,
+    qty: int,
+) -> tuple[datetime | None, float | None, float | None]:
+    from_utc, to_utc = get_moscow_day_bounds_utc()
+    cursor = ""
+    fee_by_parent: dict[str, float] = {}
+    candidates: list[tuple[datetime, str, float]] = []
+    expected_type = (
+        OperationType.OPERATION_TYPE_BUY if previous_side.upper() == "SHORT" else OperationType.OPERATION_TYPE_SELL
+    )
+
+    while True:
+        response = client.operations.get_operations_by_cursor(
+            GetOperationsByCursorRequest(
+                account_id=config.account_id,
+                from_=from_utc,
+                to=to_utc,
+                cursor=cursor,
+                limit=200,
+                state=OperationState.OPERATION_STATE_EXECUTED,
+                without_commissions=False,
+                without_overnights=False,
+                without_trades=False,
+            )
+        )
+        for item in getattr(response, "items", []) or []:
+            if str(getattr(item, "figi", "") or "") != instrument.figi:
+                continue
+            op_type = getattr(item, "type", None)
+            op_id = str(getattr(item, "id", "") or "")
+            parent_id = str(getattr(item, "parent_operation_id", "") or "")
+            payment = quotation_to_float(getattr(item, "payment", None))
+            if op_type in FEE_OPERATION_TYPES and parent_id:
+                fee_by_parent[parent_id] = fee_by_parent.get(parent_id, 0.0) + abs(payment)
+                continue
+            if op_type != expected_type:
+                continue
+            op_qty = int(getattr(item, "quantity", 0) or 0)
+            if qty > 0 and op_qty not in {0, qty}:
+                continue
+            op_time = getattr(item, "date", None)
+            if isinstance(op_time, datetime):
+                op_price = quotation_to_float(getattr(item, "price", None))
+                candidates.append((op_time, op_id, op_price))
+
+        next_cursor = str(getattr(response, "next_cursor", "") or "")
+        if not getattr(response, "has_next", False) or not next_cursor:
+            break
+        cursor = next_cursor
+
+    if not candidates:
+        return None, None, None
+
+    candidates.sort(key=lambda item: item[0])
+    op_time, op_id, op_price = candidates[-1]
+    return op_time, fee_by_parent.get(op_id), op_price
+
+
 def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     open_by_symbol: dict[str, list[dict[str, Any]]] = {}
     closed_reviews: list[dict[str, Any]] = []
@@ -2247,6 +2309,13 @@ def sync_pending_order(
 ) -> bool:
     if not has_pending_order(state):
         return False
+    previous_side = state.position_side
+    previous_qty = state.position_qty
+    previous_entry_price = state.entry_price
+    previous_entry_commission = float(state.entry_commission_rub or 0.0)
+    previous_strategy = state.entry_strategy
+    previous_exit_reason = state.pending_exit_reason or "Заявка на закрытие подтверждена синхронизацией портфеля"
+    pending_action = state.pending_order_action
 
     try:
         order_state = client.orders.get_order_state(
@@ -2259,7 +2328,57 @@ def sync_pending_order(
 
         try:
             synced_qty = sync_state_with_portfolio(client, config, instrument, state)
-            if synced_qty != 0 and state.entry_price is not None:
+            if pending_action == "CLOSE" and previous_side != "FLAT" and previous_qty > 0 and synced_qty == 0:
+                close_time, close_fee_rub, close_price = find_recent_live_close_details(
+                    client,
+                    config,
+                    instrument,
+                    previous_side,
+                    previous_qty,
+                )
+                if close_price is None or close_price <= 0:
+                    close_price = get_last_price(client, instrument)
+                gross_pnl = 0.0
+                if previous_entry_price is not None and close_price is not None:
+                    gross_pnl = calculate_futures_pnl_rub(
+                        instrument,
+                        previous_entry_price,
+                        close_price,
+                        previous_qty,
+                        previous_side,
+                    )
+                reset_daily_pnl_if_needed(state)
+                close_fee_only = float(close_fee_rub or 0.0)
+                total_trade_commission = previous_entry_commission + close_fee_only
+                net_trade_pnl = gross_pnl - total_trade_commission
+                state.realized_gross_pnl_rub += gross_pnl
+                state.realized_commission_rub += close_fee_only
+                state.realized_pnl += gross_pnl - close_fee_only
+                state.last_exit_time = (close_time or datetime.now(UTC)).isoformat()
+                state.last_exit_side = previous_side
+                state.last_exit_reason = previous_exit_reason
+                state.last_exit_pnl_rub = net_trade_pnl
+                state.last_exit_price = close_price
+                append_trade_journal(
+                    instrument,
+                    "CLOSE",
+                    previous_side,
+                    previous_qty,
+                    close_price,
+                    event_time=close_time,
+                    pnl_rub=net_trade_pnl,
+                    gross_pnl_rub=gross_pnl,
+                    commission_rub=total_trade_commission,
+                    net_pnl_rub=net_trade_pnl,
+                    reason=previous_exit_reason,
+                    strategy=previous_strategy,
+                    dry_run=False,
+                )
+                state.last_error = (
+                    f"Статус заявки {state.pending_order_id} не найден у брокера, "
+                    "закрытие подтверждено по операциям и портфелю."
+                )
+            elif synced_qty != 0 and state.entry_price is not None:
                 refresh_position_snapshot(state, instrument, get_last_price(client, instrument))
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
