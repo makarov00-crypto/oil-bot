@@ -1770,6 +1770,11 @@ def summarize_pending_order_rejection(
         return base_reason
 
 
+def is_order_not_found_error(error: RequestError) -> bool:
+    text = str(error).lower()
+    return "order not found" in text or "50005" in text or "not_found" in text
+
+
 def get_margin_per_lot(instrument: InstrumentConfig, signal: str) -> float:
     margin = instrument.initial_margin_on_buy if signal == "LONG" else instrument.initial_margin_on_sell
     if margin > 0:
@@ -2126,10 +2131,43 @@ def sync_pending_order(
     if not has_pending_order(state):
         return False
 
-    order_state = client.orders.get_order_state(
-        account_id=config.account_id,
-        order_id=state.pending_order_id,
-    )
+    try:
+        order_state = client.orders.get_order_state(
+            account_id=config.account_id,
+            order_id=state.pending_order_id,
+        )
+    except RequestError as error:
+        if not is_order_not_found_error(error):
+            raise
+
+        try:
+            synced_qty = sync_state_with_portfolio(client, config, instrument, state)
+            if synced_qty != 0 and state.entry_price is not None:
+                refresh_position_snapshot(state, instrument, get_last_price(client, instrument))
+                state.last_error = (
+                    f"Статус заявки {state.pending_order_id} не найден у брокера, "
+                    "позиция синхронизирована по портфелю."
+                )
+            else:
+                state.last_error = (
+                    f"Статус заявки {state.pending_order_id} не найден у брокера. "
+                    "Подвисшая заявка очищена, открытой позиции нет."
+                )
+        except Exception as sync_error:
+            logging.warning(
+                "Не удалось синхронизировать состояние после Order not found по %s: %s",
+                instrument.symbol,
+                sync_error,
+            )
+            state.last_error = (
+                f"Статус заявки {state.pending_order_id} не найден у брокера. "
+                "Заявка очищена без подтверждения позиции."
+            )
+        state.last_signal_summary = [state.last_error, *state.last_signal_summary[:2]]
+        clear_pending_order(state)
+        save_state(instrument.symbol, state)
+        logging.warning("symbol=%s status=stale_pending_cleared reason=%s", instrument.symbol, state.last_error)
+        return False
     status = order_state.execution_report_status
 
     if status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL:
