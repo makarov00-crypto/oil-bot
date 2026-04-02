@@ -297,17 +297,23 @@ def annotate_trade_rows(rows: list[dict], states: dict[str, dict]) -> list[dict]
                 open_item = open_by_key[key].pop(0)
                 open_item["event_status"] = "closed"
 
+    active_open_ids: set[int] = set()
+    for key, items in open_by_key.items():
+        if not items:
+            continue
+        symbol, side = key
+        state = states.get(symbol, {})
+        state_side = str(state.get("position_side", "FLAT")).upper()
+        state_qty = int(state.get("position_qty") or 0)
+        if state_side == side and state_side != "FLAT" and state_qty > 0:
+            active_open_ids.add(int(items[-1].get("_row_id")))
+
     for item in annotated:
         if str(item.get("event", "")).upper() != "OPEN":
             continue
         if item.get("event_status") == "closed":
             continue
-        symbol = str(item.get("symbol", ""))
-        side = str(item.get("side", "")).upper()
-        state = states.get(symbol, {})
-        state_side = str(state.get("position_side", "FLAT")).upper()
-        state_qty = int(state.get("position_qty") or 0)
-        if state_side == side and state_side != "FLAT" and state_qty > 0:
+        if int(item.get("_row_id")) in active_open_ids:
             item["event_status"] = "active"
         else:
             item["event_status"] = "history"

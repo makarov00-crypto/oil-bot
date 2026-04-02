@@ -321,6 +321,38 @@ def append_trade_journal(
         journal_time = event_time.strip()
     else:
         journal_time = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
+    event_name = str(event).upper()
+    side_name = str(side).upper()
+    strategy_name = str(strategy or "")
+    reason_text = str(reason or "")
+    try:
+        existing_rows = load_trade_journal()[-20:]
+    except Exception:
+        existing_rows = []
+    for existing in reversed(existing_rows):
+        try:
+            same_price = round(float(existing.get("price") or 0.0), 6) == round(float(price or 0.0), 6)
+        except Exception:
+            same_price = False
+        if (
+            str(existing.get("time", "")).strip() == journal_time
+            and str(existing.get("symbol", "")).upper() == instrument.symbol.upper()
+            and str(existing.get("event", "")).upper() == event_name
+            and str(existing.get("side", "")).upper() == side_name
+            and int(existing.get("qty_lots") or 0) == int(qty)
+            and same_price
+            and str(existing.get("reason", "") or "") == reason_text
+            and str(existing.get("strategy", "") or "") == strategy_name
+        ):
+            logging.info(
+                "Пропускаю дублирующую запись журнала: %s %s %s %s @ %s",
+                instrument.symbol,
+                event_name,
+                side_name,
+                qty,
+                journal_time,
+            )
+            return
     row = {
         "time": journal_time,
         "symbol": instrument.symbol,
