@@ -70,7 +70,7 @@ struct OverviewScreen: View {
                         Text("Торговый день")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(displayDate(payload.daily.selectedDate))
+                        Text(payload.portfolio.selectedDateMoscow ?? displayDate(payload.daily.selectedDate))
                             .font(.title2.weight(.semibold))
                     }
                     Spacer()
@@ -78,7 +78,7 @@ struct OverviewScreen: View {
                 }
 
                 LazyVGrid(columns: twoColumns, spacing: 12) {
-                    MetricGlassTile(title: "Итог по боту", value: formatRub(payload.portfolio.botTotalPnlRub), tone: statusTone(for: payload.portfolio.botTotalPnlRub))
+                    MetricGlassTile(title: "Итог по дню", value: formatRub(payload.portfolio.botTotalPnlRub), tone: statusTone(for: payload.portfolio.botTotalPnlRub))
                     MetricGlassTile(title: "NET сделок", value: formatRub(payload.portfolio.botRealizedPnlRub), tone: statusTone(for: payload.portfolio.botRealizedPnlRub))
                     MetricGlassTile(title: "Комиссия по счёту", value: formatRub(payload.portfolio.botActualFeeRub), tone: statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)))
                     MetricGlassTile(title: "Клиринговая ВМ", value: formatRub(payload.portfolio.botActualVarmarginRub), tone: statusTone(for: payload.portfolio.botActualVarmarginRub))
@@ -92,13 +92,37 @@ struct OverviewScreen: View {
     private func portfolioCard(payload: DashboardPayload) -> some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
-                SectionHeader(title: "Портфель", subtitle: payload.portfolio.generatedAtMoscow.map { "Срез портфеля: \($0)" })
+                let subtitle = [payload.portfolio.generatedAtMoscow.map { "Срез портфеля: \($0)" }, payload.portfolio.selectedDateMoscow.map { "Дата отчёта: \($0)" }]
+                    .compactMap { $0 }
+                    .joined(separator: " | ")
+                SectionHeader(title: "Портфель", subtitle: subtitle.isEmpty ? nil : subtitle)
 
                 LazyVGrid(columns: twoColumns, spacing: 12) {
                     MetricGlassTile(title: "Портфель", value: formatRub(payload.portfolio.totalPortfolioRub))
                     MetricGlassTile(title: "Свободно", value: formatRub(payload.portfolio.freeRub))
                     MetricGlassTile(title: "ГО", value: formatRub(payload.portfolio.blockedGuaranteeRub))
                     MetricGlassTile(title: "Режим", value: displayMode(payload.portfolio.mode))
+                }
+
+                if let vmBySymbol = payload.portfolio.botActualVarmarginBySymbol, !vmBySymbol.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Клиринговая ВМ по инструментам")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        let ordered = vmBySymbol.keys.sorted()
+                        ForEach(ordered, id: \.self) { symbol in
+                            let value = vmBySymbol[symbol] ?? 0
+                            HStack {
+                                Text(symbol)
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(formatRub(value))
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundStyle(statusTone(for: value))
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
                 }
             }
         }

@@ -103,7 +103,7 @@ struct TradesScreen: View {
                                 compactInfo("Комиссия", isOpenEvent ? entryCommissionText(trade.commissionRub) : formatTradePnl(trade.commissionRub), tone: isOpenEvent ? .white : statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
                                 compactInfo("Net", isOpenEvent ? "не применяется" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                                 compactInfo("Стратегия", trade.strategy ?? "-")
-                                compactInfo("Причина", trade.reason ?? "-")
+                                compactInfo("Причина", trade.reasonDisplay ?? trade.reason ?? "-")
                             }
                         }
                     }
@@ -160,7 +160,7 @@ struct TradesScreen: View {
                                         compactInfo("Время входа", trade.time ?? "-")
                                         compactInfo("Цена входа", trade.price.map { String(format: "%.4f", $0) } ?? "-")
                                         compactInfo("Комиссия входа", formatTradePnl(trade.commissionRub))
-                                        compactInfo("Причина", trade.reason ?? "-")
+                                        compactInfo("Причина", trade.reasonDisplay ?? trade.reason ?? "-")
                                     }
                                 }
                             }
@@ -212,7 +212,7 @@ struct TradesScreen: View {
     }
 
     private func filteredTrades(_ rows: [TradeEvent]) -> [TradeEvent] {
-        let base = rows.reversed()
+        let base = rows
         switch eventFilter {
         case 1:
             return base.filter { ($0.eventStatus ?? "").lowercased() == "active" }

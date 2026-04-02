@@ -64,6 +64,8 @@ struct ServiceStatus: Decodable {
 struct PortfolioSnapshot: Decodable {
     let mode: String?
     let generatedAtMoscow: String?
+    let selectedDate: String?
+    let selectedDateMoscow: String?
     let totalPortfolioRub: Double?
     let freeRub: Double?
     let blockedGuaranteeRub: Double?
@@ -71,15 +73,19 @@ struct PortfolioSnapshot: Decodable {
     let botRealizedCommissionRub: Double?
     let botRealizedPnlRub: Double?
     let botActualVarmarginRub: Double?
+    let botActualVarmarginBySymbol: [String: Double]?
     let botActualFeeRub: Double?
     let botActualCashEffectRub: Double?
     let botEstimatedVariationMarginRub: Double?
+    let botBrokerDayPnlRub: Double?
     let botTotalPnlRub: Double?
     let openPositionsCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case mode
         case generatedAtMoscow = "generated_at_moscow"
+        case selectedDate = "selected_date"
+        case selectedDateMoscow = "selected_date_moscow"
         case totalPortfolioRub = "total_portfolio_rub"
         case freeRub = "free_rub"
         case blockedGuaranteeRub = "blocked_guarantee_rub"
@@ -87,9 +93,11 @@ struct PortfolioSnapshot: Decodable {
         case botRealizedCommissionRub = "bot_realized_commission_rub"
         case botRealizedPnlRub = "bot_realized_pnl_rub"
         case botActualVarmarginRub = "bot_actual_varmargin_rub"
+        case botActualVarmarginBySymbol = "bot_actual_varmargin_by_symbol"
         case botActualFeeRub = "bot_actual_fee_rub"
         case botActualCashEffectRub = "bot_actual_cash_effect_rub"
         case botEstimatedVariationMarginRub = "bot_estimated_variation_margin_rub"
+        case botBrokerDayPnlRub = "bot_broker_day_pnl_rub"
         case botTotalPnlRub = "bot_total_pnl_rub"
         case openPositionsCount = "open_positions_count"
     }
@@ -303,6 +311,7 @@ struct OpenTradeStub: Decodable, Identifiable {
     let price: Double?
     let commissionRub: String?
     let reason: String?
+    let reasonDisplay: String?
 
     var id: String { "\(symbol)-\(time ?? UUID().uuidString)" }
 
@@ -314,6 +323,7 @@ struct OpenTradeStub: Decodable, Identifiable {
         case price
         case commissionRub = "commission_rub"
         case reason
+        case reasonDisplay = "reason_display"
     }
 }
 
@@ -371,6 +381,7 @@ struct TradeEvent: Decodable, Identifiable {
     let netPnlRub: String?
     let strategy: String?
     let reason: String?
+    let reasonDisplay: String?
 
     var id: String { "\(symbol)-\(time ?? UUID().uuidString)-\(event ?? "-")" }
 
@@ -388,6 +399,7 @@ struct TradeEvent: Decodable, Identifiable {
         case netPnlRub = "net_pnl_rub"
         case strategy
         case reason
+        case reasonDisplay = "reason_display"
     }
 }
 
