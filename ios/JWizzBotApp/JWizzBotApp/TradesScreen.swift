@@ -129,11 +129,41 @@ struct TradesScreen: View {
             }
 
             if payload.tradeReview.closedReviews.isEmpty {
-                EmptyGlassState(
-                    title: "Закрытых сделок пока нет",
-                    subtitle: "Когда появятся закрытия, они будут разобраны здесь.",
-                    systemImage: "chart.bar.doc.horizontal"
-                )
+                VStack(spacing: 16) {
+                    EmptyGlassState(
+                        title: "Закрытых сделок пока нет",
+                        subtitle: payload.tradeReview.currentOpen?.isEmpty == false
+                            ? "Есть открытые позиции. Они показаны ниже."
+                            : "Когда появятся закрытия, они будут разобраны здесь.",
+                        systemImage: "chart.bar.doc.horizontal"
+                    )
+
+                    if let currentOpen = payload.tradeReview.currentOpen, !currentOpen.isEmpty {
+                        ForEach(currentOpen.reversed()) { trade in
+                            GlassCard {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(trade.symbol)
+                                                .font(.title3.weight(.semibold))
+                                            Text(trade.strategy ?? "-")
+                                                .font(.subheadline)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        SignalPill(text: displaySignal(trade.side), raw: trade.side)
+                                    }
+
+                                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                                        compactInfo("Статус", "открыта")
+                                        compactInfo("Время входа", trade.time ?? "-")
+                                        compactInfo("Цена входа", trade.price.map { String(format: "%.4f", $0) } ?? "-")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 ForEach(payload.tradeReview.closedReviews.reversed()) { trade in
                     GlassCard {

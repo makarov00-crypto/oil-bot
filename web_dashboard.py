@@ -477,6 +477,11 @@ def load_trade_review_for_day(target_day: date, limit: int = 200) -> dict:
     worst_symbol = min(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
     best_strategy = max(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
     worst_strategy = min(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
+    current_open = []
+    for symbol, items in open_by_symbol.items():
+        if not items:
+            continue
+        current_open.append(items[-1])
 
     return {
         "closed_count": len(closed_reviews),
@@ -489,6 +494,7 @@ def load_trade_review_for_day(target_day: date, limit: int = 200) -> dict:
         "best_strategy": {"strategy": best_strategy[0], "pnl_rub": round(best_strategy[1], 2)} if best_strategy else None,
         "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
         "closed_reviews": closed_reviews[-20:],
+        "current_open": current_open[-20:],
     }
 
 
@@ -2042,8 +2048,41 @@ def build_dashboard_html() -> str:
         </article>`);
       }
       if (!(review.closed_reviews || []).length) {
-        reviewBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Закрытых сделок пока нет.</td></tr>');
-        reviewCards.insertAdjacentHTML('beforeend', '<div class="muted">Закрытых сделок пока нет.</div>');
+        const currentOpen = Array.isArray(review.current_open) ? review.current_open : [];
+        const hint = currentOpen.length
+          ? `Закрытых сделок пока нет. Сейчас открыто позиций: ${currentOpen.length}.`
+          : 'Закрытых сделок пока нет.';
+        reviewBody.insertAdjacentHTML('beforeend', `<tr><td colspan="10" class="muted">${escapeHtml(hint)}</td></tr>`);
+        reviewCards.insertAdjacentHTML('beforeend', `<div class="muted">${escapeHtml(hint)}</div>`);
+        for (const row of currentOpen.slice().reverse()) {
+          reviewBody.insertAdjacentHTML('beforeend', `<tr>
+            <td class="mono">${escapeHtml(row.symbol || '-')}</td>
+            <td>${signalBadge(row.side || '-')}</td>
+            <td>${escapeHtml(row.strategy || '-')}</td>
+            <td class="mono">${escapeHtml(row.time || '-')}</td>
+            <td class="mono">в позиции</td>
+            <td class="mono right">0.00</td>
+            <td class="mono right">0.00</td>
+            <td class="mono right">0.00</td>
+            <td class="reason">${escapeHtml(row.reason || 'позиция открыта')}</td>
+            <td>открыта</td>
+          </tr>`);
+          reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
+            <div class="mobile-card-head">
+              <div class="mobile-card-title mono">${escapeHtml(row.symbol || '-')}</div>
+              ${signalBadge(row.side || '-')}
+            </div>
+            <div class="mobile-card-grid">
+              <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
+              <div class="mobile-card-item"><span class="muted">Статус</span><div class="mobile-card-value">открыта</div></div>
+              <div class="mobile-card-item"><span class="muted">Время входа</span><div class="mobile-card-value mono">${escapeHtml(row.time || '-')}</div></div>
+              <div class="mobile-card-item"><span class="muted">Цена входа</span><div class="mobile-card-value mono">${escapeHtml(row.price || '-')}</div></div>
+            </div>
+            <div class="mobile-card-footer">
+              <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason || 'позиция открыта')}</div>
+            </div>
+          </article>`);
+        }
       }
 
       const aiReview = data.ai_review || {};
