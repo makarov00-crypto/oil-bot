@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -51,6 +52,24 @@ def normalize_text(text: str) -> str:
     return " ".join((text or "").lower().replace("\n", " ").split())
 
 
+def phrase_in_text(text: str, phrase: str) -> bool:
+    normalized_phrase = normalize_text(phrase)
+    if not normalized_phrase:
+        return False
+    if any(sep in normalized_phrase for sep in (" ", "/", "-", ".")):
+        return normalized_phrase in text
+    pattern = rf"(?<![\w]){re.escape(normalized_phrase)}(?![\w])"
+    return re.search(pattern, text) is not None
+
+
+def collect_hits(text: str, phrases: tuple[str, ...]) -> list[str]:
+    hits: list[str] = []
+    for phrase in phrases:
+        if phrase_in_text(text, phrase):
+            hits.append(phrase)
+    return hits
+
+
 def classify_strength(score: int, source_weight: int) -> str:
     weighted = score * source_weight
     if weighted >= 6:
@@ -68,13 +87,13 @@ def detect_news_bias(message: NewsMessage) -> list[NewsBias]:
 
     results: list[NewsBias] = []
     for rule in NEWS_RULES:
-        keyword_hits = [word for word in rule.keywords if word in text]
+        keyword_hits = collect_hits(text, rule.keywords)
         if not keyword_hits:
             continue
 
-        long_hits = [word for word in rule.long_terms if word in text]
-        short_hits = [word for word in rule.short_terms if word in text]
-        block_hits = [word for word in (rule.block_terms or COMMON_BLOCK_TERMS) if word in text]
+        long_hits = collect_hits(text, rule.long_terms)
+        short_hits = collect_hits(text, rule.short_terms)
+        block_hits = collect_hits(text, rule.block_terms or COMMON_BLOCK_TERMS)
 
         bias = "NEUTRAL"
         score = len(keyword_hits)
