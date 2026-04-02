@@ -2027,7 +2027,7 @@ def build_dashboard_html() -> str:
       const reviewCards = document.getElementById('reviewCards');
       reviewBody.innerHTML = '';
       reviewCards.innerHTML = '';
-      for (const row of (review.closed_reviews || []).slice().reverse()) {
+      for (const row of (review.closed_reviews || [])) {
         const pnlNum = Number(row.pnl_rub);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
         reviewBody.insertAdjacentHTML('beforeend', `<tr>
