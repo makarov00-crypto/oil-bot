@@ -1679,6 +1679,97 @@ def get_today_accounting_snapshot(client: Client, config: BotConfig) -> dict[str
     }
 
 
+def describe_capacity_block_reason(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    entry_price: float,
+    signal: str,
+) -> str:
+    snapshot = get_account_snapshot(client, config)
+    equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
+    margin_per_lot = get_margin_per_lot(instrument, signal)
+    if margin_per_lot > 0:
+        allowed_margin_total = equity * config.max_margin_usage_pct if config.max_margin_usage_pct > 0 else 0.0
+        available_margin_budget = allowed_margin_total - snapshot.blocked_guarantee_rub
+        if snapshot.free_rub < margin_per_lot:
+            return (
+                f"не хватает средств/ГО для {instrument.symbol}: "
+                f"на 1 лот нужно примерно {margin_per_lot:.2f} RUB, свободно {snapshot.free_rub:.2f} RUB."
+            )
+        if config.max_margin_usage_pct > 0 and available_margin_budget < margin_per_lot:
+            return (
+                f"внутренний лимит ГО не позволяет открыть {instrument.symbol}: "
+                f"на 1 лот нужно {margin_per_lot:.2f} RUB, в лимите ГО доступно {max(0.0, available_margin_budget):.2f} RUB."
+            )
+
+    try:
+        max_lots = client.orders.get_max_lots(
+            GetMaxLotsRequest(
+                account_id=config.account_id,
+                instrument_id=instrument.figi,
+            )
+        )
+        if signal == "LONG":
+            broker_limit = int(getattr(getattr(max_lots, "buy_limits", None), "buy_max_market_lots", 0) or 0)
+        else:
+            broker_limit = int(getattr(getattr(max_lots, "sell_limits", None), "sell_max_lots", 0) or 0)
+        if broker_limit <= 0:
+            return (
+                f"брокер не разрешает открыть {instrument.symbol}: "
+                f"доступный лимит по заявке сейчас 0 лотов."
+            )
+    except Exception:
+        pass
+
+    step_price = instrument.min_price_increment
+    step_money = instrument.min_price_increment_amount
+    stop_distance = entry_price * config.stop_loss_pct
+    if step_price > 0 and step_money > 0 and stop_distance > 0 and equity > 0 and config.risk_per_trade_pct > 0:
+        risk_budget = equity * config.risk_per_trade_pct * get_session_position_multiplier(get_market_session(), instrument.symbol)
+        money_risk_per_contract = (stop_distance / step_price) * step_money
+        if money_risk_per_contract > 0 and risk_budget < money_risk_per_contract:
+            return (
+                f"риск-бюджет слишком мал для {instrument.symbol}: "
+                f"на сделку выделено {risk_budget:.2f} RUB, на 1 контракт нужно {money_risk_per_contract:.2f} RUB."
+            )
+
+    return f"не удалось открыть {instrument.symbol}: размер позиции получился 0 лотов."
+
+
+def summarize_order_request_error(instrument: InstrumentConfig, error: RequestError) -> str:
+    text = str(error).strip()
+    lowered = text.lower()
+    if any(needle in lowered for needle in {"insufficient", "not enough", "недостат", "недост", "не хватает", "lack"}):
+        return f"заявка по {instrument.symbol} отклонена: не хватает средств/ГО. {text}"
+    if any(needle in lowered for needle in {"margin", "го", "guarantee"}):
+        return f"заявка по {instrument.symbol} отклонена из-за ограничений по ГО/марже. {text}"
+    return f"заявка по {instrument.symbol} отклонена брокером. {text}"
+
+
+def summarize_pending_order_rejection(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+) -> str:
+    action = state.pending_order_action or "UNKNOWN"
+    side = state.pending_order_side or "UNKNOWN"
+    base_reason = (
+        f"заявка по {instrument.symbol} не исполнена: действие={action}, направление={side}."
+    )
+    if action != "OPEN" or side not in {"LONG", "SHORT"}:
+        return base_reason
+
+    try:
+        price = get_last_price(client, instrument)
+        block_reason = describe_capacity_block_reason(client, config, instrument, price, side)
+        return f"{base_reason} Причина: {block_reason}"
+    except Exception as error:
+        logging.warning("Не удалось уточнить причину отклонения заявки по %s: %s", instrument.symbol, error)
+        return base_reason
+
+
 def get_margin_per_lot(instrument: InstrumentConfig, signal: str) -> float:
     margin = instrument.initial_margin_on_buy if signal == "LONG" else instrument.initial_margin_on_sell
     if margin > 0:
@@ -2165,6 +2256,9 @@ def sync_pending_order(
         OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_CANCELLED,
         OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED,
     }:
+        rejection_reason = summarize_pending_order_rejection(client, config, instrument, state)
+        state.last_error = rejection_reason
+        state.last_signal_summary = [rejection_reason, *state.last_signal_summary[:2]]
         send_msg(
             config,
             build_telegram_card(
@@ -2175,6 +2269,7 @@ def sync_pending_order(
                     f"Действие: {state.pending_order_action or 'UNKNOWN'}",
                     f"Направление: {state.pending_order_side or 'UNKNOWN'}",
                     f"Статус: {status.name}",
+                    f"Причина: {rejection_reason}",
                     f"ID заявки: {state.pending_order_id}",
                 ],
             ),
@@ -2230,6 +2325,11 @@ def open_position(
     price = get_last_price(client, instrument)
     quantity = calculate_order_quantity(client, config, instrument, price, signal)
     if quantity <= 0:
+        block_reason = describe_capacity_block_reason(client, config, instrument, price, signal)
+        state.last_error = block_reason
+        state.last_signal_summary = [block_reason, *state.last_signal_summary[:2]]
+        save_state(instrument.symbol, state)
+        logging.info("symbol=%s status=entry_blocked reason=%s", instrument.symbol, block_reason)
         return
     sizing_lines = build_position_sizing_lines(client, config, instrument, price, signal, quantity)
     side = "LONG" if signal == "LONG" else "SHORT"
@@ -2281,7 +2381,28 @@ def open_position(
         )
         return
 
-    order_id = place_market_order(client, config, instrument, quantity, direction)
+    try:
+        order_id = place_market_order(client, config, instrument, quantity, direction)
+    except RequestError as error:
+        request_reason = summarize_order_request_error(instrument, error)
+        state.last_error = request_reason
+        state.last_signal_summary = [request_reason, *state.last_signal_summary[:2]]
+        save_state(instrument.symbol, state)
+        logging.warning("symbol=%s status=order_rejected reason=%s", instrument.symbol, request_reason)
+        send_msg(
+            config,
+            build_telegram_card(
+                "Заявка на открытие отклонена",
+                "⚠️",
+                [
+                    f"Инструмент: {format_instrument_title(instrument)}",
+                    f"Направление: {side}",
+                    f"Стратегия: {strategy_name or 'unknown'}",
+                    request_reason,
+                ],
+            ),
+        )
+        return
     state.entry_strategy = strategy_name
     state.pending_order_id = order_id
     state.pending_order_action = "OPEN"
