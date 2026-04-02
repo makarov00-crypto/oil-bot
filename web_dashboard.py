@@ -2341,6 +2341,9 @@ def api_dashboard(date: str | None = None) -> dict:
     generated_at = datetime.now(timezone.utc)
     portfolio = load_portfolio_snapshot()
     accounting_history = load_accounting_history()
+    runtime = load_runtime_status()
+    session_name = str((runtime or {}).get("session") or "").upper()
+    session_closed = session_name in {"CLOSED", "WEEKEND"}
     broker_positions = {
         str(item.get("symbol", "")): item
         for item in ((portfolio or {}).get("broker_open_positions") or [])
@@ -2350,12 +2353,18 @@ def api_dashboard(date: str | None = None) -> dict:
     for symbol, state in states.items():
         item = dict(state)
         if item.get("_state_stale") and symbol not in broker_positions:
-            stale_at = item.get("_state_updated_at_moscow") or "-"
             item["last_signal"] = "HOLD"
             item["last_strategy_name"] = item.get("last_strategy_name") or item.get("entry_strategy") or "-"
-            item["last_signal_summary"] = [f"Данные по инструменту устарели: последнее обновление {stale_at}."]
-            item["last_news_impact"] = "стейт не обновляется"
-            item["last_error"] = f"State stale с {stale_at}"
+            if session_closed:
+                closed_message = "Вне торговой сессии срочного рынка Мосбиржи."
+                item["last_signal_summary"] = [closed_message]
+                item["last_news_impact"] = "торговая сессия закрыта"
+                item["last_error"] = closed_message
+            else:
+                stale_at = item.get("_state_updated_at_moscow") or "-"
+                item["last_signal_summary"] = [f"Данные по инструменту устарели: последнее обновление {stale_at}."]
+                item["last_news_impact"] = "стейт не обновляется"
+                item["last_error"] = f"State stale с {stale_at}"
         display_states[symbol] = item
     target_day = datetime.now(MOSCOW_TZ).date()
     if date:
@@ -2370,7 +2379,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "health": build_health_payload(display_states),
         "capital_alert": build_capital_alert(display_states),
         "portfolio": portfolio_view,
-        "runtime": load_runtime_status(),
+        "runtime": runtime,
         "news": load_news_snapshot(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "summary": summarize_states(display_states, portfolio_view),
