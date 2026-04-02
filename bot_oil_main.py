@@ -43,6 +43,7 @@ from strategies import get_strategy_profile as get_primary_strategy_profile
 
 
 APP_NAME = "oil-bot-main"
+WATCHLIST_REFRESH_SECONDS = 300
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
@@ -999,6 +1000,29 @@ def resolve_instruments(client: Client, config: BotConfig) -> list[InstrumentCon
     if missing:
         raise RuntimeError(f"Не удалось разрешить тикеры: {', '.join(missing)}")
     return result
+
+
+def refresh_watchlist_if_needed(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+    last_refresh_monotonic: float,
+) -> tuple[list[InstrumentConfig], float]:
+    now_monotonic = time.monotonic()
+    if now_monotonic - last_refresh_monotonic < WATCHLIST_REFRESH_SECONDS:
+        return watchlist, last_refresh_monotonic
+    try:
+        refreshed = resolve_instruments(client, config)
+        before = [item.symbol for item in watchlist]
+        after = [item.symbol for item in refreshed]
+        if after != before:
+            logging.warning("watchlist_changed before=%s after=%s", before, after)
+        else:
+            logging.info("watchlist_refresh symbols=%s", after)
+        return refreshed, now_monotonic
+    except Exception as error:
+        logging.warning("Не удалось обновить watchlist: %s", error)
+        return watchlist, now_monotonic
 
 
 def reset_daily_pnl_if_needed(state: InstrumentState) -> None:
@@ -3330,9 +3354,17 @@ def run_bot() -> int:
         try:
             with Client(config.token, app_name=APP_NAME, target=config.target) as client:
                 watchlist = resolve_instruments(client, config)
+                logging.info("watchlist_resolved symbols=%s", [item.symbol for item in watchlist])
+                watchlist_refresh_at = time.monotonic()
                 startup_error_notified = False
                 while True:
                     try:
+                        watchlist, watchlist_refresh_at = refresh_watchlist_if_needed(
+                            client,
+                            config,
+                            watchlist,
+                            watchlist_refresh_at,
+                        )
                         maybe_refresh_news_snapshot()
                         for instrument in watchlist:
                             process_instrument(client, config, instrument)
