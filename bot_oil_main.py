@@ -181,6 +181,7 @@ class InstrumentState:
     last_exit_pnl_rub: float = 0.0
     last_exit_price: float | None = None
     entry_commission_rub: float = 0.0
+    entry_commission_accounted: bool = False
     realized_gross_pnl_rub: float = 0.0
     realized_commission_rub: float = 0.0
     last_market_price: float | None = None
@@ -397,6 +398,93 @@ def get_today_trade_journal_rows() -> list[dict[str, Any]]:
         if row_time.startswith(today):
             rows.append(row)
     return rows
+
+
+def calculate_closed_trade_totals(rows: list[dict[str, Any]] | None = None) -> dict[str, float]:
+    source_rows = rows if rows is not None else get_today_trade_journal_rows()
+    gross = 0.0
+    commission = 0.0
+    net = 0.0
+    for row in source_rows:
+        if str(row.get("event", "")).upper() != "CLOSE":
+            continue
+        try:
+            gross += float(row.get("gross_pnl_rub") or 0.0)
+        except Exception:
+            pass
+        try:
+            commission += float(row.get("commission_rub") or 0.0)
+        except Exception:
+            pass
+        if row.get("net_pnl_rub") not in (None, ""):
+            try:
+                net += float(row.get("net_pnl_rub") or 0.0)
+                continue
+            except Exception:
+                pass
+        try:
+            net += float(row.get("pnl_rub") or 0.0)
+        except Exception:
+            pass
+    return {
+        "gross_pnl_rub": round(gross, 2),
+        "commission_rub": round(commission, 2),
+        "net_pnl_rub": round(net, 2),
+    }
+
+
+def reconcile_state_accounting(symbol: str, state: InstrumentState) -> None:
+    gross = 0.0
+    commission = 0.0
+    net = 0.0
+    unmatched_open_rows: list[dict[str, Any]] = []
+    for row in get_today_trade_journal_rows():
+        if str(row.get("symbol", "")).upper() != symbol.upper():
+            continue
+        event = str(row.get("event", "")).upper()
+        if event == "OPEN":
+            unmatched_open_rows.append(row)
+            continue
+        if event != "CLOSE":
+            continue
+        if unmatched_open_rows:
+            unmatched_open_rows.pop(0)
+        try:
+            gross += float(row.get("gross_pnl_rub") or 0.0)
+        except Exception:
+            pass
+        try:
+            commission += float(row.get("commission_rub") or 0.0)
+        except Exception:
+            pass
+        if row.get("net_pnl_rub") not in (None, ""):
+            try:
+                net += float(row.get("net_pnl_rub") or 0.0)
+                continue
+            except Exception:
+                pass
+        try:
+            net += float(row.get("pnl_rub") or 0.0)
+        except Exception:
+            pass
+
+    if state.position_side != "FLAT" and unmatched_open_rows:
+        active_open = unmatched_open_rows[-1]
+        try:
+            open_commission = float(active_open.get("commission_rub") or 0.0)
+        except Exception:
+            open_commission = 0.0
+        commission += open_commission
+        net -= open_commission
+        state.entry_commission_rub = open_commission
+        state.entry_commission_accounted = open_commission > 0
+    elif state.position_side == "FLAT":
+        state.entry_commission_rub = 0.0
+        state.entry_commission_accounted = False
+
+    state.realized_gross_pnl_rub = round(gross, 2)
+    state.realized_commission_rub = round(commission, 2)
+    state.realized_pnl = round(net, 2)
 
 
 def has_today_active_open_journal_entry(symbol: str, side: str) -> bool:
@@ -1450,32 +1538,13 @@ def build_portfolio_snapshot_payload(
 ) -> dict[str, Any]:
     snapshot = get_account_snapshot(client, config)
     accounting = get_today_accounting_snapshot(client, config)
-    states = {instrument.symbol: load_state(instrument.symbol) for instrument in watchlist}
-    open_positions = 0
-    realized_pnl = 0.0
-    realized_gross_pnl = 0.0
-    realized_commission = 0.0
-    unrealized_pnl = 0.0
-
-    for instrument in watchlist:
-        state = states[instrument.symbol]
-        realized_pnl += float(state.realized_pnl or 0.0)
-        realized_gross_pnl += float(state.realized_gross_pnl_rub or 0.0)
-        realized_commission += float(state.realized_commission_rub or 0.0)
-        if state.position_side == "FLAT" or state.position_qty <= 0 or state.entry_price is None:
-            continue
-        open_positions += 1
-        try:
-            last_price = get_last_price(client, instrument)
-            unrealized_pnl += calculate_futures_pnl_rub(
-                instrument,
-                state.entry_price,
-                last_price,
-                state.position_qty,
-                state.position_side,
-            )
-        except Exception:
-            continue
+    live_positions = get_live_portfolio_positions(client, config, watchlist)
+    closed_totals = calculate_closed_trade_totals()
+    open_positions = len(live_positions)
+    unrealized_pnl = sum(float(item.get("variation_margin_rub") or 0.0) for item in live_positions.values())
+    realized_pnl = float(closed_totals["net_pnl_rub"])
+    realized_gross_pnl = float(closed_totals["gross_pnl_rub"])
+    realized_commission = float(closed_totals["commission_rub"])
 
     generated_at = datetime.now(timezone.utc)
     return {
@@ -1492,6 +1561,7 @@ def build_portfolio_snapshot_payload(
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
         "bot_total_pnl_rub": round(realized_pnl + unrealized_pnl, 2),
+        "broker_open_positions": list(live_positions.values()),
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
@@ -1735,15 +1805,58 @@ def extract_position_data(
     client: Client,
     config: BotConfig,
     instrument: InstrumentConfig,
-) -> tuple[int, float | None]:
+) -> tuple[int, float | None, float | None, float | None, float | None]:
     portfolio = client.operations.get_portfolio(account_id=config.account_id)
     for position in portfolio.positions:
         if position.figi != instrument.figi:
             continue
         qty = int(round(quotation_to_float(getattr(position, "quantity", None))))
         avg = quotation_to_float(getattr(position, "average_position_price", None))
-        return qty, (avg if avg > 0 else None)
-    return 0, None
+        current_price = quotation_to_float(getattr(position, "current_price", None))
+        var_margin = quotation_to_float(getattr(position, "var_margin", None))
+        expected_yield = quotation_to_float(getattr(position, "expected_yield", None))
+        return (
+            qty,
+            (avg if avg > 0 else None),
+            (current_price if current_price > 0 else None),
+            var_margin,
+            expected_yield,
+        )
+    return 0, None, None, None, None
+
+
+def get_live_portfolio_positions(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> dict[str, dict[str, float | int | str | None]]:
+    figi_to_instrument = {item.figi: item for item in watchlist}
+    portfolio = client.operations.get_portfolio(account_id=config.account_id)
+    positions: dict[str, dict[str, float | int | str | None]] = {}
+    for position in portfolio.positions:
+        instrument = figi_to_instrument.get(position.figi)
+        if instrument is None:
+            continue
+        qty_signed = int(round(quotation_to_float(getattr(position, "quantity", None))))
+        qty = abs(qty_signed)
+        if qty <= 0:
+            continue
+        side = "LONG" if qty_signed > 0 else "SHORT"
+        avg_price = quotation_to_float(getattr(position, "average_position_price", None))
+        current_price = quotation_to_float(getattr(position, "current_price", None))
+        var_margin = quotation_to_float(getattr(position, "var_margin", None))
+        expected_yield = quotation_to_float(getattr(position, "expected_yield", None))
+        positions[instrument.symbol] = {
+            "symbol": instrument.symbol,
+            "side": side,
+            "qty": qty,
+            "entry_price": avg_price if avg_price > 0 else None,
+            "current_price": current_price if current_price > 0 else None,
+            "notional_rub": calculate_futures_notional_rub(instrument, current_price, qty) if current_price > 0 else 0.0,
+            "variation_margin_rub": var_margin if var_margin is not None else expected_yield,
+            "expected_yield_rub": expected_yield,
+        }
+    return positions
 
 
 def sync_state_with_portfolio(
@@ -1752,11 +1865,12 @@ def sync_state_with_portfolio(
     instrument: InstrumentConfig,
     state: InstrumentState,
 ) -> int:
-    qty, avg = extract_position_data(client, config, instrument)
+    qty, avg, broker_current_price, broker_var_margin, broker_expected_yield = extract_position_data(client, config, instrument)
     state.position_qty = abs(qty)
     if qty == 0:
         state.entry_price = None
         state.entry_commission_rub = 0.0
+        state.entry_commission_accounted = False
         state.max_price = None
         state.min_price = None
         state.position_side = "FLAT"
@@ -1767,7 +1881,7 @@ def sync_state_with_portfolio(
         state.position_variation_margin_rub = 0.0
         state.position_pnl_pct = 0.0
         return 0
-    last_price = get_last_price(client, instrument)
+    last_price = broker_current_price if broker_current_price is not None and broker_current_price > 0 else get_last_price(client, instrument)
     if state.entry_price is None:
         state.entry_price = avg if avg is not None else last_price
         state.max_price = last_price
@@ -1793,8 +1907,10 @@ def sync_state_with_portfolio(
             state.entry_time = operation_time.isoformat()
         if entry_fee_rub is not None and entry_fee_rub > 0:
             state.entry_commission_rub = entry_fee_rub
-            state.realized_commission_rub += entry_fee_rub
-            state.realized_pnl -= entry_fee_rub
+            if not state.entry_commission_accounted:
+                state.realized_commission_rub += entry_fee_rub
+                state.realized_pnl -= entry_fee_rub
+                state.entry_commission_accounted = True
         append_trade_journal(
             instrument,
             "OPEN",
@@ -1810,6 +1926,12 @@ def sync_state_with_portfolio(
             dry_run=config.dry_run,
         )
         save_state(instrument.symbol, state)
+    refresh_position_snapshot(state, instrument, last_price)
+    if broker_var_margin is not None:
+        state.position_variation_margin_rub = broker_var_margin
+    elif broker_expected_yield is not None:
+        state.position_variation_margin_rub = broker_expected_yield
+    save_state(instrument.symbol, state)
     return qty
 
 
@@ -2471,6 +2593,7 @@ def sync_pending_order(
         if state.pending_order_action == "OPEN":
             state.entry_price = fill_price
             state.entry_commission_rub = fill_commission_rub
+            state.entry_commission_accounted = True
             state.max_price = fill_price
             state.min_price = fill_price
             state.position_qty = filled_qty
@@ -2566,6 +2689,7 @@ def sync_pending_order(
             )
             state.entry_price = None
             state.entry_commission_rub = 0.0
+            state.entry_commission_accounted = False
             state.max_price = None
             state.min_price = None
             state.position_qty = 0
@@ -2697,6 +2821,7 @@ def open_position(
     if config.dry_run:
         state.entry_price = price
         state.entry_commission_rub = 0.0
+        state.entry_commission_accounted = False
         state.max_price = price
         state.min_price = price
         state.position_qty = quantity
@@ -2834,6 +2959,7 @@ def close_position(
         state.last_exit_price = price
         state.entry_price = None
         state.entry_commission_rub = 0.0
+        state.entry_commission_accounted = False
         state.max_price = None
         state.min_price = None
         state.position_qty = 0
@@ -3100,6 +3226,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     if not config.dry_run:
         sync_state_with_portfolio(client, config, instrument, state)
         if has_pending_order(state):
+            reconcile_state_accounting(instrument.symbol, state)
             save_state(instrument.symbol, state)
             return
 
@@ -3139,6 +3266,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     else:
         check_exit(client, config, instrument, state, lower_df, signal)
 
+    reconcile_state_accounting(instrument.symbol, state)
     save_state(instrument.symbol, state)
 
 

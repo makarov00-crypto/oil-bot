@@ -659,33 +659,54 @@ def get_dashboard_service_status() -> dict:
     return get_service_status(service_name)
 
 
-def summarize_states(states: dict[str, dict]) -> dict:
-    realized = 0.0
+def summarize_states(states: dict[str, dict], portfolio: dict | None = None) -> dict:
+    realized = float((portfolio or {}).get("bot_realized_pnl_rub") or 0.0)
     open_positions = []
     signals = {"LONG": 0, "SHORT": 0, "HOLD": 0}
 
     for symbol, state in states.items():
-        realized += float(state.get("realized_pnl") or 0.0)
         signal = (state.get("last_signal") or "HOLD").upper()
         if signal in signals:
             signals[signal] += 1
-        side = (state.get("position_side") or "FLAT").upper()
-        qty = int(state.get("position_qty") or 0)
-        if side != "FLAT" and qty > 0:
+
+    broker_positions = (portfolio or {}).get("broker_open_positions") or []
+    if broker_positions:
+        for pos in broker_positions:
+            symbol = str(pos.get("symbol", ""))
+            state = states.get(symbol, {})
             open_positions.append(
                 {
                     "symbol": symbol,
-                    "side": side,
-                    "qty": qty,
-                    "entry_price": state.get("entry_price"),
-                    "current_price": state.get("last_market_price"),
-                    "notional_rub": state.get("position_notional_rub") or 0.0,
-                    "variation_margin_rub": state.get("position_variation_margin_rub") or 0.0,
+                    "side": str(pos.get("side") or state.get("position_side") or "FLAT").upper(),
+                    "qty": int(pos.get("qty") or state.get("position_qty") or 0),
+                    "entry_price": pos.get("entry_price", state.get("entry_price")),
+                    "current_price": pos.get("current_price", state.get("last_market_price")),
+                    "notional_rub": pos.get("notional_rub") or state.get("position_notional_rub") or 0.0,
+                    "variation_margin_rub": pos.get("variation_margin_rub") or 0.0,
                     "pnl_pct": state.get("position_pnl_pct") or 0.0,
                     "strategy": state.get("entry_strategy") or "-",
-                    "last_signal": signal,
+                    "last_signal": (state.get("last_signal") or "HOLD").upper(),
                 }
             )
+    else:
+        for symbol, state in states.items():
+            side = (state.get("position_side") or "FLAT").upper()
+            qty = int(state.get("position_qty") or 0)
+            if side != "FLAT" and qty > 0:
+                open_positions.append(
+                    {
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": qty,
+                        "entry_price": state.get("entry_price"),
+                        "current_price": state.get("last_market_price"),
+                        "notional_rub": state.get("position_notional_rub") or 0.0,
+                        "variation_margin_rub": state.get("position_variation_margin_rub") or 0.0,
+                        "pnl_pct": state.get("position_pnl_pct") or 0.0,
+                        "strategy": state.get("entry_strategy") or "-",
+                        "last_signal": (state.get("last_signal") or "HOLD").upper(),
+                    }
+                )
 
     return {
         "realized_pnl_rub": round(realized, 2),
@@ -2168,7 +2189,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "runtime": load_runtime_status(),
         "news": load_news_snapshot(),
         "trade_review": load_trade_review_for_day(target_day, 200, states),
-        "summary": summarize_states(states),
+        "summary": summarize_states(states, portfolio),
         "meta": load_meta(),
         "states": states,
         "trades": trades,
