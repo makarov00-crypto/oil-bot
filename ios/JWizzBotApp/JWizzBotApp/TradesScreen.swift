@@ -77,6 +77,7 @@ struct TradesScreen: View {
                 )
             } else {
                 ForEach(filteredTrades(payload.trades)) { trade in
+                    let isOpenEvent = (trade.event ?? "").uppercased() == "OPEN"
                     GlassCard {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .top) {
@@ -98,9 +99,9 @@ struct TradesScreen: View {
                                 compactInfo("Сторона", displaySignal(trade.side))
                                 compactInfo("Лоты", formatInt(trade.qtyLots))
                                 compactInfo("Цена", trade.price ?? "-")
-                                compactInfo("Gross", formatTradePnl(trade.grossPnlRub))
+                                compactInfo("Gross", isOpenEvent ? "-" : formatTradePnl(trade.grossPnlRub))
                                 compactInfo("Комиссия", formatTradePnl(trade.commissionRub), tone: statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
-                                compactInfo("Net", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
+                                compactInfo("Net", isOpenEvent ? "-" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                                 compactInfo("Стратегия", trade.strategy ?? "-")
                                 compactInfo("Причина", trade.reason ?? "-")
                             }
@@ -158,6 +159,8 @@ struct TradesScreen: View {
                                         compactInfo("Статус", "открыта")
                                         compactInfo("Время входа", trade.time ?? "-")
                                         compactInfo("Цена входа", trade.price.map { String(format: "%.4f", $0) } ?? "-")
+                                        compactInfo("Комиссия входа", formatTradePnl(trade.commissionRub))
+                                        compactInfo("Причина", trade.reason ?? "-")
                                     }
                                 }
                             }

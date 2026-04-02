@@ -79,12 +79,13 @@ struct OverviewScreen: View {
 
                 LazyVGrid(columns: twoColumns, spacing: 12) {
                     MetricGlassTile(title: "Итог по боту", value: formatRub(payload.portfolio.botTotalPnlRub), tone: statusTone(for: payload.portfolio.botTotalPnlRub))
-                    MetricGlassTile(title: "Net по сделкам", value: formatRub(payload.portfolio.botRealizedPnlRub), tone: statusTone(for: payload.portfolio.botRealizedPnlRub))
-                    MetricGlassTile(title: "Gross по сделкам", value: formatRub(payload.portfolio.botRealizedGrossPnlRub), tone: statusTone(for: payload.portfolio.botRealizedGrossPnlRub))
-                    MetricGlassTile(title: "Комиссии", value: formatRub(payload.portfolio.botRealizedCommissionRub), tone: statusTone(for: -(payload.portfolio.botRealizedCommissionRub ?? 0)))
-                    MetricGlassTile(title: "Факт. вар. маржа", value: formatRub(payload.portfolio.botActualVarmarginRub), tone: statusTone(for: payload.portfolio.botActualVarmarginRub))
+                    MetricGlassTile(title: "Net по журналу", value: formatRub(payload.portfolio.botRealizedPnlRub), tone: statusTone(for: payload.portfolio.botRealizedPnlRub))
+                    MetricGlassTile(title: "Gross по журналу", value: formatRub(payload.portfolio.botRealizedGrossPnlRub), tone: statusTone(for: payload.portfolio.botRealizedGrossPnlRub))
+                    MetricGlassTile(title: "Комиссии по журналу", value: formatRub(payload.portfolio.botRealizedCommissionRub), tone: statusTone(for: -(payload.portfolio.botRealizedCommissionRub ?? 0)))
+                    MetricGlassTile(title: "Комиссии по операциям", value: formatRub(payload.portfolio.botActualFeeRub), tone: statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)))
+                    MetricGlassTile(title: "Клиринговая ВМ", value: formatRub(payload.portfolio.botActualVarmarginRub), tone: statusTone(for: payload.portfolio.botActualVarmarginRub))
                     MetricGlassTile(title: "Факт. эффект счёта", value: formatRub(payload.portfolio.botActualCashEffectRub), tone: statusTone(for: payload.portfolio.botActualCashEffectRub))
-                    MetricGlassTile(title: "Оценка позиций", value: formatRub(payload.portfolio.botEstimatedVariationMarginRub), tone: statusTone(for: payload.portfolio.botEstimatedVariationMarginRub))
+                    MetricGlassTile(title: "Текущая вар. маржа", value: formatRub(payload.portfolio.botEstimatedVariationMarginRub), tone: statusTone(for: payload.portfolio.botEstimatedVariationMarginRub))
                     MetricGlassTile(title: "Открытых позиций", value: formatInt(payload.portfolio.openPositionsCount))
                 }
             }

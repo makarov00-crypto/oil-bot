@@ -189,6 +189,15 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
     return normalized
 
 
+def stringify_money(value: Any, default: str = "-") -> str:
+    if value in (None, ""):
+        return default
+    try:
+        return f"{float(value):.2f}"
+    except Exception:
+        return str(value)
+
+
 def parse_trade_time(raw_value: str | None) -> datetime | None:
     if not raw_value:
         return None
@@ -356,9 +365,9 @@ def load_trade_review(limit: int = 80) -> dict:
                 "exit_price": row.get("price") or "-",
                 "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
                 "pnl_rub": f"{pnl_numeric:.2f}",
-                "gross_pnl_rub": row.get("gross_pnl_rub") or "-",
-                "commission_rub": row.get("commission_rub") or "-",
-                "net_pnl_rub": row.get("net_pnl_rub") or row.get("pnl_rub") or "-",
+                "gross_pnl_rub": stringify_money(row.get("gross_pnl_rub")),
+                "commission_rub": stringify_money(row.get("commission_rub")),
+                "net_pnl_rub": stringify_money(row.get("net_pnl_rub"), stringify_money(row.get("pnl_rub"))),
                 "entry_reason": open_row.get("reason") if open_row else "-",
                 "exit_reason": row.get("reason") or "-",
                 "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
@@ -451,9 +460,9 @@ def load_trade_review_for_day(target_day: date, limit: int = 200) -> dict:
                 "exit_price": row.get("price") or "-",
                 "qty_lots": row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
                 "pnl_rub": f"{pnl_numeric:.2f}",
-                "gross_pnl_rub": row.get("gross_pnl_rub") or "-",
-                "commission_rub": row.get("commission_rub") or "-",
-                "net_pnl_rub": row.get("net_pnl_rub") or row.get("pnl_rub") or "-",
+                "gross_pnl_rub": stringify_money(row.get("gross_pnl_rub")),
+                "commission_rub": stringify_money(row.get("commission_rub")),
+                "net_pnl_rub": stringify_money(row.get("net_pnl_rub"), stringify_money(row.get("pnl_rub"))),
                 "entry_reason": open_row.get("reason") if open_row else "-",
                 "exit_reason": row.get("reason") or "-",
                 "verdict": classify_verdict(pnl_numeric, row.get("reason") or ""),
@@ -1218,19 +1227,23 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioBlocked">-</div>
         </div>
         <div>
-          <div class="muted">Net по сделкам</div>
+          <div class="muted">Net по журналу</div>
           <div class="metric" id="portfolioRealized">-</div>
         </div>
         <div>
-          <div class="muted">Gross по сделкам</div>
+          <div class="muted">Gross по журналу</div>
           <div class="metric" id="portfolioGross">-</div>
         </div>
         <div>
-          <div class="muted">Комиссии</div>
+          <div class="muted">Комиссии по журналу</div>
           <div class="metric" id="portfolioCommission">-</div>
         </div>
         <div>
-          <div class="muted">Факт. вар. маржа</div>
+          <div class="muted">Комиссии по операциям</div>
+          <div class="metric" id="portfolioActualFee">-</div>
+        </div>
+        <div>
+          <div class="muted">Клиринговая ВМ по операциям</div>
           <div class="metric" id="portfolioActualVm">-</div>
         </div>
         <div>
@@ -1238,7 +1251,7 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioCashEffect">-</div>
         </div>
         <div>
-          <div class="muted">Оценка открытых позиций</div>
+          <div class="muted">Текущая вар. маржа позиций</div>
           <div class="metric" id="portfolioVariation">-</div>
         </div>
         <div>
@@ -1774,6 +1787,7 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioRealized').textContent = formatRub(portfolio.bot_realized_pnl_rub);
       document.getElementById('portfolioGross').textContent = formatRub(portfolio.bot_realized_gross_pnl_rub);
       document.getElementById('portfolioCommission').textContent = formatRub(portfolio.bot_realized_commission_rub);
+      document.getElementById('portfolioActualFee').textContent = formatRub(portfolio.bot_actual_fee_rub);
       document.getElementById('portfolioActualVm').textContent = formatRub(portfolio.bot_actual_varmargin_rub);
       document.getElementById('portfolioCashEffect').textContent = formatRub(portfolio.bot_actual_cash_effect_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
@@ -1955,9 +1969,13 @@ def build_dashboard_html() -> str:
       tradeCards.innerHTML = '';
       const filteredTrades = filterTradeRows((data.trades || []).slice().reverse());
       for (const row of filteredTrades) {
+        const isOpenEvent = String(row.event || '').toUpperCase() === 'OPEN';
         const pnl = row.pnl_rub ?? '-';
         const pnlNum = Number(pnl);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
+        const grossText = isOpenEvent ? '-' : (row.gross_pnl_rub ?? '-');
+        const commissionText = row.commission_rub ?? '-';
+        const netText = isOpenEvent ? '-' : (row.net_pnl_rub ?? pnl);
         tradeBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(row.time || '-')}</td>
           <td class="mono">${escapeHtml(row.symbol || '-')}</td>
@@ -1966,9 +1984,9 @@ def build_dashboard_html() -> str:
           <td>${signalBadge(row.side || '-')}</td>
           <td class="mono">${escapeHtml(row.qty_lots || '-')}</td>
           <td class="mono right">${escapeHtml(row.price ?? '-')}</td>
-          <td class="mono right">${escapeHtml(row.gross_pnl_rub ?? '-')}</td>
-          <td class="mono right">${escapeHtml(row.commission_rub ?? '-')}</td>
-          <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? pnl)}</td>
+          <td class="mono right">${escapeHtml(grossText)}</td>
+          <td class="mono right">${escapeHtml(commissionText)}</td>
+          <td class="mono right ${pnlClass}">${escapeHtml(netText)}</td>
           <td>${escapeHtml(row.strategy || '-')}</td>
           <td class="reason">${escapeHtml(row.reason || '-')}</td>
         </tr>`);
@@ -1983,9 +2001,9 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">Сторона</span><div class="mobile-card-value">${signalBadge(row.side || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(row.qty_lots || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Цена</span><div class="mobile-card-value mono">${escapeHtml(row.price ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? pnl)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(grossText)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(commissionText)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(netText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
           </div>
           <div class="mobile-card-footer">
@@ -2022,9 +2040,9 @@ def build_dashboard_html() -> str:
           <td>${escapeHtml(row.strategy || '-')}</td>
           <td class="mono">${escapeHtml(row.entry_time || '-')}</td>
           <td class="mono">${escapeHtml(row.exit_time || '-')}</td>
-          <td class="mono right">${escapeHtml(row.gross_pnl_rub || '-')}</td>
-          <td class="mono right">${escapeHtml(row.commission_rub || '-')}</td>
-          <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub || row.pnl_rub || '-')}</td>
+          <td class="mono right">${escapeHtml(row.gross_pnl_rub ?? '-')}</td>
+          <td class="mono right">${escapeHtml(row.commission_rub ?? '-')}</td>
+          <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</td>
           <td class="reason">${escapeHtml(row.exit_reason || '-')}</td>
           <td>${escapeHtml(row.verdict || '-')}</td>
         </tr>`);
@@ -2035,9 +2053,9 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub || '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub || '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub || row.pnl_rub || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub ?? '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub ?? '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Вход</span><div class="mobile-card-value mono">${escapeHtml(row.entry_time || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Выход</span><div class="mobile-card-value mono">${escapeHtml(row.exit_time || '-')}</div></div>
           </div>
@@ -2055,15 +2073,16 @@ def build_dashboard_html() -> str:
         reviewBody.insertAdjacentHTML('beforeend', `<tr><td colspan="10" class="muted">${escapeHtml(hint)}</td></tr>`);
         reviewCards.insertAdjacentHTML('beforeend', `<div class="muted">${escapeHtml(hint)}</div>`);
         for (const row of currentOpen.slice().reverse()) {
+          const openCommissionText = row.commission_rub ?? '-';
           reviewBody.insertAdjacentHTML('beforeend', `<tr>
             <td class="mono">${escapeHtml(row.symbol || '-')}</td>
             <td>${signalBadge(row.side || '-')}</td>
             <td>${escapeHtml(row.strategy || '-')}</td>
             <td class="mono">${escapeHtml(row.time || '-')}</td>
             <td class="mono">в позиции</td>
-            <td class="mono right">0.00</td>
-            <td class="mono right">0.00</td>
-            <td class="mono right">0.00</td>
+            <td class="mono right">-</td>
+            <td class="mono right">${escapeHtml(openCommissionText)}</td>
+            <td class="mono right">-</td>
             <td class="reason">${escapeHtml(row.reason || 'позиция открыта')}</td>
             <td>открыта</td>
           </tr>`);
@@ -2077,6 +2096,7 @@ def build_dashboard_html() -> str:
               <div class="mobile-card-item"><span class="muted">Статус</span><div class="mobile-card-value">открыта</div></div>
               <div class="mobile-card-item"><span class="muted">Время входа</span><div class="mobile-card-value mono">${escapeHtml(row.time || '-')}</div></div>
               <div class="mobile-card-item"><span class="muted">Цена входа</span><div class="mobile-card-value mono">${escapeHtml(row.price || '-')}</div></div>
+              <div class="mobile-card-item"><span class="muted">Комиссия входа</span><div class="mobile-card-value mono">${escapeHtml(openCommissionText)}</div></div>
             </div>
             <div class="mobile-card-footer">
               <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason || 'позиция открыта')}</div>

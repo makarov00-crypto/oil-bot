@@ -305,6 +305,7 @@ def append_trade_journal(
     qty: int,
     price: float,
     *,
+    event_time: datetime | str | None = None,
     pnl_rub: float | None = None,
     gross_pnl_rub: float | None = None,
     commission_rub: float | None = None,
@@ -314,8 +315,14 @@ def append_trade_journal(
     dry_run: bool = True,
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    if isinstance(event_time, datetime):
+        journal_time = event_time.astimezone(MOSCOW_TZ).isoformat()
+    elif isinstance(event_time, str) and event_time.strip():
+        journal_time = event_time.strip()
+    else:
+        journal_time = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
     row = {
-        "time": datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat(),
+        "time": journal_time,
         "symbol": instrument.symbol,
         "display_name": instrument.display_name,
         "event": event,
@@ -372,6 +379,72 @@ def has_today_open_journal_entry(symbol: str, side: str) -> bool:
             continue
         return True
     return False
+
+
+def find_recent_live_open_details(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    side: str,
+    qty: int,
+    entry_price: float,
+) -> tuple[datetime | None, float | None]:
+    from_utc, to_utc = get_moscow_day_bounds_utc()
+    cursor = ""
+    fee_by_parent: dict[str, float] = {}
+    candidates: list[tuple[datetime, str]] = []
+    expected_type = (
+        OperationType.OPERATION_TYPE_BUY if side.upper() == "LONG" else OperationType.OPERATION_TYPE_SELL
+    )
+    tolerance = max(instrument.min_price_increment * 2, 1e-6)
+
+    while True:
+        response = client.operations.get_operations_by_cursor(
+            GetOperationsByCursorRequest(
+                account_id=config.account_id,
+                from_=from_utc,
+                to=to_utc,
+                cursor=cursor,
+                limit=200,
+                state=OperationState.OPERATION_STATE_EXECUTED,
+                without_commissions=False,
+                without_overnights=False,
+                without_trades=False,
+            )
+        )
+        for item in getattr(response, "items", []) or []:
+            if str(getattr(item, "figi", "") or "") != instrument.figi:
+                continue
+            op_type = getattr(item, "type", None)
+            op_id = str(getattr(item, "id", "") or "")
+            parent_id = str(getattr(item, "parent_operation_id", "") or "")
+            payment = quotation_to_float(getattr(item, "payment", None))
+            if op_type in FEE_OPERATION_TYPES and parent_id:
+                fee_by_parent[parent_id] = fee_by_parent.get(parent_id, 0.0) + abs(payment)
+                continue
+            if op_type != expected_type:
+                continue
+            op_qty = int(getattr(item, "quantity", 0) or 0)
+            if qty > 0 and op_qty not in {0, qty}:
+                continue
+            op_price = quotation_to_float(getattr(item, "price", None))
+            if entry_price > 0 and op_price > 0 and abs(op_price - entry_price) > tolerance:
+                continue
+            op_time = getattr(item, "date", None)
+            if isinstance(op_time, datetime):
+                candidates.append((op_time, op_id))
+
+        next_cursor = str(getattr(response, "next_cursor", "") or "")
+        if not getattr(response, "has_next", False) or not next_cursor:
+            break
+        cursor = next_cursor
+
+    if not candidates:
+        return None, None
+
+    candidates.sort(key=lambda item: item[0])
+    op_time, op_id = candidates[-1]
+    return op_time, fee_by_parent.get(op_id)
 
 
 def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -1610,19 +1683,35 @@ def sync_state_with_portfolio(
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
     if state.position_side != "FLAT" and not has_today_open_journal_entry(instrument.symbol, state.position_side):
+        operation_time, entry_fee_rub = find_recent_live_open_details(
+            client,
+            config,
+            instrument,
+            state.position_side,
+            state.position_qty,
+            state.entry_price or last_price,
+        )
+        if operation_time is not None:
+            state.entry_time = operation_time.isoformat()
+        if entry_fee_rub is not None and entry_fee_rub > 0:
+            state.entry_commission_rub = entry_fee_rub
+            state.realized_commission_rub += entry_fee_rub
+            state.realized_pnl -= entry_fee_rub
         append_trade_journal(
             instrument,
             "OPEN",
             state.position_side,
             state.position_qty,
             state.entry_price or last_price,
-            gross_pnl_rub=0.0,
-            commission_rub=0.0,
-            net_pnl_rub=0.0,
-            reason="portfolio sync recovery",
+            event_time=operation_time,
+            gross_pnl_rub=None,
+            commission_rub=entry_fee_rub,
+            net_pnl_rub=-entry_fee_rub if entry_fee_rub is not None else None,
+            reason="восстановлено из портфеля после потери статуса заявки",
             strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
             dry_run=config.dry_run,
         )
+        save_state(instrument.symbol, state)
     return qty
 
 

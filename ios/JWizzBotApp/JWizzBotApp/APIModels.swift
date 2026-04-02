@@ -301,8 +301,20 @@ struct OpenTradeStub: Decodable, Identifiable {
     let strategy: String?
     let time: String?
     let price: Double?
+    let commissionRub: String?
+    let reason: String?
 
     var id: String { "\(symbol)-\(time ?? UUID().uuidString)" }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case side
+        case strategy
+        case time
+        case price
+        case commissionRub = "commission_rub"
+        case reason
+    }
 }
 
 struct ClosedReview: Decodable, Identifiable {
