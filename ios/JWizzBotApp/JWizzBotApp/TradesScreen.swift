@@ -140,7 +140,7 @@ struct TradesScreen: View {
                     )
 
                     if let currentOpen = payload.tradeReview.currentOpen, !currentOpen.isEmpty {
-                        ForEach(currentOpen.reversed()) { trade in
+                        ForEach(currentOpen) { trade in
                             GlassCard {
                                 VStack(alignment: .leading, spacing: 12) {
                                     HStack(alignment: .top) {
@@ -168,7 +168,7 @@ struct TradesScreen: View {
                     }
                 }
             } else {
-                ForEach(payload.tradeReview.closedReviews.reversed()) { trade in
+                ForEach(payload.tradeReview.closedReviews) { trade in
                     GlassCard {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .top) {
