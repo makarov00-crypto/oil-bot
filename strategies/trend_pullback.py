@@ -22,7 +22,23 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
             allow_short=True,
         )
 
-    if symbol in {"BRK6", "GNM6", "NGJ6"}:
+    if symbol == "NGJ6":
+        return StrategyProfile(
+            ema_slope_threshold=config.ema_slope_threshold,
+            near_ema20_pct=0.0045,
+            volume_factor=1.05,
+            atr_min_pct=0.0018,
+            impulse_body_factor=0.95,
+            long_rsi_min=40.0,
+            long_rsi_max=52.0,
+            short_rsi_min=42.0,
+            short_rsi_max=58.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
+    if symbol in {"BRK6", "GNM6"}:
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
             near_ema20_pct=0.0060,
@@ -113,6 +129,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     impulse_ok = body_avg > 0 and body >= body_avg * profile.impulse_body_factor
     macd_turn_up = macd > macd_signal and macd > prev_macd and prev_macd >= prev_prev_macd
     macd_turn_down = profile.allow_short and macd < macd_signal and macd <= prev_macd
+    if instrument.symbol == "NGJ6":
+        macd_turn_down = macd_turn_down and prev_macd >= prev_prev_macd
     trend_long = close > ema50 and ema50_slope > profile.ema_slope_threshold
     trend_short = close < ema50 and ema50_slope < -profile.ema_slope_threshold
     if uses_pullback_trend_regime(instrument.symbol):
@@ -218,6 +236,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
             volatility_ok,
         ]
     )
+    if instrument.symbol == "NGJ6":
+        short_ok = short_ok and near_ema20 and volume_ok and impulse_ok
 
     if long_ok:
         return "LONG", "Сигнал LONG: " + "; ".join(long_reasons) + "."

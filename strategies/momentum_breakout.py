@@ -35,6 +35,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     higher_tf_long_ok = higher_tf_bias != "SHORT"
     higher_tf_short_ok = higher_tf_bias != "LONG"
 
+    if instrument.symbol == "GNM6":
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.90
+        rsi_long_ok = 48.0 <= rsi <= 68.0
+        rsi_short_ok = 24.0 <= rsi <= 50.0
+        higher_tf_long_ok = higher_tf_bias == "LONG"
+        higher_tf_short_ok = higher_tf_bias == "SHORT"
+
     long_reasons = [
         f"старший ТФ={higher_tf_bias}",
         f"пробой вверх диапазона {range_high:.4f}: {'да' if breakout_up else 'нет'}",
@@ -117,6 +125,30 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     long_ok = higher_tf_long_ok and (breakout_up or soft_breakout_up) and close_above_trend and long_score >= 6
     short_ok = higher_tf_short_ok and (breakout_down or soft_breakout_down) and close_below_trend and short_score >= 6
+
+    if instrument.symbol == "GNM6":
+        long_ok = (
+            higher_tf_long_ok
+            and breakout_up
+            and close_above_trend
+            and macd_up
+            and volume_ok
+            and impulse_ok
+            and rsi_long_ok
+            and volatility_ok
+            and long_score >= 7
+        )
+        short_ok = (
+            higher_tf_short_ok
+            and breakout_down
+            and close_below_trend
+            and macd_down
+            and volume_ok
+            and impulse_ok
+            and rsi_short_ok
+            and volatility_ok
+            and short_score >= 7
+        )
 
     if long_ok:
         return "LONG", "Сигнал LONG (momentum_breakout): " + "; ".join(long_reasons) + "."

@@ -2634,7 +2634,7 @@ def position_reentry_allowed(
     signal: str,
     current_price: float,
 ) -> tuple[bool, str]:
-    if instrument.symbol not in {"GNM6", "USDRUBF", "SRM6", "BRK6"}:
+    if instrument.symbol not in {"GNM6", "USDRUBF", "SRM6", "BRK6", "NGJ6", "IMOEXF"}:
         return True, ""
     if not state.last_exit_time:
         return True, ""
@@ -2682,6 +2682,20 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 60)
         if "Трейлинг-стоп" in state.last_exit_reason or "Стоп-лосс" in state.last_exit_reason:
             cooldown_minutes = max(cooldown_minutes, 60)
+    elif instrument.symbol == "NGJ6":
+        if state.last_exit_pnl_rub < 0:
+            cooldown_minutes = 60
+        if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            cooldown_minutes = max(cooldown_minutes, 90)
+        if "Трейлинг-стоп" in state.last_exit_reason:
+            cooldown_minutes = max(cooldown_minutes, 90)
+    elif instrument.symbol == "IMOEXF":
+        if state.last_exit_pnl_rub < 0:
+            cooldown_minutes = 35
+        if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            cooldown_minutes = max(cooldown_minutes, 45)
+        if "MACD" in state.last_exit_reason and state.last_exit_side == signal:
+            cooldown_minutes = max(cooldown_minutes, 45)
 
     if cooldown_minutes <= 0:
         if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
@@ -2690,6 +2704,12 @@ def position_reentry_allowed(
         if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, "для BRK6 повторный вход после убыточного выхода разрешён только после обновления экстремума."
+        if instrument.symbol == "NGJ6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
+                return False, "для NGJ6 повторный вход после убыточного выхода разрешён только после нового экстремума."
+        if instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
+                return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."
         return True, ""
 
     next_allowed = last_exit_at + timedelta(minutes=cooldown_minutes)
@@ -2701,6 +2721,12 @@ def position_reentry_allowed(
         if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, "для BRK6 повторный вход после убыточного выхода разрешён только после обновления экстремума."
+        if instrument.symbol == "NGJ6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
+                return False, "для NGJ6 повторный вход после убыточного выхода разрешён только после нового экстремума."
+        if instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
+                return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."
         return True, ""
 
     remaining = int((next_allowed - now).total_seconds() // 60) + 1
