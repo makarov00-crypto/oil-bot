@@ -318,7 +318,27 @@ def annotate_trade_rows(rows: list[dict], states: dict[str, dict]) -> list[dict]
     return annotated
 
 
-def load_trade_review(limit: int = 80) -> dict:
+def filter_current_open_rows(rows: list[dict], states: dict[str, dict] | None = None) -> list[dict]:
+    if not states:
+        return rows
+    filtered: list[dict] = []
+    for row in rows:
+        symbol = str(row.get("symbol", ""))
+        if not symbol:
+            continue
+        state = states.get(symbol, {})
+        side = str(row.get("side", "")).upper()
+        live_side = str(state.get("position_side", "FLAT")).upper()
+        live_qty = int(state.get("position_qty") or 0)
+        if live_side == "FLAT" or live_qty <= 0:
+            continue
+        if side and live_side and side != live_side:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) -> dict:
     rows = load_trade_rows(limit)
     open_by_symbol: dict[str, list[dict]] = {}
     closed_reviews: list[dict] = []
@@ -379,6 +399,7 @@ def load_trade_review(limit: int = 80) -> dict:
         if not items:
             continue
         current_open.append(items[-1])
+    current_open = filter_current_open_rows(current_open, states)
 
     wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
     losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
@@ -413,7 +434,7 @@ def load_trade_review(limit: int = 80) -> dict:
     }
 
 
-def load_trade_review_for_day(target_day: date, limit: int = 200) -> dict:
+def load_trade_review_for_day(target_day: date, limit: int = 200, states: dict[str, dict] | None = None) -> dict:
     rows = load_trade_rows_for_day(target_day, limit)
     open_by_symbol: dict[str, list[dict]] = {}
     closed_reviews: list[dict] = []
@@ -491,6 +512,7 @@ def load_trade_review_for_day(target_day: date, limit: int = 200) -> dict:
         if not items:
             continue
         current_open.append(items[-1])
+    current_open = filter_current_open_rows(current_open, states)
 
     return {
         "closed_count": len(closed_reviews),
@@ -2165,7 +2187,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "portfolio": portfolio,
         "runtime": load_runtime_status(),
         "news": load_news_snapshot(),
-        "trade_review": load_trade_review_for_day(target_day, 200),
+        "trade_review": load_trade_review_for_day(target_day, 200, states),
         "summary": summarize_states(states),
         "meta": load_meta(),
         "states": states,
