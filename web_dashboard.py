@@ -2357,9 +2357,11 @@ def api_dashboard(date: str | None = None) -> dict:
             item["last_strategy_name"] = item.get("last_strategy_name") or item.get("entry_strategy") or "-"
             if session_closed:
                 closed_message = "Вне торговой сессии срочного рынка Мосбиржи."
-                item["last_signal_summary"] = [closed_message]
                 item["last_news_impact"] = "торговая сессия закрыта"
                 item["last_error"] = closed_message
+                existing_summary = [str(part).strip() for part in (item.get("last_signal_summary") or []) if str(part).strip()]
+                if not existing_summary:
+                    item["last_signal_summary"] = ["Нет актуального расчёта сигнала."]
             else:
                 stale_at = item.get("_state_updated_at_moscow") or "-"
                 item["last_signal_summary"] = [f"Данные по инструменту устарели: последнее обновление {stale_at}."]
