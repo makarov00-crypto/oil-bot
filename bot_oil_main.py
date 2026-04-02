@@ -367,18 +367,22 @@ def get_today_trade_journal_rows() -> list[dict[str, Any]]:
     return rows
 
 
-def has_today_open_journal_entry(symbol: str, side: str) -> bool:
+def has_today_active_open_journal_entry(symbol: str, side: str) -> bool:
     target_symbol = symbol.upper()
     target_side = side.upper()
+    open_count = 0
+    close_count = 0
     for row in get_today_trade_journal_rows():
         if str(row.get("symbol", "")).upper() != target_symbol:
             continue
         if str(row.get("side", "")).upper() != target_side:
             continue
-        if str(row.get("event", "")).upper() != "OPEN":
-            continue
-        return True
-    return False
+        event = str(row.get("event", "")).upper()
+        if event == "OPEN":
+            open_count += 1
+        elif event == "CLOSE":
+            close_count += 1
+    return open_count > close_count
 
 
 def find_recent_live_open_details(
@@ -1744,7 +1748,7 @@ def sync_state_with_portfolio(
             state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
-    if state.position_side != "FLAT" and not has_today_open_journal_entry(instrument.symbol, state.position_side):
+    if state.position_side != "FLAT" and not has_today_active_open_journal_entry(instrument.symbol, state.position_side):
         operation_time, entry_fee_rub = find_recent_live_open_details(
             client,
             config,
