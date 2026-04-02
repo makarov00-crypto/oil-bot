@@ -303,6 +303,18 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_exit_reason = ""
 
 
+def parse_state_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def append_trade_journal(
     instrument: InstrumentConfig,
     event: str,
@@ -520,6 +532,7 @@ def find_recent_live_open_details(
     side: str,
     qty: int,
     entry_price: float,
+    not_before: datetime | None = None,
 ) -> tuple[datetime | None, float | None]:
     from_utc, to_utc = get_moscow_day_bounds_utc()
     cursor = ""
@@ -564,6 +577,12 @@ def find_recent_live_open_details(
                 continue
             op_time = getattr(item, "date", None)
             if isinstance(op_time, datetime):
+                if not_before is not None:
+                    compare_dt = op_time
+                    if compare_dt.tzinfo is None:
+                        compare_dt = compare_dt.replace(tzinfo=UTC)
+                    if compare_dt < not_before:
+                        continue
                 candidates.append((op_time, op_id))
 
         next_cursor = str(getattr(response, "next_cursor", "") or "")
@@ -2525,14 +2544,131 @@ def sync_pending_order(
     previous_strategy = state.entry_strategy
     previous_exit_reason = state.pending_exit_reason or "Заявка на закрытие подтверждена синхронизацией портфеля"
     pending_action = state.pending_order_action
-    previous_entry_time: datetime | None = None
-    if previous_entry_price is not None and state.entry_time:
-        try:
-            previous_entry_time = datetime.fromisoformat(state.entry_time)
-            if previous_entry_time.tzinfo is None:
-                previous_entry_time = previous_entry_time.replace(tzinfo=UTC)
-        except Exception:
-            previous_entry_time = None
+    previous_entry_time = parse_state_datetime(state.entry_time) if previous_entry_price is not None else None
+    pending_submitted_at = parse_state_datetime(state.pending_submitted_at)
+
+    try:
+        synced_qty = sync_state_with_portfolio(client, config, instrument, state)
+    except Exception as sync_error:
+        logging.warning(
+            "Не удалось предварительно синхронизировать pending-заявку по %s: %s",
+            instrument.symbol,
+            sync_error,
+        )
+        synced_qty = state.position_qty
+
+    if pending_action == "OPEN":
+        if (
+            synced_qty != 0
+            and state.position_side == state.pending_order_side
+            and state.position_qty >= state.pending_order_qty
+            and state.entry_price is not None
+        ):
+            operation_time, entry_fee_rub = find_recent_live_open_details(
+                client,
+                config,
+                instrument,
+                state.position_side,
+                state.position_qty,
+                state.entry_price,
+                not_before=pending_submitted_at,
+            )
+            if operation_time is not None:
+                state.entry_time = operation_time.isoformat()
+            if entry_fee_rub is not None and entry_fee_rub > 0:
+                state.entry_commission_rub = entry_fee_rub
+                state.entry_commission_accounted = True
+            state.execution_status = "confirmed_open"
+            state.last_error = ""
+            clear_pending_order(state)
+            save_state(instrument.symbol, state)
+            logging.info(
+                "symbol=%s status=pending_open_confirmed_via_portfolio qty=%s",
+                instrument.symbol,
+                synced_qty,
+            )
+            return False
+    elif pending_action == "CLOSE":
+        if previous_side != "FLAT" and previous_qty > 0 and synced_qty == 0:
+            close_not_before = previous_entry_time
+            if pending_submitted_at is not None and (
+                close_not_before is None or pending_submitted_at > close_not_before
+            ):
+                close_not_before = pending_submitted_at
+            close_time, close_fee_rub, close_price = find_recent_live_close_details(
+                client,
+                config,
+                instrument,
+                previous_side,
+                previous_qty,
+                not_before=close_not_before,
+            )
+            recovered_entry_commission = previous_entry_commission
+            if recovered_entry_commission <= 0 and previous_entry_price is not None:
+                _, recovered_open_fee = find_recent_live_open_details(
+                    client,
+                    config,
+                    instrument,
+                    previous_side,
+                    previous_qty,
+                    previous_entry_price,
+                    not_before=previous_entry_time,
+                )
+                if recovered_open_fee is not None and recovered_open_fee > 0:
+                    recovered_entry_commission = recovered_open_fee
+            if close_price is None or close_price <= 0:
+                close_price = get_last_price(client, instrument)
+            gross_pnl = 0.0
+            if previous_entry_price is not None and close_price is not None:
+                gross_pnl = calculate_futures_pnl_rub(
+                    instrument,
+                    previous_entry_price,
+                    close_price,
+                    previous_qty,
+                    previous_side,
+                )
+            reset_daily_pnl_if_needed(state)
+            close_fee_only = float(close_fee_rub or 0.0)
+            recovered_entry_delta = max(0.0, recovered_entry_commission - previous_entry_commission)
+            total_trade_commission = recovered_entry_commission + close_fee_only
+            net_trade_pnl = gross_pnl - total_trade_commission
+            if recovered_entry_delta > 0:
+                state.realized_commission_rub += recovered_entry_delta
+                state.realized_pnl -= recovered_entry_delta
+            state.realized_gross_pnl_rub += gross_pnl
+            state.realized_commission_rub += close_fee_only
+            state.realized_pnl += gross_pnl - close_fee_only
+            state.last_exit_time = (close_time or datetime.now(UTC)).isoformat()
+            state.last_exit_side = previous_side
+            state.last_exit_reason = previous_exit_reason
+            state.last_exit_pnl_rub = net_trade_pnl
+            state.last_exit_price = close_price
+            state.execution_status = "confirmed_close"
+            append_trade_journal(
+                instrument,
+                "CLOSE",
+                previous_side,
+                previous_qty,
+                close_price,
+                event_time=close_time,
+                pnl_rub=net_trade_pnl,
+                gross_pnl_rub=gross_pnl,
+                commission_rub=total_trade_commission,
+                net_pnl_rub=net_trade_pnl,
+                reason=previous_exit_reason,
+                source="pending_order_recovery",
+                strategy=previous_strategy,
+                dry_run=False,
+            )
+            state.last_error = ""
+            clear_pending_order(state)
+            save_state(instrument.symbol, state)
+            logging.info(
+                "symbol=%s status=pending_close_confirmed_via_portfolio qty=%s",
+                instrument.symbol,
+                previous_qty,
+            )
+            return False
 
     try:
         order_state = client.orders.get_order_state(
