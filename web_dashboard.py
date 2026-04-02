@@ -212,8 +212,14 @@ def humanize_trade_reason(reason: str | None, source: str | None, event: str | N
     reason_text = str(reason or "").strip()
     source_text = str(source or "").strip().lower()
     event_name = str(event or "").strip().upper()
+    if source_text == "portfolio_confirmation" and event_name == "OPEN":
+        return "Позиция подтверждена по брокерскому портфелю."
+    if source_text == "portfolio_confirmation" and event_name == "CLOSE":
+        return "Закрытие подтверждено по брокерскому портфелю."
     if source_text == "pending_order_recovery" and event_name == "OPEN":
         return "Подтверждено по портфелю после потери статуса заявки."
+    if source_text == "pending_order_recovery" and event_name == "CLOSE":
+        return "Закрытие подтверждено после потери статуса заявки."
     if source_text == "portfolio_recovery" and event_name == "OPEN":
         return "Восстановлено после рестарта по брокерскому портфелю."
     if source_text == "order_fill" and event_name == "OPEN":
