@@ -2336,6 +2336,18 @@ def sync_pending_order(
                     previous_side,
                     previous_qty,
                 )
+                recovered_entry_commission = previous_entry_commission
+                if recovered_entry_commission <= 0 and previous_entry_price is not None:
+                    _, recovered_open_fee = find_recent_live_open_details(
+                        client,
+                        config,
+                        instrument,
+                        previous_side,
+                        previous_qty,
+                        previous_entry_price,
+                    )
+                    if recovered_open_fee is not None and recovered_open_fee > 0:
+                        recovered_entry_commission = recovered_open_fee
                 if close_price is None or close_price <= 0:
                     close_price = get_last_price(client, instrument)
                 gross_pnl = 0.0
@@ -2349,8 +2361,12 @@ def sync_pending_order(
                     )
                 reset_daily_pnl_if_needed(state)
                 close_fee_only = float(close_fee_rub or 0.0)
-                total_trade_commission = previous_entry_commission + close_fee_only
+                recovered_entry_delta = max(0.0, recovered_entry_commission - previous_entry_commission)
+                total_trade_commission = recovered_entry_commission + close_fee_only
                 net_trade_pnl = gross_pnl - total_trade_commission
+                if recovered_entry_delta > 0:
+                    state.realized_commission_rub += recovered_entry_delta
+                    state.realized_pnl -= recovered_entry_delta
                 state.realized_gross_pnl_rub += gross_pnl
                 state.realized_commission_rub += close_fee_only
                 state.realized_pnl += gross_pnl - close_fee_only
