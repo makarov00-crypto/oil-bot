@@ -577,6 +577,7 @@ def find_recent_live_close_details(
     instrument: InstrumentConfig,
     previous_side: str,
     qty: int,
+    not_before: datetime | None = None,
 ) -> tuple[datetime | None, float | None, float | None]:
     from_utc, to_utc = get_moscow_day_bounds_utc()
     cursor = ""
@@ -617,6 +618,12 @@ def find_recent_live_close_details(
                 continue
             op_time = getattr(item, "date", None)
             if isinstance(op_time, datetime):
+                if not_before is not None:
+                    compare_dt = op_time
+                    if compare_dt.tzinfo is None:
+                        compare_dt = compare_dt.replace(tzinfo=UTC)
+                    if compare_dt < not_before:
+                        continue
                 op_price = quotation_to_float(getattr(item, "price", None))
                 candidates.append((op_time, op_id, op_price))
 
@@ -2474,6 +2481,14 @@ def sync_pending_order(
     previous_strategy = state.entry_strategy
     previous_exit_reason = state.pending_exit_reason or "Заявка на закрытие подтверждена синхронизацией портфеля"
     pending_action = state.pending_order_action
+    previous_entry_time: datetime | None = None
+    if previous_entry_price is not None and state.entry_time:
+        try:
+            previous_entry_time = datetime.fromisoformat(state.entry_time)
+            if previous_entry_time.tzinfo is None:
+                previous_entry_time = previous_entry_time.replace(tzinfo=UTC)
+        except Exception:
+            previous_entry_time = None
 
     try:
         order_state = client.orders.get_order_state(
@@ -2493,6 +2508,7 @@ def sync_pending_order(
                     instrument,
                     previous_side,
                     previous_qty,
+                    not_before=previous_entry_time,
                 )
                 recovered_entry_commission = previous_entry_commission
                 if recovered_entry_commission <= 0 and previous_entry_price is not None:
