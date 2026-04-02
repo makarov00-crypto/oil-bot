@@ -705,6 +705,12 @@ def build_portfolio_view_for_day(
         )
         or 0.0
     )
+    broker_day_pnl = 0.0
+    for item in (portfolio.get("broker_open_positions") or []):
+        try:
+            broker_day_pnl += float(item.get("expected_yield_rub") or 0.0)
+        except Exception:
+            pass
 
     view["selected_date"] = day_key
     view["selected_date_moscow"] = target_day.strftime("%d.%m.%Y")
@@ -723,10 +729,8 @@ def build_portfolio_view_for_day(
         open_positions_count = 0
     view["bot_estimated_variation_margin_rub"] = round(estimated_variation, 2)
     view["open_positions_count"] = open_positions_count
-    view["bot_total_pnl_rub"] = round(
-        float(view.get("bot_realized_pnl_rub") or 0.0) + float(view.get("bot_actual_varmargin_rub") or 0.0),
-        2,
-    )
+    view["bot_broker_day_pnl_rub"] = round(broker_day_pnl, 2)
+    view["bot_total_pnl_rub"] = round(broker_day_pnl, 2)
     view["bot_actual_varmargin_by_symbol"] = history_entry.get(
         "varmargin_by_symbol",
         portfolio.get("bot_actual_varmargin_by_symbol") if selected_is_today else {},
