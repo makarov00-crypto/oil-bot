@@ -167,7 +167,9 @@ class InstrumentState:
     pending_order_action: str = ""
     pending_order_side: str = ""
     pending_order_qty: int = 0
+    pending_submitted_at: str = ""
     pending_exit_reason: str = ""
+    execution_status: str = "idle"
     last_fill_price: float | None = None
     entry_time: str = ""
     entry_strategy: str = ""
@@ -297,6 +299,7 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_order_action = ""
     state.pending_order_side = ""
     state.pending_order_qty = 0
+    state.pending_submitted_at = ""
     state.pending_exit_reason = ""
 
 
@@ -1915,6 +1918,8 @@ def sync_state_with_portfolio(
         state.position_notional_rub = 0.0
         state.position_variation_margin_rub = 0.0
         state.position_pnl_pct = 0.0
+        if not state.pending_order_id:
+            state.execution_status = "idle"
         return 0
     last_price = broker_current_price if broker_current_price is not None and broker_current_price > 0 else get_last_price(client, instrument)
     if state.entry_price is None:
@@ -1933,9 +1938,11 @@ def sync_state_with_portfolio(
         if state.pending_order_id and state.pending_order_action == "OPEN":
             recovery_reason = "Подтверждено по портфелю после потери статуса заявки."
             recovery_source = "pending_order_recovery"
+            state.execution_status = "recovered_open"
         else:
             recovery_reason = "Восстановлено после рестарта по брокерскому портфелю."
             recovery_source = "portfolio_recovery"
+            state.execution_status = "recovered_open"
         operation_time, entry_fee_rub = find_recent_live_open_details(
             client,
             config,
@@ -1969,6 +1976,8 @@ def sync_state_with_portfolio(
         )
         save_state(instrument.symbol, state)
     refresh_position_snapshot(state, instrument, last_price)
+    if state.position_side != "FLAT" and not state.pending_order_id and state.execution_status in {"idle", "rejected"}:
+        state.execution_status = "confirmed_open"
     if broker_var_margin is not None:
         state.position_variation_margin_rub = broker_var_margin
     elif broker_expected_yield is not None:
@@ -2584,6 +2593,7 @@ def sync_pending_order(
                 state.last_exit_reason = previous_exit_reason
                 state.last_exit_pnl_rub = net_trade_pnl
                 state.last_exit_price = close_price
+                state.execution_status = "recovered_close"
                 append_trade_journal(
                     instrument,
                     "CLOSE",
@@ -2606,11 +2616,13 @@ def sync_pending_order(
                 )
             elif synced_qty != 0 and state.entry_price is not None:
                 refresh_position_snapshot(state, instrument, get_last_price(client, instrument))
+                state.execution_status = "recovered_open"
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
                     "позиция синхронизирована по портфелю."
                 )
             else:
+                state.execution_status = "rejected"
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера. "
                     "Подвисшая заявка очищена, открытой позиции нет."
@@ -2621,6 +2633,7 @@ def sync_pending_order(
                 instrument.symbol,
                 sync_error,
             )
+            state.execution_status = "rejected"
             state.last_error = (
                 f"Статус заявки {state.pending_order_id} не найден у брокера. "
                 "Заявка очищена без подтверждения позиции."
@@ -2652,6 +2665,7 @@ def sync_pending_order(
             state.position_side = state.pending_order_side
             state.breakeven_armed = False
             state.entry_time = datetime.now(UTC).isoformat()
+            state.execution_status = "confirmed_open"
             reset_daily_pnl_if_needed(state)
             state.realized_commission_rub += fill_commission_rub
             state.realized_pnl -= fill_commission_rub
@@ -2722,6 +2736,7 @@ def sync_pending_order(
             state.last_exit_reason = exit_reason
             state.last_exit_pnl_rub = net_trade_pnl
             state.last_exit_price = fill_price
+            state.execution_status = "confirmed_close"
             state.position_notional_rub = 0.0
             state.position_variation_margin_rub = 0.0
             state.position_pnl_pct = 0.0
@@ -2761,6 +2776,7 @@ def sync_pending_order(
         OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED,
     }:
         rejection_reason = summarize_pending_order_rejection(client, config, instrument, state)
+        state.execution_status = "rejected"
         state.last_error = rejection_reason
         state.last_signal_summary = [rejection_reason, *state.last_signal_summary[:2]]
         send_msg(
@@ -2784,6 +2800,7 @@ def sync_pending_order(
 
     if status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_PARTIALLYFILL:
         executed = int(getattr(order_state, "lots_executed", 0) or 0)
+        state.execution_status = "partial_fill"
         partial_message = (
             f"Заявка {state.pending_order_id} исполнена частично: "
             f"{executed}/{state.pending_order_qty}. Ждём финальный статус брокера."
@@ -2883,6 +2900,7 @@ def open_position(
         state.breakeven_armed = False
         state.entry_time = datetime.now(UTC).isoformat()
         state.entry_strategy = strategy_name
+        state.execution_status = "confirmed_open"
         save_state(instrument.symbol, state)
         append_trade_journal(
             instrument,
@@ -2921,6 +2939,7 @@ def open_position(
         order_id = place_market_order(client, config, instrument, quantity, direction)
     except RequestError as error:
         request_reason = summarize_order_request_error(instrument, error)
+        state.execution_status = "rejected"
         state.last_error = request_reason
         state.last_signal_summary = [request_reason, *state.last_signal_summary[:2]]
         save_state(instrument.symbol, state)
@@ -2944,7 +2963,9 @@ def open_position(
     state.pending_order_action = "OPEN"
     state.pending_order_side = side
     state.pending_order_qty = quantity
+    state.pending_submitted_at = datetime.now(UTC).isoformat()
     state.pending_exit_reason = ""
+    state.execution_status = "submitted_open"
     save_state(instrument.symbol, state)
     send_msg(
         config,
@@ -3013,6 +3034,7 @@ def close_position(
         state.last_exit_reason = exit_reason
         state.last_exit_pnl_rub = pnl
         state.last_exit_price = price
+        state.execution_status = "confirmed_close"
         state.entry_price = None
         state.entry_commission_rub = 0.0
         state.entry_commission_accounted = False
@@ -3026,6 +3048,7 @@ def close_position(
         state.position_notional_rub = 0.0
         state.position_variation_margin_rub = 0.0
         state.position_pnl_pct = 0.0
+        state.execution_status = "idle"
         save_state(instrument.symbol, state)
         text = build_telegram_card(
             "Тестовое закрытие позиции",
@@ -3044,6 +3067,7 @@ def close_position(
         order_id = place_market_order(client, config, instrument, qty, direction)
     except RequestError as error:
         request_reason = summarize_order_request_error(instrument, error)
+        state.execution_status = "rejected"
         state.last_error = request_reason
         state.last_signal_summary = [request_reason, *state.last_signal_summary[:2]]
         save_state(instrument.symbol, state)
@@ -3066,7 +3090,9 @@ def close_position(
     state.pending_order_action = "CLOSE"
     state.pending_order_side = state.position_side
     state.pending_order_qty = qty
+    state.pending_submitted_at = datetime.now(UTC).isoformat()
     state.pending_exit_reason = exit_reason
+    state.execution_status = "submitted_close"
     save_state(instrument.symbol, state)
     send_msg(
         config,
