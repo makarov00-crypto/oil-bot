@@ -1094,6 +1094,10 @@ def build_telegram_card(title: str, emoji: str, lines: list[str]) -> str:
     return f"{emoji} {title}\n\n{body}"
 
 
+SIGNAL_STATUS_INTERVAL_MINUTES = 60
+SUMMARY_STATUS_INTERVAL_MINUTES = 120
+
+
 def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
     now = datetime.now(UTC)
     fetched_at = NEWS_CACHE.get("fetched_at")
@@ -1559,37 +1563,23 @@ def build_periodic_status_message(
 ) -> str:
     position_text = "нет" if state.position_side == "FLAT" else f"{state.position_side}, лотов={state.position_qty}"
     session_name = get_market_session()
-    header = f"{signal_emoji(signal)} {instrument.symbol} — {signal}"
+    summary = summarize_signal_reason(signal, reason)
     lines = [
-        header,
-        "",
+        f"Инструмент: {format_instrument_title(instrument)}",
+        f"Сигнал: {signal_emoji(signal)} {signal}",
         f"⏱ Свеча: {candle_time}",
         f"🕒 Сессия: {session_name}",
         f"💵 Цена: {price:.2f}",
         f"🧾 Позиция: {position_text}",
-        "",
-        *build_market_view_lines(df, config, instrument, higher_tf_bias),
-        "",
-        "📰 Новостный фон",
+        f"📌 Стратегия: {state.entry_strategy or state.last_strategy_name or '-'}",
+        f"📈 Старший тренд: {higher_tf_bias}",
+        f"📰 Новости: {format_news_bias_label(news_bias)}",
         f"• Влияние: {describe_news_bias_impact(signal, news_bias)}",
-        *format_news_bias_lines(news_bias),
+        "",
+        "Коротко почему:",
+        *[f"• {line}" for line in summary[:3]],
     ]
-
-    if compare_lines:
-        lines.extend(["", "⚖️ Сравнение стратегий", *compare_lines])
-
-    if signal == "HOLD":
-        long_blockers, short_blockers = extract_blocker_sections(reason)
-        lines.extend(["", "🚫 Почему нет входа", "Long:"])
-        lines.extend(f"• {item}" for item in long_blockers[:3])
-        if short_blockers:
-            lines.append("")
-            lines.append("Short:")
-            lines.extend(f"• {item}" for item in short_blockers[:3])
-    else:
-        lines.extend(["", "✅ Почему есть вход", *format_reason_multiline(reason)])
-
-    return "\n".join(lines)
+    return build_telegram_card("Торговый сигнал", signal_emoji(signal), lines)
 
 
 def notify_signal_change(
@@ -1638,7 +1628,7 @@ def notify_periodic_status(
     news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> None:
-    status_slot = get_status_slot(candle_time, 15)
+    status_slot = get_status_slot(candle_time, SIGNAL_STATUS_INTERVAL_MINUTES)
     if status_slot == state.last_status_candle:
         return
     send_msg(
@@ -1674,7 +1664,6 @@ def build_global_diagnostic_message(
     ]
 
     for instrument in watchlist:
-        state = load_state(instrument.symbol)
         news_bias = news.get(instrument.symbol)
         try:
             lower_df = add_indicators(
@@ -1689,18 +1678,13 @@ def build_global_diagnostic_message(
             higher_tf_bias = get_higher_tf_bias(client, config, instrument)
             signal, reason, strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
             signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
-            long_blockers, short_blockers = extract_blocker_sections(reason)
-            blocker = long_blockers[0] if signal in {"HOLD", "LONG"} and long_blockers else ""
-            if signal == "HOLD" and not blocker and short_blockers:
-                blocker = short_blockers[0]
+            summary = summarize_signal_reason(signal, reason)
             lines.extend(
                 [
                     f"{signal_emoji(signal)} {instrument.symbol}: {signal}",
-                    f"• Стратегия: {strategy_name}",
-                    f"• Старший тренд: {higher_tf_bias}",
-                    f"• Новости: {format_news_bias_label(news_bias)}",
+                    f"• Стратегия: {strategy_name} | Старший ТФ: {higher_tf_bias}",
                     f"• Влияние: {describe_news_bias_impact(signal, news_bias)}",
-                    f"• Главный блокер: {blocker or 'нет явного блокера'}",
+                    f"• Ключевое: {summary[0] if summary else 'нет явного вывода'}",
                     "",
                 ]
             )
@@ -1727,7 +1711,7 @@ def maybe_send_global_diagnostic(
     session_name = get_market_session()
     if session_name == "CLOSED":
         return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
     meta = load_meta_state()
     if meta.get("last_global_status_slot") == now_slot:
         return
@@ -1744,17 +1728,16 @@ def build_portfolio_snapshot_message(
     payload = build_portfolio_snapshot_payload(client, config, watchlist)
     lines = [
         f"🧭 Режим: {'DRY_RUN' if config.dry_run else 'LIVE'}",
+        f"🕓 Срез: {payload.get('generated_at_moscow', '-')}",
         f"💼 Портфель: {float(payload['total_portfolio_rub']):.2f} RUB",
         f"💵 Свободно: {float(payload['free_rub']):.2f} RUB",
-        f"🛡 Гарантийное обеспечение: {float(payload['blocked_guarantee_rub']):.2f} RUB",
-        f"📈 Открытых позиций бота: {int(payload['open_positions_count'])}",
-        f"📊 Gross по закрытым: {float(payload['bot_realized_gross_pnl_rub']):.2f} RUB",
-        f"💸 Комиссии: {float(payload['bot_realized_commission_rub']):.2f} RUB",
-        f"📊 Net реализовано ботом: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
-        f"🏦 Факт. вар. маржа по операциям: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
-        f"🏦 Факт. денежный эффект счёта: {float(payload['bot_actual_cash_effect_rub']):.2f} RUB",
-        f"📈 Оценка вариационной маржи: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
-        f"🧮 Итого по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
+        f"🛡 ГО: {float(payload['blocked_guarantee_rub']):.2f} RUB",
+        f"📒 NET сделок: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
+        f"💸 Комиссия по счёту: {float(payload['bot_actual_fee_rub']):.2f} RUB",
+        f"🏦 Клиринговая ВМ: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
+        f"📈 Текущая вар. маржа: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"🧮 Итог по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
+        f"📌 Открытых позиций: {int(payload['open_positions_count'])}",
     ]
     return build_telegram_card("Портфель бота", "💼", lines)
 
@@ -1908,60 +1891,26 @@ def build_trade_results_message(
     config: BotConfig,
     watchlist: list[InstrumentConfig],
 ) -> str:
-    states = {instrument.symbol: load_state(instrument.symbol) for instrument in watchlist}
-    lines = []
-
-    realized_total = 0.0
-    realized_gross_total = 0.0
-    realized_commission_total = 0.0
-    realized_lines: list[str] = []
-    for instrument in watchlist:
-        state = states[instrument.symbol]
-        pnl = float(state.realized_pnl or 0.0)
-        gross = float(state.realized_gross_pnl_rub or 0.0)
-        commission = float(state.realized_commission_rub or 0.0)
-        realized_total += pnl
-        realized_gross_total += gross
-        realized_commission_total += commission
-        if abs(pnl) >= 0.01 or abs(gross) >= 0.01 or abs(commission) >= 0.01:
-            realized_lines.append(
-                f"• {instrument.symbol}: gross {gross:.2f} | комисс. {commission:.2f} | net {pnl:.2f} RUB"
+    payload = build_portfolio_snapshot_payload(client, config, watchlist)
+    open_positions = payload.get("broker_open_positions") or []
+    lines = [
+        f"🕓 Срез: {payload.get('generated_at_moscow', '-')}",
+        f"📒 NET сделок: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
+        f"💸 Комиссия по счёту: {float(payload['bot_actual_fee_rub']):.2f} RUB",
+        f"🏦 Клиринговая ВМ: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
+        f"📈 Текущая вар. маржа: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"🧮 Итог по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
+        "",
+        "Открытые позиции:",
+    ]
+    if open_positions:
+        for item in open_positions:
+            lines.append(
+                f"• {item['symbol']}: {item['side']} {int(item['qty'])} | "
+                f"вар. маржа {float(item.get('variation_margin_rub') or 0.0):.2f} RUB"
             )
-
-    unrealized_total = 0.0
-    open_lines: list[str] = []
-    for instrument in watchlist:
-        state = states[instrument.symbol]
-        if state.position_side == "FLAT" or state.position_qty <= 0 or state.entry_price is None:
-            continue
-        last_price = get_last_price(client, instrument)
-        unrealized = calculate_futures_pnl_rub(
-            instrument,
-            state.entry_price,
-            last_price,
-            state.position_qty,
-            state.position_side,
-        )
-        unrealized_total += unrealized
-        open_lines.append(
-            f"• {instrument.symbol}: {state.position_side} {state.position_qty} лот., {unrealized:.2f} RUB"
-        )
-
-    lines.extend(
-        [
-            f"✅ Gross по закрытым: {realized_gross_total:.2f} RUB",
-            f"💸 Комиссии: {realized_commission_total:.2f} RUB",
-            f"✅ Net реализовано: {realized_total:.2f} RUB",
-            f"📈 Оценка вариационной маржи: {unrealized_total:.2f} RUB",
-            f"🧮 Итого: {realized_total + unrealized_total:.2f} RUB",
-            "",
-            "Закрытые результаты:",
-            *(realized_lines or ["• Пока нет закрытых результатов"]),
-            "",
-            "Открытые позиции:",
-            *(open_lines or ["• Сейчас открытых позиций нет"]),
-        ]
-    )
+    else:
+        lines.append("• Сейчас открытых позиций нет")
     return build_telegram_card("Результат торговли", "📒", lines)
 
 
@@ -1984,18 +1933,17 @@ def build_trade_review_message() -> str:
 
     if closed_reviews:
         lines.append("Последние закрытые:")
-        for item in closed_reviews[-5:]:
-            pnl = float(item.get("pnl_rub") or 0.0)
-            entry_price = item.get("entry_price")
-            exit_price = item.get("exit_price")
+        for item in closed_reviews[:5]:
+            net = float(item.get("net_pnl_rub") or item.get("pnl_rub") or 0.0)
+            gross = float(item.get("gross_pnl_rub") or 0.0)
+            commission = float(item.get("commission_rub") or 0.0)
             lines.append(
                 f"• {item['symbol']} {item['side']} | {item['strategy'] or 'unknown'} | "
-                f"{entry_price if entry_price is not None else '?'} -> {exit_price if exit_price is not None else '?'} | "
-                f"{pnl:.2f} RUB"
+                f"брутто {gross:.2f} | ком. {commission:.2f} | net {net:.2f} RUB"
             )
             exit_reason = str(item.get("exit_reason") or "").strip()
             if exit_reason:
-                lines.append(f"  Выход: {compact_reason(exit_reason)[:120]}")
+                lines.append(f"  Выход: {compact_reason(exit_reason)[:140]}")
         lines.append("")
     else:
         lines.extend(["Последние закрытые:", "• Пока нет закрытых сделок в журнале", ""])
@@ -2010,7 +1958,7 @@ def build_trade_review_message() -> str:
     else:
         lines.extend(["Текущие открытые по журналу:", "• Нет открытых записей в журнале"])
 
-    return build_telegram_card("Trade Review", "🧾", lines)
+    return build_telegram_card("Разбор сделок", "🧾", lines)
 
 
 def maybe_send_portfolio_snapshot(
@@ -2021,7 +1969,7 @@ def maybe_send_portfolio_snapshot(
     session_name = get_market_session()
     if session_name == "CLOSED":
         return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
     meta = load_meta_state()
     if meta.get("last_portfolio_snapshot_slot") == now_slot:
         return
@@ -2038,7 +1986,7 @@ def maybe_send_trade_results(
     session_name = get_market_session()
     if session_name == "CLOSED":
         return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
     meta = load_meta_state()
     if meta.get("last_trade_results_slot") == now_slot:
         return
@@ -2051,7 +1999,7 @@ def maybe_send_trade_review(config: BotConfig) -> None:
     session_name = get_market_session()
     if session_name == "CLOSED":
         return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), 30).strftime("%Y-%m-%d %H:%M")
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
     meta = load_meta_state()
     if meta.get("last_trade_review_slot") == now_slot:
         return
@@ -3221,22 +3169,7 @@ def open_position(
     state.pending_exit_reason = ""
     state.execution_status = "submitted_open"
     save_state(instrument.symbol, state)
-    send_msg(
-        config,
-        build_telegram_card(
-            "Открытие позиции отправлено",
-            "🚀" if side == "LONG" else "📉",
-            [
-                f"Инструмент: {format_instrument_title(instrument)}",
-                f"Направление: {side}",
-                f"Стратегия: {strategy_name or 'unknown'}",
-                *sizing_lines,
-                f"Режим входа: {session_name}",
-                f"Ориентировочная цена: {price:.4f}",
-                f"ID заявки: {order_id}",
-            ],
-        ),
-    )
+    logging.info("symbol=%s status=open_submitted order_id=%s", instrument.symbol, order_id)
 
 
 def close_position(
@@ -3348,19 +3281,7 @@ def close_position(
     state.pending_exit_reason = exit_reason
     state.execution_status = "submitted_close"
     save_state(instrument.symbol, state)
-    send_msg(
-        config,
-        build_telegram_card(
-            "Закрытие позиции отправлено",
-            "✅",
-            [
-                f"Инструмент: {format_instrument_title(instrument)}",
-                f"Причина выхода: {exit_reason}",
-                f"Ориентировочная цена: {price:.4f}",
-                f"ID заявки: {order_id}",
-            ],
-        ),
-    )
+    logging.info("symbol=%s status=close_submitted order_id=%s", instrument.symbol, order_id)
 
 
 def check_exit(
@@ -3638,8 +3559,8 @@ def run_bot() -> int:
                     f"Старший ТФ: {config.higher_tf_interval_minutes} минут",
                     f"Инструменты: {', '.join(config.symbols)}",
                     "",
-                    "Индивидуальные статусы будут приходить раз в 15 минут.",
-                    "Общая диагностика по рынку будет приходить раз в 30 минут.",
+                    "Базовые торговые сигналы будут приходить раз в 60 минут.",
+                    "Диагностика, портфель, результат и разбор сделок будут приходить раз в 2 часа.",
                 ],
             ),
         )
