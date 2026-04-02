@@ -2279,10 +2279,40 @@ def sync_pending_order(
         return False
 
     if status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_PARTIALLYFILL:
-        state.last_error = (
+        executed = int(getattr(order_state, "lots_executed", 0) or 0)
+        partial_message = (
             f"Заявка {state.pending_order_id} исполнена частично: "
-            f"{getattr(order_state, 'lots_executed', 0)}/{state.pending_order_qty}"
+            f"{executed}/{state.pending_order_qty}. Ждём финальный статус брокера."
         )
+        should_notify_partial = state.last_error != partial_message
+        state.last_error = partial_message
+        state.last_signal_summary = [partial_message, *state.last_signal_summary[:2]]
+        try:
+            synced_qty = sync_state_with_portfolio(client, config, instrument, state)
+            if synced_qty != 0 and state.entry_price is not None:
+                refresh_position_snapshot(state, instrument, get_last_price(client, instrument))
+        except Exception as error:
+            logging.warning(
+                "Не удалось синхронизировать частичное исполнение по %s: %s",
+                instrument.symbol,
+                error,
+            )
+        if should_notify_partial:
+            send_msg(
+                config,
+                build_telegram_card(
+                    "Заявка исполнена частично",
+                    "⚠️",
+                    [
+                        f"Инструмент: {format_instrument_title(instrument)}",
+                        f"Действие: {state.pending_order_action or 'UNKNOWN'}",
+                        f"Направление: {state.pending_order_side or 'UNKNOWN'}",
+                        f"Исполнено: {executed}/{state.pending_order_qty}",
+                        "Бот сохранил промежуточное состояние и ждёт финальный статус.",
+                        f"ID заявки: {state.pending_order_id}",
+                    ],
+                ),
+            )
         save_state(instrument.symbol, state)
         return True
 
@@ -2502,7 +2532,28 @@ def close_position(
         send_msg(config, text)
         return
 
-    order_id = place_market_order(client, config, instrument, qty, direction)
+    try:
+        order_id = place_market_order(client, config, instrument, qty, direction)
+    except RequestError as error:
+        request_reason = summarize_order_request_error(instrument, error)
+        state.last_error = request_reason
+        state.last_signal_summary = [request_reason, *state.last_signal_summary[:2]]
+        save_state(instrument.symbol, state)
+        logging.warning("symbol=%s status=close_rejected reason=%s", instrument.symbol, request_reason)
+        send_msg(
+            config,
+            build_telegram_card(
+                "Заявка на закрытие отклонена",
+                "⚠️",
+                [
+                    f"Инструмент: {format_instrument_title(instrument)}",
+                    f"Причина выхода: {exit_reason}",
+                    f"Направление позиции: {state.position_side}",
+                    request_reason,
+                ],
+            ),
+        )
+        return
     state.pending_order_id = order_id
     state.pending_order_action = "CLOSE"
     state.pending_order_side = state.position_side
