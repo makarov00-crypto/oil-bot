@@ -1249,28 +1249,8 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioBlocked">-</div>
         </div>
         <div>
-          <div class="muted">Net по журналу</div>
+          <div class="muted">Реализовано</div>
           <div class="metric" id="portfolioRealized">-</div>
-        </div>
-        <div>
-          <div class="muted">Gross по журналу</div>
-          <div class="metric" id="portfolioGross">-</div>
-        </div>
-        <div>
-          <div class="muted">Комиссии по журналу</div>
-          <div class="metric" id="portfolioCommission">-</div>
-        </div>
-        <div>
-          <div class="muted">Комиссии по операциям</div>
-          <div class="metric" id="portfolioActualFee">-</div>
-        </div>
-        <div>
-          <div class="muted">Клиринговая ВМ по операциям</div>
-          <div class="metric" id="portfolioActualVm">-</div>
-        </div>
-        <div>
-          <div class="muted">Факт. эффект счёта</div>
-          <div class="metric" id="portfolioCashEffect">-</div>
         </div>
         <div>
           <div class="muted">Текущая вар. маржа позиций</div>
@@ -1807,11 +1787,6 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_rub);
       document.getElementById('portfolioBlocked').textContent = formatRub(portfolio.blocked_guarantee_rub);
       document.getElementById('portfolioRealized').textContent = formatRub(portfolio.bot_realized_pnl_rub);
-      document.getElementById('portfolioGross').textContent = formatRub(portfolio.bot_realized_gross_pnl_rub);
-      document.getElementById('portfolioCommission').textContent = formatRub(portfolio.bot_realized_commission_rub);
-      document.getElementById('portfolioActualFee').textContent = formatRub(portfolio.bot_actual_fee_rub);
-      document.getElementById('portfolioActualVm').textContent = formatRub(portfolio.bot_actual_varmargin_rub);
-      document.getElementById('portfolioCashEffect').textContent = formatRub(portfolio.bot_actual_cash_effect_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
