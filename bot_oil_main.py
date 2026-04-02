@@ -1582,7 +1582,6 @@ def sync_state_with_portfolio(
     state: InstrumentState,
 ) -> int:
     qty, avg = extract_position_data(client, config, instrument)
-    previous_entry_price = state.entry_price
     state.position_qty = abs(qty)
     if qty == 0:
         state.entry_price = None
@@ -1610,21 +1609,20 @@ def sync_state_with_portfolio(
             state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
-    if previous_entry_price is None and state.position_side != "FLAT":
-        if not has_today_open_journal_entry(instrument.symbol, state.position_side):
-            append_trade_journal(
-                instrument,
-                "OPEN",
-                state.position_side,
-                state.position_qty,
-                state.entry_price or last_price,
-                gross_pnl_rub=0.0,
-                commission_rub=0.0,
-                net_pnl_rub=0.0,
-                reason="portfolio sync recovery",
-                strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
-                dry_run=config.dry_run,
-            )
+    if state.position_side != "FLAT" and not has_today_open_journal_entry(instrument.symbol, state.position_side):
+        append_trade_journal(
+            instrument,
+            "OPEN",
+            state.position_side,
+            state.position_qty,
+            state.entry_price or last_price,
+            gross_pnl_rub=0.0,
+            commission_rub=0.0,
+            net_pnl_rub=0.0,
+            reason="portfolio sync recovery",
+            strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
+            dry_run=config.dry_run,
+        )
     return qty
 
 
