@@ -26,7 +26,7 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 STATE_STALE_MINUTES = 20
 
 
-app = FastAPI(title="Oil Bot Dashboard")
+app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
 
 
 STRATEGY_DOCS: dict[str, dict[str, str]] = {
