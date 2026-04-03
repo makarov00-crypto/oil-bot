@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from instrument_groups import GROUP_BY_SYMBOL, get_instrument_group
+from strategy_registry import get_primary_strategies, get_secondary_strategies
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,6 +27,316 @@ STATE_STALE_MINUTES = 20
 
 
 app = FastAPI(title="Oil Bot Dashboard")
+
+
+STRATEGY_DOCS: dict[str, dict[str, str]] = {
+    "momentum_breakout": {
+        "title": "Momentum Breakout",
+        "summary": "Вход по импульсному продолжению уже начавшегося движения, когда цена уверенно выталкивается из диапазона вверх или вниз.",
+        "when": "Лучше всего работает в сильном трендовом дне с подтверждением по старшему таймфрейму, импульсу и объёму.",
+    },
+    "trend_pullback": {
+        "title": "Trend Pullback",
+        "summary": "Вход по откату к тренду: бот ждёт возврат цены к зоне EMA/баланса и пытается зайти по направлению основного движения.",
+        "when": "Подходит для спокойного направленного тренда, когда рынок делает технические откаты, а не полноценный разворот.",
+    },
+    "trend_rollover": {
+        "title": "Trend Rollover",
+        "summary": "Ловит перезапуск тренда после локальной паузы, когда рынок подтверждает rollover и снова пытается развить движение.",
+        "when": "Используется там, где инструмент любит сначала притормозить, а потом ещё раз ускориться по тренду.",
+    },
+    "range_break_continuation": {
+        "title": "Range Break Continuation",
+        "summary": "Вход после подтверждённого пробоя диапазона с расчётом на продолжение движения за пределами локального коридора.",
+        "when": "Полезна для индексов и акций, когда рынок долго стоит в диапазоне, а потом начинает направленный выход.",
+    },
+    "failed_breakout": {
+        "title": "Failed Breakout",
+        "summary": "Контртрендовая идея на ложном пробое: рынок не удержал выход из диапазона и быстро вернулся обратно.",
+        "when": "Актуальна только там, где инструмент часто даёт ложные выносы и быстрые возвраты в коридор.",
+    },
+    "opening_range_breakout": {
+        "title": "Opening Range Breakout",
+        "summary": "Вход по пробою утреннего диапазона, чаще всего по валютным фьючерсам, когда рынок выбирает направление сессии.",
+        "when": "Лучше всего работает в начале дня, пока импульс открытия ещё не выдохся.",
+    },
+    "williams": {
+        "title": "Williams Confirmation",
+        "summary": "Вторичный фильтр для валютных инструментов на базе Williams %R, который уточняет качество входа и степень перегретости движения.",
+        "when": "Используется как дополнительное подтверждение, а не как самостоятельная основная стратегия.",
+    },
+}
+
+
+def build_site_nav(active: str) -> str:
+    links = [
+        ("/", "Дашборд", "dashboard"),
+        ("/docs", "Документация", "docs"),
+    ]
+    items: list[str] = []
+    for href, label, key in links:
+        cls = "site-nav__link is-active" if key == active else "site-nav__link"
+        items.append(f'<a href="{href}" class="{cls}">{label}</a>')
+    return f"""
+  <header class="site-header">
+    <div class="site-header__inner">
+      <div class="site-brand">
+        <div class="site-brand__eyebrow">JWizzBot</div>
+        <div class="site-brand__title">Oil Bot Control Center</div>
+      </div>
+      <nav class="site-nav">
+        {''.join(items)}
+      </nav>
+    </div>
+  </header>
+"""
+
+
+def build_strategy_docs_rows() -> tuple[str, str]:
+    cards: list[str] = []
+    rows: list[str] = []
+    for key, payload in STRATEGY_DOCS.items():
+        cards.append(
+            f"""
+            <article class="doc-card">
+              <div class="doc-card__eyebrow mono">{key}</div>
+              <h3>{payload['title']}</h3>
+              <p>{payload['summary']}</p>
+              <p class="muted"><strong>Когда используется:</strong> {payload['when']}</p>
+            </article>
+            """
+        )
+
+    for symbol in sorted(GROUP_BY_SYMBOL):
+        group = get_instrument_group(symbol)
+        primary = ", ".join(get_primary_strategies(symbol))
+        secondary = ", ".join(get_secondary_strategies(symbol)) or "—"
+        rows.append(
+            f"""
+            <tr>
+              <td class="mono">{symbol}</td>
+              <td>{group.name}</td>
+              <td>{group.description}</td>
+              <td>{primary}</td>
+              <td>{secondary}</td>
+            </tr>
+            """
+        )
+    return "".join(cards), "".join(rows)
+
+
+def build_docs_html() -> str:
+    strategy_cards, strategy_rows = build_strategy_docs_rows()
+    return f"""
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+  <title>Документация Oil Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {{
+      --bg: #030711;
+      --bg2: #091120;
+      --panel: rgba(8, 14, 28, 0.88);
+      --panel-strong: rgba(10, 18, 34, 0.98);
+      --ink: #ebf4ff;
+      --muted: #7f95b3;
+      --line: rgba(102, 174, 255, 0.18);
+      --accent: #43c5ff;
+      --accent2: #7d8cff;
+      --accent3: #14f1ff;
+      --glow: rgba(67, 197, 255, 0.22);
+      --shadow: rgba(0, 0, 0, 0.45);
+    }}
+    body {{
+      margin: 0;
+      font-family: "Manrope", "Segoe UI", Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(67, 197, 255, 0.18), transparent 24%),
+        radial-gradient(circle at top right, rgba(125, 140, 255, 0.16), transparent 20%),
+        radial-gradient(circle at 50% 0%, rgba(20, 241, 255, 0.08), transparent 28%),
+        linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%);
+      color: var(--ink);
+      min-height: 100vh;
+    }}
+    .site-header {{
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(18px);
+      background: rgba(4, 9, 18, 0.78);
+      border-bottom: 1px solid rgba(102, 174, 255, 0.12);
+    }}
+    .site-header__inner {{
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 18px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }}
+    .site-brand__eyebrow {{
+      color: var(--accent3);
+      font: 700 12px/1 "JetBrains Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      margin-bottom: 6px;
+    }}
+    .site-brand__title {{
+      font: 700 18px/1.1 "Sora", sans-serif;
+      text-shadow: 0 0 22px var(--glow);
+    }}
+    .site-nav {{
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }}
+    .site-nav__link {{
+      color: #b8cae3;
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(102, 174, 255, 0.18);
+      background: rgba(67, 197, 255, 0.05);
+      font-weight: 600;
+    }}
+    .site-nav__link.is-active {{
+      color: white;
+      background: linear-gradient(135deg, rgba(67, 197, 255, 0.22), rgba(125, 140, 255, 0.24));
+      border-color: rgba(102, 174, 255, 0.32);
+      box-shadow: 0 0 18px rgba(67, 197, 255, 0.12);
+    }}
+    .wrap {{
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 28px;
+    }}
+    h1, h2, h3 {{ margin: 0 0 12px; }}
+    h1 {{
+      font-family: "Sora", sans-serif;
+      font-size: 32px;
+      line-height: 1.08;
+      text-shadow: 0 0 28px var(--glow);
+    }}
+    h2 {{
+      font-family: "Sora", sans-serif;
+      font-size: 24px;
+      line-height: 1.15;
+    }}
+    .muted {{ color: var(--muted); }}
+    .panel {{
+      background: linear-gradient(180deg, var(--panel-strong) 0%, var(--panel) 100%);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 22px 24px;
+      box-shadow:
+        0 18px 50px var(--shadow),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 0 0 1px rgba(67, 197, 255, 0.03);
+      margin-bottom: 18px;
+    }}
+    .hero p {{
+      max-width: 880px;
+      line-height: 1.6;
+      color: #d5e1f0;
+    }}
+    .doc-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }}
+    .doc-card {{
+      background: rgba(7, 13, 26, 0.72);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 18px;
+      padding: 18px;
+    }}
+    .doc-card__eyebrow {{
+      color: var(--accent);
+      margin-bottom: 8px;
+    }}
+    .mono {{
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }}
+    th, td {{
+      text-align: left;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }}
+    th {{
+      color: #b8cae3;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }}
+    .table-scroll {{
+      overflow: auto;
+      border-radius: 14px;
+    }}
+    @media (max-width: 860px) {{
+      .site-header__inner {{
+        align-items: flex-start;
+        flex-direction: column;
+      }}
+      .wrap {{
+        padding: 20px 16px 28px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  {build_site_nav("docs")}
+  <main class="wrap">
+    <section class="panel hero">
+      <h1>Документация стратегий</h1>
+      <p>
+        Здесь собрана живая карта торговых стратегий бота: что делает каждая логика входа,
+        в каких рыночных условиях она полезна и где именно она используется в текущем реестре инструментов.
+        Это отражение реальной конфигурации, из которой бот сейчас принимает решения.
+      </p>
+    </section>
+    <section class="panel">
+      <h2>Суть стратегий</h2>
+      <div class="doc-grid">
+        {strategy_cards}
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Где какие стратегии используются</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Инструмент</th>
+              <th>Группа</th>
+              <th>Описание группы</th>
+              <th>Основные стратегии</th>
+              <th>Вторичные стратегии</th>
+            </tr>
+          </thead>
+          <tbody>
+            {strategy_rows}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
 
 
 def load_json(path: Path) -> dict:
@@ -934,7 +1246,7 @@ def build_health_payload(states: dict[str, dict]) -> dict:
 
 
 def build_dashboard_html() -> str:
-    return """
+    html = """
 <!doctype html>
 <html lang="ru">
 <head>
@@ -973,6 +1285,54 @@ def build_dashboard_html() -> str:
         linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%);
       color: var(--ink);
       min-height: 100vh;
+    }
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(18px);
+      background: rgba(4, 9, 18, 0.78);
+      border-bottom: 1px solid rgba(102, 174, 255, 0.12);
+    }
+    .site-header__inner {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 18px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .site-brand__eyebrow {
+      color: var(--accent3);
+      font: 700 12px/1 "JetBrains Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      margin-bottom: 6px;
+    }
+    .site-brand__title {
+      font: 700 18px/1.1 "Sora", sans-serif;
+      text-shadow: 0 0 22px var(--glow);
+    }
+    .site-nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .site-nav__link {
+      color: #b8cae3;
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(102, 174, 255, 0.18);
+      background: rgba(67, 197, 255, 0.05);
+      font-weight: 600;
+    }
+    .site-nav__link.is-active {
+      color: white;
+      background: linear-gradient(135deg, rgba(67, 197, 255, 0.22), rgba(125, 140, 255, 0.24));
+      border-color: rgba(102, 174, 255, 0.32);
+      box-shadow: 0 0 18px rgba(67, 197, 255, 0.12);
     }
     .wrap {
       max-width: 1380px;
@@ -1345,6 +1705,10 @@ def build_dashboard_html() -> str:
       color: var(--accent);
     }
     @media (max-width: 860px) {
+      .site-header__inner {
+        align-items: flex-start;
+        flex-direction: column;
+      }
       .wrap {
         padding: 14px;
       }
@@ -1414,6 +1778,7 @@ def build_dashboard_html() -> str:
   </style>
 </head>
 <body>
+  __SITE_NAV__
   <div class="wrap">
     <div class="hero">
       <section class="panel">
@@ -2377,11 +2742,17 @@ def build_dashboard_html() -> str:
 </body>
 </html>
 """
+    return html.replace("__SITE_NAV__", build_site_nav("dashboard"))
 
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
     return build_dashboard_html()
+
+
+@app.get("/docs", response_class=HTMLResponse)
+def docs() -> str:
+    return build_docs_html()
 
 
 @app.get("/api/dashboard", response_class=JSONResponse)
