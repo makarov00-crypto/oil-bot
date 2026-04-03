@@ -1,0 +1,16 @@
+[Unit]
+Description=Oil Bot Force Flatten Positions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/oil-bot
+Environment=APP_DIR=/opt/oil-bot
+Environment=PYTHONUNBUFFERED=1
+Environment=REASON=Принудительное закрытие позиций в 23:55 МСК
+ExecStart=/opt/oil-bot/deploy/run_force_flatten.sh
+
+[Install]
+WantedBy=multi-user.target

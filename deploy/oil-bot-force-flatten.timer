@@ -1,0 +1,10 @@
+[Unit]
+Description=Run forced flatten for oil-bot at 23:55 Moscow time
+
+[Timer]
+OnCalendar=*-*-* 20:55:00 UTC
+Persistent=true
+Unit=oil-bot-force-flatten.service
+
+[Install]
+WantedBy=timers.target
