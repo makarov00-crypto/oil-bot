@@ -1,0 +1,17 @@
+[Unit]
+Description=Schedule Oil Bot Remote AI Review
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+OnCalendar=*-*-* 11:00:00
+OnCalendar=*-*-* 13:00:00
+OnCalendar=*-*-* 15:00:00
+OnCalendar=*-*-* 17:00:00
+OnCalendar=*-*-* 19:00:00
+OnCalendar=*-*-* 21:00:00
+OnCalendar=*-*-* 22:00:00
+Persistent=true
+Unit=oil-bot-ai-review.service
+
+[Install]
+WantedBy=timers.target

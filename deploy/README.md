@@ -105,3 +105,28 @@ launchctl load ~/Library/LaunchAgents/com.jwizzbot.ai-review.plist
 - `/Users/evgenymakarov/oil_bot/logs/automation/remote_ai_review.log`
 - `/Users/evgenymakarov/oil_bot/logs/automation/launchd.out.log`
 - `/Users/evgenymakarov/oil_bot/logs/automation/launchd.err.log`
+
+## 8. Автономный AI-разбор на отдельном сервере
+
+Если AI-часть вынесена на отдельный сервер, можно запускать её через systemd timer:
+
+```bash
+sudo cp /opt/oil-bot/deploy/oil-bot-ai-review.service /etc/systemd/system/oil-bot-ai-review.service
+sudo cp /opt/oil-bot/deploy/oil-bot-ai-review.timer /etc/systemd/system/oil-bot-ai-review.timer
+sudo chmod +x /opt/oil-bot/deploy/run_remote_ai_review_server.sh
+sudo systemctl daemon-reload
+sudo systemctl enable oil-bot-ai-review.timer
+sudo systemctl start oil-bot-ai-review.timer
+```
+
+Проверка:
+
+```bash
+sudo systemctl status oil-bot-ai-review.timer
+sudo systemctl start oil-bot-ai-review.service
+journalctl -u oil-bot-ai-review.service -n 100 --no-pager
+```
+
+Лог файла:
+
+- `/opt/oil-bot/logs/automation/remote_ai_review.log`

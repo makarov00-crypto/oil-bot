@@ -1,0 +1,16 @@
+[Unit]
+Description=Oil Bot Remote AI Review
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=oilbot
+Group=oilbot
+WorkingDirectory=/opt/oil-bot
+Environment=APP_DIR=/opt/oil-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/oil-bot/deploy/run_remote_ai_review_server.sh
+
+[Install]
+WantedBy=multi-user.target
