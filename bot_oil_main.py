@@ -1732,10 +1732,11 @@ def build_portfolio_snapshot_message(
         f"💼 Портфель: {float(payload['total_portfolio_rub']):.2f} RUB",
         f"💵 Свободно: {float(payload['free_rub']):.2f} RUB",
         f"🛡 ГО: {float(payload['blocked_guarantee_rub']):.2f} RUB",
-        f"📒 NET сделок: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
+        f"📒 NET закрытых сделок: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
         f"💸 Комиссия по счёту: {float(payload['bot_actual_fee_rub']):.2f} RUB",
         f"🏦 Клиринговая ВМ: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
-        f"📈 Текущая вар. маржа: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"📈 Текущая вар. маржа позиций: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"🧾 Общая вар. маржа: {float(payload['bot_total_varmargin_rub']):.2f} RUB",
         f"🧮 Итог по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
         f"📌 Открытых позиций: {int(payload['open_positions_count'])}",
     ]
@@ -1757,7 +1758,8 @@ def build_portfolio_snapshot_payload(
     realized_pnl = float(closed_totals["net_pnl_rub"])
     realized_gross_pnl = float(closed_totals["gross_pnl_rub"])
     realized_commission = float(closed_totals["commission_rub"])
-    total_bot_pnl = realized_pnl + broker_open_positions_pnl
+    total_varmargin_rub = realized_gross_pnl + broker_open_positions_pnl
+    total_bot_pnl = total_varmargin_rub - float(accounting["actual_fee_expense_rub"])
 
     generated_at = datetime.now(timezone.utc)
     return {
@@ -1774,6 +1776,7 @@ def build_portfolio_snapshot_payload(
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
+        "bot_total_varmargin_rub": round(total_varmargin_rub, 2),
         "bot_broker_day_pnl_rub": round(broker_open_positions_pnl, 2),
         "bot_total_pnl_rub": round(total_bot_pnl, 2),
         "broker_open_positions": list(live_positions.values()),
@@ -1811,6 +1814,9 @@ def maybe_refresh_portfolio_snapshot(
         "actual_varmargin_rub": payload.get("bot_actual_varmargin_rub", 0.0),
         "actual_fee_expense_rub": payload.get("bot_actual_fee_rub", 0.0),
         "actual_account_cash_effect_rub": payload.get("bot_actual_cash_effect_rub", 0.0),
+        "total_varmargin_rub": payload.get("bot_total_varmargin_rub", 0.0),
+        "broker_open_positions_pnl_rub": payload.get("bot_broker_day_pnl_rub", 0.0),
+        "total_pnl_rub": payload.get("bot_total_pnl_rub", 0.0),
         "varmargin_by_symbol": payload.get("bot_actual_varmargin_by_symbol", {}),
     }
     save_accounting_history(history)
@@ -1833,6 +1839,9 @@ def update_accounting_history_for_day(
         "actual_varmargin_rub": float(accounting["actual_varmargin_rub"]),
         "actual_fee_expense_rub": float(accounting["actual_fee_expense_rub"]),
         "actual_account_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
+        "total_varmargin_rub": 0.0,
+        "broker_open_positions_pnl_rub": 0.0,
+        "total_pnl_rub": 0.0,
         "varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
     }
     history = load_accounting_history()

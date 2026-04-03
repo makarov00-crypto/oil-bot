@@ -95,6 +95,7 @@ struct PortfolioSnapshot: Decodable {
     let botActualFeeRub: Double?
     let botActualCashEffectRub: Double?
     let botEstimatedVariationMarginRub: Double?
+    let botTotalVarmarginRub: Double?
     let botBrokerDayPnlRub: Double?
     let botTotalPnlRub: Double?
     let openPositionsCount: Int?
@@ -115,6 +116,7 @@ struct PortfolioSnapshot: Decodable {
         case botActualFeeRub = "bot_actual_fee_rub"
         case botActualCashEffectRub = "bot_actual_cash_effect_rub"
         case botEstimatedVariationMarginRub = "bot_estimated_variation_margin_rub"
+        case botTotalVarmarginRub = "bot_total_varmargin_rub"
         case botBrokerDayPnlRub = "bot_broker_day_pnl_rub"
         case botTotalPnlRub = "bot_total_pnl_rub"
         case openPositionsCount = "open_positions_count"

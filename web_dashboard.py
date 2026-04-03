@@ -759,7 +759,22 @@ def build_portfolio_view_for_day(
     view["bot_estimated_variation_margin_rub"] = round(estimated_variation, 2)
     view["open_positions_count"] = open_positions_count
     view["bot_broker_day_pnl_rub"] = round(broker_open_positions_pnl, 2)
-    view["bot_total_pnl_rub"] = round(closed_totals["net_pnl_rub"] + broker_open_positions_pnl, 2)
+    total_varmargin = float(
+        history_entry.get(
+            "total_varmargin_rub",
+            closed_totals["gross_pnl_rub"] + broker_open_positions_pnl,
+        )
+        or 0.0
+    )
+    total_pnl = float(
+        history_entry.get(
+            "total_pnl_rub",
+            total_varmargin - selected_actual_fee,
+        )
+        or 0.0
+    )
+    view["bot_total_varmargin_rub"] = round(total_varmargin, 2)
+    view["bot_total_pnl_rub"] = round(total_pnl, 2)
     view["bot_actual_varmargin_by_symbol"] = history_entry.get(
         "varmargin_by_symbol",
         portfolio.get("bot_actual_varmargin_by_symbol") if selected_is_today else {},
@@ -1451,7 +1466,7 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioBlocked">-</div>
         </div>
         <div>
-          <div class="muted">Реализовано</div>
+          <div class="muted">NET закрытых сделок</div>
           <div class="metric" id="portfolioRealized">-</div>
         </div>
         <div>
@@ -1465,6 +1480,10 @@ def build_dashboard_html() -> str:
         <div>
           <div class="muted">Текущая вар. маржа позиций</div>
           <div class="metric" id="portfolioVariation">-</div>
+        </div>
+        <div>
+          <div class="muted">Общая вар. маржа</div>
+          <div class="metric" id="portfolioTotalVm">-</div>
         </div>
         <div>
           <div class="muted">Итог по боту</div>
@@ -2002,6 +2021,7 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioActualFee').textContent = formatRub(portfolio.bot_actual_fee_rub);
       document.getElementById('portfolioActualVm').textContent = formatRub(portfolio.bot_actual_varmargin_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
+      document.getElementById('portfolioTotalVm').textContent = formatRub(portfolio.bot_total_varmargin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
       const vmBySymbol = portfolio.bot_actual_varmargin_by_symbol || {};
