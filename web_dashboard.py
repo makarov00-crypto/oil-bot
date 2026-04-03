@@ -31,37 +31,37 @@ app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
 
 STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "momentum_breakout": {
-        "title": "Momentum Breakout",
+        "title": "Импульсный пробой",
         "summary": "Вход по импульсному продолжению уже начавшегося движения, когда цена уверенно выталкивается из диапазона вверх или вниз.",
         "when": "Лучше всего работает в сильном трендовом дне с подтверждением по старшему таймфрейму, импульсу и объёму.",
     },
     "trend_pullback": {
-        "title": "Trend Pullback",
+        "title": "Откат по тренду",
         "summary": "Вход по откату к тренду: бот ждёт возврат цены к зоне EMA/баланса и пытается зайти по направлению основного движения.",
         "when": "Подходит для спокойного направленного тренда, когда рынок делает технические откаты, а не полноценный разворот.",
     },
     "trend_rollover": {
-        "title": "Trend Rollover",
+        "title": "Перезапуск тренда",
         "summary": "Ловит перезапуск тренда после локальной паузы, когда рынок подтверждает rollover и снова пытается развить движение.",
         "when": "Используется там, где инструмент любит сначала притормозить, а потом ещё раз ускориться по тренду.",
     },
     "range_break_continuation": {
-        "title": "Range Break Continuation",
+        "title": "Продолжение пробоя диапазона",
         "summary": "Вход после подтверждённого пробоя диапазона с расчётом на продолжение движения за пределами локального коридора.",
         "when": "Полезна для индексов и акций, когда рынок долго стоит в диапазоне, а потом начинает направленный выход.",
     },
     "failed_breakout": {
-        "title": "Failed Breakout",
+        "title": "Ложный пробой",
         "summary": "Контртрендовая идея на ложном пробое: рынок не удержал выход из диапазона и быстро вернулся обратно.",
         "when": "Актуальна только там, где инструмент часто даёт ложные выносы и быстрые возвраты в коридор.",
     },
     "opening_range_breakout": {
-        "title": "Opening Range Breakout",
+        "title": "Пробой утреннего диапазона",
         "summary": "Вход по пробою утреннего диапазона, чаще всего по валютным фьючерсам, когда рынок выбирает направление сессии.",
         "when": "Лучше всего работает в начале дня, пока импульс открытия ещё не выдохся.",
     },
     "williams": {
-        "title": "Williams Confirmation",
+        "title": "Подтверждение по Williams %R",
         "summary": "Вторичный фильтр для валютных инструментов на базе Williams %R, который уточняет качество входа и степень перегретости движения.",
         "when": "Используется как дополнительное подтверждение, а не как самостоятельная основная стратегия.",
     },
@@ -82,7 +82,7 @@ def build_site_nav(active: str) -> str:
     <div class="site-header__inner">
       <div class="site-brand">
         <div class="site-brand__eyebrow">JWizzBot</div>
-        <div class="site-brand__title">Oil Bot Control Center</div>
+        <div class="site-brand__title">Центр управления Oil Bot</div>
       </div>
       <nav class="site-nav">
         {''.join(items)}
@@ -246,6 +246,59 @@ def build_docs_html() -> str:
       line-height: 1.6;
       color: #d5e1f0;
     }}
+    .overview-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }}
+    .overview-card {{
+      background: rgba(7, 13, 26, 0.72);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 18px;
+      padding: 18px;
+    }}
+    .overview-card h3 {{
+      margin-bottom: 10px;
+    }}
+    .overview-card p {{
+      margin: 0;
+      line-height: 1.6;
+      color: #d5e1f0;
+    }}
+    .steps {{
+      display: grid;
+      gap: 12px;
+    }}
+    .step {{
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      align-items: start;
+      background: rgba(7, 13, 26, 0.72);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 18px;
+      padding: 16px 18px;
+    }}
+    .step__num {{
+      width: 42px;
+      height: 42px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      color: white;
+      font: 700 14px/1 "JetBrains Mono", monospace;
+      background: linear-gradient(135deg, rgba(67, 197, 255, 0.24), rgba(125, 140, 255, 0.24));
+      border: 1px solid rgba(102, 174, 255, 0.2);
+      box-shadow: 0 0 18px rgba(67, 197, 255, 0.12);
+    }}
+    .step h3 {{
+      margin-bottom: 8px;
+    }}
+    .step p {{
+      margin: 0;
+      line-height: 1.6;
+      color: #d5e1f0;
+    }}
     .doc-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -307,6 +360,77 @@ def build_docs_html() -> str:
         в каких рыночных условиях она полезна и где именно она используется в текущем реестре инструментов.
         Это отражение реальной конфигурации, из которой бот сейчас принимает решения.
       </p>
+    </section>
+    <section class="panel">
+      <h2>Как бот принимает решение</h2>
+      <div class="overview-grid">
+        <article class="overview-card">
+          <h3>Контекст рынка</h3>
+          <p>
+            Сначала бот оценивает старший таймфрейм, новости, текущую торговую сессию и жив ли вообще поток данных по инструменту.
+            Если рынок закрыт или данные устарели, новый вход не рассматривается.
+          </p>
+        </article>
+        <article class="overview-card">
+          <h3>Поиск подходящей логики</h3>
+          <p>
+            Для каждого инструмента есть свой набор основных и вторичных стратегий. Бот идёт по ним по порядку и ищет первую
+            логику, которая реально подтверждается рынком, а не просто выглядит красиво на одном индикаторе.
+          </p>
+        </article>
+        <article class="overview-card">
+          <h3>Проверка качества входа</h3>
+          <p>
+            Перед входом дополнительно проверяются импульс, объём, положение цены относительно средних, риск, доступное ГО
+            и ограничения по размеру позиции. Если один из этих блоков не проходит, бот остаётся в ожидании.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Жизненный цикл сделки</h2>
+      <div class="steps">
+        <article class="step">
+          <div class="step__num">01</div>
+          <div>
+            <h3>Сигнал найден</h3>
+            <p>
+              Бот видит совпадение рыночного контекста и условий конкретной стратегии. На этом этапе в таблице сигналов
+              появляется обоснование, почему именно сейчас инструмент интересен.
+            </p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="step__num">02</div>
+          <div>
+            <h3>Вход подтверждён</h3>
+            <p>
+              После отправки заявки бот подтверждает позицию по брокерскому портфелю и операциям. Это защищает систему
+              от случаев, когда статус заявки у брокера приходит неидеально или с задержкой.
+            </p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="step__num">03</div>
+          <div>
+            <h3>Сделка живёт под контролем</h3>
+            <p>
+              Пока позиция открыта, бот следит за текущей вариационной маржой, сменой сигнала, подтверждением по MACD,
+              EMA, RSI и за тем, не появился ли повод защищать прибыль или ограничить убыток.
+            </p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="step__num">04</div>
+          <div>
+            <h3>Выход и итог</h3>
+            <p>
+              После закрытия в журнале фиксируется торговая причина выхода, а в портфеле отдельно видны чистый результат,
+              комиссии и общая вариационная маржа. Это позволяет честно сравнивать дашборд с брокерским терминалом.
+            </p>
+          </div>
+        </article>
+      </div>
     </section>
     <section class="panel">
       <h2>Суть стратегий</h2>
