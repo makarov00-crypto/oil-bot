@@ -204,7 +204,12 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
                 item["net_pnl_rub"] = f"{float(item['net_pnl_rub']):.2f}"
             except Exception:
                 pass
-        item["reason_display"] = humanize_trade_reason(item.get("reason"), item.get("source"), item.get("event"))
+        item["reason_display"] = humanize_trade_reason(
+            item.get("reason"),
+            item.get("source"),
+            item.get("event"),
+            item.get("strategy"),
+        )
         normalized.append(item)
     return normalized
 
@@ -218,20 +223,41 @@ def stringify_money(value: Any, default: str = "-") -> str:
         return str(value)
 
 
-def humanize_trade_reason(reason: str | None, source: str | None, event: str | None) -> str:
+def humanize_strategy_name(strategy: str | None) -> str:
+    value = str(strategy or "").strip()
+    mapping = {
+        "opening_range_breakout": "opening range breakout",
+        "range_break_continuation": "продолжение пробоя диапазона",
+        "trend_pullback": "откат по тренду",
+        "trend_rollover": "разворот тренда",
+        "momentum_breakout": "импульсный breakout",
+        "failed_breakout": "ложный пробой",
+        "breakdown_continuation": "продолжение слома диапазона",
+        "recovered_position": "восстановленная позиция",
+    }
+    return mapping.get(value, value or "неизвестная стратегия")
+
+
+def humanize_trade_reason(
+    reason: str | None,
+    source: str | None,
+    event: str | None,
+    strategy: str | None = None,
+) -> str:
     reason_text = str(reason or "").strip()
     source_text = str(source or "").strip().lower()
     event_name = str(event or "").strip().upper()
+    strategy_text = humanize_strategy_name(strategy)
     if event_name == "CLOSE" and reason_text:
         return reason_text
     if source_text == "portfolio_confirmation" and event_name == "OPEN":
-        return "Позиция подтверждена по брокерскому портфелю."
+        return f"Вход по стратегии «{strategy_text}» подтверждён брокерским портфелем."
     if source_text == "pending_order_recovery" and event_name == "OPEN":
-        return "Подтверждено по портфелю после потери статуса заявки."
+        return f"Вход по стратегии «{strategy_text}» подтверждён после потери статуса заявки."
     if source_text == "portfolio_recovery" and event_name == "OPEN":
-        return "Восстановлено после рестарта по брокерскому портфелю."
+        return f"Позиция по стратегии «{strategy_text}» восстановлена после рестарта."
     if source_text == "order_fill" and event_name == "OPEN":
-        return "Исполнение заявки подтверждено брокером."
+        return f"Вход по стратегии «{strategy_text}» исполнен брокером."
     if source_text == "dry_run":
         return "Тестовая запись DRY_RUN."
     return reason_text or "-"
@@ -308,7 +334,12 @@ def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
                 item["net_pnl_rub"] = f"{float(item['net_pnl_rub']):.2f}"
             except Exception:
                 pass
-        item["reason_display"] = humanize_trade_reason(item.get("reason"), item.get("source"), item.get("event"))
+        item["reason_display"] = humanize_trade_reason(
+            item.get("reason"),
+            item.get("source"),
+            item.get("event"),
+            item.get("strategy"),
+        )
         normalized.append(item)
     return normalized
 
