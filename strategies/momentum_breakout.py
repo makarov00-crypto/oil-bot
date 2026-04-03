@@ -36,13 +36,17 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     higher_tf_short_ok = higher_tf_bias != "LONG"
 
     if instrument.symbol == "BRK6":
-        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.78
-        impulse_ok = body_avg > 0 and body >= body_avg * 0.65
-        rsi_long_ok = 44.0 <= rsi <= 76.0
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.75
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.60
+        rsi_long_ok = 44.0 <= rsi <= 78.0
         rsi_short_ok = 24.0 <= rsi <= 58.0
         volatility_ok = atr_pct >= 0.0008
         higher_tf_long_ok = higher_tf_bias == "LONG"
         higher_tf_short_ok = higher_tf_bias == "SHORT"
+        soft_breakout_up = close > ema20 and close > ema50 and close >= range_high * 0.997
+        soft_breakout_down = close < ema20 and close < ema50 and close <= range_low * 1.003
+        macd_up = macd > macd_signal and (macd >= prev_macd or (macd - macd_signal) >= 0.05)
+        macd_down = macd < macd_signal and (macd <= prev_macd or (macd_signal - macd) >= 0.05)
 
     if instrument.symbol == "GNM6":
         volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
@@ -157,6 +161,30 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and rsi_short_ok
             and volatility_ok
             and short_score >= 7
+        )
+
+    if instrument.symbol == "BRK6":
+        long_ok = (
+            higher_tf_long_ok
+            and close_above_trend
+            and (breakout_up or soft_breakout_up)
+            and rsi_long_ok
+            and macd_up
+            and volume_ok
+            and impulse_ok
+            and volatility_ok
+            and long_score >= 5
+        )
+        short_ok = (
+            higher_tf_short_ok
+            and close_below_trend
+            and (breakout_down or soft_breakout_down)
+            and rsi_short_ok
+            and macd_down
+            and volume_ok
+            and impulse_ok
+            and volatility_ok
+            and short_score >= 5
         )
 
     if long_ok:
