@@ -222,14 +222,12 @@ def humanize_trade_reason(reason: str | None, source: str | None, event: str | N
     reason_text = str(reason or "").strip()
     source_text = str(source or "").strip().lower()
     event_name = str(event or "").strip().upper()
+    if event_name == "CLOSE" and reason_text:
+        return reason_text
     if source_text == "portfolio_confirmation" and event_name == "OPEN":
         return "Позиция подтверждена по брокерскому портфелю."
-    if source_text == "portfolio_confirmation" and event_name == "CLOSE":
-        return "Закрытие подтверждено по брокерскому портфелю."
     if source_text == "pending_order_recovery" and event_name == "OPEN":
         return "Подтверждено по портфелю после потери статуса заявки."
-    if source_text == "pending_order_recovery" and event_name == "CLOSE":
-        return "Закрытие подтверждено после потери статуса заявки."
     if source_text == "portfolio_recovery" and event_name == "OPEN":
         return "Восстановлено после рестарта по брокерскому портфелю."
     if source_text == "order_fill" and event_name == "OPEN":
@@ -705,10 +703,10 @@ def build_portfolio_view_for_day(
         )
         or 0.0
     )
-    broker_day_pnl = 0.0
+    broker_open_positions_pnl = 0.0
     for item in (portfolio.get("broker_open_positions") or []):
         try:
-            broker_day_pnl += float(item.get("expected_yield_rub") or 0.0)
+            broker_open_positions_pnl += float(item.get("expected_yield_rub") or 0.0)
         except Exception:
             pass
 
@@ -729,8 +727,8 @@ def build_portfolio_view_for_day(
         open_positions_count = 0
     view["bot_estimated_variation_margin_rub"] = round(estimated_variation, 2)
     view["open_positions_count"] = open_positions_count
-    view["bot_broker_day_pnl_rub"] = round(broker_day_pnl, 2)
-    view["bot_total_pnl_rub"] = round(broker_day_pnl, 2)
+    view["bot_broker_day_pnl_rub"] = round(broker_open_positions_pnl, 2)
+    view["bot_total_pnl_rub"] = round(closed_totals["net_pnl_rub"] + broker_open_positions_pnl, 2)
     view["bot_actual_varmargin_by_symbol"] = history_entry.get(
         "varmargin_by_symbol",
         portfolio.get("bot_actual_varmargin_by_symbol") if selected_is_today else {},

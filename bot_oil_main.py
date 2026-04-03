@@ -1753,10 +1753,11 @@ def build_portfolio_snapshot_payload(
     closed_totals = calculate_closed_trade_totals()
     open_positions = len(live_positions)
     unrealized_pnl = sum(float(item.get("variation_margin_rub") or 0.0) for item in live_positions.values())
-    broker_day_pnl = sum(float(item.get("expected_yield_rub") or 0.0) for item in live_positions.values())
+    broker_open_positions_pnl = sum(float(item.get("expected_yield_rub") or 0.0) for item in live_positions.values())
     realized_pnl = float(closed_totals["net_pnl_rub"])
     realized_gross_pnl = float(closed_totals["gross_pnl_rub"])
     realized_commission = float(closed_totals["commission_rub"])
+    total_bot_pnl = realized_pnl + broker_open_positions_pnl
 
     generated_at = datetime.now(timezone.utc)
     return {
@@ -1773,8 +1774,8 @@ def build_portfolio_snapshot_payload(
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
-        "bot_broker_day_pnl_rub": round(broker_day_pnl, 2),
-        "bot_total_pnl_rub": round(broker_day_pnl, 2),
+        "bot_broker_day_pnl_rub": round(broker_open_positions_pnl, 2),
+        "bot_total_pnl_rub": round(total_bot_pnl, 2),
         "broker_open_positions": list(live_positions.values()),
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
