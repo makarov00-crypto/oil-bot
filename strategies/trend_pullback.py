@@ -38,7 +38,23 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
             allow_short=True,
         )
 
-    if symbol in {"BRK6", "GNM6"}:
+    if symbol == "BRK6":
+        return StrategyProfile(
+            ema_slope_threshold=config.ema_slope_threshold,
+            near_ema20_pct=0.0085,
+            volume_factor=0.82,
+            atr_min_pct=0.0010,
+            impulse_body_factor=0.70,
+            long_rsi_min=40.0,
+            long_rsi_max=66.0,
+            short_rsi_min=38.0,
+            short_rsi_max=64.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
+    if symbol == "GNM6":
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
             near_ema20_pct=0.0060,

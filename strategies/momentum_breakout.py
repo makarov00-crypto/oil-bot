@@ -35,6 +35,15 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     higher_tf_long_ok = higher_tf_bias != "SHORT"
     higher_tf_short_ok = higher_tf_bias != "LONG"
 
+    if instrument.symbol == "BRK6":
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.78
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.65
+        rsi_long_ok = 44.0 <= rsi <= 76.0
+        rsi_short_ok = 24.0 <= rsi <= 58.0
+        volatility_ok = atr_pct >= 0.0008
+        higher_tf_long_ok = higher_tf_bias == "LONG"
+        higher_tf_short_ok = higher_tf_bias == "SHORT"
+
     if instrument.symbol == "GNM6":
         volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
         impulse_ok = body_avg > 0 and body >= body_avg * 0.90
