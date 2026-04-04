@@ -98,6 +98,9 @@ class BotConfig:
     max_order_quantity: int
     risk_per_trade_pct: float
     max_margin_usage_pct: float
+    portfolio_usage_pct: float
+    capital_reserve_pct: float
+    base_trade_allocation_pct: float
     poll_seconds: int
     startup_retry_seconds: int
     candle_hours: int
@@ -1121,6 +1124,9 @@ def load_config() -> BotConfig:
         max_order_quantity=parse_int_env("OIL_MAX_ORDER_QUANTITY", parse_int_env("OIL_ORDER_QUANTITY", 1)),
         risk_per_trade_pct=parse_float_env("OIL_RISK_PER_TRADE_PCT", 0.0),
         max_margin_usage_pct=parse_float_env("OIL_MAX_MARGIN_USAGE_PCT", 0.35),
+        portfolio_usage_pct=parse_float_env("OIL_PORTFOLIO_USAGE_PCT", 0.85),
+        capital_reserve_pct=parse_float_env("OIL_CAPITAL_RESERVE_PCT", 0.35),
+        base_trade_allocation_pct=parse_float_env("OIL_BASE_TRADE_ALLOCATION_PCT", 0.28),
         poll_seconds=parse_int_env("OIL_POLL_SECONDS", 10),
         startup_retry_seconds=parse_int_env("OIL_STARTUP_RETRY_SECONDS", 15),
         candle_hours=parse_int_env("OIL_CANDLE_LOOKBACK_HOURS", 12),
@@ -2602,24 +2608,33 @@ def describe_capacity_block_reason(
     client: Client,
     config: BotConfig,
     instrument: InstrumentConfig,
+    state: InstrumentState,
     entry_price: float,
     signal: str,
+    strategy_name: str = "",
 ) -> str:
-    snapshot = get_account_snapshot(client, config)
-    equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
-    margin_per_lot = get_margin_per_lot(instrument, signal)
+    sizing = calculate_position_sizing_context(client, config, instrument, state, entry_price, signal, strategy_name)
+    margin_per_lot = float(sizing.get("margin_per_lot_rub") or 0.0)
     if margin_per_lot > 0:
-        allowed_margin_total = equity * config.max_margin_usage_pct if config.max_margin_usage_pct > 0 else 0.0
-        available_margin_budget = allowed_margin_total - snapshot.blocked_guarantee_rub
-        if snapshot.free_rub < margin_per_lot:
+        free_rub = float(sizing.get("free_rub") or 0.0)
+        working_margin_budget = float(sizing.get("working_margin_budget_rub") or 0.0)
+        allocatable_margin = float(sizing.get("allocatable_margin_rub") or 0.0)
+        reserve_rub = float(sizing.get("reserve_rub") or 0.0)
+        if free_rub < margin_per_lot:
             return (
                 f"не хватает средств/ГО для {instrument.symbol}: "
-                f"на 1 лот нужно примерно {margin_per_lot:.2f} RUB, свободно {snapshot.free_rub:.2f} RUB."
+                f"на 1 лот нужно примерно {margin_per_lot:.2f} RUB, свободно {free_rub:.2f} RUB."
             )
-        if config.max_margin_usage_pct > 0 and available_margin_budget < margin_per_lot:
+        if working_margin_budget < margin_per_lot:
             return (
-                f"внутренний лимит ГО не позволяет открыть {instrument.symbol}: "
-                f"на 1 лот нужно {margin_per_lot:.2f} RUB, в лимите ГО доступно {max(0.0, available_margin_budget):.2f} RUB."
+                f"рабочий бюджет капитала не позволяет открыть {instrument.symbol}: "
+                f"на 1 лот нужно {margin_per_lot:.2f} RUB, в рабочем бюджете доступно {working_margin_budget:.2f} RUB."
+            )
+        if allocatable_margin < margin_per_lot:
+            return (
+                f"аллокатор капитала пока не даёт новый вход по {instrument.symbol}: "
+                f"на 1 лот нужно {margin_per_lot:.2f} RUB, под новые сигналы сейчас доступно {allocatable_margin:.2f} RUB "
+                f"(после резерва {reserve_rub:.2f} RUB)."
             )
 
     try:
@@ -2640,18 +2655,6 @@ def describe_capacity_block_reason(
             )
     except Exception:
         pass
-
-    step_price = instrument.min_price_increment
-    step_money = instrument.min_price_increment_amount
-    stop_distance = entry_price * config.stop_loss_pct
-    if step_price > 0 and step_money > 0 and stop_distance > 0 and equity > 0 and config.risk_per_trade_pct > 0:
-        risk_budget = equity * config.risk_per_trade_pct * get_session_position_multiplier(get_market_session(), instrument.symbol)
-        money_risk_per_contract = (stop_distance / step_price) * step_money
-        if money_risk_per_contract > 0 and risk_budget < money_risk_per_contract:
-            return (
-                f"риск-бюджет слишком мал для {instrument.symbol}: "
-                f"на сделку выделено {risk_budget:.2f} RUB, на 1 контракт нужно {money_risk_per_contract:.2f} RUB."
-            )
 
     return f"не удалось открыть {instrument.symbol}: размер позиции получился 0 лотов."
 
@@ -2682,7 +2685,7 @@ def summarize_pending_order_rejection(
 
     try:
         price = get_last_price(client, instrument)
-        block_reason = describe_capacity_block_reason(client, config, instrument, price, side)
+        block_reason = describe_capacity_block_reason(client, config, instrument, state, price, side, state.entry_strategy)
         return f"{base_reason} Причина: {block_reason}"
     except Exception as error:
         logging.warning("Не удалось уточнить причину отклонения заявки по %s: %s", instrument.symbol, error)
@@ -2704,58 +2707,96 @@ def get_margin_per_lot(instrument: InstrumentConfig, signal: str) -> float:
     return 0.0
 
 
-def calculate_order_quantity(
+def get_margin_headroom_rub(client: Client, config: BotConfig, snapshot: AccountSnapshot) -> float:
+    try:
+        margin = client.users.get_margin_attributes(account_id=config.account_id)
+        missing = quotation_to_float(getattr(margin, "amount_of_missing_funds", None))
+        if missing is not None:
+            return max(0.0, -missing)
+    except Exception as error:
+        logging.warning("Не удалось получить margin attributes: %s", error)
+
+    equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
+    if equity <= 0:
+        return max(0.0, snapshot.free_rub)
+    if config.max_margin_usage_pct > 0:
+        return max(0.0, equity * config.max_margin_usage_pct - snapshot.blocked_guarantee_rub)
+    return max(0.0, snapshot.free_rub)
+
+
+def get_instrument_allocation_weight(symbol: str) -> tuple[str, float]:
+    if symbol in {"BRK6", "USDRUBF", "NGJ6"}:
+        return "тяжёлый", 0.85
+    if symbol in {"GNM6", "SRM6"}:
+        return "средний", 1.0
+    if symbol in {"IMOEXF", "CNYRUBF"}:
+        return "лёгкий", 1.35
+    return "базовый", 1.0
+
+
+def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_name: str) -> float:
+    weight = 1.0
+    if state.last_higher_tf_bias == signal:
+        weight += 0.15
+    news_bias, news_strength = parse_bias_label(state.last_news_bias)
+    if news_bias == signal:
+        if news_strength == "HIGH":
+            weight += 0.30
+        elif news_strength == "MEDIUM":
+            weight += 0.18
+        elif news_strength == "LOW":
+            weight += 0.08
+    if strategy_name in {"momentum_breakout", "opening_range_breakout"}:
+        weight += 0.10
+    elif strategy_name == "range_break_continuation":
+        weight += 0.05
+    return min(weight, 1.65)
+
+
+def calculate_position_sizing_context(
     client: Client,
     config: BotConfig,
     instrument: InstrumentConfig,
+    state: InstrumentState,
     entry_price: float,
     signal: str,
-) -> int:
+    strategy_name: str = "",
+) -> dict[str, Any]:
     session_name = get_market_session()
     session_multiplier = get_session_position_multiplier(session_name, instrument.symbol)
-    if session_multiplier <= 0:
-        return 0
-    if config.risk_per_trade_pct <= 0:
-        return max(1, int(round(max(1, config.order_quantity) * session_multiplier)))
-
     snapshot = get_account_snapshot(client, config)
     equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
-    if equity <= 0:
-        return max(1, config.order_quantity)
+    margin_per_lot = get_margin_per_lot(instrument, signal)
+    margin_headroom = get_margin_headroom_rub(client, config, snapshot)
+    working_margin_budget = max(0.0, margin_headroom * max(0.0, min(config.portfolio_usage_pct, 1.0)))
+    reserve_rub = working_margin_budget * max(0.0, min(config.capital_reserve_pct, 0.95))
+    allocatable_margin = max(0.0, working_margin_budget - reserve_rub)
+    instrument_class, instrument_weight = get_instrument_allocation_weight(instrument.symbol)
+    conviction_weight = get_signal_conviction_weight(state, signal, strategy_name)
+    base_trade_share = max(0.05, min(config.base_trade_allocation_pct, 1.0))
+    target_trade_margin = allocatable_margin * base_trade_share * instrument_weight * conviction_weight * max(session_multiplier, 0.0)
+    qty_by_target = int(target_trade_margin // margin_per_lot) if margin_per_lot > 0 else 0
+    qty_by_allocatable = int(allocatable_margin // margin_per_lot) if margin_per_lot > 0 else 0
+    qty_by_working = int(working_margin_budget // margin_per_lot) if margin_per_lot > 0 else 0
 
-    risk_budget = equity * config.risk_per_trade_pct * session_multiplier
-    stop_distance = entry_price * config.stop_loss_pct
     step_price = instrument.min_price_increment
     step_money = instrument.min_price_increment_amount
+    stop_distance = entry_price * config.stop_loss_pct
+    money_risk_per_contract = 0.0
+    risk_budget = 0.0
+    if step_price > 0 and step_money > 0 and stop_distance > 0 and equity > 0 and config.risk_per_trade_pct > 0:
+        risk_budget = equity * config.risk_per_trade_pct * max(session_multiplier, 0.0)
+        money_risk_per_contract = (stop_distance / step_price) * step_money
 
-    if step_price <= 0 or step_money <= 0 or stop_distance <= 0:
-        return max(1, config.order_quantity)
+    raw_qty = min(qty_by_target, qty_by_allocatable) if qty_by_allocatable > 0 else 0
+    if raw_qty < 1 and margin_per_lot > 0:
+        can_afford_min_lot = qty_by_working >= 1
+        if can_afford_min_lot and (instrument_class == "тяжёлый" or conviction_weight >= 1.25):
+            raw_qty = 1
+        elif qty_by_allocatable >= 1:
+            raw_qty = 1
 
-    money_risk_per_contract = (stop_distance / step_price) * step_money
-    if money_risk_per_contract <= 0:
-        return max(1, config.order_quantity)
-
-    raw_qty = int(risk_budget // money_risk_per_contract)
-    if raw_qty < 1:
-        raw_qty = 1
-
-    margin_per_lot = get_margin_per_lot(instrument, signal)
-    if margin_per_lot > 0 and config.max_margin_usage_pct > 0:
-        allowed_margin_total = equity * config.max_margin_usage_pct
-        available_margin_budget = allowed_margin_total - snapshot.blocked_guarantee_rub
-        if available_margin_budget <= 0:
-            if snapshot.free_rub >= margin_per_lot:
-                margin_cap_qty = 1
-            else:
-                return 0
-        else:
-            margin_cap_qty = int(available_margin_budget // margin_per_lot)
-            if margin_cap_qty < 1 and snapshot.free_rub >= margin_per_lot:
-                margin_cap_qty = 1
-            if margin_cap_qty < 1:
-                return 0
-        raw_qty = min(raw_qty, margin_cap_qty)
-
+    broker_limit = 0
     try:
         max_lots = client.orders.get_max_lots(
             GetMaxLotsRequest(
@@ -2767,69 +2808,88 @@ def calculate_order_quantity(
             broker_limit = int(getattr(getattr(max_lots, "buy_limits", None), "buy_max_market_lots", 0) or 0)
         else:
             broker_limit = int(getattr(getattr(max_lots, "sell_limits", None), "sell_max_lots", 0) or 0)
-        if broker_limit > 0:
-            raw_qty = min(raw_qty, broker_limit)
     except Exception as error:
         logging.warning("Не удалось получить max lots для %s: %s", instrument.symbol, error)
 
+    if broker_limit > 0:
+        raw_qty = min(raw_qty, broker_limit)
     if config.max_order_quantity > 0:
         raw_qty = min(raw_qty, config.max_order_quantity)
 
-    return max(1, raw_qty)
+    return {
+        "session_name": session_name,
+        "session_multiplier": session_multiplier,
+        "equity": equity,
+        "free_rub": snapshot.free_rub,
+        "blocked_guarantee_rub": snapshot.blocked_guarantee_rub,
+        "margin_headroom_rub": margin_headroom,
+        "working_margin_budget_rub": working_margin_budget,
+        "reserve_rub": reserve_rub,
+        "allocatable_margin_rub": allocatable_margin,
+        "instrument_class": instrument_class,
+        "instrument_weight": instrument_weight,
+        "conviction_weight": conviction_weight,
+        "base_trade_share": base_trade_share,
+        "target_trade_margin_rub": target_trade_margin,
+        "margin_per_lot_rub": margin_per_lot,
+        "qty_by_target": qty_by_target,
+        "qty_by_allocatable": qty_by_allocatable,
+        "qty_by_working": qty_by_working,
+        "broker_limit": broker_limit,
+        "money_risk_per_contract_rub": money_risk_per_contract,
+        "risk_budget_rub": risk_budget,
+        "quantity": max(0, raw_qty),
+    }
+
+
+def calculate_order_quantity(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    entry_price: float,
+    signal: str,
+    strategy_name: str = "",
+) -> int:
+    sizing = calculate_position_sizing_context(client, config, instrument, state, entry_price, signal, strategy_name)
+    return int(sizing.get("quantity") or 0)
 
 
 def build_position_sizing_lines(
     client: Client,
     config: BotConfig,
     instrument: InstrumentConfig,
+    state: InstrumentState,
     entry_price: float,
     signal: str,
     quantity: int,
+    strategy_name: str = "",
 ) -> list[str]:
-    session_name = get_market_session()
-    session_multiplier = get_session_position_multiplier(session_name, instrument.symbol)
+    sizing = calculate_position_sizing_context(client, config, instrument, state, entry_price, signal, strategy_name)
     lines = [
-        f"Сессия: {session_name}",
-        f"Множитель размера: {session_multiplier:.2f}",
+        f"Сессия: {sizing['session_name']}",
+        f"Множитель размера: {sizing['session_multiplier']:.2f}",
         f"Лотов: {quantity}",
         f"Размер биржевого лота: {instrument.lot}",
+        f"Класс инструмента: {sizing['instrument_class']}",
+        f"Вес инструмента: {sizing['instrument_weight']:.2f}",
+        f"Вес сигнала: {sizing['conviction_weight']:.2f}",
     ]
-    try:
-        snapshot = get_account_snapshot(client, config)
-        equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
-        lines.append(f"Портфель: {equity:.2f} RUB")
-        lines.append(f"Свободно: {snapshot.free_rub:.2f} RUB")
-        lines.append(f"ГО занято: {snapshot.blocked_guarantee_rub:.2f} RUB")
-        if config.risk_per_trade_pct > 0:
-            risk_budget = equity * config.risk_per_trade_pct * session_multiplier
-            stop_distance = entry_price * config.stop_loss_pct
-            step_price = instrument.min_price_increment
-            step_money = instrument.min_price_increment_amount
-            if step_price > 0 and step_money > 0 and stop_distance > 0:
-                money_risk_per_contract = (stop_distance / step_price) * step_money
-                lines.append(f"Риск на сделку: {risk_budget:.2f} RUB")
-                lines.append(f"Риск на 1 контракт: {money_risk_per_contract:.2f} RUB")
-        margin_per_lot = get_margin_per_lot(instrument, signal)
-        if margin_per_lot > 0:
-            allowed_margin_total = equity * config.max_margin_usage_pct
-            available_margin_budget = max(0.0, allowed_margin_total - snapshot.blocked_guarantee_rub)
-            lines.append(f"ГО на 1 лот: {margin_per_lot:.2f} RUB")
-            lines.append(f"Лимит ГО: {allowed_margin_total:.2f} RUB")
-            lines.append(f"Свободно под ГО: {available_margin_budget:.2f} RUB")
-        max_lots = client.orders.get_max_lots(
-            GetMaxLotsRequest(
-                account_id=config.account_id,
-                instrument_id=instrument.figi,
-            )
-        )
-        if signal == "LONG":
-            broker_limit = int(getattr(getattr(max_lots, "buy_limits", None), "buy_max_market_lots", 0) or 0)
-        else:
-            broker_limit = int(getattr(getattr(max_lots, "sell_limits", None), "sell_max_lots", 0) or 0)
-        if broker_limit > 0:
-            lines.append(f"Максимум у брокера: {broker_limit} лотов")
-    except Exception as error:
-        logging.warning("Не удалось собрать sizing info для %s: %s", instrument.symbol, error)
+    lines.append(f"Портфель: {sizing['equity']:.2f} RUB")
+    lines.append(f"Свободно: {sizing['free_rub']:.2f} RUB")
+    lines.append(f"ГО занято: {sizing['blocked_guarantee_rub']:.2f} RUB")
+    lines.append(f"Маржинальный запас: {sizing['margin_headroom_rub']:.2f} RUB")
+    lines.append(f"Рабочий бюджет: {sizing['working_margin_budget_rub']:.2f} RUB")
+    lines.append(f"Резерв капитала: {sizing['reserve_rub']:.2f} RUB")
+    lines.append(f"Доступно под новые входы: {sizing['allocatable_margin_rub']:.2f} RUB")
+    if sizing["margin_per_lot_rub"] > 0:
+        lines.append(f"ГО на 1 лот: {sizing['margin_per_lot_rub']:.2f} RUB")
+    lines.append(f"Целевой бюджет сделки: {sizing['target_trade_margin_rub']:.2f} RUB")
+    if sizing["risk_budget_rub"] > 0 and sizing["money_risk_per_contract_rub"] > 0:
+        lines.append(f"Риск-бюджет (справочно): {sizing['risk_budget_rub']:.2f} RUB")
+        lines.append(f"Риск на 1 контракт (справочно): {sizing['money_risk_per_contract_rub']:.2f} RUB")
+    if sizing["broker_limit"] > 0:
+        lines.append(f"Максимум у брокера: {sizing['broker_limit']} лотов")
     return lines
 
 
@@ -3504,15 +3564,15 @@ def open_position(
         return
     session_name = get_market_session()
     price = get_last_price(client, instrument)
-    quantity = calculate_order_quantity(client, config, instrument, price, signal)
+    quantity = calculate_order_quantity(client, config, instrument, state, price, signal, strategy_name)
     if quantity <= 0:
-        block_reason = describe_capacity_block_reason(client, config, instrument, price, signal)
+        block_reason = describe_capacity_block_reason(client, config, instrument, state, price, signal, strategy_name)
         state.last_error = block_reason
         state.last_signal_summary = [block_reason, *state.last_signal_summary[:2]]
         save_state(instrument.symbol, state)
         logging.info("symbol=%s status=entry_blocked reason=%s", instrument.symbol, block_reason)
         return
-    sizing_lines = build_position_sizing_lines(client, config, instrument, price, signal, quantity)
+    sizing_lines = build_position_sizing_lines(client, config, instrument, state, price, signal, quantity, strategy_name)
     side = "LONG" if signal == "LONG" else "SHORT"
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
