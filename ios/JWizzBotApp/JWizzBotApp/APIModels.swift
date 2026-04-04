@@ -82,10 +82,12 @@ struct ServiceStatus: Decodable {
 struct PortfolioSnapshot: Decodable {
     let mode: String?
     let generatedAtMoscow: String?
+    let reportDate: String?
     let selectedDate: String?
     let selectedDateMoscow: String?
     let totalPortfolioRub: Double?
     let freeRub: Double?
+    let freeCashRub: Double?
     let blockedGuaranteeRub: Double?
     let botRealizedGrossPnlRub: Double?
     let botRealizedCommissionRub: Double?
@@ -96,6 +98,7 @@ struct PortfolioSnapshot: Decodable {
     let botActualCashEffectRub: Double?
     let botEstimatedVariationMarginRub: Double?
     let botTotalVarmarginRub: Double?
+    let botTotalVariationMarginRub: Double?
     let botBrokerDayPnlRub: Double?
     let botTotalPnlRub: Double?
     let openPositionsCount: Int?
@@ -103,10 +106,12 @@ struct PortfolioSnapshot: Decodable {
     enum CodingKeys: String, CodingKey {
         case mode
         case generatedAtMoscow = "generated_at_moscow"
+        case reportDate = "report_date"
         case selectedDate = "selected_date"
         case selectedDateMoscow = "selected_date_moscow"
         case totalPortfolioRub = "total_portfolio_rub"
         case freeRub = "free_rub"
+        case freeCashRub = "free_cash_rub"
         case blockedGuaranteeRub = "blocked_guarantee_rub"
         case botRealizedGrossPnlRub = "bot_realized_gross_pnl_rub"
         case botRealizedCommissionRub = "bot_realized_commission_rub"
@@ -117,9 +122,38 @@ struct PortfolioSnapshot: Decodable {
         case botActualCashEffectRub = "bot_actual_cash_effect_rub"
         case botEstimatedVariationMarginRub = "bot_estimated_variation_margin_rub"
         case botTotalVarmarginRub = "bot_total_varmargin_rub"
+        case botTotalVariationMarginRub = "bot_total_variation_margin_rub"
         case botBrokerDayPnlRub = "bot_broker_day_pnl_rub"
         case botTotalPnlRub = "bot_total_pnl_rub"
         case openPositionsCount = "open_positions_count"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        generatedAtMoscow = try container.decodeIfPresent(String.self, forKey: .generatedAtMoscow)
+        reportDate = try container.decodeIfPresent(String.self, forKey: .reportDate)
+        selectedDate = try container.decodeIfPresent(String.self, forKey: .selectedDate) ?? reportDate
+        selectedDateMoscow = try container.decodeIfPresent(String.self, forKey: .selectedDateMoscow)
+        totalPortfolioRub = try container.decodeIfPresent(Double.self, forKey: .totalPortfolioRub)
+        freeRub = try container.decodeIfPresent(Double.self, forKey: .freeRub)
+        freeCashRub = try container.decodeIfPresent(Double.self, forKey: .freeCashRub) ?? freeRub
+        blockedGuaranteeRub = try container.decodeIfPresent(Double.self, forKey: .blockedGuaranteeRub)
+        botRealizedGrossPnlRub = try container.decodeIfPresent(Double.self, forKey: .botRealizedGrossPnlRub)
+        botRealizedCommissionRub = try container.decodeIfPresent(Double.self, forKey: .botRealizedCommissionRub)
+        botRealizedPnlRub = try container.decodeIfPresent(Double.self, forKey: .botRealizedPnlRub)
+        botActualVarmarginRub = try container.decodeIfPresent(Double.self, forKey: .botActualVarmarginRub)
+        botActualVarmarginBySymbol = try container.decodeIfPresent([String: Double].self, forKey: .botActualVarmarginBySymbol)
+        botActualFeeRub = try container.decodeIfPresent(Double.self, forKey: .botActualFeeRub)
+        botActualCashEffectRub = try container.decodeIfPresent(Double.self, forKey: .botActualCashEffectRub)
+        botEstimatedVariationMarginRub = try container.decodeIfPresent(Double.self, forKey: .botEstimatedVariationMarginRub)
+        let totalVmPrimary = try container.decodeIfPresent(Double.self, forKey: .botTotalVarmarginRub)
+        let totalVmAlias = try container.decodeIfPresent(Double.self, forKey: .botTotalVariationMarginRub)
+        botTotalVarmarginRub = totalVmPrimary ?? totalVmAlias
+        botTotalVariationMarginRub = totalVmAlias ?? totalVmPrimary
+        botBrokerDayPnlRub = try container.decodeIfPresent(Double.self, forKey: .botBrokerDayPnlRub)
+        botTotalPnlRub = try container.decodeIfPresent(Double.self, forKey: .botTotalPnlRub)
+        openPositionsCount = try container.decodeIfPresent(Int.self, forKey: .openPositionsCount)
     }
 }
 
@@ -386,7 +420,8 @@ struct ClosedReview: Decodable, Identifiable {
         strategy = try container.decode(String.self, forKey: .strategy)
         session = try container.decodeIfPresent(String.self, forKey: .session)
         entryTime = try container.decode(String.self, forKey: .entryTime)
-        exitTime = try container.decode(String.self, forKey: .exitTime)
+        exitTime = try container.decodeIfPresent(String.self, forKey: .exitTime)
+            ?? container.decode(String.self, forKey: .closeTime)
         entryPrice = try container.decodeLossyStringIfPresent(forKey: .entryPrice)
         exitPrice = try container.decodeLossyStringIfPresent(forKey: .exitPrice)
         qtyLots = try container.decodeIfPresent(Int.self, forKey: .qtyLots)
@@ -406,6 +441,7 @@ struct ClosedReview: Decodable, Identifiable {
         case session
         case entryTime = "entry_time"
         case exitTime = "exit_time"
+        case closeTime = "close_time"
         case entryPrice = "entry_price"
         case exitPrice = "exit_price"
         case qtyLots = "qty_lots"
