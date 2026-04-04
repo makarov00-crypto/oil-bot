@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/oil-bot}"
 VENV_PYTHON="${VENV_PYTHON:-$APP_DIR/.venv/bin/python}"
-SCRIPT_PATH="${SCRIPT_PATH:-$APP_DIR/remote_ai_review.py}"
+SCRIPT_PATH="${SCRIPT_PATH:-$APP_DIR/daily_ai_review.py}"
 LOG_DIR="${LOG_DIR:-$APP_DIR/logs/automation}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/remote_ai_review.log}"
 LOCK_DIR="${LOCK_DIR:-$APP_DIR/.locks}"
@@ -47,7 +47,7 @@ fi
 log "Старт AI-разбора на сервере."
 attempt=1
 while [ "$attempt" -le 2 ]; do
-  if "$VENV_PYTHON" "$SCRIPT_PATH" --publish-to-server >> "$LOG_FILE" 2>&1; then
+  if "$VENV_PYTHON" "$SCRIPT_PATH" --base-dir "$APP_DIR" >> "$LOG_FILE" 2>&1; then
     log "AI-разбор завершен успешно."
     exit 0
   fi
