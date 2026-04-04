@@ -662,6 +662,30 @@ def has_today_active_open_journal_entry(symbol: str, side: str) -> bool:
     return open_count > close_count
 
 
+def has_journal_event_since(
+    symbol: str,
+    side: str,
+    event: str,
+    *,
+    not_before: datetime | None = None,
+) -> bool:
+    target_symbol = symbol.upper()
+    target_side = side.upper()
+    target_event = event.upper()
+    for row in reversed(get_today_trade_journal_rows()):
+        if str(row.get("symbol", "")).upper() != target_symbol:
+            continue
+        if str(row.get("side", "")).upper() != target_side:
+            continue
+        if str(row.get("event", "")).upper() != target_event:
+            continue
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if not_before is not None and row_dt is not None and row_dt < not_before:
+            continue
+        return True
+    return False
+
+
 def find_recent_live_open_details(
     client: Client,
     config: BotConfig,
@@ -2324,7 +2348,22 @@ def sync_state_with_portfolio(
             state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
-    if state.position_side != "FLAT" and not has_today_active_open_journal_entry(instrument.symbol, state.position_side):
+    pending_open_submitted_at = (
+        parse_state_datetime(state.pending_submitted_at)
+        if state.pending_order_id and state.pending_order_action == "OPEN"
+        else None
+    )
+    has_matching_open_entry = (
+        has_journal_event_since(
+            instrument.symbol,
+            state.position_side,
+            "OPEN",
+            not_before=pending_open_submitted_at,
+        )
+        if pending_open_submitted_at is not None
+        else has_today_active_open_journal_entry(instrument.symbol, state.position_side)
+    )
+    if state.position_side != "FLAT" and not has_matching_open_entry:
         if state.pending_order_id and state.pending_order_action == "OPEN":
             recovery_reason = "Позиция подтверждена по брокерскому портфелю."
             recovery_source = "portfolio_confirmation"
@@ -3115,14 +3154,10 @@ def sync_pending_order(
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
                     "закрытие подтверждено по операциям и портфелю."
                 )
-            elif (
-                pending_action == "CLOSE"
-                and synced_qty == 0
-                and previous_side != "FLAT"
-                and pending_submitted_at is not None
-            ):
-                wait_seconds = (datetime.now(UTC) - pending_submitted_at).total_seconds()
-                if wait_seconds < BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS:
+            elif pending_action == "CLOSE" and synced_qty == 0 and previous_side != "FLAT":
+                effective_submitted_at = pending_submitted_at or datetime.now(UTC)
+                wait_seconds = (datetime.now(UTC) - effective_submitted_at).total_seconds()
+                if pending_submitted_at is not None and wait_seconds < BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS:
                     state.execution_status = "submitted_close"
                     state.last_error = (
                         f"Статус заявки {state.pending_order_id} не найден у брокера, "
@@ -3144,7 +3179,7 @@ def sync_pending_order(
                 state.delayed_close_strategy = previous_strategy
                 state.delayed_close_reason = previous_exit_reason
                 state.delayed_close_entry_time = previous_entry_time.isoformat() if previous_entry_time else ""
-                state.delayed_close_submitted_at = pending_submitted_at.isoformat()
+                state.delayed_close_submitted_at = effective_submitted_at.isoformat()
                 state.execution_status = "submitted_close"
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
