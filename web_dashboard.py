@@ -976,13 +976,15 @@ def format_trade_review_row(
 ) -> dict[str, Any]:
     entry_dt = open_row.get("_dt") if open_row else None
     exit_dt = close_row.get("_dt")
+    exit_time = exit_dt.strftime("%d.%m %H:%M:%S") if exit_dt else (close_row.get("time") or "-")
     return {
         "symbol": str(close_row.get("symbol", "")),
         "side": close_row.get("side") or (open_row.get("side") if open_row else ""),
         "strategy": close_row.get("strategy") or (open_row.get("strategy") if open_row else ""),
         "session": close_row.get("session") or (open_row.get("session") if open_row else ""),
         "entry_time": entry_dt.strftime("%d.%m %H:%M:%S") if entry_dt else "-",
-        "exit_time": exit_dt.strftime("%d.%m %H:%M:%S") if exit_dt else (close_row.get("time") or "-"),
+        "exit_time": exit_time,
+        "close_time": exit_time,
         "entry_price": f"{float(open_row['price']):.4f}" if open_row and open_row.get("price") is not None else "-",
         "exit_price": f"{float(close_row['price']):.4f}" if close_row.get("price") is not None else "-",
         "qty_lots": close_row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
@@ -1275,8 +1277,10 @@ def build_portfolio_view_for_day(
             pass
 
     view["selected_date"] = day_key
+    view["report_date"] = day_key
     view["selected_date_moscow"] = target_day.strftime("%d.%m.%Y")
     view["selected_is_today"] = selected_is_today
+    view["free_cash_rub"] = view.get("free_rub")
     view["bot_realized_gross_pnl_rub"] = round(closed_totals["gross_pnl_rub"], 2)
     view["bot_realized_commission_rub"] = round(closed_totals["commission_rub"], 2)
     view["bot_realized_pnl_rub"] = round(closed_totals["net_pnl_rub"], 2)
@@ -1307,6 +1311,7 @@ def build_portfolio_view_for_day(
         or 0.0
     )
     view["bot_total_varmargin_rub"] = round(total_varmargin, 2)
+    view["bot_total_variation_margin_rub"] = round(total_varmargin, 2)
     view["bot_total_pnl_rub"] = round(total_pnl, 2)
     view["bot_actual_varmargin_by_symbol"] = history_entry.get(
         "varmargin_by_symbol",

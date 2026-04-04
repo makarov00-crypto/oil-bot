@@ -1881,8 +1881,12 @@ def build_portfolio_snapshot_payload(
     generated_at = datetime.now(timezone.utc)
     return {
         "mode": "DRY_RUN" if config.dry_run else "LIVE",
+        "report_date": current_moscow_time().date().isoformat(),
+        "selected_date": current_moscow_time().date().isoformat(),
+        "selected_date_moscow": current_moscow_time().strftime("%d.%m.%Y"),
         "total_portfolio_rub": round(snapshot.total_portfolio, 2),
         "free_rub": round(snapshot.free_rub, 2),
+        "free_cash_rub": round(snapshot.free_rub, 2),
         "blocked_guarantee_rub": round(snapshot.blocked_guarantee_rub, 2),
         "open_positions_count": open_positions,
         "bot_realized_gross_pnl_rub": round(realized_gross_pnl, 2),
@@ -1894,6 +1898,7 @@ def build_portfolio_snapshot_payload(
         "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
         "bot_total_varmargin_rub": round(total_varmargin_rub, 2),
+        "bot_total_variation_margin_rub": round(total_varmargin_rub, 2),
         "bot_broker_day_pnl_rub": round(broker_open_positions_pnl, 2),
         "bot_total_pnl_rub": round(total_bot_pnl, 2),
         "broker_open_positions": list(live_positions.values()),
@@ -2358,6 +2363,24 @@ def get_accounting_snapshot_for_day(
     target_day: date,
     watchlist: list[InstrumentConfig] | None = None,
 ) -> dict[str, Any]:
+    def history_fallback() -> dict[str, Any]:
+        history_entry = (load_accounting_history() or {}).get(target_day.isoformat()) or {}
+        return {
+            "date": target_day.isoformat(),
+            "actual_varmargin_rub": round(float(history_entry.get("actual_varmargin_rub") or 0.0), 2),
+            "actual_fee_expense_rub": round(float(history_entry.get("actual_fee_expense_rub") or 0.0), 2),
+            "actual_fee_cash_effect_rub": round(
+                float(history_entry.get("actual_fee_cash_effect_rub") or 0.0),
+                2,
+            ),
+            "actual_account_cash_effect_rub": round(
+                float(history_entry.get("actual_account_cash_effect_rub") or 0.0),
+                2,
+            ),
+            "varmargin_by_symbol": dict(history_entry.get("varmargin_by_symbol") or {}),
+            "source": "history_fallback",
+        }
+
     from_utc, to_utc = get_day_bounds_utc_for_date(target_day)
     cursor = ""
     actual_varmargin_rub = 0.0
@@ -2367,19 +2390,46 @@ def get_accounting_snapshot_for_day(
     varmargin_by_symbol: dict[str, float] = {}
 
     while True:
-        response = client.operations.get_operations_by_cursor(
-            GetOperationsByCursorRequest(
-                account_id=config.account_id,
-                from_=from_utc,
-                to=to_utc,
-                cursor=cursor,
-                limit=200,
-                state=OperationState.OPERATION_STATE_EXECUTED,
-                without_commissions=False,
-                without_overnights=False,
-                without_trades=False,
+        try:
+            response = client.operations.get_operations_by_cursor(
+                GetOperationsByCursorRequest(
+                    account_id=config.account_id,
+                    from_=from_utc,
+                    to=to_utc,
+                    cursor=cursor,
+                    limit=200,
+                    state=OperationState.OPERATION_STATE_EXECUTED,
+                    without_commissions=False,
+                    without_overnights=False,
+                    without_trades=False,
+                )
             )
-        )
+        except RequestError as error:
+            logging.warning(
+                "Не удалось получить операции за %s: %s. Использую сохранённую историю.",
+                target_day.isoformat(),
+                error,
+            )
+            fallback = history_fallback()
+            if any(
+                abs(float(fallback.get(key) or 0.0)) > 0.0
+                for key in (
+                    "actual_varmargin_rub",
+                    "actual_fee_expense_rub",
+                    "actual_fee_cash_effect_rub",
+                    "actual_account_cash_effect_rub",
+                )
+            ) or fallback.get("varmargin_by_symbol"):
+                return fallback
+            return {
+                "date": target_day.isoformat(),
+                "actual_varmargin_rub": round(actual_varmargin_rub, 2),
+                "actual_fee_expense_rub": round(actual_fee_expense_rub, 2),
+                "actual_fee_cash_effect_rub": round(actual_fee_cash_effect_rub, 2),
+                "actual_account_cash_effect_rub": round(actual_varmargin_rub + actual_fee_cash_effect_rub, 2),
+                "varmargin_by_symbol": varmargin_by_symbol,
+                "source": "partial_live_fallback",
+            }
         for item in getattr(response, "items", []) or []:
             op_type = getattr(item, "type", None)
             payment = quotation_to_float(getattr(item, "payment", None))
@@ -2405,6 +2455,7 @@ def get_accounting_snapshot_for_day(
         "actual_fee_cash_effect_rub": round(actual_fee_cash_effect_rub, 2),
         "actual_account_cash_effect_rub": round(actual_varmargin_rub + actual_fee_cash_effect_rub, 2),
         "varmargin_by_symbol": varmargin_by_symbol,
+        "source": "live",
     }
 
 
