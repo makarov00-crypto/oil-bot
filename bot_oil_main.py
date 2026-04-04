@@ -1212,6 +1212,7 @@ def build_telegram_card(title: str, emoji: str, lines: list[str]) -> str:
 
 SIGNAL_STATUS_INTERVAL_MINUTES = 60
 SUMMARY_STATUS_INTERVAL_MINUTES = 120
+BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS = 120
 
 
 def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
@@ -2976,11 +2977,32 @@ def sync_pending_order(
                 source="pending_order_recovery",
                 recovered_status="recovered_close",
                 not_before=close_not_before,
-            ):
+                ):
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
                     "закрытие подтверждено по операциям и портфелю."
                 )
+            elif (
+                pending_action == "CLOSE"
+                and synced_qty == 0
+                and previous_side != "FLAT"
+                and pending_submitted_at is not None
+            ):
+                wait_seconds = (datetime.now(UTC) - pending_submitted_at).total_seconds()
+                if wait_seconds < BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS:
+                    state.execution_status = "submitted_close"
+                    state.last_error = (
+                        f"Статус заявки {state.pending_order_id} не найден у брокера, "
+                        "ждём появления операции закрытия в истории."
+                    )
+                    state.last_signal_summary = [state.last_error, *state.last_signal_summary[:2]]
+                    save_state(instrument.symbol, state)
+                    logging.info(
+                        "symbol=%s status=close_waiting_broker_ops seconds=%.0f",
+                        instrument.symbol,
+                        wait_seconds,
+                    )
+                    return True
             elif pending_action == "OPEN" and confirm_pending_open_from_broker(
                 client,
                 config,
