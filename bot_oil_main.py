@@ -1197,6 +1197,16 @@ def compact_reason(reason: str) -> str:
     return cleaned
 
 
+def parse_bias_label(value: str) -> tuple[str, str]:
+    raw = (value or "").strip().upper()
+    if not raw:
+        return "NEUTRAL", ""
+    if "/" in raw:
+        bias, strength = raw.split("/", 1)
+        return bias.strip(), strength.strip()
+    return raw, ""
+
+
 def format_news_bias_label(news_bias: NewsBias | None) -> str:
     if news_bias is None:
         return "NEUTRAL"
@@ -2958,6 +2968,26 @@ def position_reentry_allowed(
     signal: str,
     current_price: float,
 ) -> tuple[bool, str]:
+    def brk6_fresh_impulse_override() -> bool:
+        if instrument.symbol != "BRK6":
+            return False
+        if signal != "LONG":
+            return False
+        if state.last_exit_side != "LONG" or state.last_exit_pnl_rub <= 0:
+            return False
+        if state.last_higher_tf_bias != "LONG":
+            return False
+        news_bias, news_strength = parse_bias_label(state.last_news_bias)
+        if news_bias != "LONG" or news_strength not in {"MEDIUM", "HIGH"}:
+            return False
+        return price_has_new_extreme_since_exit(
+            instrument,
+            signal,
+            current_price,
+            state.last_exit_price,
+            min_steps=6,
+        )
+
     if instrument.symbol not in {"GNM6", "USDRUBF", "SRM6", "BRK6", "NGJ6", "IMOEXF"}:
         return True, ""
     if not state.last_exit_time:
@@ -3000,6 +3030,8 @@ def position_reentry_allowed(
         if state.last_exit_side and state.last_exit_side != signal:
             cooldown_minutes = max(cooldown_minutes, 75)
     elif instrument.symbol == "BRK6":
+        if state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            cooldown_minutes = max(cooldown_minutes, 40)
         if state.last_exit_pnl_rub < 0:
             cooldown_minutes = 45
         if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
@@ -3025,6 +3057,8 @@ def position_reentry_allowed(
         if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
+        if brk6_fresh_impulse_override():
+            return True, ""
         if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, "для BRK6 повторный вход после убыточного выхода разрешён только после обновления экстремума."
@@ -3038,6 +3072,8 @@ def position_reentry_allowed(
 
     next_allowed = last_exit_at + timedelta(minutes=cooldown_minutes)
     now = datetime.now(UTC)
+    if brk6_fresh_impulse_override():
+        return True, ""
     if now >= next_allowed:
         if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
@@ -3054,6 +3090,8 @@ def position_reentry_allowed(
         return True, ""
 
     remaining = int((next_allowed - now).total_seconds() // 60) + 1
+    if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+        return False, f"для BRK6 после прибыльного выхода нужен либо новый сильный импульс по новостям и цене, либо пауза ещё ~{remaining} мин."
     return False, f"для {instrument.symbol} действует cooldown после выхода: ждать ещё ~{remaining} мин."
 
 
