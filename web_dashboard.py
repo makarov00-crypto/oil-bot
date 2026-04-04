@@ -2727,6 +2727,25 @@ def build_dashboard_html() -> str:
         .replaceAll("'", '&#39;');
     }
 
+    const instrumentNames = {
+      BRK6: 'BR-5.26 Нефть Brent',
+      USDRUBF: 'USDRUBF Доллар - Рубль',
+      CNYRUBF: 'CNYRUBF Юань - Рубль',
+      IMOEXF: 'IMOEXF Индекс МосБиржи',
+      SRM6: 'SBRF-6.26 Сбер Банк',
+      GNM6: 'GOLDM-6.26 Золото (мини)',
+      NGJ6: 'NG-4.26 Природный газ',
+    };
+
+    function renderInstrumentLabel(symbol, explicitName = '') {
+      const ticker = String(symbol || '-');
+      const displayName = String(explicitName || instrumentNames[ticker] || '').trim();
+      if (!displayName) {
+        return `<div class="mono">${escapeHtml(ticker)}</div>`;
+      }
+      return `<div class="mono">${escapeHtml(ticker)}</div><div class="muted">${escapeHtml(displayName)}</div>`;
+    }
+
     function signalBadge(value) {
       const raw = String(value || '-').toUpperCase();
       const css = raw === 'LONG' || raw === 'ACTIVE' ? 'long' : raw === 'SHORT' || raw === 'FAILED' ? 'short' : 'hold';
@@ -3078,7 +3097,7 @@ def build_dashboard_html() -> str:
           ? `<button type="button" class="hint-button js-news-popover" data-source="${escapeHtml(sourceLabel)}" data-news-text="${escapeHtml(item.message_text)}">текст</button>`
           : '';
         newsBody.insertAdjacentHTML('beforeend', `<tr>
-          <td class="mono">${escapeHtml(item.symbol || '-')}</td>
+          <td>${renderInstrumentLabel(item.symbol || '-', item.display_name || '')}</td>
           <td>${signalBadge(item.bias || '-')}</td>
           <td>${escapeHtml(formatStrength(item.strength || '-'))}</td>
           <td>${escapeHtml(item.source || '-')}</td>
@@ -3087,7 +3106,7 @@ def build_dashboard_html() -> str:
         </tr>`);
         newsCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
-            <div class="mobile-card-title mono">${escapeHtml(item.symbol || '-')}</div>
+            <div class="mobile-card-title">${renderInstrumentLabel(item.symbol || '-', item.display_name || '')}</div>
             ${signalBadge(item.bias || '-')}
           </div>
           <div class="mobile-card-grid">
@@ -3116,7 +3135,7 @@ def build_dashboard_html() -> str:
         const vmClass = vm > 0 ? 'good' : vm < 0 ? 'bad' : 'muted';
         const pctClass = pct > 0 ? 'good' : pct < 0 ? 'bad' : 'muted';
         posBody.insertAdjacentHTML('beforeend', `<tr>
-          <td class="mono">${escapeHtml(pos.symbol)}</td>
+          <td>${renderInstrumentLabel(pos.symbol, pos.display_name || '')}</td>
           <td>${signalBadge(pos.side)}</td>
           <td class="mono">${escapeHtml(pos.qty)}</td>
           <td class="mono">${escapeHtml(formatPrice(pos.entry_price))}</td>
@@ -3129,7 +3148,7 @@ def build_dashboard_html() -> str:
         </tr>`);
         posCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
-            <div class="mobile-card-title mono">${escapeHtml(pos.symbol)}</div>
+            <div class="mobile-card-title">${renderInstrumentLabel(pos.symbol, pos.display_name || '')}</div>
             ${signalBadge(pos.side)}
           </div>
           <div class="mobile-card-grid">
@@ -3158,7 +3177,7 @@ def build_dashboard_html() -> str:
           ? state.last_signal_summary[0]
           : (state.last_error || '-');
         signalBody.insertAdjacentHTML('beforeend', `<tr>
-          <td class="mono">${escapeHtml(symbol)}</td>
+          <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
           <td>${escapeHtml(state.last_strategy_name || state.entry_strategy || '-')}</td>
           <td>${signalBadge(state.last_higher_tf_bias || '-')}</td>
@@ -3168,7 +3187,7 @@ def build_dashboard_html() -> str:
         </tr>`);
         signalCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
-            <div class="mobile-card-title mono">${escapeHtml(symbol)}</div>
+            <div class="mobile-card-title">${renderInstrumentLabel(symbol, state.display_name || '')}</div>
             ${signalBadge(state.last_signal || '-')}
           </div>
           <div class="mobile-card-grid">
@@ -3200,7 +3219,7 @@ def build_dashboard_html() -> str:
         const netText = isOpenEvent ? 'не применяется' : (row.net_pnl_rub ?? pnl);
         tradeBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(row.time || '-')}</td>
-          <td class="mono">${escapeHtml(row.symbol || '-')}</td>
+          <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
           <td>${escapeHtml(formatEventLabel(row.event || '-'))}</td>
           <td>${eventStatusBadge(row.event_status || 'history')}</td>
           <td>${signalBadge(row.side || '-')}</td>
@@ -3214,7 +3233,7 @@ def build_dashboard_html() -> str:
         </tr>`);
         tradeCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
-            <div class="mobile-card-title mono">${escapeHtml(row.symbol || '-')}</div>
+            <div class="mobile-card-title">${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</div>
             ${eventStatusBadge(row.event_status || 'history')}
           </div>
           <div class="mobile-card-grid">
@@ -3257,7 +3276,7 @@ def build_dashboard_html() -> str:
         const pnlNum = Number(row.pnl_rub);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
         reviewBody.insertAdjacentHTML('beforeend', `<tr>
-          <td class="mono">${escapeHtml(row.symbol || '-')}</td>
+          <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
           <td>${signalBadge(row.side || '-')}</td>
           <td>${escapeHtml(row.strategy || '-')}</td>
           <td class="mono">${escapeHtml(row.entry_time || '-')}</td>
@@ -3270,7 +3289,7 @@ def build_dashboard_html() -> str:
         </tr>`);
         reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
-            <div class="mobile-card-title mono">${escapeHtml(row.symbol || '-')}</div>
+            <div class="mobile-card-title">${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</div>
             ${signalBadge(row.side || '-')}
           </div>
           <div class="mobile-card-grid">
@@ -3297,7 +3316,7 @@ def build_dashboard_html() -> str:
         for (const row of currentOpen) {
           const openCommissionText = row.commission_rub ?? '-';
           reviewBody.insertAdjacentHTML('beforeend', `<tr>
-            <td class="mono">${escapeHtml(row.symbol || '-')}</td>
+            <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
             <td>${signalBadge(row.side || '-')}</td>
             <td>${escapeHtml(row.strategy || '-')}</td>
             <td class="mono">${escapeHtml(row.time || '-')}</td>
@@ -3310,7 +3329,7 @@ def build_dashboard_html() -> str:
           </tr>`);
           reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
             <div class="mobile-card-head">
-              <div class="mobile-card-title mono">${escapeHtml(row.symbol || '-')}</div>
+              <div class="mobile-card-title">${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</div>
               ${signalBadge(row.side || '-')}
             </div>
             <div class="mobile-card-grid">
