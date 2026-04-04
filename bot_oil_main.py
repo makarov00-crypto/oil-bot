@@ -2278,6 +2278,31 @@ def sync_state_with_portfolio(
         )
         save_state(instrument.symbol, state)
     refresh_position_snapshot(state, instrument, last_price)
+    if (
+        state.position_side != "FLAT"
+        and state.position_qty > 0
+        and state.entry_price is not None
+        and (not state.entry_commission_accounted or float(state.entry_commission_rub or 0.0) <= 0)
+    ):
+        operation_time, entry_fee_rub = find_recent_live_open_details(
+            client,
+            config,
+            instrument,
+            state.position_side,
+            state.position_qty,
+            state.entry_price,
+            not_before=None,
+        )
+        if operation_time is not None and entry_fee_rub is not None and entry_fee_rub > 0:
+            state.entry_time = operation_time.isoformat()
+            state.entry_commission_rub = entry_fee_rub
+            state.entry_commission_accounted = True
+            update_latest_unclosed_open_journal_entry(
+                instrument.symbol,
+                state.position_side,
+                commission_rub=entry_fee_rub,
+                net_pnl_rub=-entry_fee_rub,
+            )
     if state.position_side != "FLAT" and not state.pending_order_id and state.execution_status in {"idle", "rejected"}:
         state.execution_status = "confirmed_open"
     if broker_var_margin is not None:
