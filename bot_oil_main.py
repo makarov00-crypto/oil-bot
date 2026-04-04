@@ -429,6 +429,103 @@ def load_trade_journal() -> list[dict[str, Any]]:
     return rows
 
 
+def save_trade_journal(rows: list[dict[str, Any]]) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with TRADE_JOURNAL_PATH.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def update_latest_unclosed_open_journal_entry(
+    symbol: str,
+    side: str,
+    *,
+    commission_rub: float | None = None,
+    net_pnl_rub: float | None = None,
+) -> bool:
+    rows = load_trade_journal()
+    target_symbol = symbol.upper()
+    target_side = side.upper()
+    unmatched_closes = 0
+
+    for row in reversed(rows):
+        if str(row.get("symbol", "")).upper() != target_symbol:
+            continue
+        if str(row.get("side", "")).upper() != target_side:
+            continue
+        event = str(row.get("event", "")).upper()
+        if event == "CLOSE":
+            unmatched_closes += 1
+            continue
+        if event != "OPEN":
+            continue
+        if unmatched_closes > 0:
+            unmatched_closes -= 1
+            continue
+        changed = False
+        if commission_rub is not None:
+            row["commission_rub"] = round(float(commission_rub), 2)
+            changed = True
+        if net_pnl_rub is not None:
+            row["net_pnl_rub"] = round(float(net_pnl_rub), 2)
+            changed = True
+        if changed:
+            save_trade_journal(rows)
+        return changed
+    return False
+
+
+def update_latest_close_journal_entry(
+    symbol: str,
+    side: str,
+    *,
+    not_before: datetime | None = None,
+    price: float | None = None,
+    gross_pnl_rub: float | None = None,
+    commission_rub: float | None = None,
+    net_pnl_rub: float | None = None,
+    pnl_rub: float | None = None,
+    event_time: datetime | None = None,
+) -> bool:
+    rows = load_trade_journal()
+    target_symbol = symbol.upper()
+    target_side = side.upper()
+
+    for row in reversed(rows):
+        if str(row.get("symbol", "")).upper() != target_symbol:
+            continue
+        if str(row.get("side", "")).upper() != target_side:
+            continue
+        if str(row.get("event", "")).upper() != "CLOSE":
+            continue
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if not_before is not None and row_dt is not None and row_dt < not_before:
+            continue
+        changed = False
+        if price is not None:
+            row["price"] = price
+            changed = True
+        if gross_pnl_rub is not None:
+            row["gross_pnl_rub"] = round(float(gross_pnl_rub), 2)
+            changed = True
+        if commission_rub is not None:
+            row["commission_rub"] = round(float(commission_rub), 2)
+            changed = True
+        if net_pnl_rub is not None:
+            row["net_pnl_rub"] = round(float(net_pnl_rub), 2)
+            changed = True
+        if pnl_rub is not None:
+            row["pnl_rub"] = round(float(pnl_rub), 2)
+            changed = True
+        if event_time is not None:
+            row["time"] = event_time.astimezone(MOSCOW_TZ).isoformat()
+            changed = True
+        if changed:
+            save_trade_journal(rows)
+        return changed
+    return False
+
+
 def get_today_trade_journal_rows() -> list[dict[str, Any]]:
     today = datetime.now(MOSCOW_TZ).date().isoformat()
     rows = []
@@ -716,6 +813,12 @@ def confirm_pending_open_from_broker(
     if entry_fee_rub is not None and entry_fee_rub > 0:
         state.entry_commission_rub = entry_fee_rub
         state.entry_commission_accounted = True
+        update_latest_unclosed_open_journal_entry(
+            instrument.symbol,
+            state.position_side,
+            commission_rub=entry_fee_rub,
+            net_pnl_rub=-entry_fee_rub,
+        )
     state.execution_status = "confirmed_open"
     state.last_error = ""
     clear_pending_order(state)
@@ -755,6 +858,8 @@ def confirm_pending_close_from_broker(
         previous_qty,
         not_before=not_before,
     )
+    if close_time is None:
+        return False
     recovered_entry_commission = previous_entry_commission
     if recovered_entry_commission <= 0 and previous_entry_price is not None:
         _, recovered_open_fee = find_recent_live_open_details(
@@ -811,6 +916,17 @@ def confirm_pending_close_from_broker(
         source=source,
         strategy=previous_strategy,
         dry_run=False,
+    )
+    update_latest_close_journal_entry(
+        instrument.symbol,
+        previous_side,
+        not_before=not_before,
+        price=close_price,
+        gross_pnl_rub=gross_pnl,
+        commission_rub=total_trade_commission,
+        net_pnl_rub=net_trade_pnl,
+        pnl_rub=net_trade_pnl,
+        event_time=close_time,
     )
     state.last_error = ""
     clear_pending_order(state)
