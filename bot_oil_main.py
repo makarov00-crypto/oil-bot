@@ -191,6 +191,8 @@ class InstrumentState:
     last_news_bias: str = "NEUTRAL"
     last_news_impact: str = ""
     last_signal_summary: list[str] = field(default_factory=list)
+    last_allocator_summary: str = ""
+    last_allocator_quantity: int = 0
     last_exit_time: str = ""
     last_exit_side: str = ""
     last_exit_reason: str = ""
@@ -2893,6 +2895,28 @@ def build_position_sizing_lines(
     return lines
 
 
+def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
+    quantity = int(sizing.get("quantity") or 0)
+    instrument_class = str(sizing.get("instrument_class") or "базовый")
+    conviction_weight = float(sizing.get("conviction_weight") or 0.0)
+    allocatable_margin = float(sizing.get("allocatable_margin_rub") or 0.0)
+    target_trade_margin = float(sizing.get("target_trade_margin_rub") or 0.0)
+    margin_per_lot = float(sizing.get("margin_per_lot_rub") or 0.0)
+    broker_limit = int(sizing.get("broker_limit") or 0)
+    if quantity <= 0:
+        return (
+            f"Аллокатор: вход не проходит. Класс {instrument_class}, "
+            f"вес сигнала {conviction_weight:.2f}, доступно {allocatable_margin:.0f} RUB, "
+            f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB."
+        )
+    broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
+    return (
+        f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
+        f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
+        f"ГО 1 лота {margin_per_lot:.0f} RUB{broker_hint} -> {quantity} лот(а)."
+    )
+
+
 def calculate_futures_pnl_rub(
     instrument: InstrumentConfig,
     entry_price: float,
@@ -4000,6 +4024,23 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     state.last_news_bias = format_news_bias_label(news_bias)
     state.last_news_impact = describe_news_bias_impact(signal, news_bias)
     state.last_signal_summary = signal_summary
+    state.last_allocator_summary = ""
+    state.last_allocator_quantity = 0
+    if signal in {"LONG", "SHORT"} and state.position_side == "FLAT" and not has_pending_order(state):
+        try:
+            allocator_sizing = calculate_position_sizing_context(
+                client,
+                config,
+                instrument,
+                state,
+                current_price,
+                signal,
+                primary_strategy_name,
+            )
+            state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
+            state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
+        except Exception as error:
+            logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
 
     if signal_changed:
         logging.info("symbol=%s signal=%s side=%s qty=%s", instrument.symbol, signal, state.position_side, state.position_qty)

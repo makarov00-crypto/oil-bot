@@ -2555,7 +2555,7 @@ def build_dashboard_html() -> str:
         <table id="signalsTable">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>News bias</th><th>Влияние</th><th>Ключевая причина</th>
+              <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>News bias</th><th>Влияние</th><th>Аллокатор</th><th>Ключевая причина</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -3176,6 +3176,7 @@ def build_dashboard_html() -> str:
         const summary = Array.isArray(state.last_signal_summary) && state.last_signal_summary.length
           ? state.last_signal_summary[0]
           : (state.last_error || '-');
+        const allocatorSummary = state.last_allocator_summary || 'Нет активного расчёта размера позиции.';
         signalBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
@@ -3183,6 +3184,7 @@ def build_dashboard_html() -> str:
           <td>${signalBadge(state.last_higher_tf_bias || '-')}</td>
           <td>${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</td>
           <td class="reason">${escapeHtml(state.last_news_impact || '-')}</td>
+          <td class="reason">${escapeHtml(allocatorSummary)}</td>
           <td class="reason">${escapeHtml(summary)}</td>
         </tr>`);
         signalCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -3195,6 +3197,9 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">Старший ТФ</span><div class="mobile-card-value">${signalBadge(state.last_higher_tf_bias || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</div></div>
             <div class="mobile-card-item"><span class="muted">Влияние</span><div class="mobile-card-value">${escapeHtml(state.last_news_impact || '-')}</div></div>
+          </div>
+          <div class="mobile-card-footer">
+            <div class="mobile-card-text"><span class="muted">Аллокатор</span><br>${escapeHtml(allocatorSummary)}</div>
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Ключевая причина</span><br>${escapeHtml(summary)}</div>
