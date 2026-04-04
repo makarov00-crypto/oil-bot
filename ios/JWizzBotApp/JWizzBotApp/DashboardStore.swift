@@ -38,8 +38,16 @@ final class DashboardStore: ObservableObject {
             let result = try await fetchDashboard(date: targetDate)
             let decoded = result.payload
             apply(decoded)
-            try saveCache(result.data, for: targetDate)
+            do {
+                try saveCache(result.data, for: targetDate)
+            } catch {
+                // Кэш — это удобство, а не причина ломать успешное обновление.
+                print("Dashboard cache save warning:", error.localizedDescription)
+            }
         } catch {
+            if isCancellation(error) {
+                return
+            }
             if let cached = loadCache(for: targetDate) {
                 apply(cached, cached: true)
                 errorMessage = "Сервер временно недоступен. Показан сохранённый срез."
@@ -90,6 +98,9 @@ final class DashboardStore: ObservableObject {
     }
 
     private func shouldRetry(_ error: Error) -> Bool {
+        if isCancellation(error) {
+            return false
+        }
         if let error = error as? DashboardLoadError {
             if case .httpStatus(let code) = error {
                 return code >= 500
@@ -141,6 +152,16 @@ final class DashboardStore: ObservableObject {
         return base
             .appendingPathComponent("JWizzBotApp", isDirectory: true)
             .appendingPathComponent("dashboard-\(key).json")
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            return true
+        }
+        return false
     }
 
     private func describe(_ error: Error) -> String {
