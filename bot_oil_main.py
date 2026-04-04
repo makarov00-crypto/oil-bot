@@ -170,6 +170,15 @@ class InstrumentState:
     pending_order_qty: int = 0
     pending_submitted_at: str = ""
     pending_exit_reason: str = ""
+    delayed_close_recovery_needed: bool = False
+    delayed_close_side: str = ""
+    delayed_close_qty: int = 0
+    delayed_close_entry_price: float | None = None
+    delayed_close_entry_commission_rub: float = 0.0
+    delayed_close_strategy: str = ""
+    delayed_close_reason: str = ""
+    delayed_close_entry_time: str = ""
+    delayed_close_submitted_at: str = ""
     execution_status: str = "idle"
     last_fill_price: float | None = None
     entry_time: str = ""
@@ -320,6 +329,18 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_order_qty = 0
     state.pending_submitted_at = ""
     state.pending_exit_reason = ""
+
+
+def clear_delayed_close_recovery(state: InstrumentState) -> None:
+    state.delayed_close_recovery_needed = False
+    state.delayed_close_side = ""
+    state.delayed_close_qty = 0
+    state.delayed_close_entry_price = None
+    state.delayed_close_entry_commission_rub = 0.0
+    state.delayed_close_strategy = ""
+    state.delayed_close_reason = ""
+    state.delayed_close_entry_time = ""
+    state.delayed_close_submitted_at = ""
 
 
 def parse_state_datetime(value: str) -> datetime | None:
@@ -938,6 +959,67 @@ def confirm_pending_close_from_broker(
         source,
     )
     return True
+
+
+DELAYED_CLOSE_RECOVERY_MAX_AGE_SECONDS = 6 * 60 * 60
+
+
+def reconcile_delayed_close_from_broker(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+) -> bool:
+    if not state.delayed_close_recovery_needed:
+        return False
+    if state.position_qty != 0 or state.position_side != "FLAT":
+        return False
+
+    previous_side = state.delayed_close_side
+    previous_qty = int(state.delayed_close_qty or 0)
+    if previous_side == "FLAT" or previous_qty <= 0:
+        clear_delayed_close_recovery(state)
+        save_state(instrument.symbol, state)
+        return False
+
+    previous_entry_time = parse_state_datetime(state.delayed_close_entry_time)
+    delayed_submitted_at = parse_state_datetime(state.delayed_close_submitted_at)
+    close_not_before = previous_entry_time
+    if delayed_submitted_at is not None and (close_not_before is None or delayed_submitted_at > close_not_before):
+        close_not_before = delayed_submitted_at
+
+    if confirm_pending_close_from_broker(
+        client,
+        config,
+        instrument,
+        state,
+        previous_side=previous_side,
+        previous_qty=previous_qty,
+        previous_entry_price=state.delayed_close_entry_price,
+        previous_entry_commission=state.delayed_close_entry_commission_rub,
+        previous_strategy=state.delayed_close_strategy,
+        previous_exit_reason=state.delayed_close_reason or "Закрытие подтверждено брокерской операцией",
+        previous_entry_time=previous_entry_time,
+        source="delayed_broker_ops_recovery",
+        recovered_status="recovered_close",
+        not_before=close_not_before,
+    ):
+        clear_delayed_close_recovery(state)
+        save_state(instrument.symbol, state)
+        logging.info("symbol=%s status=delayed_close_recovered", instrument.symbol)
+        return True
+
+    if delayed_submitted_at is not None:
+        age_seconds = (datetime.now(UTC) - delayed_submitted_at).total_seconds()
+        if age_seconds > DELAYED_CLOSE_RECOVERY_MAX_AGE_SECONDS:
+            state.last_error = (
+                "Закрытие позиции не удалось подтвердить по брокерским операциям в разумное время. "
+                "Нужна ручная сверка журнала."
+            )
+            clear_delayed_close_recovery(state)
+            save_state(instrument.symbol, state)
+            logging.warning("symbol=%s status=delayed_close_recovery_expired", instrument.symbol)
+    return False
 
 
 def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -3054,6 +3136,29 @@ def sync_pending_order(
                         wait_seconds,
                     )
                     return True
+                state.delayed_close_recovery_needed = True
+                state.delayed_close_side = previous_side
+                state.delayed_close_qty = previous_qty
+                state.delayed_close_entry_price = previous_entry_price
+                state.delayed_close_entry_commission_rub = previous_entry_commission
+                state.delayed_close_strategy = previous_strategy
+                state.delayed_close_reason = previous_exit_reason
+                state.delayed_close_entry_time = previous_entry_time.isoformat() if previous_entry_time else ""
+                state.delayed_close_submitted_at = pending_submitted_at.isoformat()
+                state.execution_status = "submitted_close"
+                state.last_error = (
+                    f"Статус заявки {state.pending_order_id} не найден у брокера, "
+                    "закрытие будет дозапрошено по брокерским операциям."
+                )
+                state.last_signal_summary = [state.last_error, *state.last_signal_summary[:2]]
+                clear_pending_order(state)
+                save_state(instrument.symbol, state)
+                logging.warning(
+                    "symbol=%s status=close_deferred_to_broker_ops seconds=%.0f",
+                    instrument.symbol,
+                    wait_seconds,
+                )
+                return False
             elif pending_action == "OPEN" and confirm_pending_open_from_broker(
                 client,
                 config,
@@ -3624,6 +3729,9 @@ def check_exit(
 def process_instrument(client: Client, config: BotConfig, instrument: InstrumentConfig) -> None:
     state = load_state(instrument.symbol)
     reconcile_state_accounting(instrument.symbol, state)
+    if not config.dry_run:
+        reconcile_delayed_close_from_broker(client, config, instrument, state)
+        state = load_state(instrument.symbol)
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
         return
     session_name = get_market_session()
