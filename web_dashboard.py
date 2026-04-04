@@ -72,6 +72,7 @@ def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
         ("/docs", "Документация", "docs"),
+        ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
     for href, label, key in links:
@@ -555,6 +556,398 @@ def build_docs_html() -> str:
       </div>
     </section>
   </main>
+</body>
+</html>
+    """
+
+
+def quotation_like_to_float(value: object) -> float | None:
+    if value is None:
+        return None
+    units = getattr(value, "units", None)
+    nano = getattr(value, "nano", None)
+    if units is None or nano is None:
+        return None
+    return float(units) + float(nano) / 1_000_000_000
+
+
+def load_contracts_payload() -> dict:
+    generated_at = datetime.now(timezone.utc)
+    payload = {
+        "margin": {},
+        "contracts": [],
+        "generated_at": generated_at.isoformat(),
+        "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+        "error": "",
+    }
+    try:
+        from tinkoff.invest import Client
+        from tinkoff.invest.schemas import GetMaxLotsRequest
+        from bot_oil_main import load_config, quotation_to_float, resolve_instruments
+
+        config = load_config()
+        with Client(config.token, target=config.target) as client:
+            margin = client.users.get_margin_attributes(account_id=config.account_id)
+            liquid_portfolio = quotation_like_to_float(getattr(margin, "liquid_portfolio", None)) or 0.0
+            starting_margin = quotation_like_to_float(getattr(margin, "starting_margin", None)) or 0.0
+            minimal_margin = quotation_like_to_float(getattr(margin, "minimal_margin", None)) or 0.0
+            funds_sufficiency_level = quotation_like_to_float(getattr(margin, "funds_sufficiency_level", None))
+            amount_of_missing_funds = quotation_like_to_float(getattr(margin, "amount_of_missing_funds", None)) or 0.0
+            margin_headroom = max(0.0, -amount_of_missing_funds)
+            payload["margin"] = {
+                "liquid_portfolio_rub": round(liquid_portfolio, 2),
+                "starting_margin_rub": round(starting_margin, 2),
+                "minimal_margin_rub": round(minimal_margin, 2),
+                "funds_sufficiency_level": round(funds_sufficiency_level, 2) if funds_sufficiency_level is not None else None,
+                "amount_of_missing_funds_rub": round(amount_of_missing_funds, 2),
+                "margin_headroom_rub": round(margin_headroom, 2),
+            }
+
+            instruments = resolve_instruments(client, config)
+            last_prices = client.market_data.get_last_prices(figi=[item.figi for item in instruments]).last_prices
+            price_map = {
+                item.figi: quotation_to_float(getattr(item, "price", None))
+                for item in last_prices
+            }
+
+            rows: list[dict] = []
+            for instrument in instruments:
+                current_price = price_map.get(instrument.figi) or 0.0
+                step_price = instrument.min_price_increment or 0.0
+                step_money = instrument.min_price_increment_amount or 0.0
+                multiplier = (step_money / step_price) if step_price > 0 else 0.0
+                notional_per_lot = current_price * multiplier if current_price > 0 and multiplier > 0 else 0.0
+                long_margin = instrument.initial_margin_on_buy or 0.0
+                short_margin = instrument.initial_margin_on_sell or 0.0
+                leverage_long = (notional_per_lot / long_margin) if long_margin > 0 else None
+                leverage_short = (notional_per_lot / short_margin) if short_margin > 0 else None
+                approx_long_lots = int(margin_headroom // long_margin) if long_margin > 0 else 0
+                approx_short_lots = int(margin_headroom // short_margin) if short_margin > 0 else 0
+                broker_buy_max = 0
+                broker_sell_max = 0
+                try:
+                    limits = client.orders.get_max_lots(
+                        GetMaxLotsRequest(account_id=config.account_id, instrument_id=instrument.figi)
+                    )
+                    broker_buy_max = int(getattr(getattr(limits, "buy_limits", None), "buy_max_market_lots", 0) or 0)
+                    broker_sell_max = int(getattr(getattr(limits, "sell_limits", None), "sell_max_lots", 0) or 0)
+                except Exception:
+                    broker_buy_max = 0
+                    broker_sell_max = 0
+
+                rows.append(
+                    {
+                        "symbol": instrument.symbol,
+                        "display_name": instrument.display_name,
+                        "lot": instrument.lot,
+                        "current_price": round(current_price, 4) if current_price else 0.0,
+                        "multiplier": round(multiplier, 4) if multiplier else 0.0,
+                        "notional_per_lot_rub": round(notional_per_lot, 2) if notional_per_lot else 0.0,
+                        "initial_margin_on_buy_rub": round(long_margin, 2) if long_margin else 0.0,
+                        "initial_margin_on_sell_rub": round(short_margin, 2) if short_margin else 0.0,
+                        "leverage_long": round(leverage_long, 2) if leverage_long is not None else None,
+                        "leverage_short": round(leverage_short, 2) if leverage_short is not None else None,
+                        "approx_long_lots": approx_long_lots,
+                        "approx_short_lots": approx_short_lots,
+                        "broker_buy_max_lots": broker_buy_max,
+                        "broker_sell_max_lots": broker_sell_max,
+                    }
+                )
+            payload["contracts"] = rows
+    except Exception as error:
+        payload["error"] = str(error)
+    return payload
+
+
+def build_contracts_html() -> str:
+    return f"""
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+  <title>Параметры контрактов Oil Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {{
+      --bg: #030711;
+      --bg2: #091120;
+      --panel: rgba(8, 14, 28, 0.88);
+      --panel-strong: rgba(10, 18, 34, 0.98);
+      --ink: #ebf4ff;
+      --muted: #7f95b3;
+      --line: rgba(102, 174, 255, 0.18);
+      --accent: #43c5ff;
+      --accent2: #7d8cff;
+      --accent3: #14f1ff;
+      --glow: rgba(67, 197, 255, 0.22);
+      --shadow: rgba(0, 0, 0, 0.45);
+    }}
+    body {{
+      margin: 0;
+      font-family: "Manrope", "Segoe UI", Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(67, 197, 255, 0.18), transparent 24%),
+        radial-gradient(circle at top right, rgba(125, 140, 255, 0.16), transparent 20%),
+        radial-gradient(circle at 50% 0%, rgba(20, 241, 255, 0.08), transparent 28%),
+        linear-gradient(180deg, var(--bg2) 0%, var(--bg) 100%);
+      color: var(--ink);
+      min-height: 100vh;
+    }}
+    .site-header {{
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(18px);
+      background: rgba(4, 9, 18, 0.78);
+      border-bottom: 1px solid rgba(102, 174, 255, 0.12);
+    }}
+    .site-header__inner {{
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 18px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }}
+    .site-brand__eyebrow {{
+      color: var(--accent3);
+      font: 700 12px/1 "JetBrains Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      margin-bottom: 6px;
+    }}
+    .site-brand__title {{
+      font: 700 18px/1.1 "Sora", sans-serif;
+      text-shadow: 0 0 22px var(--glow);
+    }}
+    .site-nav {{
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }}
+    .site-nav__link {{
+      color: #b8cae3;
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(102, 174, 255, 0.18);
+      background: rgba(67, 197, 255, 0.05);
+      font-weight: 600;
+    }}
+    .site-nav__link.is-active {{
+      color: white;
+      background: linear-gradient(135deg, rgba(67, 197, 255, 0.22), rgba(125, 140, 255, 0.24));
+      border-color: rgba(102, 174, 255, 0.32);
+      box-shadow: 0 0 18px rgba(67, 197, 255, 0.12);
+    }}
+    .wrap {{
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 28px;
+    }}
+    .panel {{
+      background: linear-gradient(180deg, var(--panel-strong) 0%, var(--panel) 100%);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 20px 22px;
+      box-shadow: 0 18px 50px var(--shadow);
+      margin-bottom: 18px;
+    }}
+    h1, h2 {{ margin: 0 0 12px; }}
+    h1 {{
+      font-family: "Sora", sans-serif;
+      font-size: 32px;
+      line-height: 1.08;
+      text-shadow: 0 0 28px var(--glow);
+    }}
+    h2 {{
+      font-family: "Sora", sans-serif;
+      font-size: 24px;
+      line-height: 1.15;
+    }}
+    .muted {{ color: var(--muted); }}
+    .mono {{ font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }}
+    .grid {{
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }}
+    .metric-card {{
+      background: rgba(7, 13, 26, 0.72);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 18px;
+      padding: 18px;
+    }}
+    .metric-label {{
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }}
+    .metric-value {{
+      font: 700 28px/1.15 "Sora", sans-serif;
+      overflow-wrap: anywhere;
+      text-shadow: 0 0 20px var(--glow);
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }}
+    th, td {{
+      text-align: left;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }}
+    th {{
+      color: #b8cae3;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }}
+    .table-scroll {{
+      overflow: auto;
+      border-radius: 14px;
+    }}
+    .hint {{
+      line-height: 1.6;
+      color: #d5e1f0;
+      max-width: 980px;
+    }}
+    .error {{
+      color: #ff8ea1;
+      white-space: pre-wrap;
+    }}
+    @media (max-width: 860px) {{
+      .site-header__inner {{
+        align-items: flex-start;
+        flex-direction: column;
+      }}
+      .wrap {{
+        padding: 20px 16px 28px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  {build_site_nav("contracts")}
+  <main class="wrap">
+    <section class="panel">
+      <h1>Параметры контрактов</h1>
+      <p class="hint">
+        Это отдельная справочная страница по маржинальным параметрам счёта и контрактов. Здесь видно,
+        сколько стоит один лот, какое по нему гарантийное обеспечение, какое фактическое плечо получается
+        по текущей цене и сколько лотов примерно помещается в текущий маржинальный запас.
+      </p>
+      <p class="muted" id="contractsGeneratedAt">Загрузка данных…</p>
+    </section>
+    <section class="panel">
+      <h2>Маржинальные параметры счёта</h2>
+      <div class="grid" id="marginGrid"></div>
+      <div id="contractsError" class="error" style="display:none; margin-top:14px;"></div>
+    </section>
+    <section class="panel">
+      <h2>Текущие параметры по инструментам</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Инструмент</th>
+              <th>Текущая цена</th>
+              <th>Стоимость 1 лота</th>
+              <th>ГО LONG</th>
+              <th>ГО SHORT</th>
+              <th>Плечо LONG</th>
+              <th>Плечо SHORT</th>
+              <th>Влезает LONG</th>
+              <th>Влезает SHORT</th>
+              <th>Лимит брокера LONG</th>
+              <th>Лимит брокера SHORT</th>
+            </tr>
+          </thead>
+          <tbody id="contractsBody">
+            <tr><td colspan="11" class="muted">Загрузка…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const formatRub = (value) => {{
+      const num = Number(value || 0);
+      return new Intl.NumberFormat('ru-RU', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }}).format(num) + ' RUB';
+    }};
+    const formatNum = (value, digits = 2) => {{
+      if (value === null || value === undefined || value === '') return '—';
+      return new Intl.NumberFormat('ru-RU', {{ minimumFractionDigits: digits, maximumFractionDigits: digits }}).format(Number(value));
+    }};
+    const metricCard = (label, value) => `
+      <article class="metric-card">
+        <div class="metric-label">${{label}}</div>
+        <div class="metric-value">${{value}}</div>
+      </article>
+    `;
+
+    async function loadContracts() {{
+      const resp = await fetch('/api/contracts', {{ cache: 'no-store' }});
+      if (!resp.ok) throw new Error('Не удалось загрузить параметры контрактов');
+      return await resp.json();
+    }}
+
+    function renderContracts(data) {{
+      document.getElementById('contractsGeneratedAt').textContent =
+        `Срез построен: ${{data.generated_at_moscow || '-'}}`;
+      const margin = data.margin || {{}};
+      document.getElementById('marginGrid').innerHTML = [
+        metricCard('Ликвидный портфель', formatRub(margin.liquid_portfolio_rub || 0)),
+        metricCard('Начальная маржа', formatRub(margin.starting_margin_rub || 0)),
+        metricCard('Минимальная маржа', formatRub(margin.minimal_margin_rub || 0)),
+        metricCard('Уровень достаточности', formatNum(margin.funds_sufficiency_level, 2)),
+        metricCard('Недостающие средства', formatRub(margin.amount_of_missing_funds_rub || 0)),
+        metricCard('Свободный маржинальный запас', formatRub(margin.margin_headroom_rub || 0)),
+      ].join('');
+
+      const body = document.getElementById('contractsBody');
+      const rows = (data.contracts || []).map((row) => `
+        <tr>
+          <td><div class="mono">${{row.symbol}}</div><div class="muted">${{row.display_name || ''}}</div></td>
+          <td class="mono">${{formatNum(row.current_price, 4)}}</td>
+          <td class="mono">${{formatRub(row.notional_per_lot_rub || 0)}}</td>
+          <td class="mono">${{formatRub(row.initial_margin_on_buy_rub || 0)}}</td>
+          <td class="mono">${{formatRub(row.initial_margin_on_sell_rub || 0)}}</td>
+          <td class="mono">${{row.leverage_long ? 'x' + formatNum(row.leverage_long, 2) : '—'}}</td>
+          <td class="mono">${{row.leverage_short ? 'x' + formatNum(row.leverage_short, 2) : '—'}}</td>
+          <td class="mono">${{row.approx_long_lots ?? '—'}}</td>
+          <td class="mono">${{row.approx_short_lots ?? '—'}}</td>
+          <td class="mono">${{row.broker_buy_max_lots || '0'}}</td>
+          <td class="mono">${{row.broker_sell_max_lots || '0'}}</td>
+        </tr>
+      `);
+      body.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="11" class="muted">Данные недоступны.</td></tr>';
+
+      const errorNode = document.getElementById('contractsError');
+      if (data.error) {{
+        errorNode.style.display = 'block';
+        errorNode.textContent = `Техническая ошибка получения данных: ${{data.error}}`;
+      }} else {{
+        errorNode.style.display = 'none';
+        errorNode.textContent = '';
+      }}
+    }}
+
+    loadContracts().then(renderContracts).catch((error) => {{
+      document.getElementById('contractsGeneratedAt').textContent = 'Не удалось загрузить данные.';
+      document.getElementById('contractsError').style.display = 'block';
+      document.getElementById('contractsError').textContent = String(error);
+      document.getElementById('contractsBody').innerHTML = '<tr><td colspan="11" class="muted">Загрузка не удалась.</td></tr>';
+    }});
+  </script>
 </body>
 </html>
 """
@@ -2981,6 +3374,11 @@ def docs() -> str:
     return build_docs_html()
 
 
+@app.get("/contracts", response_class=HTMLResponse)
+def contracts() -> str:
+    return build_contracts_html()
+
+
 @app.get("/api/dashboard", response_class=JSONResponse)
 def api_dashboard(date: str | None = None) -> dict:
     states = load_states()
@@ -3039,6 +3437,11 @@ def api_dashboard(date: str | None = None) -> dict:
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
+
+
+@app.get("/api/contracts", response_class=JSONResponse)
+def api_contracts() -> dict:
+    return load_contracts_payload()
 
 
 @app.get("/api/health", response_class=JSONResponse)
