@@ -1051,6 +1051,64 @@ def reconcile_delayed_close_from_broker(
     return False
 
 
+def defer_close_recovery_to_broker_ops(
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    *,
+    previous_side: str,
+    previous_qty: int,
+    previous_entry_price: float | None,
+    previous_entry_commission: float,
+    previous_strategy: str,
+    previous_exit_reason: str,
+    previous_entry_time: datetime | None,
+    pending_submitted_at: datetime | None,
+    grace_seconds: float | None,
+) -> bool:
+    if previous_side == "FLAT" or previous_qty <= 0:
+        return False
+    effective_submitted_at = pending_submitted_at or datetime.now(UTC)
+    wait_seconds = (datetime.now(UTC) - effective_submitted_at).total_seconds()
+    if grace_seconds is not None and pending_submitted_at is not None and wait_seconds < grace_seconds:
+        state.execution_status = "submitted_close"
+        state.last_error = (
+            f"Статус заявки {state.pending_order_id} не найден у брокера, "
+            "ждём появления операции закрытия в истории."
+        )
+        state.last_signal_summary = [state.last_error, *state.last_signal_summary[:2]]
+        save_state(instrument.symbol, state)
+        logging.info(
+            "symbol=%s status=close_waiting_broker_ops seconds=%.0f",
+            instrument.symbol,
+            wait_seconds,
+        )
+        return True
+
+    state.delayed_close_recovery_needed = True
+    state.delayed_close_side = previous_side
+    state.delayed_close_qty = previous_qty
+    state.delayed_close_entry_price = previous_entry_price
+    state.delayed_close_entry_commission_rub = previous_entry_commission
+    state.delayed_close_strategy = previous_strategy
+    state.delayed_close_reason = previous_exit_reason
+    state.delayed_close_entry_time = previous_entry_time.isoformat() if previous_entry_time else ""
+    state.delayed_close_submitted_at = effective_submitted_at.isoformat()
+    state.execution_status = "submitted_close"
+    state.last_error = (
+        f"Статус заявки {state.pending_order_id} не найден у брокера, "
+        "закрытие будет дозапрошено по брокерским операциям."
+    )
+    state.last_signal_summary = [state.last_error, *state.last_signal_summary[:2]]
+    clear_pending_order(state)
+    save_state(instrument.symbol, state)
+    logging.warning(
+        "symbol=%s status=close_deferred_to_broker_ops seconds=%.0f",
+        instrument.symbol,
+        wait_seconds,
+    )
+    return False
+
+
 def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     open_by_symbol: dict[str, list[dict[str, Any]]] = {}
     closed_reviews: list[dict[str, Any]] = []
@@ -3277,45 +3335,19 @@ def sync_pending_order(
                     "закрытие подтверждено по операциям и портфелю."
                 )
             elif pending_action == "CLOSE" and synced_qty == 0 and previous_side != "FLAT":
-                effective_submitted_at = pending_submitted_at or datetime.now(UTC)
-                wait_seconds = (datetime.now(UTC) - effective_submitted_at).total_seconds()
-                if pending_submitted_at is not None and wait_seconds < BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS:
-                    state.execution_status = "submitted_close"
-                    state.last_error = (
-                        f"Статус заявки {state.pending_order_id} не найден у брокера, "
-                        "ждём появления операции закрытия в истории."
-                    )
-                    state.last_signal_summary = [state.last_error, *state.last_signal_summary[:2]]
-                    save_state(instrument.symbol, state)
-                    logging.info(
-                        "symbol=%s status=close_waiting_broker_ops seconds=%.0f",
-                        instrument.symbol,
-                        wait_seconds,
-                    )
-                    return True
-                state.delayed_close_recovery_needed = True
-                state.delayed_close_side = previous_side
-                state.delayed_close_qty = previous_qty
-                state.delayed_close_entry_price = previous_entry_price
-                state.delayed_close_entry_commission_rub = previous_entry_commission
-                state.delayed_close_strategy = previous_strategy
-                state.delayed_close_reason = previous_exit_reason
-                state.delayed_close_entry_time = previous_entry_time.isoformat() if previous_entry_time else ""
-                state.delayed_close_submitted_at = effective_submitted_at.isoformat()
-                state.execution_status = "submitted_close"
-                state.last_error = (
-                    f"Статус заявки {state.pending_order_id} не найден у брокера, "
-                    "закрытие будет дозапрошено по брокерским операциям."
+                return defer_close_recovery_to_broker_ops(
+                    instrument,
+                    state,
+                    previous_side=previous_side,
+                    previous_qty=previous_qty,
+                    previous_entry_price=previous_entry_price,
+                    previous_entry_commission=previous_entry_commission,
+                    previous_strategy=previous_strategy,
+                    previous_exit_reason=previous_exit_reason,
+                    previous_entry_time=previous_entry_time,
+                    pending_submitted_at=pending_submitted_at,
+                    grace_seconds=BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS,
                 )
-                state.last_signal_summary = [state.last_error, *state.last_signal_summary[:2]]
-                clear_pending_order(state)
-                save_state(instrument.symbol, state)
-                logging.warning(
-                    "symbol=%s status=close_deferred_to_broker_ops seconds=%.0f",
-                    instrument.symbol,
-                    wait_seconds,
-                )
-                return False
             elif pending_action == "OPEN" and confirm_pending_open_from_broker(
                 client,
                 config,
@@ -3335,6 +3367,20 @@ def sync_pending_order(
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
                     "позиция синхронизирована по портфелю."
                 )
+            elif pending_action == "CLOSE" and previous_side != "FLAT" and synced_qty == 0:
+                return defer_close_recovery_to_broker_ops(
+                    instrument,
+                    state,
+                    previous_side=previous_side,
+                    previous_qty=previous_qty,
+                    previous_entry_price=previous_entry_price,
+                    previous_entry_commission=previous_entry_commission,
+                    previous_strategy=previous_strategy,
+                    previous_exit_reason=previous_exit_reason,
+                    previous_entry_time=previous_entry_time,
+                    pending_submitted_at=pending_submitted_at,
+                    grace_seconds=None,
+                )
             else:
                 state.execution_status = "rejected"
                 state.last_error = (
@@ -3347,6 +3393,20 @@ def sync_pending_order(
                 instrument.symbol,
                 sync_error,
             )
+            if pending_action == "CLOSE" and previous_side != "FLAT" and state.position_qty == 0:
+                return defer_close_recovery_to_broker_ops(
+                    instrument,
+                    state,
+                    previous_side=previous_side,
+                    previous_qty=previous_qty,
+                    previous_entry_price=previous_entry_price,
+                    previous_entry_commission=previous_entry_commission,
+                    previous_strategy=previous_strategy,
+                    previous_exit_reason=previous_exit_reason,
+                    previous_entry_time=previous_entry_time,
+                    pending_submitted_at=pending_submitted_at,
+                    grace_seconds=None,
+                )
             state.execution_status = "rejected"
             state.last_error = (
                 f"Статус заявки {state.pending_order_id} не найден у брокера. "
