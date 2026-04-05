@@ -1228,6 +1228,7 @@ def load_all_trade_rows() -> list[dict]:
 
 def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
     rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()]
+    rows.sort(key=lambda row: row.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ))
     normalized: list[dict] = []
     for row in rows[-limit:]:
         item = dict(row)
