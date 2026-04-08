@@ -92,6 +92,9 @@ struct PortfolioSnapshot: Decodable {
     let botRealizedGrossPnlRub: Double?
     let botRealizedCommissionRub: Double?
     let botRealizedPnlRub: Double?
+    let botClosedNetPnlRub: Double?
+    let botClosedGrossPnlRub: Double?
+    let botClosedFeeRub: Double?
     let botActualVarmarginRub: Double?
     let botActualVarmarginBySymbol: [String: Double]?
     let botActualFeeRub: Double?
@@ -100,7 +103,10 @@ struct PortfolioSnapshot: Decodable {
     let botTotalVarmarginRub: Double?
     let botTotalVariationMarginRub: Double?
     let botBrokerDayPnlRub: Double?
+    let botOpenPositionsLivePnlRub: Double?
     let botTotalPnlRub: Double?
+    let botAnalyticalTotalPnlRub: Double?
+    let botOperationsCashEffectRub: Double?
     let openPositionsCount: Int?
 
     enum CodingKeys: String, CodingKey {
@@ -116,6 +122,9 @@ struct PortfolioSnapshot: Decodable {
         case botRealizedGrossPnlRub = "bot_realized_gross_pnl_rub"
         case botRealizedCommissionRub = "bot_realized_commission_rub"
         case botRealizedPnlRub = "bot_realized_pnl_rub"
+        case botClosedNetPnlRub = "bot_closed_net_pnl_rub"
+        case botClosedGrossPnlRub = "bot_closed_gross_pnl_rub"
+        case botClosedFeeRub = "bot_closed_fee_rub"
         case botActualVarmarginRub = "bot_actual_varmargin_rub"
         case botActualVarmarginBySymbol = "bot_actual_varmargin_by_symbol"
         case botActualFeeRub = "bot_actual_fee_rub"
@@ -124,7 +133,10 @@ struct PortfolioSnapshot: Decodable {
         case botTotalVarmarginRub = "bot_total_varmargin_rub"
         case botTotalVariationMarginRub = "bot_total_variation_margin_rub"
         case botBrokerDayPnlRub = "bot_broker_day_pnl_rub"
+        case botOpenPositionsLivePnlRub = "bot_open_positions_live_pnl_rub"
         case botTotalPnlRub = "bot_total_pnl_rub"
+        case botAnalyticalTotalPnlRub = "bot_analytical_total_pnl_rub"
+        case botOperationsCashEffectRub = "bot_operations_cash_effect_rub"
         case openPositionsCount = "open_positions_count"
     }
 
@@ -142,6 +154,9 @@ struct PortfolioSnapshot: Decodable {
         botRealizedGrossPnlRub = try container.decodeIfPresent(Double.self, forKey: .botRealizedGrossPnlRub)
         botRealizedCommissionRub = try container.decodeIfPresent(Double.self, forKey: .botRealizedCommissionRub)
         botRealizedPnlRub = try container.decodeIfPresent(Double.self, forKey: .botRealizedPnlRub)
+        botClosedNetPnlRub = try container.decodeIfPresent(Double.self, forKey: .botClosedNetPnlRub) ?? botRealizedPnlRub
+        botClosedGrossPnlRub = try container.decodeIfPresent(Double.self, forKey: .botClosedGrossPnlRub) ?? botRealizedGrossPnlRub
+        botClosedFeeRub = try container.decodeIfPresent(Double.self, forKey: .botClosedFeeRub) ?? botRealizedCommissionRub
         botActualVarmarginRub = try container.decodeIfPresent(Double.self, forKey: .botActualVarmarginRub)
         botActualVarmarginBySymbol = try container.decodeIfPresent([String: Double].self, forKey: .botActualVarmarginBySymbol)
         botActualFeeRub = try container.decodeIfPresent(Double.self, forKey: .botActualFeeRub)
@@ -152,7 +167,10 @@ struct PortfolioSnapshot: Decodable {
         botTotalVarmarginRub = totalVmPrimary ?? totalVmAlias
         botTotalVariationMarginRub = totalVmAlias ?? totalVmPrimary
         botBrokerDayPnlRub = try container.decodeIfPresent(Double.self, forKey: .botBrokerDayPnlRub)
+        botOpenPositionsLivePnlRub = try container.decodeIfPresent(Double.self, forKey: .botOpenPositionsLivePnlRub) ?? botBrokerDayPnlRub
         botTotalPnlRub = try container.decodeIfPresent(Double.self, forKey: .botTotalPnlRub)
+        botAnalyticalTotalPnlRub = try container.decodeIfPresent(Double.self, forKey: .botAnalyticalTotalPnlRub) ?? botTotalPnlRub
+        botOperationsCashEffectRub = try container.decodeIfPresent(Double.self, forKey: .botOperationsCashEffectRub) ?? botActualCashEffectRub
         openPositionsCount = try container.decodeIfPresent(Int.self, forKey: .openPositionsCount)
     }
 }

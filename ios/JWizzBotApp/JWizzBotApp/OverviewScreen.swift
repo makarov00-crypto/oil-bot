@@ -78,12 +78,14 @@ struct OverviewScreen: View {
                 }
 
                 LazyVGrid(columns: twoColumns, spacing: 12) {
-                    MetricGlassTile(title: "Итог по боту", value: formatRub(payload.portfolio.botTotalPnlRub), tone: statusTone(for: payload.portfolio.botTotalPnlRub))
-                    MetricGlassTile(title: "NET закрытых сделок", value: formatRub(payload.portfolio.botRealizedPnlRub), tone: statusTone(for: payload.portfolio.botRealizedPnlRub))
+                    MetricGlassTile(title: "Аналитический итог", value: formatRub(payload.portfolio.botAnalyticalTotalPnlRub), tone: statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub))
+                    MetricGlassTile(title: "Закрытые сделки, NET", value: formatRub(payload.portfolio.botClosedNetPnlRub), tone: statusTone(for: payload.portfolio.botClosedNetPnlRub))
                     MetricGlassTile(title: "Комиссия по счёту", value: formatRub(payload.portfolio.botActualFeeRub), tone: statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)))
                     MetricGlassTile(title: "Клиринговая ВМ", value: formatRub(payload.portfolio.botActualVarmarginRub), tone: statusTone(for: payload.portfolio.botActualVarmarginRub))
-                    MetricGlassTile(title: "Текущая вар. маржа", value: formatRub(payload.portfolio.botEstimatedVariationMarginRub), tone: statusTone(for: payload.portfolio.botEstimatedVariationMarginRub))
-                    MetricGlassTile(title: "Общая вар. маржа", value: formatRub(payload.portfolio.botTotalVarmarginRub), tone: statusTone(for: payload.portfolio.botTotalVarmarginRub))
+                    MetricGlassTile(title: "Денежный эффект операций", value: formatRub(payload.portfolio.botOperationsCashEffectRub), tone: statusTone(for: payload.portfolio.botOperationsCashEffectRub))
+                    MetricGlassTile(title: "Текущая ВМ позиций", value: formatRub(payload.portfolio.botEstimatedVariationMarginRub), tone: statusTone(for: payload.portfolio.botEstimatedVariationMarginRub))
+                    MetricGlassTile(title: "Открытые позиции, live", value: formatRub(payload.portfolio.botOpenPositionsLivePnlRub), tone: statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub))
+                    MetricGlassTile(title: "Gross закрытых + live", value: formatRub(payload.portfolio.botTotalVariationMarginRub), tone: statusTone(for: payload.portfolio.botTotalVariationMarginRub))
                     MetricGlassTile(title: "Открытых позиций", value: formatInt(payload.portfolio.openPositionsCount))
                 }
             }
@@ -98,9 +100,13 @@ struct OverviewScreen: View {
                     .joined(separator: " | ")
                 SectionHeader(title: "Портфель", subtitle: subtitle.isEmpty ? nil : subtitle)
 
+                Text("Здесь раздельно показаны данные брокера по счёту, денежный эффект операций и аналитический итог бота.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 LazyVGrid(columns: twoColumns, spacing: 12) {
                     MetricGlassTile(title: "Портфель", value: formatRub(payload.portfolio.totalPortfolioRub))
-                    MetricGlassTile(title: "Свободно", value: formatRub(payload.portfolio.freeRub))
+                    MetricGlassTile(title: "Свободные RUB", value: formatRub(payload.portfolio.freeCashRub ?? payload.portfolio.freeRub))
                     MetricGlassTile(title: "ГО", value: formatRub(payload.portfolio.blockedGuaranteeRub))
                     MetricGlassTile(title: "Режим", value: displayMode(payload.portfolio.mode))
                 }
