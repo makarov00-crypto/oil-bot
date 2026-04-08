@@ -2395,6 +2395,8 @@ def sync_state_with_portfolio(
     state: InstrumentState,
 ) -> int:
     qty, avg, broker_current_price, broker_var_margin, broker_expected_yield = extract_position_data(client, config, instrument)
+    if state.delayed_close_recovery_needed:
+        reconcile_delayed_close_from_broker(client, config, instrument, state)
     state.position_qty = abs(qty)
     if qty == 0:
         state.entry_price = None
@@ -2426,8 +2428,6 @@ def sync_state_with_portfolio(
             state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
-    if state.delayed_close_recovery_needed:
-        reconcile_delayed_close_from_broker(client, config, instrument, state)
     pending_open_submitted_at = (
         parse_state_datetime(state.pending_submitted_at)
         if state.pending_order_id and state.pending_order_action == "OPEN"
@@ -3347,7 +3347,8 @@ def sync_pending_order(
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
                     "закрытие подтверждено по операциям и портфелю."
                 )
-            elif pending_action == "CLOSE" and synced_qty == 0 and previous_side != "FLAT":
+                return False
+            elif pending_action == "CLOSE" and previous_side != "FLAT":
                 return defer_close_recovery_to_broker_ops(
                     instrument,
                     state,
@@ -3380,20 +3381,6 @@ def sync_pending_order(
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
                     "позиция синхронизирована по портфелю."
                 )
-            elif pending_action == "CLOSE" and previous_side != "FLAT" and synced_qty == 0:
-                return defer_close_recovery_to_broker_ops(
-                    instrument,
-                    state,
-                    previous_side=previous_side,
-                    previous_qty=previous_qty,
-                    previous_entry_price=previous_entry_price,
-                    previous_entry_commission=previous_entry_commission,
-                    previous_strategy=previous_strategy,
-                    previous_exit_reason=previous_exit_reason,
-                    previous_entry_time=previous_entry_time,
-                    pending_submitted_at=pending_submitted_at,
-                    grace_seconds=None,
-                )
             else:
                 state.execution_status = "rejected"
                 state.last_error = (
@@ -3406,7 +3393,7 @@ def sync_pending_order(
                 instrument.symbol,
                 sync_error,
             )
-            if pending_action == "CLOSE" and previous_side != "FLAT" and state.position_qty == 0:
+            if pending_action == "CLOSE" and previous_side != "FLAT":
                 return defer_close_recovery_to_broker_ops(
                     instrument,
                     state,
