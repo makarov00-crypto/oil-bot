@@ -195,6 +195,9 @@ class InstrumentState:
     last_signal_summary: list[str] = field(default_factory=list)
     last_allocator_summary: str = ""
     last_allocator_quantity: int = 0
+    last_entry_allocator_summary: str = ""
+    last_entry_allocator_quantity: int = 0
+    last_entry_allocator_time: str = ""
     last_exit_time: str = ""
     last_exit_side: str = ""
     last_exit_reason: str = ""
@@ -3697,6 +3700,23 @@ def open_position(
         logging.info("symbol=%s status=entry_blocked reason=%s", instrument.symbol, block_reason)
         return
     sizing_lines = build_position_sizing_lines(client, config, instrument, state, price, signal, quantity, strategy_name)
+    try:
+        allocator_sizing = calculate_position_sizing_context(
+            client,
+            config,
+            instrument,
+            state,
+            price,
+            signal,
+            strategy_name,
+        )
+        state.last_entry_allocator_quantity = quantity
+        state.last_entry_allocator_summary = build_allocator_summary_text(allocator_sizing)
+        state.last_entry_allocator_time = datetime.now(UTC).isoformat()
+    except Exception:
+        state.last_entry_allocator_quantity = quantity
+        state.last_entry_allocator_summary = f"Последний вход: {quantity} лот(а), подробный расчёт аллокатора недоступен."
+        state.last_entry_allocator_time = datetime.now(UTC).isoformat()
     side = "LONG" if signal == "LONG" else "SHORT"
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
@@ -4141,9 +4161,14 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     if signal not in {"LONG", "SHORT"}:
         state.last_allocator_summary = "Аллокатор не активен: сейчас нет сигнала на вход."
     elif state.position_side != "FLAT":
+        last_entry_hint = ""
+        if state.last_entry_allocator_summary:
+            last_entry_hint = f" Последний вход: {state.last_entry_allocator_summary}"
+        elif state.entry_time:
+            last_entry_hint = " Последний вход был открыт до включения расширенной диагностики аллокатора."
         state.last_allocator_summary = (
             f"Аллокатор не активен: по инструменту уже открыта позиция {state.position_side} "
-            f"{state.position_qty} лот(а)."
+            f"{state.position_qty} лот(а).{last_entry_hint}"
         )
     elif has_pending_order(state):
         pending_action = state.pending_order_action or "UNKNOWN"
