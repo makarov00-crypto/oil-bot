@@ -15,6 +15,7 @@ import pandas as pd
 import requests
 import ta
 from dotenv import load_dotenv
+from custom_instruments import merge_with_custom_symbols
 from instrument_groups import (
     DEFAULT_SYMBOLS,
     get_instrument_group,
@@ -245,7 +246,8 @@ def parse_bool_env(name: str, default: bool) -> bool:
 
 def parse_symbols_env() -> list[str]:
     raw = os.getenv("T_INVEST_SYMBOLS", DEFAULT_SYMBOLS)
-    return [item.strip().upper() for item in raw.split(",") if item.strip()]
+    base_symbols = [item.strip().upper() for item in raw.split(",") if item.strip()]
+    return merge_with_custom_symbols(base_symbols)
 
 
 def state_path_for(symbol: str) -> Path:
@@ -1643,6 +1645,7 @@ def refresh_watchlist_if_needed(
     if now_monotonic - last_refresh_monotonic < WATCHLIST_REFRESH_SECONDS:
         return watchlist, last_refresh_monotonic
     try:
+        config.symbols = parse_symbols_env()
         refreshed = resolve_instruments(client, config)
         before = [item.symbol for item in watchlist]
         after = [item.symbol for item in refreshed]

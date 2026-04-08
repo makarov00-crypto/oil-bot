@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from custom_instruments import get_custom_clone_source
+
 
 @dataclass(frozen=True)
 class InstrumentGroup:
@@ -28,7 +30,13 @@ DEFAULT_SYMBOLS = ",".join(GROUP_BY_SYMBOL.keys())
 
 
 def get_instrument_group(symbol: str) -> InstrumentGroup:
-    return GROUP_BY_SYMBOL.get(symbol, COMMODITIES)
+    normalized = str(symbol or "").strip().upper()
+    if normalized in GROUP_BY_SYMBOL:
+        return GROUP_BY_SYMBOL[normalized]
+    template_symbol = get_custom_clone_source(normalized)
+    if template_symbol:
+        return GROUP_BY_SYMBOL.get(template_symbol, COMMODITIES)
+    return COMMODITIES
 
 
 def is_currency_instrument(symbol: str) -> bool:

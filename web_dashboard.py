@@ -12,7 +12,13 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-from instrument_groups import GROUP_BY_SYMBOL, get_instrument_group
+from custom_instruments import (
+    list_custom_instruments,
+    merge_with_custom_symbols,
+    upsert_custom_instrument,
+    validate_custom_symbol,
+)
+from instrument_groups import DEFAULT_SYMBOLS, GROUP_BY_SYMBOL, get_instrument_group
 from strategy_registry import get_primary_strategies, get_secondary_strategies
 from daily_ai_review import (
     FOLLOWUP_SYSTEM_INSTRUCTIONS,
@@ -105,6 +111,81 @@ def build_site_nav(active: str) -> str:
     </div>
   </header>
 """
+
+
+def load_base_symbols_from_env() -> list[str]:
+    raw = os.getenv("T_INVEST_SYMBOLS", DEFAULT_SYMBOLS)
+    return [item.strip().upper() for item in raw.split(",") if item.strip()]
+
+
+def build_manual_instruments_payload() -> dict:
+    base_symbols = load_base_symbols_from_env()
+    configured_symbols = merge_with_custom_symbols(base_symbols)
+    templates: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for symbol in configured_symbols:
+        normalized = str(symbol or "").strip().upper()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        templates.append(
+            {
+                "symbol": normalized,
+                "display_name": normalized,
+                "primary_strategies": get_primary_strategies(normalized),
+                "secondary_strategies": get_secondary_strategies(normalized),
+            }
+        )
+    return {
+        "templates": templates,
+        "custom_instruments": list_custom_instruments(),
+        "watchlist_refresh_seconds": 300,
+    }
+
+
+def build_instrument_catalog(portfolio: dict | None = None, trades: list[dict] | None = None) -> dict[str, str]:
+    catalog = {
+        "BRK6": "BR-5.26 Нефть Brent",
+        "USDRUBF": "USDRUBF Доллар - Рубль",
+        "CNYRUBF": "CNYRUBF Юань - Рубль",
+        "IMOEXF": "IMOEXF Индекс МосБиржи",
+        "SRM6": "SBRF-6.26 Сбер Банк",
+        "GNM6": "GOLDM-6.26 Золото (мини)",
+        "NGJ6": "NG-4.26 Природный газ",
+    }
+    for item in (portfolio or {}).get("broker_open_positions", []) or []:
+        symbol = str(item.get("symbol") or "").strip().upper()
+        display_name = str(item.get("display_name") or "").strip()
+        if symbol and display_name:
+            catalog[symbol] = display_name
+    for row in trades or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        display_name = str(row.get("display_name") or "").strip()
+        if symbol and display_name:
+            catalog[symbol] = display_name
+    return catalog
+
+
+def validate_futures_ticker_exists(symbol: str) -> dict[str, str]:
+    from tinkoff.invest import Client
+    from tinkoff.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
+
+    token = os.getenv("T_INVEST_TOKEN", "").strip()
+    target_name = os.getenv("T_INVEST_TARGET", "PROD").strip().upper()
+    target = INVEST_GRPC_API_SANDBOX if target_name == "SANDBOX" else INVEST_GRPC_API
+    if not token:
+        raise RuntimeError("Не задан T_INVEST_TOKEN для проверки тикера у брокера.")
+    with Client(token, target=target) as client:
+        futures = client.instruments.futures().instruments
+    for item in futures:
+        ticker = str(getattr(item, "ticker", "") or "").strip().upper()
+        if ticker != symbol:
+            continue
+        return {
+            "symbol": symbol,
+            "display_name": str(getattr(item, "name", "") or symbol).strip() or symbol,
+        }
+    raise RuntimeError("Брокер не знает такой фьючерсный тикер.")
 
 
 def build_strategy_docs_rows() -> tuple[str, str]:
@@ -2846,7 +2927,16 @@ def build_dashboard_html() -> str:
     </div>
 
     <section class="panel" style="margin-top:16px;">
-      <h2>Сигналы по инструментам</h2>
+      <div class="section-title">
+        <h2>Сигналы по инструментам</h2>
+        <div class="toolbar-inline">
+          <input id="manualInstrumentTicker" type="text" placeholder="Новый тикер, например VBM6" />
+          <select id="manualInstrumentTemplate"></select>
+          <button id="manualInstrumentAddBtn" class="btn-secondary" type="button">Добавить инструмент</button>
+        </div>
+      </div>
+      <div class="muted" id="manualInstrumentStatus" style="margin-bottom:12px;">Можно добавить новый тикер и скопировать для него стратегии уже существующего инструмента.</div>
+      <div class="muted" id="manualInstrumentList" style="margin-bottom:12px;">Ручных инструментов пока нет.</div>
       <div id="signalsCards" class="mobile-cards"></div>
       <div class="table-scroll desktop-table">
         <table id="signalsTable">
@@ -3041,7 +3131,7 @@ def build_dashboard_html() -> str:
         .replaceAll("'", '&#39;');
     }
 
-    const instrumentNames = {
+    let instrumentNames = {
       BRK6: 'BR-5.26 Нефть Brent',
       USDRUBF: 'USDRUBF Доллар - Рубль',
       CNYRUBF: 'CNYRUBF Юань - Рубль',
@@ -3316,6 +3406,7 @@ def build_dashboard_html() -> str:
       const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
       const response = await fetch(`/api/dashboard${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`);
       const data = await response.json();
+      instrumentNames = { ...instrumentNames, ...(data.instrument_catalog || {}) };
 
       if (dateInput && data.daily && data.daily.selected_date) {
         dateInput.value = data.daily.selected_date;
@@ -3521,6 +3612,31 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-text"><span class="muted">Ключевая причина</span><br>${escapeHtml(summary)}</div>
           </div>
         </article>`);
+      }
+
+      const manual = data.manual_instruments || {};
+      const templateSelect = document.getElementById('manualInstrumentTemplate');
+      if (templateSelect) {
+        const currentValue = templateSelect.value;
+        const options = Array.isArray(manual.templates) ? manual.templates : [];
+        templateSelect.innerHTML = options.length
+          ? options.map((item) => {
+              const primary = Array.isArray(item.primary_strategies) && item.primary_strategies.length
+                ? item.primary_strategies.join(', ')
+                : 'без стратегий';
+              return `<option value="${escapeHtml(item.symbol || '')}">${escapeHtml(item.symbol || '')} → ${escapeHtml(primary)}</option>`;
+            }).join('')
+          : '<option value="">Нет доступных шаблонов</option>';
+        if (currentValue && options.some((item) => item.symbol === currentValue)) {
+          templateSelect.value = currentValue;
+        }
+      }
+      const manualList = document.getElementById('manualInstrumentList');
+      if (manualList) {
+        const items = Array.isArray(manual.custom_instruments) ? manual.custom_instruments : [];
+        manualList.textContent = items.length
+          ? `Ручные инструменты: ${items.map((item) => `${item.symbol} как ${item.clone_from}`).join(' | ')}`
+          : 'Ручных инструментов пока нет.';
       }
 
       const tradeBody = document.querySelector('#tradesTable tbody');
@@ -3772,6 +3888,44 @@ const aiReview = data.ai_review || {};
       }
     }
 
+    async function addManualInstrument() {
+      const tickerInput = document.getElementById('manualInstrumentTicker');
+      const templateSelect = document.getElementById('manualInstrumentTemplate');
+      const status = document.getElementById('manualInstrumentStatus');
+      const btn = document.getElementById('manualInstrumentAddBtn');
+      if (!tickerInput || !templateSelect || !status || !btn) return;
+      const symbol = String(tickerInput.value || '').trim().toUpperCase();
+      const cloneFrom = String(templateSelect.value || '').trim().toUpperCase();
+      if (!symbol) {
+        status.textContent = 'Сначала введи тикер нового инструмента.';
+        return;
+      }
+      if (!cloneFrom) {
+        status.textContent = 'Сначала выбери похожий инструмент, от которого копировать стратегии.';
+        return;
+      }
+      btn.disabled = true;
+      status.textContent = 'Добавляю инструмент в конфигурацию бота...';
+      try {
+        const response = await fetch('/api/instruments/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, clone_from: cloneFrom }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.message || 'Не удалось добавить инструмент.');
+        }
+        status.textContent = payload.message || 'Инструмент добавлен.';
+        tickerInput.value = '';
+        await loadData();
+      } catch (error) {
+        status.textContent = error?.message || 'Не удалось добавить инструмент.';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       const filter = document.getElementById('eventStatusFilter');
       const dateInput = document.getElementById('selectedDate');
@@ -3792,6 +3946,10 @@ const aiReview = data.ai_review || {};
       const tradeRecoveryBtn = document.getElementById('tradeRecoveryBtn');
       if (tradeRecoveryBtn) {
         tradeRecoveryBtn.addEventListener('click', recoverTradeOperations);
+      }
+      const manualInstrumentAddBtn = document.getElementById('manualInstrumentAddBtn');
+      if (manualInstrumentAddBtn) {
+        manualInstrumentAddBtn.addEventListener('click', addManualInstrument);
       }
       document.addEventListener('click', (event) => {
         const trigger = event.target.closest('.js-news-popover');
@@ -3870,6 +4028,7 @@ def api_dashboard(date: str | None = None) -> dict:
             pass
     portfolio_view = build_portfolio_view_for_day(portfolio, target_day, accounting_history)
     trades = annotate_trade_rows(load_trade_rows_for_day(target_day, 200), display_states, broker_positions)
+    instrument_catalog = build_instrument_catalog(portfolio, trades)
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(display_states),
@@ -3882,6 +4041,8 @@ def api_dashboard(date: str | None = None) -> dict:
         "meta": load_meta(),
         "states": display_states,
         "trades": trades,
+        "manual_instruments": build_manual_instruments_payload(),
+        "instrument_catalog": instrument_catalog,
         "daily": build_daily_performance(portfolio, target_day, accounting_history),
         "ai_review": load_ai_review(target_day),
         "generated_at": generated_at.isoformat(),
@@ -3921,6 +4082,38 @@ def api_trades_recover(date: str | None = None) -> dict:
         except ValueError as error:
             raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
     return run_trade_operations_recovery(target_day)
+
+
+@app.post("/api/instruments/add", response_class=JSONResponse)
+def api_instruments_add(payload: dict = Body(default={})) -> dict:
+    symbol = str((payload or {}).get("symbol") or "").strip().upper()
+    clone_from = str((payload or {}).get("clone_from") or "").strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Нужно указать тикер нового инструмента.")
+    if not clone_from:
+        raise HTTPException(status_code=400, detail="Нужно выбрать существующий инструмент-шаблон.")
+    try:
+        normalized_symbol = validate_custom_symbol(symbol)
+        normalized_clone = validate_custom_symbol(clone_from)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if normalized_symbol in set(load_base_symbols_from_env()):
+        raise HTTPException(status_code=400, detail="Этот тикер уже есть в базовой конфигурации бота.")
+    available_templates = set(merge_with_custom_symbols(load_base_symbols_from_env()))
+    if normalized_clone not in available_templates:
+        raise HTTPException(status_code=400, detail="Выбранный шаблон не найден среди доступных инструментов.")
+    try:
+        instrument_info = validate_futures_ticker_exists(normalized_symbol)
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=f"Тикер {normalized_symbol} не прошёл проверку у брокера: {error}") from error
+    entry = upsert_custom_instrument(normalized_symbol, normalized_clone, template_symbol=normalized_clone)
+    refresh_minutes = max(1, build_manual_instruments_payload().get("watchlist_refresh_seconds", 300) // 60)
+    action = "обновлён" if entry.get("status") == "updated" else "добавлен"
+    return {
+        "ok": True,
+        "entry": entry,
+        "message": f"Инструмент {normalized_symbol} ({instrument_info['display_name']}) {action}. Бот подхватит его автоматически при ближайшем обновлении watchlist, обычно в течение {refresh_minutes} мин.",
+    }
 
 
 @app.get("/api/contracts", response_class=JSONResponse)
