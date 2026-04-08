@@ -2851,6 +2851,7 @@ def calculate_position_sizing_context(
     qty_by_target = int(target_trade_margin // margin_per_lot) if margin_per_lot > 0 else 0
     qty_by_allocatable = int(allocatable_margin // margin_per_lot) if margin_per_lot > 0 else 0
     qty_by_working = int(working_margin_budget // margin_per_lot) if margin_per_lot > 0 else 0
+    qty_by_headroom = int(margin_headroom // margin_per_lot) if margin_per_lot > 0 else 0
 
     step_price = instrument.min_price_increment
     step_money = instrument.min_price_increment_amount
@@ -2864,7 +2865,15 @@ def calculate_position_sizing_context(
     raw_qty = min(qty_by_target, qty_by_allocatable) if qty_by_allocatable > 0 else 0
     if raw_qty < 1 and margin_per_lot > 0:
         can_afford_min_lot = qty_by_working >= 1
-        if can_afford_min_lot and (instrument_class == "тяжёлый" or conviction_weight >= 1.25):
+        can_afford_min_lot_by_headroom = qty_by_headroom >= 1
+        if (
+            instrument.symbol == "BRK6"
+            and can_afford_min_lot_by_headroom
+            and conviction_weight >= 1.10
+            and signal in {"LONG", "SHORT"}
+        ):
+            raw_qty = 1
+        elif can_afford_min_lot and (instrument_class == "тяжёлый" or conviction_weight >= 1.25):
             raw_qty = 1
         elif qty_by_allocatable >= 1:
             raw_qty = 1
@@ -2908,6 +2917,7 @@ def calculate_position_sizing_context(
         "qty_by_target": qty_by_target,
         "qty_by_allocatable": qty_by_allocatable,
         "qty_by_working": qty_by_working,
+        "qty_by_headroom": qty_by_headroom,
         "broker_limit": broker_limit,
         "money_risk_per_contract_rub": money_risk_per_contract,
         "risk_budget_rub": risk_budget,
@@ -3156,6 +3166,8 @@ def position_reentry_allowed(
 
     cooldown_minutes = 0
     if instrument.symbol == "GNM6":
+        if state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
+            cooldown_minutes = max(cooldown_minutes, 35)
         if state.last_exit_pnl_rub < 0:
             cooldown_minutes = 45
         if "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
@@ -3220,6 +3232,9 @@ def position_reentry_allowed(
         if instrument.symbol == "NGJ6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, "для NGJ6 повторный вход после убыточного выхода разрешён только после нового экстремума."
+        if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
+                return False, "для GNM6 повторный LONG после прибыльного выхода разрешён только после нового экстремума."
         if instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."
@@ -3239,6 +3254,9 @@ def position_reentry_allowed(
         if instrument.symbol == "NGJ6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, "для NGJ6 повторный вход после убыточного выхода разрешён только после нового экстремума."
+        if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
+                return False, "для GNM6 повторный LONG после прибыльного выхода разрешён только после нового экстремума."
         if instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."

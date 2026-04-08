@@ -25,14 +25,14 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
     if symbol == "NGJ6":
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
-            near_ema20_pct=0.0045,
-            volume_factor=1.05,
-            atr_min_pct=0.0018,
-            impulse_body_factor=0.95,
-            long_rsi_min=40.0,
-            long_rsi_max=52.0,
-            short_rsi_min=42.0,
-            short_rsi_max=58.0,
+            near_ema20_pct=0.0062,
+            volume_factor=0.95,
+            atr_min_pct=0.0014,
+            impulse_body_factor=0.82,
+            long_rsi_min=39.0,
+            long_rsi_max=56.0,
+            short_rsi_min=38.0,
+            short_rsi_max=60.0,
             rsi_exit_long=config.rsi_exit_long,
             rsi_exit_short=config.rsi_exit_short,
             allow_short=True,
@@ -253,7 +253,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
         ]
     )
     if instrument.symbol == "NGJ6":
-        short_ok = short_ok and near_ema20 and volume_ok and impulse_ok
+        # Газу нужен чуть более живой pullback, иначе он почти не торгуется.
+        short_ok = short_ok and near_ema20
 
     if long_ok:
         return "LONG", "Сигнал LONG: " + "; ".join(long_reasons) + "."
