@@ -7,12 +7,19 @@ import subprocess
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from instrument_groups import GROUP_BY_SYMBOL, get_instrument_group
 from strategy_registry import get_primary_strategies, get_secondary_strategies
+from daily_ai_review import (
+    FOLLOWUP_SYSTEM_INSTRUCTIONS,
+    DEFAULT_MODEL as DEFAULT_AI_MODEL,
+    build_review_prompt,
+    request_openai_text,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1809,6 +1816,7 @@ def load_ai_review(target_day: date) -> dict:
             "content": "",
             "updated_at_moscow": None,
             "status": "missing",
+            "followups": [],
         }
     try:
         content = source_path.read_text(encoding="utf-8").strip()
@@ -1819,6 +1827,7 @@ def load_ai_review(target_day: date) -> dict:
             "content": "",
             "updated_at_moscow": None,
             "status": "error",
+            "followups": [],
         }
     try:
         modified = datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc).astimezone(MOSCOW_TZ)
@@ -1832,6 +1841,90 @@ def load_ai_review(target_day: date) -> dict:
         "content": content,
         "updated_at_moscow": modified_text,
         "status": "ready" if content else "empty",
+        "followups": load_ai_review_followups(target_day),
+    }
+
+
+def get_ai_review_followup_path(target_day: date) -> Path:
+    return AI_REVIEW_DIR / f"{target_day.isoformat()}_followups.json"
+
+
+def load_ai_review_followups(target_day: date) -> list[dict[str, object]]:
+    path = get_ai_review_followup_path(target_day)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    items: list[dict[str, object]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            {
+                "id": str(item.get("id") or ""),
+                "question": str(item.get("question") or ""),
+                "answer": str(item.get("answer") or ""),
+                "model": str(item.get("model") or ""),
+                "created_at_moscow": str(item.get("created_at_moscow") or ""),
+            }
+        )
+    return items
+
+
+def save_ai_review_followups(target_day: date, items: list[dict[str, object]]) -> None:
+    path = get_ai_review_followup_path(target_day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def build_ai_review_followup_prompt(target_day: date, review_content: str, question: str) -> str:
+    context_prompt = build_review_prompt(BASE_DIR, target_day)
+    return (
+        f"Дата разбора: {target_day.isoformat()}\n\n"
+        "Основной AI-разбор дня:\n"
+        f"{review_content.strip()}\n\n"
+        "Текущий контекст дня:\n"
+        f"{context_prompt.strip()}\n\n"
+        "Дополнительный вопрос пользователя:\n"
+        f"{question.strip()}\n"
+    )
+
+
+def run_ai_review_followup(target_day: date, question: str) -> dict[str, object]:
+    clean_question = str(question or "").strip()
+    if not clean_question:
+        raise HTTPException(status_code=400, detail="Нужно ввести вопрос к AI-разбору.")
+    ai_review = load_ai_review(target_day)
+    if not ai_review.get("available") or not str(ai_review.get("content") or "").strip():
+        raise HTTPException(status_code=400, detail="Сначала нужен основной AI-разбор за выбранную дату.")
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="На сервере не задан OPENAI_API_KEY.")
+
+    model = os.getenv("OIL_AI_FOLLOWUP_MODEL", os.getenv("OIL_AI_MODEL", DEFAULT_AI_MODEL)).strip() or DEFAULT_AI_MODEL
+    prompt = build_ai_review_followup_prompt(target_day, str(ai_review.get("content") or ""), clean_question)
+    answer = request_openai_text(api_key, model, FOLLOWUP_SYSTEM_INSTRUCTIONS, prompt)
+    created_at = datetime.now(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК")
+    item = {
+        "id": uuid4().hex,
+        "question": clean_question,
+        "answer": answer.strip(),
+        "model": model,
+        "created_at_moscow": created_at,
+    }
+    followups = load_ai_review_followups(target_day)
+    followups.append(item)
+    save_ai_review_followups(target_day, followups[-12:])
+    return {
+        "ok": True,
+        "date": target_day.isoformat(),
+        "item": item,
+        "message": "Дополнительный AI-разбор готов.",
     }
 
 
@@ -2923,6 +3016,15 @@ def build_dashboard_html() -> str:
       </div>
       <div class="muted" id="aiReviewStatus" style="margin-bottom:12px;">Ручной запуск не выполнялся.</div>
       <div id="aiReviewContent" class="prose-review muted">AI-review пока не загружен.</div>
+      <div style="margin-top:16px; display:grid; gap:10px;">
+        <label for="aiReviewFollowupInput" class="muted">Дополнительный вопрос к AI-разбору</label>
+        <textarea id="aiReviewFollowupInput" rows="4" placeholder="Например: почему бот слабо использовал движение по нефти после 18:00?" style="width:100%; resize:vertical; background:rgba(8,16,32,.75); color:#e8f0ff; border:1px solid rgba(138,163,255,.16); border-radius:14px; padding:12px;"></textarea>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <button id="aiReviewFollowupBtn" class="btn-secondary" type="button">Задать доп. вопрос</button>
+          <div class="generated" id="aiReviewFollowupStatus">Дополнительный разбор не запускался.</div>
+        </div>
+      </div>
+      <div id="aiReviewFollowups" style="margin-top:16px; display:grid; gap:14px;"></div>
     </section>
   </div>
   <div id="newsPopover" class="news-popover" role="dialog" aria-hidden="true">
@@ -3565,11 +3667,25 @@ def build_dashboard_html() -> str:
         }
       }
 
-      const aiReview = data.ai_review || {};
+const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available
         ? `AI review: ${aiReview.source || '-'} • обновлено ${aiReview.updated_at_moscow || '-'}`
         : `AI review: пока нет${aiReview.updated_at_moscow ? ` • последняя попытка ${aiReview.updated_at_moscow}` : ''}`;
       document.getElementById('aiReviewContent').innerHTML = markdownToHtml(aiReview.content || '');
+      const aiFollowupsEl = document.getElementById('aiReviewFollowups');
+      if (aiFollowupsEl) {
+        const followups = Array.isArray(aiReview.followups) ? aiReview.followups : [];
+        aiFollowupsEl.innerHTML = '';
+        for (const item of followups.slice().reverse()) {
+          aiFollowupsEl.insertAdjacentHTML('beforeend', `
+            <div class="glass-card">
+              <div class="muted" style="margin-bottom:8px;">Доп. вопрос • ${escapeHtml(item.created_at_moscow || '-')} • ${escapeHtml(item.model || '-')}</div>
+              <div style="font-weight:600; margin-bottom:10px;">${escapeHtml(item.question || '-')}</div>
+              <div class="prose-review">${markdownToHtml(item.answer || '')}</div>
+            </div>
+          `);
+        }
+      }
     }
 
     async function refreshAIReview() {
@@ -3592,6 +3708,40 @@ def build_dashboard_html() -> str:
         window.setTimeout(loadData, 4000);
       } catch (error) {
         status.textContent = error?.message || 'Не удалось запустить AI-разбор.';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function askAIReviewFollowup() {
+      const dateInput = document.getElementById('selectedDate');
+      const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
+      const input = document.getElementById('aiReviewFollowupInput');
+      const btn = document.getElementById('aiReviewFollowupBtn');
+      const status = document.getElementById('aiReviewFollowupStatus');
+      const question = input && input.value ? input.value.trim() : '';
+      if (!input || !btn || !status) return;
+      if (!question) {
+        status.textContent = 'Сначала введи вопрос к AI-разбору.';
+        return;
+      }
+      btn.disabled = true;
+      status.textContent = 'Запрашиваю дополнительный AI-разбор...';
+      try {
+        const response = await fetch(`/api/ai-review/followup${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.message || 'Не удалось получить дополнительный AI-разбор.');
+        }
+        status.textContent = payload.message || 'Дополнительный AI-разбор готов.';
+        input.value = '';
+        await loadData();
+      } catch (error) {
+        status.textContent = error?.message || 'Не удалось получить дополнительный AI-разбор.';
       } finally {
         btn.disabled = false;
       }
@@ -3634,6 +3784,10 @@ def build_dashboard_html() -> str:
       const aiRefreshBtn = document.getElementById('aiReviewRefreshBtn');
       if (aiRefreshBtn) {
         aiRefreshBtn.addEventListener('click', refreshAIReview);
+      }
+      const aiFollowupBtn = document.getElementById('aiReviewFollowupBtn');
+      if (aiFollowupBtn) {
+        aiFollowupBtn.addEventListener('click', askAIReviewFollowup);
       }
       const tradeRecoveryBtn = document.getElementById('tradeRecoveryBtn');
       if (tradeRecoveryBtn) {
@@ -3744,6 +3898,18 @@ def api_ai_review_refresh(date: str | None = None) -> dict:
         except ValueError as error:
             raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
     return start_ai_review_refresh(target_day)
+
+
+@app.post("/api/ai-review/followup", response_class=JSONResponse)
+def api_ai_review_followup(payload: dict = Body(default={}), date: str | None = None) -> dict:
+    target_day = datetime.now(MOSCOW_TZ).date()
+    if date:
+        try:
+            target_day = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
+    question = str((payload or {}).get("question") or "").strip()
+    return run_ai_review_followup(target_day, question)
 
 
 @app.post("/api/trades/recover", response_class=JSONResponse)

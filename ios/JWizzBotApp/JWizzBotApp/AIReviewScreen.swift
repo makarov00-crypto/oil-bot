@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AIReviewScreen: View {
     @ObservedObject var store: DashboardStore
+    @State private var followupQuestion = ""
 
     var body: some View {
         Group {
@@ -71,6 +72,62 @@ struct AIReviewScreen: View {
 
                     if payload.aiReview.available {
                         AIReviewMarkdownView(markdown: payload.aiReview.content)
+
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Дополнительный вопрос к AI-разбору")
+                                    .font(.headline)
+                                TextEditor(text: $followupQuestion)
+                                    .frame(minHeight: 110)
+                                    .padding(10)
+                                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                                HStack(spacing: 10) {
+                                    Button {
+                                        let question = followupQuestion
+                                        Task {
+                                            await store.requestAIReviewFollowup(question: question, date: store.selectedDate)
+                                            if let message = store.aiReviewFollowupMessage, message.contains("готов") {
+                                                followupQuestion = ""
+                                            }
+                                        }
+                                    } label: {
+                                        if store.isRequestingAIFollowup {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                        } else {
+                                            Label("Задать доп. вопрос", systemImage: "text.bubble")
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.cyan)
+                                    .disabled(store.isRequestingAIFollowup)
+
+                                    if let message = store.aiReviewFollowupMessage, !message.isEmpty {
+                                        Text(message)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+
+                        if let followups = payload.aiReview.followups, !followups.isEmpty {
+                            ForEach(Array(followups.reversed())) { item in
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(item.question)
+                                        .font(.headline)
+                                        .padding(.horizontal, 4)
+                                    if let created = item.createdAtMoscow ?? item.model {
+                                        Text([created, item.model].compactMap { $0 }.joined(separator: " • "))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 4)
+                                    }
+                                    AIReviewMarkdownView(markdown: item.answer)
+                                }
+                            }
+                        }
                     } else {
                         EmptyGlassState(
                             title: "AI-разбор пока не найден",

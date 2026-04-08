@@ -11,11 +11,14 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var isShowingCachedData = false
     @Published private(set) var isRefreshingAIReview = false
     @Published private(set) var aiReviewRefreshMessage: String?
+    @Published private(set) var isRequestingAIFollowup = false
+    @Published private(set) var aiReviewFollowupMessage: String?
     @Published private(set) var isRecoveringTrades = false
     @Published private(set) var tradeRecoveryMessage: String?
 
     private let dashboardURL = URL(string: "https://jwizzbot.ru/api/dashboard")!
     private let aiReviewRefreshURL = URL(string: "https://jwizzbot.ru/api/ai-review/refresh")!
+    private let aiReviewFollowupURL = URL(string: "https://jwizzbot.ru/api/ai-review/followup")!
     private let tradeRecoveryURL = URL(string: "https://jwizzbot.ru/api/trades/recover")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -120,6 +123,40 @@ final class DashboardStore: ObservableObject {
         }
     }
 
+    func requestAIReviewFollowup(question: String, date: String? = nil) async {
+        if isRequestingAIFollowup { return }
+        let cleanQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanQuestion.isEmpty else {
+            aiReviewFollowupMessage = "Сначала введи вопрос к AI-разбору."
+            return
+        }
+        isRequestingAIFollowup = true
+        defer { isRequestingAIFollowup = false }
+
+        let targetDate = date ?? selectedDate
+        do {
+            let requestURL = makeAIReviewFollowupURL(date: targetDate)
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(["question": cleanQuestion])
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw DashboardLoadError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let message = (try? JSONDecoder().decode(AIReviewFollowupResponse.self, from: data).message)
+                    ?? "Не удалось получить дополнительный AI-разбор."
+                throw DashboardLoadError.decoding(message)
+            }
+            let payload = try JSONDecoder().decode(AIReviewFollowupResponse.self, from: data)
+            aiReviewFollowupMessage = payload.message
+            await load(date: targetDate)
+        } catch {
+            aiReviewFollowupMessage = describeAIFollowup(error)
+        }
+    }
+
     private func makeDashboardURL(date: String?) -> URL {
         guard let date, !date.isEmpty else { return dashboardURL }
         var components = URLComponents(url: dashboardURL, resolvingAgainstBaseURL: false)
@@ -139,6 +176,13 @@ final class DashboardStore: ObservableObject {
         var components = URLComponents(url: tradeRecoveryURL, resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "date", value: date)]
         return components?.url ?? tradeRecoveryURL
+    }
+
+    private func makeAIReviewFollowupURL(date: String?) -> URL {
+        guard let date, !date.isEmpty else { return aiReviewFollowupURL }
+        var components = URLComponents(url: aiReviewFollowupURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "date", value: date)]
+        return components?.url ?? aiReviewFollowupURL
     }
 
     private func fetchDashboard(date: String?) async throws -> DashboardFetchResult {
@@ -314,6 +358,32 @@ final class DashboardStore: ObservableObject {
 
         return "Не удалось восстановить операции."
     }
+
+    private func describeAIFollowup(_ error: Error) -> String {
+        if let error = error as? DashboardLoadError {
+            switch error {
+            case .httpStatus(let code):
+                return "Сервер вернул ошибку \(code) при дополнительном AI-разборе."
+            case .invalidResponse:
+                return "Сервер вернул неполный ответ при дополнительном AI-разборе."
+            case .decoding(let message):
+                return message
+            }
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet:
+                return "Нет доступа к интернету."
+            case .timedOut, .networkConnectionLost:
+                return "Сервер не ответил вовремя при дополнительном AI-разборе."
+            default:
+                return "Не удалось получить дополнительный AI-разбор."
+            }
+        }
+
+        return "Не удалось получить дополнительный AI-разбор."
+    }
 }
 
 private enum DashboardLoadError: LocalizedError {
@@ -336,4 +406,10 @@ private struct AIReviewRefreshResponse: Decodable {
     let status: String?
     let message: String?
     let date: String?
+}
+
+private struct AIReviewFollowupResponse: Decodable {
+    let ok: Bool?
+    let date: String?
+    let message: String?
 }

@@ -572,6 +572,7 @@ struct AIReviewPayload: Decodable {
     let content: String
     let updatedAtMoscow: String?
     let status: String?
+    let followups: [AIReviewFollowupItem]?
 
     enum CodingKeys: String, CodingKey {
         case available
@@ -580,5 +581,22 @@ struct AIReviewPayload: Decodable {
         case content
         case updatedAtMoscow = "updated_at_moscow"
         case status
+        case followups
+    }
+}
+
+struct AIReviewFollowupItem: Decodable, Identifiable {
+    let id: String
+    let question: String
+    let answer: String
+    let model: String?
+    let createdAtMoscow: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case question
+        case answer
+        case model
+        case createdAtMoscow = "created_at_moscow"
     }
 }
