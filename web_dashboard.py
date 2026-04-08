@@ -168,14 +168,12 @@ def build_instrument_catalog(portfolio: dict | None = None, trades: list[dict] |
 
 def validate_futures_ticker_exists(symbol: str) -> dict[str, str]:
     from tinkoff.invest import Client
-    from tinkoff.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
+    from bot_oil_main import load_config
 
-    token = os.getenv("T_INVEST_TOKEN", "").strip()
-    target_name = os.getenv("T_INVEST_TARGET", "PROD").strip().upper()
-    target = INVEST_GRPC_API_SANDBOX if target_name == "SANDBOX" else INVEST_GRPC_API
-    if not token:
+    config = load_config()
+    if not config.token:
         raise RuntimeError("Не задан T_INVEST_TOKEN для проверки тикера у брокера.")
-    with Client(token, target=target) as client:
+    with Client(config.token, target=config.target) as client:
         futures = client.instruments.futures().instruments
     for item in futures:
         ticker = str(getattr(item, "ticker", "") or "").strip().upper()
@@ -1852,9 +1850,20 @@ def build_portfolio_view_for_day(
     if selected_is_today:
         estimated_variation = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
         open_positions_count = portfolio.get("open_positions_count")
+        live_varmargin_by_symbol: dict[str, float] = {}
+        for item in (portfolio.get("broker_open_positions") or []):
+            symbol = str(item.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            try:
+                live_value = float(item.get("variation_margin_rub") or 0.0)
+            except Exception:
+                continue
+            live_varmargin_by_symbol[symbol] = round(live_varmargin_by_symbol.get(symbol, 0.0) + live_value, 2)
     else:
         estimated_variation = 0.0
         open_positions_count = 0
+        live_varmargin_by_symbol = {}
     view["bot_estimated_variation_margin_rub"] = round(estimated_variation, 2)
     view["open_positions_count"] = open_positions_count
     view["bot_broker_day_pnl_rub"] = round(broker_open_positions_pnl, 2)
@@ -1878,10 +1887,16 @@ def build_portfolio_view_for_day(
     view["bot_total_pnl_rub"] = round(total_pnl, 2)
     view["bot_analytical_total_pnl_rub"] = round(total_pnl, 2)
     view["bot_operations_cash_effect_rub"] = round(selected_cash_effect, 2)
-    view["bot_actual_varmargin_by_symbol"] = history_entry.get(
+    actual_varmargin_by_symbol = history_entry.get(
         "varmargin_by_symbol",
         portfolio.get("bot_actual_varmargin_by_symbol") if selected_is_today else {},
     ) or {}
+    actual_varmargin_source = "broker_operations"
+    if not actual_varmargin_by_symbol and live_varmargin_by_symbol:
+        actual_varmargin_by_symbol = live_varmargin_by_symbol
+        actual_varmargin_source = "live_positions_fallback"
+    view["bot_actual_varmargin_by_symbol"] = actual_varmargin_by_symbol
+    view["bot_actual_varmargin_by_symbol_source"] = actual_varmargin_source
     view["generated_at_moscow"] = history_entry.get("generated_at_moscow") or portfolio.get("generated_at_moscow")
     return view
 
@@ -2856,7 +2871,6 @@ def build_dashboard_html() -> str:
           <div class="metric" id="portfolioOpenCount">-</div>
         </div>
       </div>
-      <div class="muted" id="portfolioVmBreakdown" style="margin-top:12px;">Клиринговая ВМ по инструментам: -</div>
     </section>
 
     <section class="panel alert-panel is-hidden" id="capitalAlertPanel" style="margin-bottom:16px;">
@@ -3434,12 +3448,6 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioTotalVm').textContent = formatRub(portfolio.bot_total_variation_margin_rub ?? portfolio.bot_total_varmargin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_analytical_total_pnl_rub ?? portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
-      const vmBySymbol = portfolio.bot_actual_varmargin_by_symbol || {};
-      const vmEntries = Object.entries(vmBySymbol);
-      document.getElementById('portfolioVmBreakdown').textContent = vmEntries.length
-        ? `Клиринговая ВМ по инструментам: ${vmEntries.map(([symbol, value]) => `${symbol} ${formatRub(value)}`).join(' | ')}`
-        : 'Клиринговая ВМ по инструментам: -';
-
       const capitalAlert = data.capital_alert || {};
       const capitalPanel = document.getElementById('capitalAlertPanel');
       if (capitalPanel && capitalAlert.active) {
