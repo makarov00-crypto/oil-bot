@@ -8,6 +8,7 @@ LOG_DIR="${LOG_DIR:-$APP_DIR/logs/automation}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/remote_ai_review.log}"
 LOCK_DIR="${LOCK_DIR:-$APP_DIR/.locks}"
 LOCK_PATH="${LOCK_PATH:-$LOCK_DIR/remote_ai_review.lock}"
+TARGET_DATE="${AI_TARGET_DATE:-}"
 
 mkdir -p "$LOG_DIR" "$LOCK_DIR"
 
@@ -44,10 +45,16 @@ if ! /usr/bin/curl -Is --max-time 15 https://api.openai.com/v1/models >/dev/null
   exit 0
 fi
 
-log "Старт AI-разбора на сервере."
+if [ -n "$TARGET_DATE" ]; then
+  log "Старт AI-разбора на сервере для даты $TARGET_DATE."
+  REVIEW_ARGS=(--base-dir "$APP_DIR" --date "$TARGET_DATE")
+else
+  log "Старт AI-разбора на сервере."
+  REVIEW_ARGS=(--base-dir "$APP_DIR")
+fi
 attempt=1
 while [ "$attempt" -le 2 ]; do
-  if "$VENV_PYTHON" "$SCRIPT_PATH" --base-dir "$APP_DIR" >> "$LOG_FILE" 2>&1; then
+  if "$VENV_PYTHON" "$SCRIPT_PATH" "${REVIEW_ARGS[@]}" >> "$LOG_FILE" 2>&1; then
     log "AI-разбор завершен успешно."
     exit 0
   fi

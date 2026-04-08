@@ -29,6 +29,28 @@ struct AIReviewScreen: View {
                                 }
                             }
 
+                            HStack(spacing: 10) {
+                                Button {
+                                    Task { await store.refreshAIReview(date: store.selectedDate) }
+                                } label: {
+                                    if store.isRefreshingAIReview {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Label("Обновить AI-разбор", systemImage: "arrow.triangle.2.circlepath")
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.cyan)
+                                .disabled(store.isRefreshingAIReview)
+
+                                if let message = store.aiReviewRefreshMessage, !message.isEmpty {
+                                    Text(message)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
                             if let source = payload.aiReview.source {
                                 Text("Источник: \(source)")
                                     .font(.caption)
@@ -76,10 +98,19 @@ struct AIReviewScreen: View {
         .navigationTitle("AI-разбор")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await store.load(date: store.selectedDate) }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+                HStack(spacing: 12) {
+                    Button {
+                        Task { await store.refreshAIReview(date: store.selectedDate) }
+                    } label: {
+                        Image(systemName: "brain")
+                    }
+                    .disabled(store.isRefreshingAIReview)
+
+                    Button {
+                        Task { await store.load(date: store.selectedDate) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
             }
         }

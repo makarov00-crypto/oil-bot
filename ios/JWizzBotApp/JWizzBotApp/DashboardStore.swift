@@ -9,8 +9,11 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var lastLoadedAt: Date?
     @Published private(set) var selectedDate: String?
     @Published private(set) var isShowingCachedData = false
+    @Published private(set) var isRefreshingAIReview = false
+    @Published private(set) var aiReviewRefreshMessage: String?
 
     private let dashboardURL = URL(string: "https://jwizzbot.ru/api/dashboard")!
+    private let aiReviewRefreshURL = URL(string: "https://jwizzbot.ru/api/ai-review/refresh")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -61,11 +64,44 @@ final class DashboardStore: ObservableObject {
         await load(date: date)
     }
 
+    func refreshAIReview(date: String? = nil) async {
+        if isRefreshingAIReview { return }
+        isRefreshingAIReview = true
+        defer { isRefreshingAIReview = false }
+
+        let targetDate = date ?? selectedDate
+        do {
+            let requestURL = makeAIReviewRefreshURL(date: targetDate)
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "POST"
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw DashboardLoadError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let message = (try? JSONDecoder().decode(AIReviewRefreshResponse.self, from: data).message)
+                    ?? "Не удалось запустить AI-разбор."
+                throw DashboardLoadError.decoding(message)
+            }
+            let payload = try JSONDecoder().decode(AIReviewRefreshResponse.self, from: data)
+            aiReviewRefreshMessage = payload.message
+        } catch {
+            aiReviewRefreshMessage = describeAIRefresh(error)
+        }
+    }
+
     private func makeDashboardURL(date: String?) -> URL {
         guard let date, !date.isEmpty else { return dashboardURL }
         var components = URLComponents(url: dashboardURL, resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "date", value: date)]
         return components?.url ?? dashboardURL
+    }
+
+    private func makeAIReviewRefreshURL(date: String?) -> URL {
+        guard let date, !date.isEmpty else { return aiReviewRefreshURL }
+        var components = URLComponents(url: aiReviewRefreshURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "date", value: date)]
+        return components?.url ?? aiReviewRefreshURL
     }
 
     private func fetchDashboard(date: String?) async throws -> DashboardFetchResult {
@@ -189,6 +225,32 @@ final class DashboardStore: ObservableObject {
 
         return "Не удалось загрузить данные с сервера."
     }
+
+    private func describeAIRefresh(_ error: Error) -> String {
+        if let error = error as? DashboardLoadError {
+            switch error {
+            case .httpStatus(let code):
+                return "Сервер вернул ошибку \(code) при запуске AI-разбора."
+            case .invalidResponse:
+                return "Сервер вернул неполный ответ при запуске AI-разбора."
+            case .decoding(let message):
+                return message
+            }
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet:
+                return "Нет доступа к интернету."
+            case .timedOut, .networkConnectionLost:
+                return "Сервер не ответил вовремя при запуске AI-разбора."
+            default:
+                return "Не удалось запустить AI-разбор."
+            }
+        }
+
+        return "Не удалось запустить AI-разбор."
+    }
 }
 
 private enum DashboardLoadError: LocalizedError {
@@ -200,4 +262,11 @@ private enum DashboardLoadError: LocalizedError {
 private struct DashboardFetchResult {
     let payload: DashboardPayload
     let data: Data
+}
+
+private struct AIReviewRefreshResponse: Decodable {
+    let started: Bool?
+    let status: String?
+    let message: String?
+    let date: String?
 }

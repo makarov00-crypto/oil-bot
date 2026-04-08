@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from instrument_groups import GROUP_BY_SYMBOL, get_instrument_group
 from strategy_registry import get_primary_strategies, get_secondary_strategies
@@ -22,6 +22,9 @@ ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 AI_REVIEW_DIR = LOG_DIR / "ai_reviews"
+AI_REVIEW_SCRIPT_PATH = BASE_DIR / "deploy" / "run_remote_ai_review_server.sh"
+AI_REVIEW_LOG_PATH = LOG_DIR / "automation" / "remote_ai_review.log"
+AI_REVIEW_LOCK_PATH = BASE_DIR / ".locks" / "remote_ai_review.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 STATE_STALE_MINUTES = 20
 
@@ -1779,6 +1782,45 @@ def load_ai_review(target_day: date) -> dict:
     }
 
 
+def start_ai_review_refresh(target_day: date | None = None) -> dict[str, object]:
+    if not AI_REVIEW_SCRIPT_PATH.exists():
+        raise HTTPException(status_code=500, detail="Скрипт AI-разбора не найден на сервере.")
+    if AI_REVIEW_LOCK_PATH.exists():
+        return {
+            "started": False,
+            "status": "already_running",
+            "message": "AI-разбор уже выполняется.",
+            "date": target_day.isoformat() if target_day else None,
+        }
+
+    env = os.environ.copy()
+    env["APP_DIR"] = str(BASE_DIR)
+    if target_day is not None:
+        env["AI_TARGET_DATE"] = target_day.isoformat()
+
+    AI_REVIEW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with AI_REVIEW_LOG_PATH.open("ab") as log_handle:
+        subprocess.Popen(
+            [str(AI_REVIEW_SCRIPT_PATH)],
+            cwd=str(BASE_DIR),
+            env=env,
+            stdout=log_handle,
+            stderr=log_handle,
+            start_new_session=True,
+        )
+
+    return {
+        "started": True,
+        "status": "started",
+        "message": (
+            f"AI-разбор для {target_day.isoformat()} запущен."
+            if target_day is not None
+            else "AI-разбор запущен."
+        ),
+        "date": target_day.isoformat() if target_day else None,
+    }
+
+
 def get_service_status(service_name: str) -> dict:
     try:
         active = subprocess.run(
@@ -2135,6 +2177,25 @@ def build_dashboard_html() -> str:
     .hint-button:hover {
       background: rgba(67, 197, 255, 0.16);
       border-color: rgba(102, 174, 255, 0.32);
+    }
+    .btn-secondary {
+      appearance: none;
+      border: 1px solid rgba(102, 174, 255, 0.22);
+      background: rgba(67, 197, 255, 0.10);
+      color: #d9f3ff;
+      border-radius: 12px;
+      padding: 8px 14px;
+      font: 700 13px/1 "Manrope", sans-serif;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+    }
+    .btn-secondary:hover {
+      background: rgba(67, 197, 255, 0.16);
+      border-color: rgba(102, 174, 255, 0.32);
+    }
+    .btn-secondary:disabled {
+      opacity: 0.55;
+      cursor: default;
     }
     .news-popover {
       position: fixed;
@@ -2736,8 +2797,12 @@ def build_dashboard_html() -> str:
     <section class="panel" style="margin-top:16px;">
       <div class="section-title">
         <h2>AI-разбор дня</h2>
-        <div class="generated" id="aiReviewMeta">AI review: -</div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <button id="aiReviewRefreshBtn" class="btn-secondary" type="button">Обновить AI-разбор</button>
+          <div class="generated" id="aiReviewMeta">AI review: -</div>
+        </div>
       </div>
+      <div class="muted" id="aiReviewStatus" style="margin-bottom:12px;">Ручной запуск не выполнялся.</div>
       <div id="aiReviewContent" class="prose-review muted">AI-review пока не загружен.</div>
     </section>
   </div>
@@ -3386,6 +3451,31 @@ def build_dashboard_html() -> str:
       document.getElementById('aiReviewContent').innerHTML = markdownToHtml(aiReview.content || '');
     }
 
+    async function refreshAIReview() {
+      const dateInput = document.getElementById('selectedDate');
+      const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
+      const btn = document.getElementById('aiReviewRefreshBtn');
+      const status = document.getElementById('aiReviewStatus');
+      if (!btn || !status) return;
+      btn.disabled = true;
+      status.textContent = 'Запускаю AI-разбор...';
+      try {
+        const response = await fetch(`/api/ai-review/refresh${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`, {
+          method: 'POST',
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.message || 'Не удалось запустить AI-разбор.');
+        }
+        status.textContent = payload.message || 'AI-разбор запущен.';
+        window.setTimeout(loadData, 4000);
+      } catch (error) {
+        status.textContent = error?.message || 'Не удалось запустить AI-разбор.';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       const filter = document.getElementById('eventStatusFilter');
       const dateInput = document.getElementById('selectedDate');
@@ -3394,6 +3484,10 @@ def build_dashboard_html() -> str:
       }
       if (dateInput) {
         dateInput.addEventListener('change', loadData);
+      }
+      const aiRefreshBtn = document.getElementById('aiReviewRefreshBtn');
+      if (aiRefreshBtn) {
+        aiRefreshBtn.addEventListener('click', refreshAIReview);
       }
       document.addEventListener('click', (event) => {
         const trigger = event.target.closest('.js-news-popover');
@@ -3489,6 +3583,17 @@ def api_dashboard(date: str | None = None) -> dict:
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
+
+
+@app.post("/api/ai-review/refresh", response_class=JSONResponse)
+def api_ai_review_refresh(date: str | None = None) -> dict:
+    target_day: date | None = None
+    if date:
+        try:
+            target_day = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
+    return start_ai_review_refresh(target_day)
 
 
 @app.get("/api/contracts", response_class=JSONResponse)
