@@ -31,6 +31,30 @@ struct TradesScreen: View {
                             SegmentedGlassPicker(title: "Раздел", selection: $segment, items: ["События", "Обзор"])
                         }
 
+                        GlassCard {
+                            HStack(spacing: 10) {
+                                Button {
+                                    Task { await store.recoverTradeOperations(date: store.selectedDate) }
+                                } label: {
+                                    if store.isRecoveringTrades {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Label("Восстановить операции", systemImage: "wrench.adjustable")
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+                                .disabled(store.isRecoveringTrades)
+
+                                if let message = store.tradeRecoveryMessage, !message.isEmpty {
+                                    Text(message)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
                         if segment == 0 {
                             eventsContent(payload: payload)
                         } else {
@@ -53,10 +77,19 @@ struct TradesScreen: View {
             .navigationTitle("Сделки")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await store.load(date: store.selectedDate) }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    HStack(spacing: 12) {
+                        Button {
+                            Task { await store.recoverTradeOperations(date: store.selectedDate) }
+                        } label: {
+                            Image(systemName: "wrench.adjustable")
+                        }
+                        .disabled(store.isRecoveringTrades)
+
+                        Button {
+                            Task { await store.load(date: store.selectedDate) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
                     }
                 }
             }

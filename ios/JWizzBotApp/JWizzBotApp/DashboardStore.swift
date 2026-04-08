@@ -11,9 +11,12 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var isShowingCachedData = false
     @Published private(set) var isRefreshingAIReview = false
     @Published private(set) var aiReviewRefreshMessage: String?
+    @Published private(set) var isRecoveringTrades = false
+    @Published private(set) var tradeRecoveryMessage: String?
 
     private let dashboardURL = URL(string: "https://jwizzbot.ru/api/dashboard")!
     private let aiReviewRefreshURL = URL(string: "https://jwizzbot.ru/api/ai-review/refresh")!
+    private let tradeRecoveryURL = URL(string: "https://jwizzbot.ru/api/trades/recover")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -90,6 +93,33 @@ final class DashboardStore: ObservableObject {
         }
     }
 
+    func recoverTradeOperations(date: String? = nil) async {
+        if isRecoveringTrades { return }
+        isRecoveringTrades = true
+        defer { isRecoveringTrades = false }
+
+        let targetDate = date ?? selectedDate
+        do {
+            let requestURL = makeTradeRecoveryURL(date: targetDate)
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "POST"
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw DashboardLoadError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let message = (try? JSONDecoder().decode(TradeRecoveryResponse.self, from: data).message)
+                    ?? "Не удалось восстановить операции."
+                throw DashboardLoadError.decoding(message)
+            }
+            let payload = try JSONDecoder().decode(TradeRecoveryResponse.self, from: data)
+            tradeRecoveryMessage = payload.message
+            await load(date: targetDate)
+        } catch {
+            tradeRecoveryMessage = describeTradeRecovery(error)
+        }
+    }
+
     private func makeDashboardURL(date: String?) -> URL {
         guard let date, !date.isEmpty else { return dashboardURL }
         var components = URLComponents(url: dashboardURL, resolvingAgainstBaseURL: false)
@@ -102,6 +132,13 @@ final class DashboardStore: ObservableObject {
         var components = URLComponents(url: aiReviewRefreshURL, resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "date", value: date)]
         return components?.url ?? aiReviewRefreshURL
+    }
+
+    private func makeTradeRecoveryURL(date: String?) -> URL {
+        guard let date, !date.isEmpty else { return tradeRecoveryURL }
+        var components = URLComponents(url: tradeRecoveryURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "date", value: date)]
+        return components?.url ?? tradeRecoveryURL
     }
 
     private func fetchDashboard(date: String?) async throws -> DashboardFetchResult {
@@ -251,6 +288,32 @@ final class DashboardStore: ObservableObject {
 
         return "Не удалось запустить AI-разбор."
     }
+
+    private func describeTradeRecovery(_ error: Error) -> String {
+        if let error = error as? DashboardLoadError {
+            switch error {
+            case .httpStatus(let code):
+                return "Сервер вернул ошибку \(code) при восстановлении операций."
+            case .invalidResponse:
+                return "Сервер вернул неполный ответ при восстановлении операций."
+            case .decoding(let message):
+                return message
+            }
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet:
+                return "Нет доступа к интернету."
+            case .timedOut, .networkConnectionLost:
+                return "Сервер не ответил вовремя при восстановлении операций."
+            default:
+                return "Не удалось восстановить операции."
+            }
+        }
+
+        return "Не удалось восстановить операции."
+    }
 }
 
 private enum DashboardLoadError: LocalizedError {
@@ -262,6 +325,10 @@ private enum DashboardLoadError: LocalizedError {
 private struct DashboardFetchResult {
     let payload: DashboardPayload
     let data: Data
+}
+
+private struct TradeRecoveryResponse: Decodable {
+    let message: String
 }
 
 private struct AIReviewRefreshResponse: Decodable {

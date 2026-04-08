@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -25,6 +26,8 @@ AI_REVIEW_DIR = LOG_DIR / "ai_reviews"
 AI_REVIEW_SCRIPT_PATH = BASE_DIR / "deploy" / "run_remote_ai_review_server.sh"
 AI_REVIEW_LOG_PATH = LOG_DIR / "automation" / "remote_ai_review.log"
 AI_REVIEW_LOCK_PATH = BASE_DIR / ".locks" / "remote_ai_review.lock"
+TRADE_RECOVERY_SCRIPT_PATH = BASE_DIR / "scripts" / "recover_trade_operations.py"
+TRADE_RECOVERY_LOCK_PATH = BASE_DIR / ".locks" / "trade_operations_recovery.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 STATE_STALE_MINUTES = 20
 
@@ -1821,6 +1824,57 @@ def start_ai_review_refresh(target_day: date | None = None) -> dict[str, object]
     }
 
 
+def run_trade_operations_recovery(target_day: date | None = None) -> dict[str, object]:
+    if not TRADE_RECOVERY_SCRIPT_PATH.exists():
+        raise HTTPException(status_code=500, detail="Скрипт восстановления операций не найден на сервере.")
+    if TRADE_RECOVERY_LOCK_PATH.exists():
+        return {
+            "started": False,
+            "status": "already_running",
+            "message": "Восстановление операций уже выполняется.",
+            "date": target_day.isoformat() if target_day else None,
+        }
+
+    target = target_day or datetime.now(MOSCOW_TZ).date()
+    TRADE_RECOVERY_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TRADE_RECOVERY_LOCK_PATH.write_text(target.isoformat(), encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(TRADE_RECOVERY_SCRIPT_PATH),
+                "--date",
+                target.isoformat(),
+                "--write",
+                "--json",
+            ],
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    finally:
+        TRADE_RECOVERY_LOCK_PATH.unlink(missing_ok=True)
+
+    output = (result.stdout or "").strip()
+    error_text = (result.stderr or "").strip()
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=error_text or output or "Не удалось выполнить восстановление операций.",
+        )
+    try:
+        payload = json.loads(output or "{}")
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Скрипт восстановления вернул непонятный ответ: {error}") from error
+
+    payload.setdefault("started", True)
+    payload.setdefault("status", "completed")
+    payload.setdefault("date", target.isoformat())
+    return payload
+
+
 def get_service_status(service_name: str) -> dict:
     try:
         active = subprocess.run(
@@ -2691,15 +2745,19 @@ def build_dashboard_html() -> str:
     <section class="panel" style="margin-top:16px;">
       <div class="section-title">
         <h2>Лента событий</h2>
-        <label class="muted" for="eventStatusFilter">Статус:
-          <select id="eventStatusFilter" style="margin-left:8px; background:#0b1324; color:#ebf4ff; border:1px solid rgba(102,174,255,0.18); border-radius:10px; padding:6px 10px;">
-            <option value="all">Все</option>
-            <option value="active">Активные</option>
-            <option value="closed">Закрытые</option>
-            <option value="history">История</option>
-          </select>
-        </label>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <label class="muted" for="eventStatusFilter">Статус:
+            <select id="eventStatusFilter" style="margin-left:8px; background:#0b1324; color:#ebf4ff; border:1px solid rgba(102,174,255,0.18); border-radius:10px; padding:6px 10px;">
+              <option value="all">Все</option>
+              <option value="active">Активные</option>
+              <option value="closed">Закрытые</option>
+              <option value="history">История</option>
+            </select>
+          </label>
+          <button id="tradeRecoveryBtn" class="btn-secondary" type="button">Восстановить операции</button>
+        </div>
       </div>
+      <div class="muted" id="tradeRecoveryStatus" style="margin-bottom:12px;">Ручное восстановление не запускалось.</div>
       <div id="tradesCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="tradesTable">
@@ -3476,6 +3534,31 @@ def build_dashboard_html() -> str:
       }
     }
 
+    async function recoverTradeOperations() {
+      const dateInput = document.getElementById('selectedDate');
+      const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
+      const btn = document.getElementById('tradeRecoveryBtn');
+      const status = document.getElementById('tradeRecoveryStatus');
+      if (!btn || !status) return;
+      btn.disabled = true;
+      status.textContent = 'Восстанавливаю пропавшие операции...';
+      try {
+        const response = await fetch(`/api/trades/recover${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`, {
+          method: 'POST',
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.message || 'Не удалось восстановить операции.');
+        }
+        status.textContent = payload.message || 'Восстановление завершено.';
+        window.setTimeout(loadData, 1500);
+      } catch (error) {
+        status.textContent = error?.message || 'Не удалось восстановить операции.';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       const filter = document.getElementById('eventStatusFilter');
       const dateInput = document.getElementById('selectedDate');
@@ -3488,6 +3571,10 @@ def build_dashboard_html() -> str:
       const aiRefreshBtn = document.getElementById('aiReviewRefreshBtn');
       if (aiRefreshBtn) {
         aiRefreshBtn.addEventListener('click', refreshAIReview);
+      }
+      const tradeRecoveryBtn = document.getElementById('tradeRecoveryBtn');
+      if (tradeRecoveryBtn) {
+        tradeRecoveryBtn.addEventListener('click', recoverTradeOperations);
       }
       document.addEventListener('click', (event) => {
         const trigger = event.target.closest('.js-news-popover');
@@ -3594,6 +3681,17 @@ def api_ai_review_refresh(date: str | None = None) -> dict:
         except ValueError as error:
             raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
     return start_ai_review_refresh(target_day)
+
+
+@app.post("/api/trades/recover", response_class=JSONResponse)
+def api_trades_recover(date: str | None = None) -> dict:
+    target_day: date | None = None
+    if date:
+        try:
+            target_day = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
+    return run_trade_operations_recovery(target_day)
 
 
 @app.get("/api/contracts", response_class=JSONResponse)
