@@ -183,6 +183,7 @@ class InstrumentState:
     delayed_close_reason: str = ""
     delayed_close_entry_time: str = ""
     delayed_close_submitted_at: str = ""
+    delayed_close_queue: list[dict[str, Any]] = field(default_factory=list)
     execution_status: str = "idle"
     last_fill_price: float | None = None
     entry_time: str = ""
@@ -352,6 +353,83 @@ def clear_delayed_close_recovery(state: InstrumentState) -> None:
     state.delayed_close_reason = ""
     state.delayed_close_entry_time = ""
     state.delayed_close_submitted_at = ""
+    state.delayed_close_queue = []
+
+
+def build_delayed_close_snapshot(
+    *,
+    previous_side: str,
+    previous_qty: int,
+    previous_entry_price: float | None,
+    previous_entry_commission: float,
+    previous_strategy: str,
+    previous_exit_reason: str,
+    previous_entry_time: datetime | None,
+    submitted_at: datetime,
+) -> dict[str, Any]:
+    return {
+        "side": previous_side,
+        "qty": int(previous_qty or 0),
+        "entry_price": previous_entry_price,
+        "entry_commission_rub": float(previous_entry_commission or 0.0),
+        "strategy": previous_strategy or "",
+        "reason": previous_exit_reason or "",
+        "entry_time": previous_entry_time.isoformat() if previous_entry_time else "",
+        "submitted_at": submitted_at.isoformat(),
+    }
+
+
+def sync_legacy_delayed_close_fields(state: InstrumentState) -> None:
+    queue = list(state.delayed_close_queue or [])
+    if not queue:
+        state.delayed_close_recovery_needed = False
+        state.delayed_close_side = ""
+        state.delayed_close_qty = 0
+        state.delayed_close_entry_price = None
+        state.delayed_close_entry_commission_rub = 0.0
+        state.delayed_close_strategy = ""
+        state.delayed_close_reason = ""
+        state.delayed_close_entry_time = ""
+        state.delayed_close_submitted_at = ""
+        return
+    item = queue[0]
+    state.delayed_close_recovery_needed = True
+    state.delayed_close_side = str(item.get("side") or "")
+    state.delayed_close_qty = int(item.get("qty") or 0)
+    state.delayed_close_entry_price = item.get("entry_price")
+    state.delayed_close_entry_commission_rub = float(item.get("entry_commission_rub") or 0.0)
+    state.delayed_close_strategy = str(item.get("strategy") or "")
+    state.delayed_close_reason = str(item.get("reason") or "")
+    state.delayed_close_entry_time = str(item.get("entry_time") or "")
+    state.delayed_close_submitted_at = str(item.get("submitted_at") or "")
+
+
+def ensure_delayed_close_queue(state: InstrumentState) -> list[dict[str, Any]]:
+    queue = list(state.delayed_close_queue or [])
+    if not queue and state.delayed_close_recovery_needed and state.delayed_close_side and int(state.delayed_close_qty or 0) > 0:
+        queue.append(
+            {
+                "side": state.delayed_close_side,
+                "qty": int(state.delayed_close_qty or 0),
+                "entry_price": state.delayed_close_entry_price,
+                "entry_commission_rub": float(state.delayed_close_entry_commission_rub or 0.0),
+                "strategy": state.delayed_close_strategy or "",
+                "reason": state.delayed_close_reason or "",
+                "entry_time": state.delayed_close_entry_time or "",
+                "submitted_at": state.delayed_close_submitted_at or "",
+            }
+        )
+    state.delayed_close_queue = queue
+    sync_legacy_delayed_close_fields(state)
+    return state.delayed_close_queue
+
+
+def enqueue_delayed_close_snapshot(state: InstrumentState, snapshot: dict[str, Any]) -> None:
+    queue = ensure_delayed_close_queue(state)
+    queue.append(snapshot)
+    queue.sort(key=lambda item: str(item.get("submitted_at") or ""))
+    state.delayed_close_queue = queue
+    sync_legacy_delayed_close_fields(state)
 
 
 def parse_state_datetime(value: str) -> datetime | None:
@@ -1005,53 +1083,62 @@ def reconcile_delayed_close_from_broker(
     instrument: InstrumentConfig,
     state: InstrumentState,
 ) -> bool:
-    if not state.delayed_close_recovery_needed:
+    queue = ensure_delayed_close_queue(state)
+    if not queue:
         return False
 
-    previous_side = state.delayed_close_side
-    previous_qty = int(state.delayed_close_qty or 0)
-    if previous_side == "FLAT" or previous_qty <= 0:
-        clear_delayed_close_recovery(state)
-        save_state(instrument.symbol, state)
-        return False
+    changed = False
+    for item in list(queue):
+        previous_side = str(item.get("side") or "")
+        previous_qty = int(item.get("qty") or 0)
+        if previous_side == "FLAT" or previous_qty <= 0:
+            queue.remove(item)
+            changed = True
+            continue
 
-    previous_entry_time = parse_state_datetime(state.delayed_close_entry_time)
-    delayed_submitted_at = parse_state_datetime(state.delayed_close_submitted_at)
-    close_not_before = previous_entry_time
-    if delayed_submitted_at is not None and (close_not_before is None or delayed_submitted_at > close_not_before):
-        close_not_before = delayed_submitted_at
+        previous_entry_time = parse_state_datetime(str(item.get("entry_time") or ""))
+        delayed_submitted_at = parse_state_datetime(str(item.get("submitted_at") or ""))
+        close_not_before = previous_entry_time
+        if delayed_submitted_at is not None and (close_not_before is None or delayed_submitted_at > close_not_before):
+            close_not_before = delayed_submitted_at
 
-    if confirm_pending_close_from_broker(
-        client,
-        config,
-        instrument,
-        state,
-        previous_side=previous_side,
-        previous_qty=previous_qty,
-        previous_entry_price=state.delayed_close_entry_price,
-        previous_entry_commission=state.delayed_close_entry_commission_rub,
-        previous_strategy=state.delayed_close_strategy,
-        previous_exit_reason=state.delayed_close_reason or "Закрытие подтверждено брокерской операцией",
-        previous_entry_time=previous_entry_time,
-        source="delayed_broker_ops_recovery",
-        recovered_status="recovered_close",
-        not_before=close_not_before,
-    ):
-        clear_delayed_close_recovery(state)
-        save_state(instrument.symbol, state)
-        logging.info("symbol=%s status=delayed_close_recovered", instrument.symbol)
-        return True
-
-    if delayed_submitted_at is not None:
-        age_seconds = (datetime.now(UTC) - delayed_submitted_at).total_seconds()
-        if age_seconds > DELAYED_CLOSE_RECOVERY_MAX_AGE_SECONDS:
-            state.last_error = (
-                "Закрытие позиции не удалось подтвердить по брокерским операциям в разумное время. "
-                "Нужна ручная сверка журнала."
-            )
-            clear_delayed_close_recovery(state)
+        if confirm_pending_close_from_broker(
+            client,
+            config,
+            instrument,
+            state,
+            previous_side=previous_side,
+            previous_qty=previous_qty,
+            previous_entry_price=item.get("entry_price"),
+            previous_entry_commission=float(item.get("entry_commission_rub") or 0.0),
+            previous_strategy=str(item.get("strategy") or ""),
+            previous_exit_reason=str(item.get("reason") or "Закрытие подтверждено брокерской операцией"),
+            previous_entry_time=previous_entry_time,
+            source="delayed_broker_ops_recovery",
+            recovered_status="recovered_close",
+            not_before=close_not_before,
+        ):
+            queue.remove(item)
+            state.delayed_close_queue = queue
+            sync_legacy_delayed_close_fields(state)
             save_state(instrument.symbol, state)
-            logging.warning("symbol=%s status=delayed_close_recovery_expired", instrument.symbol)
+            logging.info("symbol=%s status=delayed_close_recovered", instrument.symbol)
+            return True
+
+        if delayed_submitted_at is not None:
+            age_seconds = (datetime.now(UTC) - delayed_submitted_at).total_seconds()
+            if age_seconds > DELAYED_CLOSE_RECOVERY_MAX_AGE_SECONDS:
+                queue.remove(item)
+                changed = True
+                state.last_error = (
+                    "Закрытие позиции не удалось подтвердить по брокерским операциям в разумное время. "
+                    "Нужна ручная сверка журнала."
+                )
+                logging.warning("symbol=%s status=delayed_close_recovery_expired", instrument.symbol)
+    if changed:
+        state.delayed_close_queue = queue
+        sync_legacy_delayed_close_fields(state)
+        save_state(instrument.symbol, state)
     return False
 
 
@@ -1088,15 +1175,19 @@ def defer_close_recovery_to_broker_ops(
         )
         return True
 
-    state.delayed_close_recovery_needed = True
-    state.delayed_close_side = previous_side
-    state.delayed_close_qty = previous_qty
-    state.delayed_close_entry_price = previous_entry_price
-    state.delayed_close_entry_commission_rub = previous_entry_commission
-    state.delayed_close_strategy = previous_strategy
-    state.delayed_close_reason = previous_exit_reason
-    state.delayed_close_entry_time = previous_entry_time.isoformat() if previous_entry_time else ""
-    state.delayed_close_submitted_at = effective_submitted_at.isoformat()
+    enqueue_delayed_close_snapshot(
+        state,
+        build_delayed_close_snapshot(
+            previous_side=previous_side,
+            previous_qty=previous_qty,
+            previous_entry_price=previous_entry_price,
+            previous_entry_commission=previous_entry_commission,
+            previous_strategy=previous_strategy,
+            previous_exit_reason=previous_exit_reason,
+            previous_entry_time=previous_entry_time,
+            submitted_at=effective_submitted_at,
+        ),
+    )
     state.execution_status = "submitted_close"
     state.last_error = (
         f"Статус заявки {state.pending_order_id} не найден у брокера, "
