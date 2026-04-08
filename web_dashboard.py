@@ -1152,16 +1152,51 @@ def stringify_money(value: Any, default: str = "-") -> str:
 def humanize_strategy_name(strategy: str | None) -> str:
     value = str(strategy or "").strip()
     mapping = {
-        "opening_range_breakout": "opening range breakout",
+        "opening_range_breakout": "пробой стартового диапазона",
         "range_break_continuation": "продолжение пробоя диапазона",
         "trend_pullback": "откат по тренду",
         "trend_rollover": "разворот тренда",
-        "momentum_breakout": "импульсный breakout",
+        "momentum_breakout": "импульсный пробой",
         "failed_breakout": "ложный пробой",
         "breakdown_continuation": "продолжение слома диапазона",
         "recovered_position": "восстановленная позиция",
     }
     return mapping.get(value, value or "неизвестная стратегия")
+
+
+def is_service_trade_reason(reason: str | None) -> bool:
+    text = str(reason or "").strip().lower()
+    if not text:
+        return True
+    service_prefixes = (
+        "позиция подтверждена",
+        "восстановлено после рестарта",
+        "закрытие подтверждено",
+        "закрытие восстановлено",
+        "live fill",
+        "dry_run",
+        "тестовая запись",
+        "заявка на закрытие исполнена",
+        "восстановлено из broker operations",
+    )
+    return text.startswith(service_prefixes)
+
+
+def fallback_trade_reason(
+    event: str | None,
+    strategy: str | None,
+    source: str | None,
+) -> str:
+    event_name = str(event or "").strip().upper()
+    strategy_text = humanize_strategy_name(strategy)
+    source_text = str(source or "").strip().lower()
+    if event_name == "OPEN":
+        return f"Вход по торговой логике стратегии «{strategy_text}»."
+    if source_text in {"delayed_broker_ops_recovery", "pending_order_recovery"}:
+        return "Торговая причина выхода не сохранилась, закрытие подтверждено брокерскими операциями."
+    if source_text in {"portfolio_confirmation", "portfolio_recovery", "order_fill"}:
+        return "Торговая причина выхода не сохранилась, закрытие подтверждено брокером."
+    return f"Выход по сопровождению позиции стратегии «{strategy_text}»."
 
 
 def humanize_trade_reason(
@@ -1174,19 +1209,11 @@ def humanize_trade_reason(
     source_text = str(source or "").strip().lower()
     event_name = str(event or "").strip().upper()
     strategy_text = humanize_strategy_name(strategy)
-    if event_name == "CLOSE" and reason_text:
+    if reason_text and not is_service_trade_reason(reason_text):
         return reason_text
-    if source_text == "portfolio_confirmation" and event_name == "OPEN":
-        return f"Вход по стратегии «{strategy_text}» подтверждён брокерским портфелем."
-    if source_text == "pending_order_recovery" and event_name == "OPEN":
-        return f"Вход по стратегии «{strategy_text}» подтверждён после потери статуса заявки."
-    if source_text == "portfolio_recovery" and event_name == "OPEN":
-        return f"Позиция по стратегии «{strategy_text}» восстановлена после рестарта."
-    if source_text == "order_fill" and event_name == "OPEN":
-        return f"Вход по стратегии «{strategy_text}» исполнен брокером."
     if source_text == "dry_run":
         return "Тестовая запись DRY_RUN."
-    return reason_text or "-"
+    return fallback_trade_reason(event_name, strategy_text, source_text)
 
 
 def parse_trade_time(raw_value: str | None) -> datetime | None:

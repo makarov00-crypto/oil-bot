@@ -172,6 +172,7 @@ class InstrumentState:
     pending_order_side: str = ""
     pending_order_qty: int = 0
     pending_submitted_at: str = ""
+    pending_entry_reason: str = ""
     pending_exit_reason: str = ""
     delayed_close_recovery_needed: bool = False
     delayed_close_side: str = ""
@@ -186,6 +187,7 @@ class InstrumentState:
     last_fill_price: float | None = None
     entry_time: str = ""
     entry_strategy: str = ""
+    entry_reason: str = ""
     last_strategy_name: str = ""
     last_higher_tf_bias: str = ""
     last_news_bias: str = "NEUTRAL"
@@ -333,6 +335,7 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_order_side = ""
     state.pending_order_qty = 0
     state.pending_submitted_at = ""
+    state.pending_entry_reason = ""
     state.pending_exit_reason = ""
 
 
@@ -2403,6 +2406,7 @@ def sync_state_with_portfolio(
         state.breakeven_armed = False
         state.entry_time = ""
         state.entry_strategy = ""
+        state.entry_reason = ""
         state.position_notional_rub = 0.0
         state.position_variation_margin_rub = 0.0
         state.position_pnl_pct = 0.0
@@ -2440,14 +2444,18 @@ def sync_state_with_portfolio(
         else has_today_active_open_journal_entry(instrument.symbol, state.position_side)
     )
     if state.position_side != "FLAT" and not has_matching_open_entry and not state.delayed_close_recovery_needed:
+        entry_reason_text = compact_reason(
+            state.pending_entry_reason or state.entry_reason or ""
+        )
         if state.pending_order_id and state.pending_order_action == "OPEN":
-            recovery_reason = "Позиция подтверждена по брокерскому портфелю."
+            recovery_reason = entry_reason_text or "Позиция подтверждена по брокерскому портфелю."
             recovery_source = "portfolio_confirmation"
             state.execution_status = "confirmed_open"
         else:
-            recovery_reason = "Восстановлено после рестарта по брокерскому портфелю."
+            recovery_reason = entry_reason_text or "Восстановлено после рестарта по брокерскому портфелю."
             recovery_source = "portfolio_recovery"
             state.execution_status = "recovered_open"
+        state.entry_reason = recovery_reason
         operation_time, entry_fee_rub = find_recent_live_open_details(
             client,
             config,
@@ -3444,6 +3452,7 @@ def sync_pending_order(
             state.position_side = state.pending_order_side
             state.breakeven_armed = False
             state.entry_time = datetime.now(UTC).isoformat()
+            state.entry_reason = compact_reason(state.pending_entry_reason or "Сделка исполнена по рыночному входу")
             state.execution_status = "confirmed_open"
             reset_daily_pnl_if_needed(state)
             state.realized_commission_rub += fill_commission_rub
@@ -3458,7 +3467,7 @@ def sync_pending_order(
                 gross_pnl_rub=0.0,
                 commission_rub=fill_commission_rub,
                 net_pnl_rub=-fill_commission_rub,
-                reason="live fill",
+                reason=state.entry_reason,
                 source="order_fill",
                 strategy=state.entry_strategy,
                 dry_run=False,
@@ -3545,6 +3554,7 @@ def sync_pending_order(
             state.breakeven_armed = False
             state.entry_time = ""
             state.entry_strategy = ""
+            state.entry_reason = ""
 
         clear_pending_order(state)
         save_state(instrument.symbol, state)
@@ -3648,6 +3658,7 @@ def open_position(
     state: InstrumentState,
     signal: str,
     strategy_name: str = "",
+    entry_reason: str = "",
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
@@ -3679,6 +3690,7 @@ def open_position(
         state.breakeven_armed = False
         state.entry_time = datetime.now(UTC).isoformat()
         state.entry_strategy = strategy_name
+        state.entry_reason = compact_reason(entry_reason or "Тестовый вход по стратегии.")
         state.execution_status = "confirmed_open"
         save_state(instrument.symbol, state)
         append_trade_journal(
@@ -3690,7 +3702,7 @@ def open_position(
             gross_pnl_rub=0.0,
             commission_rub=0.0,
             net_pnl_rub=0.0,
-            reason="dry_run open",
+            reason=state.entry_reason,
             source="dry_run",
             strategy=strategy_name,
             dry_run=True,
@@ -3738,6 +3750,7 @@ def open_position(
         )
         return
     state.entry_strategy = strategy_name
+    state.pending_entry_reason = compact_reason(entry_reason)
     state.pending_order_id = order_id
     state.pending_order_action = "OPEN"
     state.pending_order_side = side
@@ -3809,6 +3822,7 @@ def close_position(
         state.breakeven_armed = False
         state.entry_time = ""
         state.entry_strategy = ""
+        state.entry_reason = ""
         state.position_notional_rub = 0.0
         state.position_variation_margin_rub = 0.0
         state.position_pnl_pct = 0.0
@@ -4128,7 +4142,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol):
             reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
             if reentry_allowed:
-                open_position(client, config, instrument, state, signal, primary_strategy_name)
+                open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
             else:
                 logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
                 state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
