@@ -550,6 +550,7 @@ def update_latest_unclosed_open_journal_entry(
     symbol: str,
     side: str,
     *,
+    not_before: datetime | None = None,
     commission_rub: float | None = None,
     net_pnl_rub: float | None = None,
 ) -> bool:
@@ -571,6 +572,9 @@ def update_latest_unclosed_open_journal_entry(
             continue
         if unmatched_closes > 0:
             unmatched_closes -= 1
+            continue
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if not_before is not None and row_dt is not None and row_dt < not_before:
             continue
         changed = False
         if commission_rub is not None:
@@ -982,6 +986,7 @@ def confirm_pending_open_from_broker(
         update_latest_unclosed_open_journal_entry(
             instrument.symbol,
             state.position_side,
+            not_before=not_before or operation_time,
             commission_rub=entry_fee_rub,
             net_pnl_rub=-entry_fee_rub,
         )
@@ -1248,21 +1253,23 @@ def defer_close_recovery_to_broker_ops(
 
 
 def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    open_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    open_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
     closed_reviews: list[dict[str, Any]] = []
     for row in rows:
         symbol = str(row.get("symbol", ""))
+        side = str(row.get("side", "")).upper()
         event = str(row.get("event", "")).upper()
-        if not symbol:
+        if not symbol or not side:
             continue
+        key = (symbol, side)
         if event == "OPEN":
-            open_by_symbol.setdefault(symbol, []).append(row)
+            open_by_key.setdefault(key, []).append(row)
             continue
         if event != "CLOSE":
             continue
         open_row = None
-        if open_by_symbol.get(symbol):
-            open_row = open_by_symbol[symbol].pop(0)
+        if open_by_key.get(key):
+            open_row = open_by_key[key].pop(0)
         closed_reviews.append(
             {
                 "symbol": symbol,
@@ -1281,7 +1288,7 @@ def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, 
                 "exit_reason": row.get("reason", ""),
             }
         )
-    current_open = {symbol: items[-1] for symbol, items in open_by_symbol.items() if items}
+    current_open = {symbol: items[-1] for (symbol, _side), items in open_by_key.items() if items}
     return closed_reviews, current_open
 
 
@@ -2653,6 +2660,7 @@ def sync_state_with_portfolio(
             update_latest_unclosed_open_journal_entry(
                 instrument.symbol,
                 state.position_side,
+                not_before=operation_time,
                 commission_rub=entry_fee_rub,
                 net_pnl_rub=-entry_fee_rub,
             )

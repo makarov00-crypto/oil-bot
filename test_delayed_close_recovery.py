@@ -180,6 +180,88 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(mod.ensure_delayed_close_queue(state), [])
         self.assertFalse(state.delayed_close_recovery_needed)
 
+    def test_update_latest_unclosed_open_respects_not_before(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-08T18:00:00+00:00",
+                "symbol": "TEST",
+                "side": "SHORT",
+                "event": "OPEN",
+                "commission_rub": None,
+                "net_pnl_rub": None,
+            },
+            {
+                "time": "2026-04-08T19:00:00+00:00",
+                "symbol": "TEST",
+                "side": "SHORT",
+                "event": "OPEN",
+                "commission_rub": None,
+                "net_pnl_rub": None,
+            },
+        ]
+        saved = {}
+
+        def fake_load():
+            return [dict(row) for row in rows]
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", side_effect=fake_load), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ):
+            changed = mod.update_latest_unclosed_open_journal_entry(
+                "TEST",
+                "SHORT",
+                not_before=datetime(2026, 4, 8, 18, 30, tzinfo=timezone.utc),
+                commission_rub=7.5,
+                net_pnl_rub=-7.5,
+            )
+
+        self.assertTrue(changed)
+        self.assertEqual(saved["rows"][0]["commission_rub"], None)
+        self.assertEqual(saved["rows"][1]["commission_rub"], 7.5)
+
+    def test_pair_trade_journal_rows_keeps_sides_separate(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-08T10:00:00+00:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "OPEN",
+                "price": 100.0,
+                "qty_lots": 1,
+                "reason": "long open",
+                "strategy": "s1",
+            },
+            {
+                "time": "2026-04-08T10:05:00+00:00",
+                "symbol": "TEST",
+                "side": "SHORT",
+                "event": "OPEN",
+                "price": 99.0,
+                "qty_lots": 1,
+                "reason": "short open",
+                "strategy": "s2",
+            },
+            {
+                "time": "2026-04-08T10:10:00+00:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "CLOSE",
+                "price": 101.0,
+                "qty_lots": 1,
+                "reason": "long close",
+                "strategy": "s1",
+            },
+        ]
+        closed_reviews, current_open = mod.pair_trade_journal_rows(rows)
+        self.assertEqual(len(closed_reviews), 1)
+        self.assertEqual(closed_reviews[0]["side"], "LONG")
+        self.assertEqual(closed_reviews[0]["entry_reason"], "long open")
+        self.assertIn("TEST", current_open)
+        self.assertEqual(current_open["TEST"]["side"], "SHORT")
+
 
 if __name__ == "__main__":
     unittest.main()
