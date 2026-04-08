@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import bot_oil_main as mod
@@ -109,6 +110,75 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["side"], "LONG")
         self.assertEqual(queue[0]["strategy"], "legacy")
+
+    def test_confirm_pending_open_appends_missing_open_entry(self) -> None:
+        state = mod.InstrumentState(
+            position_side="SHORT",
+            position_qty=1,
+            pending_order_side="SHORT",
+            pending_order_qty=1,
+            pending_order_action="OPEN",
+            pending_order_id="oid",
+            pending_entry_reason="Сигнал SHORT (momentum_breakout): старший ТФ=SHORT; цена ниже EMA20 и EMA50: да.",
+            entry_price=2.772,
+            entry_strategy="momentum_breakout",
+        )
+        config = SimpleNamespace(dry_run=False)
+        recorded: list[dict] = []
+
+        def fake_append(*args, **kwargs):
+            recorded.append(kwargs)
+
+        with patch.object(
+            mod,
+            "find_recent_live_open_details",
+            return_value=(datetime(2026, 4, 8, 19, 35, tzinfo=timezone.utc), 5.5),
+        ), patch.object(mod, "has_journal_event_since", return_value=False), patch.object(
+            mod, "append_trade_journal", side_effect=fake_append
+        ), patch.object(
+            mod, "update_latest_unclosed_open_journal_entry", return_value=True
+        ), patch.object(
+            mod, "save_state", lambda *args, **kwargs: None
+        ):
+            confirmed = mod.confirm_pending_open_from_broker(
+                None,
+                config,
+                self.instrument,
+                state,
+                not_before=datetime(2026, 4, 8, 19, 34, tzinfo=timezone.utc),
+            )
+
+        self.assertTrue(confirmed)
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["reason"], state.entry_reason)
+        self.assertEqual(recorded[0]["source"], "portfolio_confirmation")
+        self.assertEqual(recorded[0]["strategy"], "momentum_breakout")
+
+    def test_reconcile_delayed_close_clears_item_when_close_already_in_journal(self) -> None:
+        state = mod.InstrumentState(
+            delayed_close_queue=[
+                {
+                    "side": "SHORT",
+                    "qty": 1,
+                    "entry_price": 2.771,
+                    "entry_commission_rub": 5.5,
+                    "strategy": "momentum_breakout",
+                    "reason": "Трейлинг-стоп",
+                    "entry_time": datetime(2026, 4, 8, 16, 47, tzinfo=timezone.utc).isoformat(),
+                    "submitted_at": datetime(2026, 4, 8, 17, 26, tzinfo=timezone.utc).isoformat(),
+                }
+            ]
+        )
+        mod.sync_legacy_delayed_close_fields(state)
+
+        with patch.object(mod, "has_journal_event_since", return_value=True), patch.object(
+            mod, "save_state", lambda *args, **kwargs: None
+        ):
+            recovered = mod.reconcile_delayed_close_from_broker(None, None, self.instrument, state)
+
+        self.assertFalse(recovered)
+        self.assertEqual(mod.ensure_delayed_close_queue(state), [])
+        self.assertFalse(state.delayed_close_recovery_needed)
 
 
 if __name__ == "__main__":

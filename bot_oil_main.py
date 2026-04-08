@@ -944,6 +944,38 @@ def confirm_pending_open_from_broker(
     )
     if operation_time is not None:
         state.entry_time = operation_time.isoformat()
+    has_matching_open_entry = (
+        has_journal_event_since(
+            instrument.symbol,
+            state.position_side,
+            "OPEN",
+            not_before=not_before,
+        )
+        if not_before is not None
+        else has_today_active_open_journal_entry(instrument.symbol, state.position_side)
+    )
+    if not has_matching_open_entry:
+        entry_reason = compact_reason(
+            state.pending_entry_reason
+            or state.entry_reason
+            or "Позиция подтверждена по брокерскому портфелю."
+        )
+        state.entry_reason = entry_reason
+        append_trade_journal(
+            instrument,
+            "OPEN",
+            state.position_side,
+            state.position_qty,
+            state.entry_price,
+            event_time=operation_time,
+            gross_pnl_rub=0.0,
+            commission_rub=entry_fee_rub,
+            net_pnl_rub=-entry_fee_rub if entry_fee_rub is not None else None,
+            reason=entry_reason,
+            source="portfolio_confirmation",
+            strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
+            dry_run=config.dry_run,
+        )
     if entry_fee_rub is not None and entry_fee_rub > 0:
         state.entry_commission_rub = entry_fee_rub
         state.entry_commission_accounted = True
@@ -1101,6 +1133,17 @@ def reconcile_delayed_close_from_broker(
         close_not_before = previous_entry_time
         if delayed_submitted_at is not None and (close_not_before is None or delayed_submitted_at > close_not_before):
             close_not_before = delayed_submitted_at
+
+        if has_journal_event_since(
+            instrument.symbol,
+            previous_side,
+            "CLOSE",
+            not_before=close_not_before,
+        ):
+            queue.remove(item)
+            changed = True
+            logging.info("symbol=%s status=delayed_close_already_in_journal", instrument.symbol)
+            continue
 
         if confirm_pending_close_from_broker(
             client,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import date, datetime, timezone
@@ -1205,6 +1206,47 @@ def fallback_trade_reason(
     return f"Выход по сопровождению позиции стратегии «{strategy_text}»."
 
 
+def summarize_open_trade_reason(reason: str, strategy: str | None) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return fallback_trade_reason("OPEN", strategy, "")
+
+    compact = " ".join(text.split())
+    signal_match = re.search(r"Сигнал\s+(LONG|SHORT)\s+\(([^)]+)\):", compact)
+    direction = signal_match.group(1) if signal_match else ""
+    strategy_code = signal_match.group(2) if signal_match else (strategy or "")
+    strategy_text = humanize_strategy_name(strategy_code)
+
+    extracted: list[str] = []
+    patterns = (
+        r"старший ТФ=([^;:.]+)",
+        r"(цена выше EMA20 и EMA50: да|цена ниже EMA20 и EMA50: да)",
+        r"(пробой вверх диапазона [^;:.]+: да|пробой вниз диапазона [^;:.]+: да)",
+        r"(мягкий пробой вверх: да|мягкий пробой вниз: да|мягкий breakout вниз: да|мягкий breakdown вниз: да|мягкий breakout вверх: да)",
+        r"(продолжение вверх после пробоя: да|продолжение вниз после слома: да)",
+        r"(rollover вверх: да|rollover вниз: да)",
+        r"(MACD поддерживает рост|MACD поддерживает снижение)",
+        r"(объём выше базового|объём подтверждает вход|объём сильный)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, compact, re.IGNORECASE)
+        if match:
+            value = match.group(1).strip().rstrip(".")
+            if value not in extracted:
+                extracted.append(value)
+        if len(extracted) >= 3:
+            break
+
+    prefix = "Вход"
+    if direction:
+        prefix = f"Вход {direction}"
+
+    details = "; ".join(extracted[:3])
+    if details:
+        return f"{prefix} по стратегии «{strategy_text}»: {details}."
+    return f"{prefix} по стратегии «{strategy_text}»."
+
+
 def humanize_trade_reason(
     reason: str | None,
     source: str | None,
@@ -1216,6 +1258,8 @@ def humanize_trade_reason(
     event_name = str(event or "").strip().upper()
     strategy_text = humanize_strategy_name(strategy)
     if reason_text and not is_service_trade_reason(reason_text):
+        if event_name == "OPEN":
+            return summarize_open_trade_reason(reason_text, strategy_text)
         return reason_text
     if source_text == "dry_run":
         return "Тестовая запись DRY_RUN."
