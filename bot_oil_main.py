@@ -3286,6 +3286,25 @@ def sync_pending_order(
     previous_entry_time = parse_state_datetime(state.entry_time) if previous_entry_price is not None else None
     pending_submitted_at = parse_state_datetime(state.pending_submitted_at)
 
+    if pending_action == "CLOSE":
+        if previous_side == "FLAT" and state.delayed_close_side:
+            previous_side = state.delayed_close_side
+        if previous_qty <= 0 and state.delayed_close_qty:
+            previous_qty = int(state.delayed_close_qty or 0)
+        if previous_entry_price is None and state.delayed_close_entry_price is not None:
+            previous_entry_price = state.delayed_close_entry_price
+        if previous_entry_commission <= 0 and state.delayed_close_entry_commission_rub:
+            previous_entry_commission = float(state.delayed_close_entry_commission_rub or 0.0)
+        if not previous_strategy and state.delayed_close_strategy:
+            previous_strategy = state.delayed_close_strategy
+        if (
+            previous_exit_reason == "Заявка на закрытие подтверждена синхронизацией портфеля"
+            and state.delayed_close_reason
+        ):
+            previous_exit_reason = state.delayed_close_reason
+        if previous_entry_time is None and state.delayed_close_entry_time:
+            previous_entry_time = parse_state_datetime(state.delayed_close_entry_time)
+
     try:
         synced_qty = sync_state_with_portfolio(client, config, instrument, state)
     except Exception as sync_error:
@@ -3875,6 +3894,16 @@ def close_position(
     state.pending_order_qty = qty
     state.pending_submitted_at = datetime.now(UTC).isoformat()
     state.pending_exit_reason = exit_reason
+    # Снимок позиции на момент отправки CLOSE нужен, потому что live sync может
+    # увидеть FLAT раньше, чем брокерская операция появится в истории.
+    state.delayed_close_side = state.position_side
+    state.delayed_close_qty = qty
+    state.delayed_close_entry_price = state.entry_price
+    state.delayed_close_entry_commission_rub = float(state.entry_commission_rub or 0.0)
+    state.delayed_close_strategy = state.entry_strategy
+    state.delayed_close_reason = exit_reason
+    state.delayed_close_entry_time = state.entry_time or ""
+    state.delayed_close_submitted_at = state.pending_submitted_at
     state.execution_status = "submitted_close"
     save_state(instrument.symbol, state)
     logging.info("symbol=%s status=close_submitted order_id=%s", instrument.symbol, order_id)
