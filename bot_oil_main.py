@@ -898,7 +898,7 @@ def confirm_pending_close_from_broker(
     recovered_status: str,
     not_before: datetime | None = None,
 ) -> bool:
-    if previous_side == "FLAT" or previous_qty <= 0 or state.position_qty != 0:
+    if previous_side == "FLAT" or previous_qty <= 0:
         return False
     close_time, close_fee_rub, close_price = find_recent_live_close_details(
         client,
@@ -1000,8 +1000,6 @@ def reconcile_delayed_close_from_broker(
     state: InstrumentState,
 ) -> bool:
     if not state.delayed_close_recovery_needed:
-        return False
-    if state.position_qty != 0 or state.position_side != "FLAT":
         return False
 
     previous_side = state.delayed_close_side
@@ -2424,6 +2422,8 @@ def sync_state_with_portfolio(
             state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
+    if state.delayed_close_recovery_needed:
+        reconcile_delayed_close_from_broker(client, config, instrument, state)
     pending_open_submitted_at = (
         parse_state_datetime(state.pending_submitted_at)
         if state.pending_order_id and state.pending_order_action == "OPEN"
@@ -2439,7 +2439,7 @@ def sync_state_with_portfolio(
         if pending_open_submitted_at is not None
         else has_today_active_open_journal_entry(instrument.symbol, state.position_side)
     )
-    if state.position_side != "FLAT" and not has_matching_open_entry:
+    if state.position_side != "FLAT" and not has_matching_open_entry and not state.delayed_close_recovery_needed:
         if state.pending_order_id and state.pending_order_action == "OPEN":
             recovery_reason = "Позиция подтверждена по брокерскому портфелю."
             recovery_source = "portfolio_confirmation"
@@ -2480,6 +2480,11 @@ def sync_state_with_portfolio(
             dry_run=config.dry_run,
         )
         save_state(instrument.symbol, state)
+    elif state.position_side != "FLAT" and not has_matching_open_entry and state.delayed_close_recovery_needed:
+        logging.info(
+            "symbol=%s status=open_recovery_deferred_until_close_reconciled",
+            instrument.symbol,
+        )
     refresh_position_snapshot(state, instrument, last_price)
     if (
         state.position_side != "FLAT"
