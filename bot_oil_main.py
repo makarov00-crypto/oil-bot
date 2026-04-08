@@ -4089,9 +4089,22 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     state.last_news_bias = format_news_bias_label(news_bias)
     state.last_news_impact = describe_news_bias_impact(signal, news_bias)
     state.last_signal_summary = signal_summary
-    state.last_allocator_summary = ""
     state.last_allocator_quantity = 0
-    if signal in {"LONG", "SHORT"} and state.position_side == "FLAT" and not has_pending_order(state):
+    if signal not in {"LONG", "SHORT"}:
+        state.last_allocator_summary = "Аллокатор не активен: сейчас нет сигнала на вход."
+    elif state.position_side != "FLAT":
+        state.last_allocator_summary = (
+            f"Аллокатор не активен: по инструменту уже открыта позиция {state.position_side} "
+            f"{state.position_qty} лот(а)."
+        )
+    elif has_pending_order(state):
+        pending_action = state.pending_order_action or "UNKNOWN"
+        pending_side = state.pending_order_side or "UNKNOWN"
+        state.last_allocator_summary = (
+            f"Аллокатор ждёт завершения заявки: действие {pending_action}, "
+            f"направление {pending_side}, лотов {state.pending_order_qty}."
+        )
+    else:
         try:
             allocator_sizing = calculate_position_sizing_context(
                 client,
@@ -4105,6 +4118,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
             state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
         except Exception as error:
+            state.last_allocator_summary = f"Аллокатор временно недоступен: {error}"
             logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
 
     if signal_changed:
