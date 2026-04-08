@@ -110,27 +110,6 @@ struct OverviewScreen: View {
                     MetricGlassTile(title: "ГО", value: formatRub(payload.portfolio.blockedGuaranteeRub))
                     MetricGlassTile(title: "Режим", value: displayMode(payload.portfolio.mode))
                 }
-
-                if let vmBySymbol = payload.portfolio.botActualVarmarginBySymbol, !vmBySymbol.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Клиринговая ВМ по инструментам")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        let ordered = vmBySymbol.keys.sorted()
-                        ForEach(ordered, id: \.self) { symbol in
-                            let value = vmBySymbol[symbol] ?? 0
-                            HStack {
-                                Text(symbol)
-                                    .font(.subheadline.weight(.semibold))
-                                Spacer()
-                                Text(formatRub(value))
-                                    .font(.subheadline.monospacedDigit())
-                                    .foregroundStyle(statusTone(for: value))
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
             }
         }
     }

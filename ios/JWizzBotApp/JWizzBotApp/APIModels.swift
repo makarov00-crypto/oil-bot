@@ -31,6 +31,8 @@ struct DashboardPayload: Decodable {
     let aiReview: AIReviewPayload
     let states: [String: InstrumentSignalState]
     let trades: [TradeEvent]
+    let manualInstruments: ManualInstrumentsPayload?
+    let instrumentCatalog: [String: String]?
 
     enum CodingKeys: String, CodingKey {
         case generatedAtMoscow = "generated_at_moscow"
@@ -45,6 +47,8 @@ struct DashboardPayload: Decodable {
         case aiReview = "ai_review"
         case states
         case trades
+        case manualInstruments = "manual_instruments"
+        case instrumentCatalog = "instrument_catalog"
     }
 }
 
@@ -265,6 +269,7 @@ struct InstrumentSignalState: Decodable, Identifiable {
     let lastError: String?
     let positionSide: String?
     let positionQty: Int?
+    let lastAllocatorSummary: String?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -279,6 +284,7 @@ struct InstrumentSignalState: Decodable, Identifiable {
         lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
         positionSide = try container.decodeIfPresent(String.self, forKey: .positionSide)
         positionQty = try container.decodeIfPresent(Int.self, forKey: .positionQty)
+        lastAllocatorSummary = try container.decodeIfPresent(String.self, forKey: .lastAllocatorSummary)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -292,6 +298,53 @@ struct InstrumentSignalState: Decodable, Identifiable {
         case lastError = "last_error"
         case positionSide = "position_side"
         case positionQty = "position_qty"
+        case lastAllocatorSummary = "last_allocator_summary"
+    }
+}
+
+struct ManualInstrumentsPayload: Decodable {
+    let templates: [InstrumentTemplate]
+    let customInstruments: [CustomInstrumentItem]
+    let watchlistRefreshSeconds: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case templates
+        case customInstruments = "custom_instruments"
+        case watchlistRefreshSeconds = "watchlist_refresh_seconds"
+    }
+}
+
+struct InstrumentTemplate: Decodable, Identifiable, Hashable {
+    let symbol: String
+    let displayName: String?
+    let primaryStrategies: [String]
+    let secondaryStrategies: [String]
+
+    var id: String { symbol }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case displayName = "display_name"
+        case primaryStrategies = "primary_strategies"
+        case secondaryStrategies = "secondary_strategies"
+    }
+}
+
+struct CustomInstrumentItem: Decodable, Identifiable {
+    let symbol: String
+    let cloneFrom: String
+    let templateSymbol: String?
+    let addedAt: String?
+    let updatedAt: String?
+
+    var id: String { symbol }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case cloneFrom = "clone_from"
+        case templateSymbol = "template_symbol"
+        case addedAt = "added_at"
+        case updatedAt = "updated_at"
     }
 }
 

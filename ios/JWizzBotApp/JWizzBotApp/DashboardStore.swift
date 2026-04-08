@@ -15,11 +15,14 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var aiReviewFollowupMessage: String?
     @Published private(set) var isRecoveringTrades = false
     @Published private(set) var tradeRecoveryMessage: String?
+    @Published private(set) var isAddingInstrument = false
+    @Published private(set) var addInstrumentMessage: String?
 
     private let dashboardURL = URL(string: "https://jwizzbot.ru/api/dashboard")!
     private let aiReviewRefreshURL = URL(string: "https://jwizzbot.ru/api/ai-review/refresh")!
     private let aiReviewFollowupURL = URL(string: "https://jwizzbot.ru/api/ai-review/followup")!
     private let tradeRecoveryURL = URL(string: "https://jwizzbot.ru/api/trades/recover")!
+    private let addInstrumentURL = URL(string: "https://jwizzbot.ru/api/instruments/add")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -154,6 +157,46 @@ final class DashboardStore: ObservableObject {
             await load(date: targetDate)
         } catch {
             aiReviewFollowupMessage = describeAIFollowup(error)
+        }
+    }
+
+    func addManualInstrument(symbol: String, cloneFrom: String) async {
+        if isAddingInstrument { return }
+        let cleanSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let cleanCloneFrom = cloneFrom.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !cleanSymbol.isEmpty else {
+            addInstrumentMessage = "Сначала введи тикер нового инструмента."
+            return
+        }
+        guard !cleanCloneFrom.isEmpty else {
+            addInstrumentMessage = "Сначала выбери инструмент-шаблон."
+            return
+        }
+        isAddingInstrument = true
+        defer { isAddingInstrument = false }
+
+        do {
+            var request = URLRequest(url: addInstrumentURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode([
+                "symbol": cleanSymbol,
+                "clone_from": cleanCloneFrom,
+            ])
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw DashboardLoadError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let message = (try? JSONDecoder().decode(AddInstrumentResponse.self, from: data).message)
+                    ?? "Не удалось добавить инструмент."
+                throw DashboardLoadError.decoding(message)
+            }
+            let payload = try JSONDecoder().decode(AddInstrumentResponse.self, from: data)
+            addInstrumentMessage = payload.message
+            await load(date: selectedDate)
+        } catch {
+            addInstrumentMessage = describeAddInstrument(error)
         }
     }
 
@@ -384,6 +427,32 @@ final class DashboardStore: ObservableObject {
 
         return "Не удалось получить дополнительный AI-разбор."
     }
+
+    private func describeAddInstrument(_ error: Error) -> String {
+        if let error = error as? DashboardLoadError {
+            switch error {
+            case .httpStatus(let code):
+                return "Сервер вернул ошибку \(code) при добавлении инструмента."
+            case .invalidResponse:
+                return "Сервер вернул неполный ответ при добавлении инструмента."
+            case .decoding(let message):
+                return message
+            }
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet:
+                return "Нет доступа к интернету."
+            case .timedOut, .networkConnectionLost:
+                return "Сервер не ответил вовремя при добавлении инструмента."
+            default:
+                return "Не удалось добавить инструмент."
+            }
+        }
+
+        return "Не удалось добавить инструмент."
+    }
 }
 
 private enum DashboardLoadError: LocalizedError {
@@ -411,5 +480,10 @@ private struct AIReviewRefreshResponse: Decodable {
 private struct AIReviewFollowupResponse: Decodable {
     let ok: Bool?
     let date: String?
+    let message: String?
+}
+
+private struct AddInstrumentResponse: Decodable {
+    let ok: Bool?
     let message: String?
 }
