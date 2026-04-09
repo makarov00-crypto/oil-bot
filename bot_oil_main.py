@@ -3308,13 +3308,24 @@ def calculate_position_sizing_context(
     equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
     margin_per_lot = get_margin_per_lot(instrument, signal)
     margin_headroom = get_margin_headroom_rub(client, config, snapshot)
-    working_margin_budget = max(0.0, margin_headroom * max(0.0, min(config.portfolio_usage_pct, 1.0)))
+    # Основой аллокации должен быть реальный маржинальный запас брокера, а не
+    # только текущая оценка портфеля. Резерв ограничивает суммарную загрузку
+    # счёта, но не должен чрезмерно занижать целевой размер одной сделки.
+    working_margin_budget = max(0.0, margin_headroom)
     reserve_rub = working_margin_budget * max(0.0, min(config.capital_reserve_pct, 0.95))
     allocatable_margin = max(0.0, working_margin_budget - reserve_rub)
     instrument_class, instrument_weight = get_instrument_allocation_weight(instrument.symbol)
     conviction_weight = get_signal_conviction_weight(state, signal, strategy_name)
     base_trade_share = max(0.05, min(config.base_trade_allocation_pct, 1.0))
-    target_trade_margin = allocatable_margin * base_trade_share * instrument_weight * conviction_weight * max(session_multiplier, 0.0)
+    trade_aggression = max(0.35, min(config.portfolio_usage_pct, 1.0))
+    target_trade_margin = (
+        working_margin_budget
+        * trade_aggression
+        * base_trade_share
+        * instrument_weight
+        * conviction_weight
+        * max(session_multiplier, 0.0)
+    )
     qty_by_target = int(target_trade_margin // margin_per_lot) if margin_per_lot > 0 else 0
     qty_by_allocatable = int(allocatable_margin // margin_per_lot) if margin_per_lot > 0 else 0
     qty_by_working = int(working_margin_budget // margin_per_lot) if margin_per_lot > 0 else 0
@@ -3375,6 +3386,7 @@ def calculate_position_sizing_context(
         "working_margin_budget_rub": working_margin_budget,
         "reserve_rub": reserve_rub,
         "allocatable_margin_rub": allocatable_margin,
+        "trade_aggression": trade_aggression,
         "instrument_class": instrument_class,
         "instrument_weight": instrument_weight,
         "conviction_weight": conviction_weight,
@@ -3429,9 +3441,11 @@ def build_position_sizing_lines(
     lines.append(f"Свободно: {sizing['free_rub']:.2f} RUB")
     lines.append(f"ГО занято: {sizing['blocked_guarantee_rub']:.2f} RUB")
     lines.append(f"Маржинальный запас: {sizing['margin_headroom_rub']:.2f} RUB")
-    lines.append(f"Рабочий бюджет: {sizing['working_margin_budget_rub']:.2f} RUB")
+    lines.append(f"Рабочий маржинальный бюджет: {sizing['working_margin_budget_rub']:.2f} RUB")
     lines.append(f"Резерв капитала: {sizing['reserve_rub']:.2f} RUB")
     lines.append(f"Доступно под новые входы: {sizing['allocatable_margin_rub']:.2f} RUB")
+    lines.append(f"Глубина по марже: {int(sizing['qty_by_headroom'])} лот(а)")
+    lines.append(f"Агрессивность аллокации: {float(sizing['trade_aggression']):.2f}")
     if sizing["margin_per_lot_rub"] > 0:
         lines.append(f"ГО на 1 лот: {sizing['margin_per_lot_rub']:.2f} RUB")
     lines.append(f"Целевой бюджет сделки: {sizing['target_trade_margin_rub']:.2f} RUB")
@@ -3448,20 +3462,24 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     instrument_class = str(sizing.get("instrument_class") or "базовый")
     conviction_weight = float(sizing.get("conviction_weight") or 0.0)
     allocatable_margin = float(sizing.get("allocatable_margin_rub") or 0.0)
+    margin_headroom = float(sizing.get("margin_headroom_rub") or 0.0)
     target_trade_margin = float(sizing.get("target_trade_margin_rub") or 0.0)
     margin_per_lot = float(sizing.get("margin_per_lot_rub") or 0.0)
     broker_limit = int(sizing.get("broker_limit") or 0)
+    qty_by_headroom = int(sizing.get("qty_by_headroom") or 0)
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
-            f"вес сигнала {conviction_weight:.2f}, доступно {allocatable_margin:.0f} RUB, "
-            f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB."
+            f"вес сигнала {conviction_weight:.2f}, запас {margin_headroom:.0f} RUB, "
+            f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
+            f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
-        f"ГО 1 лота {margin_per_lot:.0f} RUB{broker_hint} -> {quantity} лот(а)."
+        f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
+        f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
+        f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."
     )
 
 

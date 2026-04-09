@@ -1,0 +1,70 @@
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import bot_oil_main as mod
+
+
+class PositionSizingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.instrument = mod.InstrumentConfig(
+            symbol="CNYRUBF",
+            figi="FIGI",
+            display_name="FX",
+            initial_margin_on_buy=1000.0,
+            initial_margin_on_sell=1000.0,
+        )
+        self.state = mod.InstrumentState(last_higher_tf_bias="SHORT", last_news_bias="NEUTRAL")
+        self.config = SimpleNamespace(
+            account_id="acc",
+            max_margin_usage_pct=0.35,
+            portfolio_usage_pct=0.85,
+            capital_reserve_pct=0.35,
+            base_trade_allocation_pct=0.22,
+            risk_per_trade_pct=0.0,
+            stop_loss_pct=0.008,
+            max_order_quantity=3,
+        )
+
+    def test_sizing_uses_margin_headroom_as_primary_budget(self) -> None:
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+            )
+
+        self.assertEqual(sizing["working_margin_budget_rub"], 20000.0)
+        self.assertEqual(sizing["reserve_rub"], 7000.0)
+        self.assertEqual(sizing["allocatable_margin_rub"], 13000.0)
+        self.assertEqual(sizing["target_trade_margin_rub"], 3740.0)
+        self.assertEqual(sizing["qty_by_headroom"], 20)
+
+    def test_quantity_is_capped_by_allocatable_margin_and_config(self) -> None:
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.4
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.35)
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "opening_range_breakout"
+            )
+
+        self.assertGreaterEqual(sizing["qty_by_target"], 3)
+        self.assertEqual(sizing["quantity"], 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
