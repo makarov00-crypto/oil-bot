@@ -262,6 +262,68 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertIn("TEST", current_open)
         self.assertEqual(current_open["TEST"]["side"], "SHORT")
 
+    def test_auto_recovery_appends_missing_close_from_broker_ops(self) -> None:
+        open_time = datetime(2026, 4, 9, 10, 0, tzinfo=timezone.utc)
+        close_time = datetime(2026, 4, 9, 10, 30, tzinfo=timezone.utc)
+        rows = [
+            {
+                "time": open_time.isoformat(),
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "lot_size": 1,
+                "price": 100.0,
+                "commission_rub": 2.0,
+                "strategy": "range_break_continuation",
+                "mode": "LIVE",
+                "session": "DAY",
+            }
+        ]
+        saved = {}
+        config = SimpleNamespace(account_id="acc", dry_run=False)
+        fee_by_parent = {"close-op": 3.0}
+        trade_ops = [
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="close-op",
+                parent_id="parent",
+                op_type=mod.OperationType.OPERATION_TYPE_BUY,
+                side="LONG",
+                qty=1,
+                price=95.0,
+                dt=close_time,
+            )
+        ]
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", return_value=list(rows)), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ), patch.object(
+            mod, "fetch_trade_operations_for_day", return_value=(trade_ops, fee_by_parent)
+        ), patch.object(
+            mod, "infer_close_reason_for_recovery", return_value="test reason"
+        ):
+            recovered = mod.reconcile_missing_trade_closes_from_broker(
+                None,
+                config,
+                [self.instrument],
+                target_day=datetime(2026, 4, 9, tzinfo=timezone.utc).date(),
+            )
+
+        self.assertEqual(recovered, 1)
+        self.assertEqual(len(saved["rows"]), 2)
+        close_row = saved["rows"][1]
+        self.assertEqual(close_row["event"], "CLOSE")
+        self.assertEqual(close_row["symbol"], "TEST")
+        self.assertEqual(close_row["reason"], "test reason")
+        self.assertEqual(close_row["commission_rub"], 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

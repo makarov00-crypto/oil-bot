@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1178,18 +1179,299 @@ def reconcile_delayed_close_from_broker(
         if delayed_submitted_at is not None:
             age_seconds = (datetime.now(UTC) - delayed_submitted_at).total_seconds()
             if age_seconds > DELAYED_CLOSE_RECOVERY_MAX_AGE_SECONDS:
-                queue.remove(item)
-                changed = True
                 state.last_error = (
-                    "Закрытие позиции не удалось подтвердить по брокерским операциям в разумное время. "
-                    "Нужна ручная сверка журнала."
+                    "Закрытие позиции пока не удалось подтвердить по брокерским операциям. "
+                    "Recovery будет продолжать попытки автоматически."
                 )
-                logging.warning("symbol=%s status=delayed_close_recovery_expired", instrument.symbol)
+                logging.warning("symbol=%s status=delayed_close_recovery_overdue", instrument.symbol)
     if changed:
         state.delayed_close_queue = queue
         sync_legacy_delayed_close_fields(state)
         save_state(instrument.symbol, state)
     return False
+
+
+@dataclass
+class BrokerTradeOp:
+    symbol: str
+    display_name: str
+    figi: str
+    op_id: str
+    parent_id: str
+    op_type: Any
+    side: str
+    qty: int
+    price: float
+    dt: datetime
+
+
+def fetch_trade_operations_for_day(
+    client: Client,
+    config: BotConfig,
+    target_day: date,
+    watchlist: list[InstrumentConfig],
+) -> tuple[list[BrokerTradeOp], dict[str, float]]:
+    from_utc, to_utc = get_day_bounds_utc_for_date(target_day)
+    cursor = ""
+    fee_by_parent: dict[str, float] = defaultdict(float)
+    figi_to_symbol = {item.figi: item.symbol for item in watchlist if item.figi}
+    symbol_to_name = {item.symbol: item.display_name for item in watchlist}
+    trade_ops: list[BrokerTradeOp] = []
+
+    while True:
+        response = client.operations.get_operations_by_cursor(
+            GetOperationsByCursorRequest(
+                account_id=config.account_id,
+                from_=from_utc,
+                to=to_utc,
+                cursor=cursor,
+                limit=500,
+                state=OperationState.OPERATION_STATE_EXECUTED,
+                without_commissions=False,
+                without_overnights=False,
+                without_trades=False,
+            )
+        )
+        for item in getattr(response, "items", []) or []:
+            figi = str(getattr(item, "figi", "") or "")
+            symbol = figi_to_symbol.get(figi)
+            if not symbol:
+                continue
+            op_type = getattr(item, "type", None)
+            op_id = str(getattr(item, "id", "") or "")
+            parent_id = str(getattr(item, "parent_operation_id", "") or "")
+            payment = quotation_to_float(getattr(item, "payment", None))
+
+            if op_type in FEE_OPERATION_TYPES and parent_id:
+                fee_by_parent[parent_id] += abs(payment)
+                continue
+
+            if op_type not in {
+                OperationType.OPERATION_TYPE_BUY,
+                OperationType.OPERATION_TYPE_SELL,
+            }:
+                continue
+
+            op_dt = getattr(item, "date", None)
+            if not isinstance(op_dt, datetime):
+                continue
+            if op_dt.tzinfo is None:
+                op_dt = op_dt.replace(tzinfo=UTC)
+
+            trade_ops.append(
+                BrokerTradeOp(
+                    symbol=symbol,
+                    display_name=symbol_to_name.get(symbol, symbol),
+                    figi=figi,
+                    op_id=op_id,
+                    parent_id=parent_id,
+                    op_type=op_type,
+                    side="LONG" if op_type == OperationType.OPERATION_TYPE_BUY else "SHORT",
+                    qty=int(getattr(item, "quantity", 0) or 0),
+                    price=quotation_to_float(getattr(item, "price", None)),
+                    dt=op_dt,
+                )
+            )
+
+        next_cursor = str(getattr(response, "next_cursor", "") or "")
+        if not getattr(response, "has_next", False) or not next_cursor:
+            break
+        cursor = next_cursor
+
+    trade_ops.sort(key=lambda item: item.dt)
+    return trade_ops, dict(fee_by_parent)
+
+
+def build_trade_journal_queues_for_day(
+    rows: list[dict[str, Any]],
+    target_day: date,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    day_key = target_day.isoformat()
+    queues: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    existing_close_signatures: set[str] = set()
+
+    target_rows = sorted(
+        [row for row in rows if str(row.get("time", "")).startswith(day_key)],
+        key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC),
+    )
+
+    for row in target_rows:
+        symbol = str(row.get("symbol") or "").upper()
+        side = str(row.get("side") or "").upper()
+        event = str(row.get("event") or "").upper()
+        if not symbol or not side:
+            continue
+        if event == "OPEN":
+            queues[(symbol, side)].append(row)
+            continue
+        if event != "CLOSE":
+            continue
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if row_dt is not None:
+            existing_close_signatures.add(f"{symbol}:{side}:{int(row_dt.timestamp())}")
+        queue = queues[(symbol, side)]
+        if queue:
+            queue.pop(0)
+
+    unmatched = [row for queue in queues.values() for row in queue]
+    unmatched.sort(key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC))
+    return unmatched, existing_close_signatures
+
+
+def infer_open_fee_for_recovery(
+    open_row: dict[str, Any],
+    instrument: InstrumentConfig,
+    trade_ops: list[BrokerTradeOp],
+    fee_by_parent: dict[str, float],
+) -> float:
+    try:
+        existing_fee = float(open_row.get("commission_rub") or 0.0)
+    except Exception:
+        existing_fee = 0.0
+    if existing_fee > 0:
+        return existing_fee
+
+    open_dt = parse_state_datetime(str(open_row.get("time") or ""))
+    open_price = float(open_row.get("price") or 0.0)
+    qty = int(open_row.get("qty_lots") or 0)
+    side = str(open_row.get("side") or "").upper()
+    if open_dt is None or qty <= 0 or side not in {"LONG", "SHORT"}:
+        return 0.0
+
+    expected_type = OperationType.OPERATION_TYPE_BUY if side == "LONG" else OperationType.OPERATION_TYPE_SELL
+    tolerance = max(float(getattr(instrument, "min_price_increment", 0.0) or 0.0) * 3, 1e-4)
+
+    for op in trade_ops:
+        if op.symbol != str(open_row.get("symbol") or "").upper():
+            continue
+        if op.op_type != expected_type:
+            continue
+        if op.dt < open_dt - timedelta(minutes=2) or op.dt > open_dt + timedelta(minutes=10):
+            continue
+        if qty > 0 and op.qty not in {0, qty}:
+            continue
+        if open_price > 0 and op.price > 0 and abs(op.price - open_price) > tolerance:
+            continue
+        return round(float(fee_by_parent.get(op.op_id, 0.0)), 2)
+    return 0.0
+
+
+def infer_close_reason_for_recovery(symbol: str, side: str, qty: int, close_dt: datetime) -> str:
+    state = load_state(symbol)
+    delayed_reason = compact_reason(str(state.delayed_close_reason or ""))
+    delayed_side = str(state.delayed_close_side or "").upper()
+    delayed_qty = int(state.delayed_close_qty or 0)
+    delayed_at = parse_state_datetime(state.delayed_close_submitted_at)
+    if delayed_reason and delayed_side == side and delayed_qty == qty and delayed_at is not None:
+        if abs((close_dt - delayed_at).total_seconds()) <= 12 * 60 * 60:
+            return delayed_reason
+
+    last_reason = compact_reason(str(state.last_exit_reason or ""))
+    last_side = str(state.last_exit_side or "").upper()
+    last_time = parse_state_datetime(state.last_exit_time)
+    if last_reason and last_side == side and last_time is not None:
+        if abs((close_dt - last_time).total_seconds()) <= 12 * 60 * 60:
+            return last_reason
+
+    pending_reason = compact_reason(str(state.pending_exit_reason or ""))
+    if pending_reason:
+        return pending_reason
+
+    return "Торговая причина выхода не сохранилась, закрытие подтверждено брокерскими операциями."
+
+
+def reconcile_missing_trade_closes_from_broker(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+    *,
+    target_day: date | None = None,
+) -> int:
+    target_day = target_day or current_moscow_time().date()
+    try:
+        trade_ops, fee_by_parent = fetch_trade_operations_for_day(client, config, target_day, watchlist)
+    except RequestError as error:
+        logging.warning("journal_auto_recovery skipped for %s: %s", target_day.isoformat(), error)
+        return 0
+
+    rows = load_trade_journal()
+    unmatched_opens, existing_close_signatures = build_trade_journal_queues_for_day(rows, target_day)
+    instruments_by_symbol = {item.symbol: item for item in watchlist}
+    matches: list[dict[str, Any]] = []
+    used_op_ids: set[str] = set()
+
+    for open_row in unmatched_opens:
+        symbol = str(open_row.get("symbol") or "").upper()
+        side = str(open_row.get("side") or "").upper()
+        qty = int(open_row.get("qty_lots") or 0)
+        open_dt = parse_state_datetime(str(open_row.get("time") or ""))
+        instrument = instruments_by_symbol.get(symbol)
+        if not symbol or side not in {"LONG", "SHORT"} or qty <= 0 or open_dt is None or instrument is None:
+            continue
+
+        expected_type = OperationType.OPERATION_TYPE_SELL if side == "LONG" else OperationType.OPERATION_TYPE_BUY
+        candidate: BrokerTradeOp | None = None
+
+        for op in trade_ops:
+            if op.op_id in used_op_ids:
+                continue
+            if op.symbol != symbol or op.op_type != expected_type:
+                continue
+            if op.dt <= open_dt:
+                continue
+            if qty > 0 and op.qty not in {0, qty}:
+                continue
+            signature = f"{symbol}:{side}:{int(op.dt.timestamp())}"
+            if signature in existing_close_signatures:
+                continue
+            candidate = op
+            break
+
+        if candidate is None:
+            continue
+
+        entry_price = float(open_row.get("price") or 0.0)
+        open_fee = infer_open_fee_for_recovery(open_row, instrument, trade_ops, fee_by_parent)
+        close_fee = round(float(fee_by_parent.get(candidate.op_id, 0.0)), 2)
+        gross = calculate_futures_pnl_rub(instrument, entry_price, candidate.price, qty, side)
+        total_commission = round(open_fee + close_fee, 2)
+        net = round(gross - total_commission, 2)
+        matches.append(
+            {
+                "time": candidate.dt.astimezone(MOSCOW_TZ).isoformat(),
+                "symbol": symbol,
+                "display_name": open_row.get("display_name") or candidate.display_name,
+                "event": "CLOSE",
+                "side": side,
+                "qty_lots": qty,
+                "lot_size": open_row.get("lot_size") or getattr(instrument, "lot", 1),
+                "price": candidate.price,
+                "pnl_rub": net,
+                "gross_pnl_rub": round(gross, 2),
+                "commission_rub": total_commission,
+                "net_pnl_rub": net,
+                "reason": infer_close_reason_for_recovery(symbol, side, qty, candidate.dt),
+                "source": "broker_ops_auto_recovery",
+                "strategy": open_row.get("strategy") or "",
+                "mode": open_row.get("mode") or ("DRY_RUN" if config.dry_run else "LIVE"),
+                "session": open_row.get("session") or get_market_session(),
+            }
+        )
+        used_op_ids.add(candidate.op_id)
+        existing_close_signatures.add(f"{symbol}:{side}:{int(candidate.dt.timestamp())}")
+
+    if not matches:
+        return 0
+
+    rows.extend(matches)
+    rows.sort(key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC))
+    save_trade_journal(rows)
+    logging.warning(
+        "journal_auto_recovery recovered_closes=%s symbols=%s",
+        len(matches),
+        [row["symbol"] for row in matches],
+    )
+    return len(matches)
 
 
 def defer_close_recovery_to_broker_ops(
@@ -4415,6 +4697,9 @@ def run_bot() -> int:
                         maybe_refresh_news_snapshot()
                         for instrument in watchlist:
                             process_instrument(client, config, instrument)
+                        recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)
+                        if recovered_closes:
+                            logging.warning("journal_auto_recovery_applied recovered_closes=%s", recovered_closes)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist)
                         maybe_send_global_diagnostic(client, config, watchlist)
                         maybe_send_portfolio_snapshot(client, config, watchlist)
