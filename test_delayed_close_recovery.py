@@ -193,7 +193,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             entry_strategy="range_break_continuation",
         )
         config = SimpleNamespace(dry_run=False)
-        recorded: list[dict] = []
+        recorded: list[tuple[tuple, dict]] = []
 
         with patch.object(
             mod,
@@ -202,9 +202,9 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         ), patch.object(
             mod, "has_journal_event_since", return_value=False
         ), patch.object(
-            mod, "has_today_active_open_journal_entry", return_value=True
+            mod, "get_active_journal_lots", return_value=1
         ), patch.object(
-            mod, "append_trade_journal", side_effect=lambda *args, **kwargs: recorded.append(kwargs)
+            mod, "append_trade_journal", side_effect=lambda *args, **kwargs: recorded.append((args, kwargs))
         ), patch.object(
             mod, "update_latest_unclosed_open_journal_entry", return_value=True
         ), patch.object(
@@ -220,6 +220,119 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
         self.assertTrue(confirmed)
         self.assertEqual(recorded, [])
+
+    def test_confirm_pending_open_appends_only_missing_lots_for_scale_in(self) -> None:
+        state = mod.InstrumentState(
+            position_side="SHORT",
+            position_qty=2,
+            pending_order_side="SHORT",
+            pending_order_qty=1,
+            pending_order_action="OPEN",
+            pending_order_id="oid",
+            pending_entry_reason="short setup",
+            entry_price=100.0,
+            entry_strategy="range_break_continuation",
+        )
+        config = SimpleNamespace(dry_run=False)
+        recorded: list[tuple[tuple, dict]] = []
+
+        with patch.object(
+            mod,
+            "find_recent_live_open_details",
+            return_value=(datetime(2026, 4, 9, 15, 5, 0, tzinfo=timezone.utc), 6.0),
+        ), patch.object(
+            mod, "has_journal_event_since", return_value=False
+        ), patch.object(
+            mod, "get_active_journal_lots", return_value=1
+        ), patch.object(
+            mod, "append_trade_journal", side_effect=lambda *args, **kwargs: recorded.append((args, kwargs))
+        ), patch.object(
+            mod, "update_latest_unclosed_open_journal_entry", return_value=True
+        ), patch.object(
+            mod, "save_state", lambda *args, **kwargs: None
+        ):
+            confirmed = mod.confirm_pending_open_from_broker(
+                None,
+                config,
+                self.instrument,
+                state,
+                not_before=datetime(2026, 4, 9, 15, 4, 59, tzinfo=timezone.utc),
+            )
+
+        self.assertTrue(confirmed)
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0][0][3], 1)
+
+    def test_auto_recovery_splits_combined_close_qty_across_two_unmatched_opens(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-09T16:13:15.749718+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "lot_size": 1,
+                "price": 101.0,
+                "commission_rub": 6.0,
+                "strategy": "range_break_continuation",
+                "mode": "LIVE",
+                "session": "DAY",
+            },
+            {
+                "time": "2026-04-09T18:04:59.756160+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "lot_size": 1,
+                "price": 100.0,
+                "commission_rub": 6.0,
+                "strategy": "range_break_continuation",
+                "mode": "LIVE",
+                "session": "DAY",
+            },
+        ]
+        saved = {}
+        config = SimpleNamespace(account_id="acc", dry_run=False)
+        fee_by_parent = {"close-op": 10.0}
+        trade_ops = [
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="close-op",
+                parent_id="parent",
+                op_type=mod.OperationType.OPERATION_TYPE_BUY,
+                side="LONG",
+                qty=2,
+                price=95.0,
+                dt=datetime(2026, 4, 9, 19, 25, 12, tzinfo=timezone.utc),
+            )
+        ]
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", return_value=list(rows)), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ), patch.object(
+            mod, "fetch_trade_operations_for_day", return_value=(trade_ops, fee_by_parent)
+        ), patch.object(
+            mod, "infer_close_reason_for_recovery", return_value="test reason"
+        ):
+            recovered = mod.reconcile_missing_trade_closes_from_broker(
+                None,
+                config,
+                [self.instrument],
+                target_day=datetime(2026, 4, 9, tzinfo=timezone.utc).date(),
+            )
+
+        self.assertEqual(recovered, 2)
+        closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
+        self.assertEqual(len(closes), 2)
+        self.assertTrue(all(row["qty_lots"] == 1 for row in closes))
 
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [

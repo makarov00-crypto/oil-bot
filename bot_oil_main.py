@@ -741,21 +741,27 @@ def reconcile_state_accounting(symbol: str, state: InstrumentState) -> None:
 
 
 def has_today_active_open_journal_entry(symbol: str, side: str) -> bool:
+    return get_active_journal_lots(symbol, side) > 0
+
+
+def get_active_journal_lots(symbol: str, side: str, rows: list[dict[str, Any]] | None = None) -> int:
     target_symbol = symbol.upper()
     target_side = side.upper()
-    open_count = 0
-    close_count = 0
-    for row in get_today_trade_journal_rows():
+    open_lots = 0
+    close_lots = 0
+    source_rows = rows if rows is not None else get_today_trade_journal_rows()
+    for row in source_rows:
         if str(row.get("symbol", "")).upper() != target_symbol:
             continue
         if str(row.get("side", "")).upper() != target_side:
             continue
         event = str(row.get("event", "")).upper()
+        qty = int(row.get("qty_lots") or 0)
         if event == "OPEN":
-            open_count += 1
+            open_lots += qty
         elif event == "CLOSE":
-            close_count += 1
-    return open_count > close_count
+            close_lots += qty
+    return max(0, open_lots - close_lots)
 
 
 def has_journal_event_since(
@@ -951,7 +957,8 @@ def confirm_pending_open_from_broker(
     )
     if operation_time is not None:
         state.entry_time = operation_time.isoformat()
-    has_active_open_entry = has_today_active_open_journal_entry(instrument.symbol, state.position_side)
+    active_open_lots = get_active_journal_lots(instrument.symbol, state.position_side)
+    missing_open_lots = max(0, int(state.position_qty) - int(active_open_lots))
     has_matching_open_entry = (
         has_journal_event_since(
             instrument.symbol,
@@ -960,11 +967,11 @@ def confirm_pending_open_from_broker(
             not_before=not_before,
         )
         if not_before is not None
-        else has_active_open_entry
+        else active_open_lots > 0
     )
-    if not has_matching_open_entry and has_active_open_entry:
+    if not has_matching_open_entry and active_open_lots >= int(state.position_qty):
         has_matching_open_entry = True
-    if not has_matching_open_entry:
+    if not has_matching_open_entry and missing_open_lots > 0:
         entry_reason = compact_reason(
             state.pending_entry_reason
             or state.entry_reason
@@ -975,7 +982,7 @@ def confirm_pending_open_from_broker(
             instrument,
             "OPEN",
             state.position_side,
-            state.position_qty,
+            missing_open_lots,
             state.entry_price,
             event_time=operation_time,
             gross_pnl_rub=0.0,
@@ -1305,16 +1312,24 @@ def build_trade_journal_queues_for_day(
         if not symbol or not side:
             continue
         if event == "OPEN":
-            queues[(symbol, side)].append(row)
+            qty = max(1, int(row.get("qty_lots") or 0))
+            for _ in range(qty):
+                split_row = dict(row)
+                split_row["qty_lots"] = 1
+                queues[(symbol, side)].append(split_row)
             continue
         if event != "CLOSE":
             continue
         row_dt = parse_state_datetime(str(row.get("time") or ""))
+        close_qty = max(1, int(row.get("qty_lots") or 0))
         if row_dt is not None:
-            existing_close_signatures.add(f"{symbol}:{side}:{int(row_dt.timestamp())}")
+            for unit in range(close_qty):
+                existing_close_signatures.add(f"{symbol}:{side}:{int(row_dt.timestamp())}:{unit}")
         queue = queues[(symbol, side)]
-        if queue:
+        remaining = close_qty
+        while queue and remaining > 0:
             queue.pop(0)
+            remaining -= 1
 
     unmatched = [row for queue in queues.values() for row in queue]
     unmatched.sort(key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC))
@@ -1401,7 +1416,7 @@ def reconcile_missing_trade_closes_from_broker(
     unmatched_opens, existing_close_signatures = build_trade_journal_queues_for_day(rows, target_day)
     instruments_by_symbol = {item.symbol: item for item in watchlist}
     matches: list[dict[str, Any]] = []
-    used_op_ids: set[str] = set()
+    used_op_qty: dict[str, int] = defaultdict(int)
 
     for open_row in unmatched_opens:
         symbol = str(open_row.get("symbol") or "").upper()
@@ -1416,15 +1431,16 @@ def reconcile_missing_trade_closes_from_broker(
         candidate: BrokerTradeOp | None = None
 
         for op in trade_ops:
-            if op.op_id in used_op_ids:
-                continue
             if op.symbol != symbol or op.op_type != expected_type:
                 continue
             if op.dt <= open_dt:
                 continue
-            if qty > 0 and op.qty not in {0, qty}:
+            op_total_qty = max(1, int(op.qty or 0))
+            op_used_qty = used_op_qty.get(op.op_id, 0)
+            op_remaining_qty = max(0, op_total_qty - op_used_qty)
+            if op_remaining_qty < qty:
                 continue
-            signature = f"{symbol}:{side}:{int(op.dt.timestamp())}"
+            signature = f"{symbol}:{side}:{int(op.dt.timestamp())}:{op_used_qty}"
             if signature in existing_close_signatures:
                 continue
             candidate = op
@@ -1460,8 +1476,8 @@ def reconcile_missing_trade_closes_from_broker(
                 "session": open_row.get("session") or get_market_session(),
             }
         )
-        used_op_ids.add(candidate.op_id)
-        existing_close_signatures.add(f"{symbol}:{side}:{int(candidate.dt.timestamp())}")
+        used_op_qty[candidate.op_id] = used_op_qty.get(candidate.op_id, 0) + qty
+        existing_close_signatures.add(f"{symbol}:{side}:{int(candidate.dt.timestamp())}:{used_op_qty[candidate.op_id] - qty}")
 
     if not matches:
         return 0
@@ -2865,6 +2881,8 @@ def sync_state_with_portfolio(
         if state.pending_order_id and state.pending_order_action == "OPEN"
         else None
     )
+    active_open_lots = get_active_journal_lots(instrument.symbol, state.position_side)
+    missing_open_lots = max(0, int(state.position_qty) - int(active_open_lots))
     has_matching_open_entry = (
         has_journal_event_since(
             instrument.symbol,
@@ -2873,9 +2891,9 @@ def sync_state_with_portfolio(
             not_before=pending_open_submitted_at,
         )
         if pending_open_submitted_at is not None
-        else has_today_active_open_journal_entry(instrument.symbol, state.position_side)
+        else active_open_lots > 0
     )
-    if state.position_side != "FLAT" and not has_matching_open_entry and not state.delayed_close_recovery_needed:
+    if state.position_side != "FLAT" and missing_open_lots > 0 and not state.delayed_close_recovery_needed:
         entry_reason_text = compact_reason(
             state.pending_entry_reason or state.entry_reason or ""
         )
@@ -2908,7 +2926,7 @@ def sync_state_with_portfolio(
             instrument,
             "OPEN",
             state.position_side,
-            state.position_qty,
+            missing_open_lots,
             state.entry_price or last_price,
             event_time=operation_time,
             gross_pnl_rub=None,
