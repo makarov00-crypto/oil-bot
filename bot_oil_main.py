@@ -485,13 +485,29 @@ def append_trade_journal(
             same_price = round(float(existing.get("price") or 0.0), 6) == round(float(price or 0.0), 6)
         except Exception:
             same_price = False
-        if (
+        same_core_identity = (
             str(existing.get("time", "")).strip() == journal_time
             and str(existing.get("symbol", "")).upper() == instrument.symbol.upper()
             and str(existing.get("event", "")).upper() == event_name
             and str(existing.get("side", "")).upper() == side_name
             and int(existing.get("qty_lots") or 0) == int(qty)
             and same_price
+            and str(existing.get("strategy", "") or "") == strategy_name
+        )
+        # Recovery and portfolio-confirmation can describe the same OPEN with
+        # different service metadata. Treat identical execution payloads as one event.
+        if event_name == "OPEN" and same_core_identity:
+            logging.info(
+                "Пропускаю семантический дубль OPEN: %s %s %s %s @ %s",
+                instrument.symbol,
+                event_name,
+                side_name,
+                qty,
+                journal_time,
+            )
+            return
+        if (
+            same_core_identity
             and str(existing.get("reason", "") or "") == reason_text
             and str(existing.get("source", "") or "") == source_text
             and str(existing.get("strategy", "") or "") == strategy_name

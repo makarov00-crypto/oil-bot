@@ -1,5 +1,7 @@
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -333,6 +335,46 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
         self.assertEqual(len(closes), 2)
         self.assertTrue(all(row["qty_lots"] == 1 for row in closes))
+
+    def test_append_trade_journal_skips_semantic_duplicate_open_from_recovery(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
+        with TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            journal_path = log_dir / "trade_journal.jsonl"
+            with patch.object(mod, "LOG_DIR", log_dir), patch.object(mod, "TRADE_JOURNAL_PATH", journal_path):
+                event_time = datetime(2026, 4, 9, 14, 55, 4, 212691, tzinfo=timezone.utc)
+                mod.append_trade_journal(
+                    instrument,
+                    "OPEN",
+                    "LONG",
+                    1,
+                    4805.4,
+                    event_time=event_time,
+                    commission_rub=9.41,
+                    net_pnl_rub=-9.41,
+                    reason="from confirmation",
+                    source="portfolio_confirmation",
+                    strategy="trend_rollover",
+                    dry_run=False,
+                )
+                mod.append_trade_journal(
+                    instrument,
+                    "OPEN",
+                    "LONG",
+                    1,
+                    4805.4,
+                    event_time=event_time,
+                    commission_rub=9.41,
+                    net_pnl_rub=-9.41,
+                    reason="from recovery",
+                    source="portfolio_recovery",
+                    strategy="trend_rollover",
+                    dry_run=False,
+                )
+
+                rows = mod.load_trade_journal()
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["source"], "portfolio_confirmation")
 
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [
