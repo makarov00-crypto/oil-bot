@@ -1,3 +1,6 @@
+from instrument_groups import get_instrument_group
+
+
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -37,6 +40,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     volatility_ok = atr_pct >= 0.0004
     rsi_short_ok = 28.0 <= rsi <= 58.0
     rsi_long_ok = 42.0 <= rsi <= 72.0
+    is_fx = get_instrument_group(instrument.symbol).name == "fx"
     if instrument.symbol == "SRM6":
         higher_tf_short_ok = higher_tf_bias == "SHORT"
         higher_tf_long_ok = higher_tf_bias == "LONG"
@@ -45,6 +49,21 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         higher_tf_long_ok = higher_tf_bias != "SHORT"
 
     strict_imoexf_long = instrument.symbol == "IMOEXF"
+
+    if is_fx:
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.65
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.45
+        trend_short = close < ema20 and close < ema50 and ema20 <= ema50 * 1.0005
+        trend_long = close > ema20 and close > ema50 and ema20 >= ema50 * 0.9995
+        soft_breakdown_down = close <= range_low * 1.0015 and trend_short
+        soft_breakout_up = close >= range_high * 0.9985 and trend_long
+        continuation_short = trend_short and close <= prev_close and high <= ema20 * 1.004
+        continuation_long = trend_long and close >= prev_close and low >= ema20 * 0.996
+        volatility_ok = atr_pct >= 0.00025
+        rsi_short_ok = 26.0 <= rsi <= 60.0
+        rsi_long_ok = 40.0 <= rsi <= 74.0
+        higher_tf_short_ok = higher_tf_bias == "SHORT"
+        higher_tf_long_ok = higher_tf_bias == "LONG"
 
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
@@ -159,6 +178,26 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         )
     else:
         long_ok = higher_tf_long_ok and (breakout_up or soft_breakout_up) and continuation_long and trend_long and long_score >= 6
+
+    if is_fx:
+        short_ok = (
+            higher_tf_short_ok
+            and trend_short
+            and continuation_short
+            and (breakdown_down or soft_breakdown_down)
+            and rsi_short_ok
+            and momentum_down
+            and short_score >= 5
+        )
+        long_ok = (
+            higher_tf_long_ok
+            and trend_long
+            and continuation_long
+            and (breakout_up or soft_breakout_up)
+            and rsi_long_ok
+            and momentum_up
+            and long_score >= 5
+        )
 
     if short_ok:
         return "SHORT", "Сигнал SHORT (range_break_continuation): " + "; ".join(short_reasons) + "."
