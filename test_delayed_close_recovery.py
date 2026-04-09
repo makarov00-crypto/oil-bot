@@ -180,6 +180,47 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(mod.ensure_delayed_close_queue(state), [])
         self.assertFalse(state.delayed_close_recovery_needed)
 
+    def test_confirm_pending_open_does_not_duplicate_existing_active_open(self) -> None:
+        state = mod.InstrumentState(
+            position_side="SHORT",
+            position_qty=1,
+            pending_order_side="SHORT",
+            pending_order_qty=1,
+            pending_order_action="OPEN",
+            pending_order_id="oid",
+            pending_entry_reason="short setup",
+            entry_price=100.0,
+            entry_strategy="range_break_continuation",
+        )
+        config = SimpleNamespace(dry_run=False)
+        recorded: list[dict] = []
+
+        with patch.object(
+            mod,
+            "find_recent_live_open_details",
+            return_value=(datetime(2026, 4, 9, 9, 5, 4, tzinfo=timezone.utc), 6.0),
+        ), patch.object(
+            mod, "has_journal_event_since", return_value=False
+        ), patch.object(
+            mod, "has_today_active_open_journal_entry", return_value=True
+        ), patch.object(
+            mod, "append_trade_journal", side_effect=lambda *args, **kwargs: recorded.append(kwargs)
+        ), patch.object(
+            mod, "update_latest_unclosed_open_journal_entry", return_value=True
+        ), patch.object(
+            mod, "save_state", lambda *args, **kwargs: None
+        ):
+            confirmed = mod.confirm_pending_open_from_broker(
+                None,
+                config,
+                self.instrument,
+                state,
+                not_before=datetime(2026, 4, 9, 9, 5, 25, tzinfo=timezone.utc),
+            )
+
+        self.assertTrue(confirmed)
+        self.assertEqual(recorded, [])
+
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [
             {

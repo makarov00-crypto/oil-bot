@@ -951,6 +951,7 @@ def confirm_pending_open_from_broker(
     )
     if operation_time is not None:
         state.entry_time = operation_time.isoformat()
+    has_active_open_entry = has_today_active_open_journal_entry(instrument.symbol, state.position_side)
     has_matching_open_entry = (
         has_journal_event_since(
             instrument.symbol,
@@ -959,8 +960,10 @@ def confirm_pending_open_from_broker(
             not_before=not_before,
         )
         if not_before is not None
-        else has_today_active_open_journal_entry(instrument.symbol, state.position_side)
+        else has_active_open_entry
     )
+    if not has_matching_open_entry and has_active_open_entry:
+        has_matching_open_entry = True
     if not has_matching_open_entry:
         entry_reason = compact_reason(
             state.pending_entry_reason
