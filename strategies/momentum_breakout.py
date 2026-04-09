@@ -57,15 +57,15 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         higher_tf_short_ok = higher_tf_bias == "SHORT"
 
     if instrument.symbol == "NGJ6":
-        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.90
-        impulse_ok = body_avg > 0 and body >= body_avg * 0.75
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 1.00
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.90
         rsi_long_ok = 42.0 <= rsi <= 72.0
-        rsi_short_ok = 24.0 <= rsi <= 58.0
-        volatility_ok = atr_pct >= 0.0011
+        rsi_short_ok = 26.0 <= rsi <= 50.0
+        volatility_ok = atr_pct >= 0.0013
         higher_tf_long_ok = higher_tf_bias == "LONG"
         higher_tf_short_ok = higher_tf_bias == "SHORT"
         soft_breakout_up = close > ema20 and close > ema50 and close >= range_high * 0.9985
-        soft_breakout_down = close < ema20 and close < ema50 and close <= range_low * 1.0015
+        soft_breakout_down = close < ema20 and close < ema50 and close <= range_low * 1.0010
         macd_up = macd > macd_signal and (macd >= prev_macd or (macd - macd_signal) >= 0.02)
         macd_down = macd < macd_signal and (macd <= prev_macd or (macd_signal - macd) >= 0.02)
 
@@ -215,13 +215,13 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_ok = (
             higher_tf_short_ok
             and close_below_trend
-            and (breakout_down or soft_breakout_down)
+            and breakout_down
             and rsi_short_ok
             and macd_down
             and impulse_ok
             and volume_ok
             and volatility_ok
-            and short_score >= 5
+            and short_score >= 7
         )
 
     if long_ok:

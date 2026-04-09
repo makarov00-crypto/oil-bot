@@ -7,7 +7,7 @@ import pandas as pd
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 FX_OPENING_RANGE_START = time(9, 0)
 FX_OPENING_RANGE_CANDLES = 6
-FX_OPENING_RANGE_CUTOFF = time(14, 0)
+FX_OPENING_RANGE_CUTOFF = time(16, 0)
 
 
 def _get_today_opening_range(df: pd.DataFrame) -> pd.DataFrame:

@@ -42,10 +42,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     higher_tf_long_ok = higher_tf_bias != "SHORT"
 
     if instrument.symbol == "GNM6":
-        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.95
-        impulse_ok = body_avg > 0 and body >= body_avg * 0.82
-        rsi_short_ok = 30.0 <= rsi <= 56.0
-        rsi_long_ok = 45.0 <= rsi <= 66.0
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.95
+        rsi_short_ok = 32.0 <= rsi <= 54.0
+        rsi_long_ok = 46.0 <= rsi <= 64.0
         volatility_ok = atr_pct >= 0.0011
         higher_tf_short_ok = higher_tf_bias == "SHORT"
         higher_tf_long_ok = higher_tf_bias == "LONG"
@@ -155,8 +155,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and impulse_ok
             and rsi_short_ok
             and volatility_ok
-            and (breakdown_down or soft_breakdown_down or rollover_short)
-            and short_score >= 7
+            and (breakdown_down or (soft_breakdown_down and close <= recent_low * 1.0005))
+            and short_score >= 8
         )
         long_ok = (
             higher_tf_long_ok
@@ -166,8 +166,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and impulse_ok
             and rsi_long_ok
             and volatility_ok
-            and (breakout_up or (rollover_long and close >= recent_high * 0.9985))
-            and long_score >= 7
+            and (breakout_up or (rollover_long and close >= recent_high * 0.9995))
+            and long_score >= 8
         )
 
     if short_ok:
