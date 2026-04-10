@@ -376,6 +376,25 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["source"], "portfolio_confirmation")
 
+    def test_active_journal_lots_ignores_orphan_close_before_new_open(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-10T09:10:14+03:00",
+                "symbol": "USDRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+            },
+            {
+                "time": "2026-04-10T10:05:08+03:00",
+                "symbol": "USDRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+            },
+        ]
+        self.assertEqual(mod.get_active_journal_lots("USDRUBF", "SHORT", rows), 1)
+
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [
             {

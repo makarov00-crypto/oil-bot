@@ -763,8 +763,7 @@ def has_today_active_open_journal_entry(symbol: str, side: str) -> bool:
 def get_active_journal_lots(symbol: str, side: str, rows: list[dict[str, Any]] | None = None) -> int:
     target_symbol = symbol.upper()
     target_side = side.upper()
-    open_lots = 0
-    close_lots = 0
+    active_lots = 0
     source_rows = rows if rows is not None else get_today_trade_journal_rows()
     for row in source_rows:
         if str(row.get("symbol", "")).upper() != target_symbol:
@@ -774,10 +773,10 @@ def get_active_journal_lots(symbol: str, side: str, rows: list[dict[str, Any]] |
         event = str(row.get("event", "")).upper()
         qty = int(row.get("qty_lots") or 0)
         if event == "OPEN":
-            open_lots += qty
+            active_lots += qty
         elif event == "CLOSE":
-            close_lots += qty
-    return max(0, open_lots - close_lots)
+            active_lots = max(0, active_lots - qty)
+    return max(0, active_lots)
 
 
 def has_journal_event_since(
