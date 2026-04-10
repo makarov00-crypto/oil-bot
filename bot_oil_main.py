@@ -1856,6 +1856,7 @@ def build_telegram_card(title: str, emoji: str, lines: list[str]) -> str:
 
 
 SIGNAL_STATUS_INTERVAL_MINUTES = 60
+HOURLY_REPORT_INTERVAL_MINUTES = 60
 SUMMARY_STATUS_INTERVAL_MINUTES = 120
 BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS = 120
 
@@ -2391,25 +2392,9 @@ def notify_periodic_status(
     news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> None:
+    # Периодические сигнальные карточки в Telegram отключены: оставляем только
+    # изменения сигнала и общий часовой отчёт.
     status_slot = get_status_slot(candle_time, SIGNAL_STATUS_INTERVAL_MINUTES)
-    if status_slot == state.last_status_candle:
-        return
-    send_msg(
-        config,
-        build_periodic_status_message(
-            config,
-            instrument,
-            state,
-            signal,
-            price,
-            reason,
-            candle_time,
-            higher_tf_bias,
-            df,
-            news_bias,
-            compare_lines,
-        ),
-    )
     state.last_status_candle = status_slot
 
 
@@ -2471,16 +2456,7 @@ def maybe_send_global_diagnostic(
     config: BotConfig,
     watchlist: list[InstrumentConfig],
 ) -> None:
-    session_name = get_market_session()
-    if session_name == "CLOSED":
-        return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
-    meta = load_meta_state()
-    if meta.get("last_global_status_slot") == now_slot:
-        return
-    send_msg(config, build_global_diagnostic_message(config, client, watchlist))
-    meta["last_global_status_slot"] = now_slot
-    save_meta_state(meta)
+    return
 
 
 def build_portfolio_snapshot_message(
@@ -2744,16 +2720,7 @@ def maybe_send_portfolio_snapshot(
     config: BotConfig,
     watchlist: list[InstrumentConfig],
 ) -> None:
-    session_name = get_market_session()
-    if session_name == "CLOSED":
-        return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
-    meta = load_meta_state()
-    if meta.get("last_portfolio_snapshot_slot") == now_slot:
-        return
-    send_msg(config, build_portfolio_snapshot_message(client, config, watchlist))
-    meta["last_portfolio_snapshot_slot"] = now_slot
-    save_meta_state(meta)
+    return
 
 
 def maybe_send_trade_results(
@@ -2761,28 +2728,84 @@ def maybe_send_trade_results(
     config: BotConfig,
     watchlist: list[InstrumentConfig],
 ) -> None:
-    session_name = get_market_session()
-    if session_name == "CLOSED":
-        return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
-    meta = load_meta_state()
-    if meta.get("last_trade_results_slot") == now_slot:
-        return
-    send_msg(config, build_trade_results_message(client, config, watchlist))
-    meta["last_trade_results_slot"] = now_slot
-    save_meta_state(meta)
+    return
 
 
 def maybe_send_trade_review(config: BotConfig) -> None:
+    return
+
+
+def build_hourly_summary_message(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> str:
+    portfolio = build_portfolio_snapshot_payload(client, config, watchlist)
+    review_rows = get_today_trade_journal_rows()
+    closed_reviews, current_open = pair_trade_journal_rows(review_rows)
+    news = get_active_news_biases()
+
+    wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
+    losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
+    session_name = get_market_session()
+    lines = [
+        f"🕓 Срез: {portfolio.get('generated_at_moscow', '-')}",
+        f"🕒 Сессия: {session_name}",
+        "",
+        "Разбор сделок",
+        f"• Закрыто: {len(closed_reviews)} | Плюс: {wins} | Минус: {losses}",
+        f"• Итог по закрытым: {float(portfolio['bot_realized_pnl_rub']):.2f} RUB",
+        "",
+        "Результат торговли",
+        f"• Комиссия по счёту: {float(portfolio['bot_actual_fee_rub']):.2f} RUB",
+        f"• Текущая вар. маржа: {float(portfolio['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"• Аналитический итог бота: {float(portfolio['bot_total_pnl_rub']):.2f} RUB",
+        "",
+        "Портфель бота",
+        f"• Портфель: {float(portfolio['total_portfolio_rub']):.2f} RUB",
+        f"• Свободные RUB: {float(portfolio['free_rub']):.2f} RUB",
+        f"• ГО: {float(portfolio['blocked_guarantee_rub']):.2f} RUB",
+        f"• Открытых позиций: {int(portfolio['open_positions_count'])}",
+        "",
+        "Общая диагностика",
+    ]
+
+    for instrument in watchlist:
+        state = load_state(instrument.symbol)
+        signal = state.last_signal or "HOLD"
+        strategy_name = state.last_strategy_name or state.entry_strategy or "-"
+        summary = state.last_signal_summary[0] if state.last_signal_summary else "нет свежего объяснения"
+        lines.append(
+            f"• {instrument.symbol}: {signal} | {strategy_name} | "
+            f"ТФ {state.last_higher_tf_bias or '-'} | Новости {format_news_bias_label(news.get(instrument.symbol))}"
+        )
+        lines.append(f"  {summary}")
+
+    if current_open:
+        lines.extend(["", "Открытые позиции по журналу"])
+        for symbol, row in current_open.items():
+            lines.append(
+                f"• {symbol} {row.get('side', '')} | {row.get('strategy') or '-'} | "
+                f"{row.get('qty_lots', 0)} лот. | вход {row.get('price')}"
+            )
+
+    return build_telegram_card("Часовой отчёт", "🧾", lines)
+
+
+def maybe_send_hourly_summary(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> None:
     session_name = get_market_session()
     if session_name == "CLOSED":
         return
-    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), SUMMARY_STATUS_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
+    now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), HOURLY_REPORT_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
     meta = load_meta_state()
-    if meta.get("last_trade_review_slot") == now_slot:
+    if meta.get("last_hourly_summary_slot") == now_slot:
         return
-    send_msg(config, build_trade_review_message())
-    meta["last_trade_review_slot"] = now_slot
+    send_msg(config, build_hourly_summary_message(client, config, watchlist))
+    meta["last_hourly_summary_slot"] = now_slot
     save_meta_state(meta)
 
 
@@ -3980,21 +4003,6 @@ def sync_pending_order(
                 strategy=state.entry_strategy,
                 dry_run=False,
             )
-            send_msg(
-                config,
-                build_telegram_card(
-                    "Позиция открыта",
-                    "🟢" if state.position_side == "LONG" else "🔴",
-                    [
-                        f"Инструмент: {format_instrument_title(instrument)}",
-                        f"Направление: {state.position_side}",
-                        f"Лотов: {filled_qty}",
-                        f"Цена исполнения: {fill_price:.4f}",
-                        f"Комиссия: {fill_commission_rub:.2f} RUB",
-                        f"ID заявки: {state.pending_order_id}",
-                    ],
-                ),
-            )
         elif state.pending_order_action == "CLOSE":
             gross_pnl = 0.0
             if state.entry_price is not None:
@@ -4036,22 +4044,6 @@ def sync_pending_order(
             state.position_notional_rub = 0.0
             state.position_variation_margin_rub = 0.0
             state.position_pnl_pct = 0.0
-            send_msg(
-                config,
-                build_telegram_card(
-                    "Позиция закрыта",
-                    "✅" if net_trade_pnl >= 0 else "⚠️",
-                    [
-                        f"Инструмент: {format_instrument_title(instrument)}",
-                        f"Причина выхода: {exit_reason}",
-                        f"Цена исполнения: {fill_price:.4f}",
-                        f"Gross: {gross_pnl:.2f} RUB",
-                        f"Комиссия: {total_trade_commission:.2f} RUB",
-                        f"Net: {net_trade_pnl:.2f} RUB",
-                        f"ID заявки: {state.pending_order_id}",
-                    ],
-                ),
-            )
             state.entry_price = None
             state.entry_commission_rub = 0.0
             state.entry_commission_accounted = False
@@ -4076,21 +4068,6 @@ def sync_pending_order(
         state.execution_status = "rejected"
         state.last_error = rejection_reason
         state.last_signal_summary = [rejection_reason, *state.last_signal_summary[:2]]
-        send_msg(
-            config,
-            build_telegram_card(
-                "Заявка не исполнена",
-                "⚠️",
-                [
-                    f"Инструмент: {format_instrument_title(instrument)}",
-                    f"Действие: {state.pending_order_action or 'UNKNOWN'}",
-                    f"Направление: {state.pending_order_side or 'UNKNOWN'}",
-                    f"Статус: {status.name}",
-                    f"Причина: {rejection_reason}",
-                    f"ID заявки: {state.pending_order_id}",
-                ],
-            ),
-        )
         clear_pending_order(state)
         save_state(instrument.symbol, state)
         return False
@@ -4114,22 +4091,6 @@ def sync_pending_order(
                 "Не удалось синхронизировать частичное исполнение по %s: %s",
                 instrument.symbol,
                 error,
-            )
-        if should_notify_partial:
-            send_msg(
-                config,
-                build_telegram_card(
-                    "Заявка исполнена частично",
-                    "⚠️",
-                    [
-                        f"Инструмент: {format_instrument_title(instrument)}",
-                        f"Действие: {state.pending_order_action or 'UNKNOWN'}",
-                        f"Направление: {state.pending_order_side or 'UNKNOWN'}",
-                        f"Исполнено: {executed}/{state.pending_order_qty}",
-                        "Бот сохранил промежуточное состояние и ждёт финальный статус.",
-                        f"ID заявки: {state.pending_order_id}",
-                    ],
-                ),
             )
         save_state(instrument.symbol, state)
         return True
@@ -4232,23 +4193,6 @@ def open_position(
             strategy=strategy_name,
             dry_run=True,
         )
-        send_msg(
-            config,
-            build_telegram_card(
-                "Тестовое открытие позиции",
-                "🚀" if side == "LONG" else "📉",
-                [
-                    f"Инструмент: {format_instrument_title(instrument)}",
-                    f"Направление: {side}",
-                    f"Стратегия: {strategy_name or 'unknown'}",
-                    *sizing_lines,
-                    f"Режим входа: {session_name}",
-                    f"Ориентировочная цена: {price:.4f}",
-                    "",
-                    "Сделка не отправлена в брокер: включён DRY_RUN.",
-                ],
-            ),
-        )
         return
 
     try:
@@ -4260,19 +4204,6 @@ def open_position(
         state.last_signal_summary = [request_reason, *state.last_signal_summary[:2]]
         save_state(instrument.symbol, state)
         logging.warning("symbol=%s status=order_rejected reason=%s", instrument.symbol, request_reason)
-        send_msg(
-            config,
-            build_telegram_card(
-                "Заявка на открытие отклонена",
-                "⚠️",
-                [
-                    f"Инструмент: {format_instrument_title(instrument)}",
-                    f"Направление: {side}",
-                    f"Стратегия: {strategy_name or 'unknown'}",
-                    request_reason,
-                ],
-            ),
-        )
         return
     state.entry_strategy = strategy_name
     state.pending_entry_reason = compact_reason(entry_reason)
@@ -4353,17 +4284,6 @@ def close_position(
         state.position_pnl_pct = 0.0
         state.execution_status = "idle"
         save_state(instrument.symbol, state)
-        text = build_telegram_card(
-            "Тестовое закрытие позиции",
-            "✅" if pnl >= 0 else "⚠️",
-            [
-                f"Инструмент: {format_instrument_title(instrument)}",
-                f"Причина выхода: {exit_reason}",
-                f"Ориентировочная цена: {price:.4f}",
-                f"Результат по позиции: {pnl:.2f} RUB",
-            ],
-        )
-        send_msg(config, text)
         return
 
     try:
@@ -4375,19 +4295,6 @@ def close_position(
         state.last_signal_summary = [request_reason, *state.last_signal_summary[:2]]
         save_state(instrument.symbol, state)
         logging.warning("symbol=%s status=close_rejected reason=%s", instrument.symbol, request_reason)
-        send_msg(
-            config,
-            build_telegram_card(
-                "Заявка на закрытие отклонена",
-                "⚠️",
-                [
-                    f"Инструмент: {format_instrument_title(instrument)}",
-                    f"Причина выхода: {exit_reason}",
-                    f"Направление позиции: {state.position_side}",
-                    request_reason,
-                ],
-            ),
-        )
         return
     state.pending_order_id = order_id
     state.pending_order_action = "CLOSE"
@@ -4532,17 +4439,6 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     if not ensure_risk_limits(client, state, config):
         today = datetime.now(UTC).date().isoformat()
         if state.last_risk_stop_day != today:
-            send_msg(
-                config,
-                build_telegram_card(
-                    "Торговля остановлена",
-                    "🛑",
-                    [
-                        f"Инструмент: {format_instrument_title(instrument)}",
-                        "Причина: достигнут дневной лимит убытка.",
-                    ],
-                ),
-            )
             state.last_risk_stop_day = today
             save_state(instrument.symbol, state)
         return
@@ -4712,24 +4608,6 @@ def run_bot() -> int:
             state="starting",
         )
     )
-    if get_market_session() != "CLOSED":
-        send_msg(
-            config,
-            build_telegram_card(
-                "Бот запущен",
-                "🤖",
-                [
-                    f"Режим: {mode}",
-                    f"Младший ТФ: {config.candle_interval_minutes} минут",
-                    f"Старший ТФ: {config.higher_tf_interval_minutes} минут",
-                    f"Инструменты: {', '.join(config.symbols)}",
-                    "",
-                    "Базовые торговые сигналы будут приходить раз в 60 минут.",
-                    "Диагностика, портфель, результат и разбор сделок будут приходить раз в 2 часа.",
-                ],
-            ),
-        )
-
     consecutive_errors = 0
     cycle_count = 0
     startup_error_notified = False
@@ -4755,10 +4633,7 @@ def run_bot() -> int:
                         if recovered_closes:
                             logging.warning("journal_auto_recovery_applied recovered_closes=%s", recovered_closes)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist)
-                        maybe_send_global_diagnostic(client, config, watchlist)
-                        maybe_send_portfolio_snapshot(client, config, watchlist)
-                        maybe_send_trade_results(client, config, watchlist)
-                        maybe_send_trade_review(config)
+                        maybe_send_hourly_summary(client, config, watchlist)
                         consecutive_errors = 0
                         cycle_count += 1
                         last_cycle_at = datetime.now(timezone.utc)
@@ -4774,14 +4649,6 @@ def run_bot() -> int:
                             )
                         )
                         if config.max_cycles > 0 and cycle_count >= config.max_cycles:
-                            send_msg(
-                                config,
-                                build_telegram_card(
-                                    "Тестовый прогон завершён",
-                                    "🏁",
-                                    [f"Количество циклов: {cycle_count}"],
-                                ),
-                            )
                             return 0
                         time.sleep(config.poll_seconds)
                     except RequestError as error:
@@ -4799,14 +4666,6 @@ def run_bot() -> int:
                                 last_error=str(error),
                             )
                         )
-                        send_msg(
-                            config,
-                            build_telegram_card(
-                                "Ошибка API T-Invest",
-                                "⚠️",
-                                [str(error)],
-                            ),
-                        )
                     except Exception as error:
                         consecutive_errors += 1
                         logging.exception("Внутренняя ошибка бота")
@@ -4822,14 +4681,6 @@ def run_bot() -> int:
                                 last_error=str(error),
                             )
                         )
-                        send_msg(
-                            config,
-                            build_telegram_card(
-                                "Внутренняя ошибка бота",
-                                "⚠️",
-                                [str(error)],
-                            ),
-                        )
                     if consecutive_errors >= config.max_consecutive_errors:
                         save_runtime_status(
                             build_runtime_status_payload(
@@ -4842,14 +4693,6 @@ def run_bot() -> int:
                                 last_cycle_at=last_cycle_at,
                                 last_error=f"Слишком много ошибок подряд: {consecutive_errors}",
                             )
-                        )
-                        send_msg(
-                            config,
-                            build_telegram_card(
-                                "Бот остановлен",
-                                "🛑",
-                                [f"Слишком много ошибок подряд: {consecutive_errors}"],
-                            ),
                         )
                         return 1
                     time.sleep(5)
@@ -4868,18 +4711,6 @@ def run_bot() -> int:
                 )
             )
             if not startup_error_notified:
-                send_msg(
-                    config,
-                    build_telegram_card(
-                        "Проблема запуска",
-                        "⚠️",
-                        [
-                            "Не удалось подключиться к T-Invest при старте.",
-                            str(error),
-                            f"Повторная попытка через {config.startup_retry_seconds} сек.",
-                        ],
-                    ),
-                )
                 startup_error_notified = True
             time.sleep(config.startup_retry_seconds)
         except Exception as error:
@@ -4897,18 +4728,6 @@ def run_bot() -> int:
                 )
             )
             if not startup_error_notified:
-                send_msg(
-                    config,
-                    build_telegram_card(
-                        "Проблема запуска",
-                        "⚠️",
-                        [
-                            "Бот не смог корректно стартовать.",
-                            str(error),
-                            f"Повторная попытка через {config.startup_retry_seconds} сек.",
-                        ],
-                    ),
-                )
                 startup_error_notified = True
             time.sleep(config.startup_retry_seconds)
 
