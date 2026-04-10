@@ -2748,46 +2748,52 @@ def build_hourly_summary_message(
     wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
     losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
     session_name = get_market_session()
+    recent_closed = sorted(
+        closed_reviews,
+        key=lambda item: str(item.get("exit_time") or item.get("close_time") or ""),
+        reverse=True,
+    )[:3]
     lines = [
         f"🕓 Срез: {portfolio.get('generated_at_moscow', '-')}",
-        f"🕒 Сессия: {session_name}",
-        "",
-        "Разбор сделок",
-        f"• Закрыто: {len(closed_reviews)} | Плюс: {wins} | Минус: {losses}",
-        f"• Итог по закрытым: {float(portfolio['bot_realized_pnl_rub']):.2f} RUB",
-        "",
-        "Результат торговли",
-        f"• Комиссия по счёту: {float(portfolio['bot_actual_fee_rub']):.2f} RUB",
-        f"• Текущая вар. маржа: {float(portfolio['bot_estimated_variation_margin_rub']):.2f} RUB",
-        f"• Аналитический итог бота: {float(portfolio['bot_total_pnl_rub']):.2f} RUB",
-        "",
-        "Портфель бота",
-        f"• Портфель: {float(portfolio['total_portfolio_rub']):.2f} RUB",
-        f"• Свободные RUB: {float(portfolio['free_rub']):.2f} RUB",
-        f"• ГО: {float(portfolio['blocked_guarantee_rub']):.2f} RUB",
-        f"• Открытых позиций: {int(portfolio['open_positions_count'])}",
-        "",
-        "Общая диагностика",
+        f"🕒 Сессия: {session_name} | Закрыто: {len(closed_reviews)} | ✅ {wins} / ⚠️ {losses}",
+        f"💰 Закрытые: {float(portfolio['bot_realized_pnl_rub']):.2f} | "
+        f"📈 Текущая ВМ: {float(portfolio['bot_estimated_variation_margin_rub']):.2f} | "
+        f"🧮 Итог: {float(portfolio['bot_total_pnl_rub']):.2f} RUB",
+        f"💼 Портфель: {float(portfolio['total_portfolio_rub']):.2f} | "
+        f"💵 Свободно: {float(portfolio['free_rub']):.2f} | "
+        f"🛡 ГО: {float(portfolio['blocked_guarantee_rub']):.2f} RUB",
     ]
 
-    for instrument in watchlist:
-        state = load_state(instrument.symbol)
-        signal = state.last_signal or "HOLD"
-        strategy_name = state.last_strategy_name or state.entry_strategy or "-"
-        summary = state.last_signal_summary[0] if state.last_signal_summary else "нет свежего объяснения"
-        lines.append(
-            f"• {instrument.symbol}: {signal} | {strategy_name} | "
-            f"ТФ {state.last_higher_tf_bias or '-'} | Новости {format_news_bias_label(news.get(instrument.symbol))}"
-        )
-        lines.append(f"  {summary}")
+    if recent_closed:
+        lines.extend(["", "Последние закрытые"])
+        for item in recent_closed:
+            net = float(item.get("net_pnl_rub") or item.get("pnl_rub") or 0.0)
+            exit_reason = compact_reason(str(item.get("exit_reason") or ""))[:90]
+            lines.append(
+                f"• {item['symbol']} {item['side']} | {item.get('strategy') or '-'} | "
+                f"net {net:.2f} RUB | {exit_reason or 'без причины'}"
+            )
 
     if current_open:
-        lines.extend(["", "Открытые позиции по журналу"])
+        lines.extend(["", "Открытые позиции"])
         for symbol, row in current_open.items():
             lines.append(
                 f"• {symbol} {row.get('side', '')} | {row.get('strategy') or '-'} | "
                 f"{row.get('qty_lots', 0)} лот. | вход {row.get('price')}"
             )
+    else:
+        lines.extend(["", "Открытые позиции", "• нет"])
+
+    lines.extend(["", "Диагностика"])
+    for instrument in watchlist:
+        state = load_state(instrument.symbol)
+        signal = state.last_signal or "HOLD"
+        strategy_name = state.last_strategy_name or state.entry_strategy or "-"
+        news_label = format_news_bias_label(news.get(instrument.symbol))
+        lines.append(
+            f"• {instrument.symbol}: {signal} | {strategy_name} | "
+            f"ТФ {state.last_higher_tf_bias or '-'} | Новости {news_label}"
+        )
 
     return build_telegram_card("Часовой отчёт", "🧾", lines)
 
