@@ -182,6 +182,43 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(mod.ensure_delayed_close_queue(state), [])
         self.assertFalse(state.delayed_close_recovery_needed)
 
+    def test_reconcile_delayed_close_allows_small_broker_clock_skew(self) -> None:
+        submitted_at = datetime(2026, 4, 13, 12, 55, 4, 142354, tzinfo=timezone.utc)
+        close_at = datetime(2026, 4, 13, 12, 55, 4, 13004, tzinfo=timezone.utc)
+        state = mod.InstrumentState(
+            delayed_close_queue=[
+                {
+                    "side": "SHORT",
+                    "qty": 1,
+                    "entry_price": 4757.2,
+                    "entry_commission_rub": 9.15,
+                    "strategy": "trend_rollover",
+                    "reason": "MACD развернулся вверх",
+                    "entry_time": datetime(2026, 4, 13, 9, 10, tzinfo=timezone.utc).isoformat(),
+                    "submitted_at": submitted_at.isoformat(),
+                }
+            ]
+        )
+        mod.sync_legacy_delayed_close_fields(state)
+        rows = [
+            {
+                "time": close_at.astimezone(mod.MOSCOW_TZ).isoformat(),
+                "symbol": "TEST",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+            }
+        ]
+
+        with patch.object(mod, "load_trade_journal", return_value=rows), patch.object(
+            mod, "save_state", lambda *args, **kwargs: None
+        ):
+            recovered = mod.reconcile_delayed_close_from_broker(None, None, self.instrument, state)
+
+        self.assertFalse(recovered)
+        self.assertEqual(mod.ensure_delayed_close_queue(state), [])
+        self.assertFalse(state.delayed_close_recovery_needed)
+
     def test_confirm_pending_open_does_not_duplicate_existing_active_open(self) -> None:
         state = mod.InstrumentState(
             position_side="SHORT",
@@ -335,6 +372,8 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
         self.assertEqual(len(closes), 2)
         self.assertTrue(all(row["qty_lots"] == 1 for row in closes))
+        self.assertTrue(all(row["commission_rub"] == 11.0 for row in closes))
+        self.assertEqual([row["broker_op_unit"] for row in closes], [0, 1])
 
     def test_append_trade_journal_skips_semantic_duplicate_open_from_recovery(self) -> None:
         instrument = mod.InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
@@ -538,6 +577,45 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(close_row["symbol"], "TEST")
         self.assertEqual(close_row["reason"], "test reason")
         self.assertEqual(close_row["commission_rub"], 5.0)
+
+    def test_trade_journal_queue_splits_open_fees_and_counts_close_units(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-13T09:25:10+03:00",
+                "symbol": "TEST",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+                "price": 11.17,
+                "commission_rub": 8.37,
+                "net_pnl_rub": -8.37,
+            },
+            {
+                "time": "2026-04-13T15:15:22+03:00",
+                "symbol": "TEST",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+            },
+            {
+                "time": "2026-04-13T15:15:22+03:00",
+                "symbol": "TEST",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+            },
+        ]
+
+        unmatched, close_signatures = mod.build_trade_journal_queues_for_day(
+            rows,
+            datetime(2026, 4, 13, tzinfo=timezone.utc).date(),
+        )
+
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(unmatched[0]["qty_lots"], 1)
+        self.assertEqual(unmatched[0]["commission_rub"], 2.79)
+        self.assertIn("TEST:SHORT:ts:1776082522:0", close_signatures)
+        self.assertIn("TEST:SHORT:ts:1776082522:1", close_signatures)
 
 
 if __name__ == "__main__":

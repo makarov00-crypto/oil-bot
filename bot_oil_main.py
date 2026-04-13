@@ -785,11 +785,16 @@ def has_journal_event_since(
     event: str,
     *,
     not_before: datetime | None = None,
+    tolerance_seconds: float = 0.0,
 ) -> bool:
     target_symbol = symbol.upper()
     target_side = side.upper()
     target_event = event.upper()
-    for row in reversed(get_today_trade_journal_rows()):
+    source_rows = load_trade_journal()
+    adjusted_not_before = not_before
+    if adjusted_not_before is not None and tolerance_seconds > 0:
+        adjusted_not_before = adjusted_not_before - timedelta(seconds=tolerance_seconds)
+    for row in reversed(source_rows):
         if str(row.get("symbol", "")).upper() != target_symbol:
             continue
         if str(row.get("side", "")).upper() != target_side:
@@ -797,7 +802,7 @@ def has_journal_event_since(
         if str(row.get("event", "")).upper() != target_event:
             continue
         row_dt = parse_state_datetime(str(row.get("time") or ""))
-        if not_before is not None and row_dt is not None and row_dt < not_before:
+        if adjusted_not_before is not None and row_dt is not None and row_dt < adjusted_not_before:
             continue
         return True
     return False
@@ -1172,6 +1177,7 @@ def reconcile_delayed_close_from_broker(
             previous_side,
             "CLOSE",
             not_before=close_not_before,
+            tolerance_seconds=60.0,
         ):
             queue.remove(item)
             changed = True
@@ -1314,6 +1320,7 @@ def build_trade_journal_queues_for_day(
     day_key = target_day.isoformat()
     queues: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     existing_close_signatures: set[str] = set()
+    close_unit_counts: dict[tuple[str, str, int], int] = defaultdict(int)
 
     target_rows = sorted(
         [row for row in rows if str(row.get("time", "")).startswith(day_key)],
@@ -1331,15 +1338,30 @@ def build_trade_journal_queues_for_day(
             for _ in range(qty):
                 split_row = dict(row)
                 split_row["qty_lots"] = 1
+                for money_key in ("commission_rub", "net_pnl_rub", "pnl_rub", "gross_pnl_rub"):
+                    if split_row.get(money_key) is None:
+                        continue
+                    try:
+                        split_row[money_key] = round(float(split_row[money_key]) / qty, 2)
+                    except Exception:
+                        pass
                 queues[(symbol, side)].append(split_row)
             continue
         if event != "CLOSE":
             continue
         row_dt = parse_state_datetime(str(row.get("time") or ""))
         close_qty = max(1, int(row.get("qty_lots") or 0))
+        broker_op_id = str(row.get("broker_op_id") or "")
         if row_dt is not None:
             for unit in range(close_qty):
-                existing_close_signatures.add(f"{symbol}:{side}:{int(row_dt.timestamp())}:{unit}")
+                if broker_op_id:
+                    broker_unit = int(row.get("broker_op_unit") or unit)
+                    existing_close_signatures.add(f"{symbol}:{side}:op:{broker_op_id}:{broker_unit}")
+                    continue
+                timestamp = int(row_dt.timestamp())
+                next_unit = close_unit_counts[(symbol, side, timestamp)]
+                existing_close_signatures.add(f"{symbol}:{side}:ts:{timestamp}:{next_unit}")
+                close_unit_counts[(symbol, side, timestamp)] = next_unit + 1
         queue = queues[(symbol, side)]
         remaining = close_qty
         while queue and remaining > 0:
@@ -1455,8 +1477,9 @@ def reconcile_missing_trade_closes_from_broker(
             op_remaining_qty = max(0, op_total_qty - op_used_qty)
             if op_remaining_qty < qty:
                 continue
-            signature = f"{symbol}:{side}:{int(op.dt.timestamp())}:{op_used_qty}"
-            if signature in existing_close_signatures:
+            signature = f"{symbol}:{side}:op:{op.op_id}:{op_used_qty}"
+            legacy_signature = f"{symbol}:{side}:ts:{int(op.dt.timestamp())}:{op_used_qty}"
+            if signature in existing_close_signatures or legacy_signature in existing_close_signatures:
                 continue
             candidate = op
             break
@@ -1467,8 +1490,11 @@ def reconcile_missing_trade_closes_from_broker(
         entry_price = float(open_row.get("price") or 0.0)
         open_fee = infer_open_fee_for_recovery(open_row, instrument, trade_ops, fee_by_parent)
         close_fee = round(float(fee_by_parent.get(candidate.op_id, 0.0)), 2)
+        op_total_qty = max(1, int(candidate.qty or 0))
+        op_used_qty = used_op_qty.get(candidate.op_id, 0)
+        close_fee_for_qty = round(close_fee * qty / op_total_qty, 2)
         gross = calculate_futures_pnl_rub(instrument, entry_price, candidate.price, qty, side)
-        total_commission = round(open_fee + close_fee, 2)
+        total_commission = round(open_fee + close_fee_for_qty, 2)
         net = round(gross - total_commission, 2)
         matches.append(
             {
@@ -1486,13 +1512,15 @@ def reconcile_missing_trade_closes_from_broker(
                 "net_pnl_rub": net,
                 "reason": infer_close_reason_for_recovery(symbol, side, qty, candidate.dt),
                 "source": "broker_ops_auto_recovery",
+                "broker_op_id": candidate.op_id,
+                "broker_op_unit": op_used_qty,
                 "strategy": open_row.get("strategy") or "",
                 "mode": open_row.get("mode") or ("DRY_RUN" if config.dry_run else "LIVE"),
                 "session": open_row.get("session") or get_market_session(),
             }
         )
-        used_op_qty[candidate.op_id] = used_op_qty.get(candidate.op_id, 0) + qty
-        existing_close_signatures.add(f"{symbol}:{side}:{int(candidate.dt.timestamp())}:{used_op_qty[candidate.op_id] - qty}")
+        used_op_qty[candidate.op_id] = op_used_qty + qty
+        existing_close_signatures.add(f"{symbol}:{side}:op:{candidate.op_id}:{op_used_qty}")
 
     if not matches:
         return 0
