@@ -68,6 +68,39 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["closed_total_pnl_rub"], 120.24)
         self.assertEqual([row["entry_time"] for row in review["closed_reviews"]], ["13.04 06:25:33"] * 3)
 
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_trade_review_keeps_remaining_multi_lot_open_qty(self) -> None:
+        rows = [
+            {
+                "_dt": datetime(2026, 4, 13, 6, 25, 33, tzinfo=timezone.utc),
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+                "price": 11.17,
+                "strategy": "opening_range_breakout",
+                "reason": "open",
+            },
+            {
+                "_dt": datetime(2026, 4, 13, 12, 15, 22, tzinfo=timezone.utc),
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 11.146,
+                "pnl_rub": 83.4,
+                "net_pnl_rub": 83.4,
+                "strategy": "opening_range_breakout",
+                "reason": "close",
+            },
+        ]
+
+        review = dashboard.build_trade_review(rows)
+
+        self.assertEqual(review["closed_count"], 1)
+        self.assertEqual(len(review["current_open"]), 1)
+        self.assertEqual(review["current_open"][0]["qty_lots"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

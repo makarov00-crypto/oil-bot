@@ -1662,10 +1662,21 @@ def build_trade_review(
         last_kept_close_by_key[key] = row
 
     current_open = []
-    for (_, _), items in open_by_key.items():
+    for (symbol, _), items in open_by_key.items():
         if not items:
             continue
-        current_open.append(items[-1])
+        row = dict(items[-1])
+        remaining_qty = len(items)
+        live = (live_positions or {}).get(symbol)
+        if live is not None:
+            try:
+                live_qty = int(live.get("qty") or 0)
+            except Exception:
+                live_qty = 0
+            if live_qty > 0:
+                remaining_qty = live_qty
+        row["qty_lots"] = remaining_qty
+        current_open.append(row)
     current_open = filter_current_open_rows(current_open, states, live_positions)
     current_open.sort(key=lambda row: row.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ), reverse=True)
 
