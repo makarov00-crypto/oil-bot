@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from dotenv import load_dotenv
 from custom_instruments import (
     list_custom_instruments,
     merge_with_custom_symbols,
@@ -29,6 +30,8 @@ from daily_ai_review import (
 
 
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
 STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
