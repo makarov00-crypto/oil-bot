@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import bot_oil_main as mod
+import strategy_registry
 
 
 class DelayedCloseRecoveryTests(unittest.TestCase):
@@ -453,6 +454,96 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
         self.assertTrue(allowed)
         self.assertEqual(reason, "")
+
+    def test_fx_reentry_after_macd_exit_requires_new_extreme(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="UCM6",
+            figi="FIGI",
+            display_name="USD/CNY",
+            min_price_increment=0.001,
+        )
+        state = mod.InstrumentState(
+            trading_day="2026-04-13",
+            last_exit_time=datetime(2026, 4, 13, 15, 0, tzinfo=timezone.utc).isoformat(),
+            last_exit_side="SHORT",
+            last_exit_pnl_rub=-72.06,
+            last_exit_price=6.818,
+            last_exit_reason="MACD подтверждённо развернулся вверх и цена вернулась выше EMA20",
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "SHORT", 6.817)
+
+        self.assertFalse(allowed)
+        self.assertIn("нового экстремума", reason)
+
+    def test_fx_reentry_after_macd_exit_allows_new_extreme(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="UCM6",
+            figi="FIGI",
+            display_name="USD/CNY",
+            min_price_increment=0.001,
+        )
+        state = mod.InstrumentState(
+            trading_day="2026-04-13",
+            last_exit_time=datetime(2026, 4, 13, 15, 0, tzinfo=timezone.utc).isoformat(),
+            last_exit_side="SHORT",
+            last_exit_pnl_rub=-72.06,
+            last_exit_price=6.818,
+            last_exit_reason="MACD подтверждённо развернулся вверх и цена вернулась выше EMA20",
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "SHORT", 6.815)
+
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+
+    def test_ngj6_rsi_profit_reentry_requires_new_extreme(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="NGJ6",
+            figi="FIGI",
+            display_name="Natural Gas",
+            min_price_increment=0.001,
+        )
+        state = mod.InstrumentState(
+            trading_day="2026-04-13",
+            last_exit_time=datetime(2026, 4, 13, 11, 48, tzinfo=timezone.utc).isoformat(),
+            last_exit_side="LONG",
+            last_exit_pnl_rub=174.16,
+            last_exit_price=2.759,
+            last_exit_reason="RSI вышел в зону перегрева: 66.41 >= 65.00",
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "LONG", 2.760)
+
+        self.assertFalse(allowed)
+        self.assertIn("RSI-фиксации", reason)
+
+    def test_equity_future_reentry_after_loss_requires_new_extreme(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="VBM6",
+            figi="FIGI",
+            display_name="VTB",
+            min_price_increment=1.0,
+        )
+        state = mod.InstrumentState(
+            trading_day="2026-04-13",
+            last_exit_time=datetime(2026, 4, 13, 16, 0, tzinfo=timezone.utc).isoformat(),
+            last_exit_side="LONG",
+            last_exit_pnl_rub=-18.7,
+            last_exit_price=9386.0,
+            last_exit_reason="MACD подтверждённо развернулся вниз и цена потеряла EMA20",
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "LONG", 9387.0)
+
+        self.assertFalse(allowed)
+        self.assertIn("нового экстремума", reason)
+
+    def test_imoexf_does_not_use_failed_breakout_primary_strategy(self) -> None:
+        strategies = strategy_registry.get_primary_strategies("IMOEXF")
+
+        self.assertNotIn("failed_breakout", strategies)
+        self.assertEqual(strategies, ["range_break_continuation", "trend_pullback"])
 
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [

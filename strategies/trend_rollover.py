@@ -155,7 +155,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and impulse_ok
             and rsi_short_ok
             and volatility_ok
-            and (breakdown_down or (soft_breakdown_down and close <= recent_low * 1.0005))
+            and breakdown_down
             and short_score >= 8
         )
         long_ok = (

@@ -3674,6 +3674,19 @@ def position_reentry_allowed(
     signal: str,
     current_price: float,
 ) -> tuple[bool, str]:
+    def exit_reason_has_macd_ema_reversal() -> bool:
+        reason = str(state.last_exit_reason or "").lower()
+        return "macd" in reason or "ema20" in reason or "цена вернулась" in reason or "цена потеряла" in reason
+
+    def strong_same_side_reentry_confirmed(min_steps: int) -> bool:
+        return price_has_new_extreme_since_exit(
+            instrument,
+            signal,
+            current_price,
+            state.last_exit_price,
+            min_steps=min_steps,
+        )
+
     def brk6_fresh_impulse_override() -> bool:
         if instrument.symbol != "BRK6":
             return False
@@ -3694,7 +3707,9 @@ def position_reentry_allowed(
             min_steps=6,
         )
 
-    if instrument.symbol not in {"GNM6", "USDRUBF", "SRM6", "BRK6", "NGJ6", "IMOEXF"}:
+    group_name = get_instrument_group(instrument.symbol).name
+    guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "BRK6", "NGJ6", "IMOEXF", "CNYRUBF", "UCM6", "VBM6"}
+    if instrument.symbol not in guarded_symbols and group_name not in {"fx", "equity_index", "equity_futures"}:
         return True, ""
     if not state.last_exit_time:
         return True, ""
@@ -3710,6 +3725,34 @@ def position_reentry_allowed(
         trading_day = None
     if trading_day and last_exit_at.astimezone(MOSCOW_TZ).date() < trading_day:
         return True, ""
+
+    if group_name == "fx" and state.last_exit_side == signal and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal()):
+        min_steps = 1 if instrument.symbol == "CNYRUBF" else 2
+        if not strong_same_side_reentry_confirmed(min_steps):
+            return (
+                False,
+                f"для {instrument.symbol} повторный вход после MACD/EMA-выхода разрешён только после нового экстремума цены.",
+            )
+
+    if (
+        group_name in {"equity_index", "equity_futures"}
+        and state.last_exit_side == signal
+        and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal())
+        and not strong_same_side_reentry_confirmed(2)
+    ):
+        return (
+            False,
+            f"для {instrument.symbol} повторный вход после слабого выхода разрешён только после нового экстремума цены.",
+        )
+
+    if (
+        instrument.symbol == "NGJ6"
+        and state.last_exit_side == signal
+        and state.last_exit_pnl_rub > 0
+        and "RSI вышел" in state.last_exit_reason
+        and not strong_same_side_reentry_confirmed(3)
+    ):
+        return False, "для NGJ6 повторный вход после RSI-фиксации прибыли разрешён только после нового экстремума."
 
     cooldown_minutes = 0
     if instrument.symbol == "GNM6":
