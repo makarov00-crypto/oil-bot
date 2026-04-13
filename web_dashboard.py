@@ -1625,7 +1625,14 @@ def build_trade_review(
             continue
         key = (symbol, side)
         if event == "OPEN":
-            open_by_key.setdefault(key, []).append(row)
+            try:
+                open_qty = max(1, int(row.get("qty_lots") or 1))
+            except Exception:
+                open_qty = 1
+            for _ in range(open_qty):
+                unit_row = dict(row)
+                unit_row["qty_lots"] = 1
+                open_by_key.setdefault(key, []).append(unit_row)
             continue
         if event != "CLOSE":
             continue

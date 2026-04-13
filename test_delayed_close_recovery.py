@@ -434,6 +434,26 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         ]
         self.assertEqual(mod.get_active_journal_lots("USDRUBF", "SHORT", rows), 1)
 
+    def test_old_reentry_exit_from_previous_trading_day_does_not_block_brk6(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="BRK6",
+            figi="FIGI",
+            display_name="Brent",
+            min_price_increment=0.01,
+        )
+        state = mod.InstrumentState(
+            trading_day="2026-04-13",
+            last_exit_time=datetime(2026, 4, 4, 15, 45, tzinfo=timezone.utc).isoformat(),
+            last_exit_side="LONG",
+            last_exit_pnl_rub=-188.99,
+            last_exit_price=114.07,
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "LONG", 98.82)
+
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [
             {

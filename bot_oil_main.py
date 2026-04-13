@@ -3704,6 +3704,12 @@ def position_reentry_allowed(
         return True, ""
     if last_exit_at.tzinfo is None:
         last_exit_at = last_exit_at.replace(tzinfo=UTC)
+    try:
+        trading_day = datetime.strptime(str(state.trading_day or ""), "%Y-%m-%d").date()
+    except ValueError:
+        trading_day = None
+    if trading_day and last_exit_at.astimezone(MOSCOW_TZ).date() < trading_day:
+        return True, ""
 
     cooldown_minutes = 0
     if instrument.symbol == "GNM6":
