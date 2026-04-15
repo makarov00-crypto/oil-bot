@@ -25,6 +25,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     range_high = float(recent["high"].max())
     range_low = float(recent["low"].min())
+    range_width_pct = (range_high - range_low) / close if close else 0.0
     volume_ok = volume_avg > 0 and volume >= volume_avg * 0.85
     impulse_ok = body_avg > 0 and body >= body_avg * 0.60
     momentum_down = macd < macd_signal and macd <= prev_macd
@@ -43,6 +44,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     group_name = get_instrument_group(instrument.symbol).name
     is_fx = group_name == "fx"
     is_equity_continuation = group_name in {"equity_index", "equity_futures"}
+    is_expensive_fx = instrument.symbol in {"USDRUBF", "UCM6"}
     if instrument.symbol == "SRM6":
         higher_tf_short_ok = higher_tf_bias == "SHORT"
         higher_tf_long_ok = higher_tf_bias == "LONG"
@@ -66,6 +68,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         rsi_long_ok = 40.0 <= rsi <= 74.0
         higher_tf_short_ok = higher_tf_bias == "SHORT"
         higher_tf_long_ok = higher_tf_bias == "LONG"
+        if is_expensive_fx:
+            volume_ok = volume_avg > 0 and volume >= volume_avg * 0.85
+            impulse_ok = body_avg > 0 and body >= body_avg * 0.65
 
     if is_equity_continuation:
         volume_ok = volume_avg > 0 and volume >= volume_avg * 0.95
@@ -81,6 +86,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         continuation_short = trend_short and close <= prev_close and high <= ema20 * 1.0010
         continuation_long = trend_long and close >= prev_close and low >= ema20 * 0.9990
 
+    commission_room_ok = True
+    if is_expensive_fx:
+        commission_room_ok = max(range_width_pct, atr_pct) >= 0.0009
+
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
         f"пробой вниз диапазона {range_low:.4f}: {'да' if breakdown_down else 'нет'}",
@@ -92,6 +101,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         "импульс свечи есть" if impulse_ok else "импульс свечи слабый",
         "MACD поддерживает снижение" if momentum_down else "MACD не поддерживает снижение",
         f"ATR%={atr_pct:.4f}, минимум 0.0004",
+        "запас движения перекрывает комиссию" if commission_room_ok else "запас движения мал для комиссии",
     ]
     long_reasons = [
         f"старший ТФ={higher_tf_bias}",
@@ -104,6 +114,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         "импульс свечи есть" if impulse_ok else "импульс свечи слабый",
         "MACD поддерживает рост" if momentum_up else "MACD не поддерживает рост",
         f"ATR%={atr_pct:.4f}, минимум 0.0004",
+        "запас движения перекрывает комиссию" if commission_room_ok else "запас движения мал для комиссии",
     ]
 
     short_blockers: list[str] = []
@@ -126,6 +137,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_blockers.append("объём не подтверждает продолжение")
     if not volatility_ok:
         short_blockers.append("волатильность слишком низкая")
+    if not commission_room_ok:
+        short_blockers.append("ожидаемое движение мало относительно комиссии")
 
     if not higher_tf_long_ok:
         long_blockers.append(f"старший ТФ против LONG: {higher_tf_bias}")
@@ -152,6 +165,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("объём не подтверждает продолжение")
     if not volatility_ok:
         long_blockers.append("волатильность слишком низкая")
+    if not commission_room_ok:
+        long_blockers.append("ожидаемое движение мало относительно комиссии")
 
     short_score = sum(
         [
@@ -219,6 +234,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and short_break_ok
             and rsi_short_ok
             and momentum_down
+            and commission_room_ok
             and short_score >= 6
         )
         long_ok = (
@@ -228,7 +244,22 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and long_break_ok
             and rsi_long_ok
             and momentum_up
+            and commission_room_ok
             and long_score >= 6
+        )
+
+    if instrument.symbol == "IMOEXF":
+        short_ok = (
+            higher_tf_short_ok
+            and trend_short
+            and continuation_short
+            and breakdown_down
+            and rsi_short_ok
+            and momentum_down
+            and volume_ok
+            and impulse_ok
+            and volatility_ok
+            and short_score >= 8
         )
 
     if is_equity_continuation and not strict_imoexf_long:

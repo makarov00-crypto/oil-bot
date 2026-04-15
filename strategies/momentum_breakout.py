@@ -69,6 +69,34 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         macd_up = macd > macd_signal and (macd >= prev_macd or (macd - macd_signal) >= 0.02)
         macd_down = macd < macd_signal and (macd <= prev_macd or (macd_signal - macd) >= 0.02)
 
+    soft_breakout_quality_up = True
+    soft_breakout_quality_down = True
+    if instrument.symbol in {"BRK6", "NGJ6"}:
+        soft_volume_factor = 1.05 if instrument.symbol == "BRK6" else 1.15
+        soft_impulse_factor = 0.85 if instrument.symbol == "BRK6" else 1.05
+        soft_breakout_quality_up = (
+            breakout_up
+            or (
+                soft_breakout_up
+                and volume_avg > 0
+                and volume >= volume_avg * soft_volume_factor
+                and body_avg > 0
+                and body >= body_avg * soft_impulse_factor
+                and macd_up
+            )
+        )
+        soft_breakout_quality_down = (
+            breakout_down
+            or (
+                soft_breakout_down
+                and volume_avg > 0
+                and volume >= volume_avg * soft_volume_factor
+                and body_avg > 0
+                and body >= body_avg * soft_impulse_factor
+                and macd_down
+            )
+        )
+
     long_reasons = [
         f"старший ТФ={higher_tf_bias}",
         f"пробой вверх диапазона {range_high:.4f}: {'да' if breakout_up else 'нет'}",
@@ -98,6 +126,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append(f"старший ТФ не LONG, а {higher_tf_bias}")
     if not breakout_up and not soft_breakout_up:
         long_blockers.append("нет подтверждённого breakout вверх")
+    elif not soft_breakout_quality_up:
+        long_blockers.append("мягкий breakout вверх без сильного объёма/импульса")
     if not rsi_long_ok:
         long_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 46-78")
     if not macd_up:
@@ -113,6 +143,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_blockers.append(f"старший ТФ не SHORT, а {higher_tf_bias}")
     if not breakout_down and not soft_breakout_down:
         short_blockers.append("нет подтверждённого breakout вниз")
+    elif not soft_breakout_quality_down:
+        short_blockers.append("мягкий breakout вниз без сильного объёма/импульса")
     if not rsi_short_ok:
         short_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 22-54")
     if not macd_down:
@@ -181,6 +213,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             higher_tf_long_ok
             and close_above_trend
             and (breakout_up or soft_breakout_up)
+            and soft_breakout_quality_up
             and rsi_long_ok
             and macd_up
             and volume_ok
@@ -192,6 +225,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             higher_tf_short_ok
             and close_below_trend
             and (breakout_down or soft_breakout_down)
+            and soft_breakout_quality_down
             and rsi_short_ok
             and macd_down
             and volume_ok
@@ -205,6 +239,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             higher_tf_long_ok
             and close_above_trend
             and (breakout_up or soft_breakout_up)
+            and soft_breakout_quality_up
             and rsi_long_ok
             and macd_up
             and impulse_ok

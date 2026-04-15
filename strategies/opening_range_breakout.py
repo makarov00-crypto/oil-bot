@@ -70,6 +70,15 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     rsi_short_ok = 28.0 <= rsi <= 58.0
     higher_tf_long_ok = higher_tf_bias != "SHORT"
     higher_tf_short_ok = higher_tf_bias != "LONG"
+    is_expensive_fx = instrument.symbol in {"USDRUBF", "UCM6"}
+    if is_expensive_fx:
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.95
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.70
+    commission_room_ok = True
+    if is_expensive_fx:
+        commission_room_ok = max(opening_width_pct, atr_pct) >= 0.0010
+    hard_or_strong_soft_up = breakout_up or (soft_breakout_up and volume_ok and impulse_ok and momentum_up)
+    hard_or_strong_soft_down = breakout_down or (soft_breakout_down and volume_ok and impulse_ok and momentum_down)
 
     long_reasons = [
         f"старший ТФ={higher_tf_bias}",
@@ -83,6 +92,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         "импульс свечи есть" if impulse_ok else "импульс свечи слабый",
         "MACD поддерживает рост" if momentum_up else "MACD не поддерживает рост",
         f"ATR%={atr_pct:.4f}, минимум 0.0005",
+        "запас движения перекрывает комиссию" if commission_room_ok else "запас движения мал для комиссии",
     ]
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
@@ -96,6 +106,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         "импульс свечи есть" if impulse_ok else "импульс свечи слабый",
         "MACD поддерживает снижение" if momentum_down else "MACD не поддерживает снижение",
         f"ATR%={atr_pct:.4f}, минимум 0.0005",
+        "запас движения перекрывает комиссию" if commission_room_ok else "запас движения мал для комиссии",
     ]
 
     long_blockers: list[str] = []
@@ -105,7 +116,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append(f"старший ТФ против LONG: {higher_tf_bias}")
     if not range_compression_ok:
         long_blockers.append("opening range слишком широкий, нет чистого стартового сжатия")
-    if not breakout_up and not soft_breakout_up:
+    if not hard_or_strong_soft_up:
         long_blockers.append("нет пробоя вверх opening range")
     if not trend_up:
         long_blockers.append("цена не удерживается выше EMA20 и EMA50")
@@ -121,12 +132,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("объём не поддерживает breakout")
     if not volatility_ok:
         long_blockers.append("волатильность слишком низкая")
+    if not commission_room_ok:
+        long_blockers.append("ожидаемое движение мало относительно комиссии")
 
     if not higher_tf_short_ok:
         short_blockers.append(f"старший ТФ против SHORT: {higher_tf_bias}")
     if not range_compression_ok:
         short_blockers.append("opening range слишком широкий, нет чистого стартового сжатия")
-    if not breakout_down and not soft_breakout_down:
+    if not hard_or_strong_soft_down:
         short_blockers.append("нет пробоя вниз opening range")
     if not trend_down:
         short_blockers.append("цена не удерживается ниже EMA20 и EMA50")
@@ -142,6 +155,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_blockers.append("объём не поддерживает breakout")
     if not volatility_ok:
         short_blockers.append("волатильность слишком низкая")
+    if not commission_room_ok:
+        short_blockers.append("ожидаемое движение мало относительно комиссии")
 
     long_score = sum(
         [
@@ -172,8 +187,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         ]
     )
 
-    long_ok = higher_tf_long_ok and (breakout_up or soft_breakout_up) and trend_up and hold_above_range and long_score >= 6
-    short_ok = higher_tf_short_ok and (breakout_down or soft_breakout_down) and trend_down and hold_below_range and short_score >= 6
+    long_ok = higher_tf_long_ok and hard_or_strong_soft_up and trend_up and hold_above_range and commission_room_ok and long_score >= 6
+    short_ok = higher_tf_short_ok and hard_or_strong_soft_down and trend_down and hold_below_range and commission_room_ok and short_score >= 6
 
     if long_ok:
         return "LONG", "Сигнал LONG (opening_range_breakout): " + "; ".join(long_reasons) + "."
