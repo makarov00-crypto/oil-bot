@@ -2714,7 +2714,7 @@ def build_dashboard_html() -> str:
       font-size: 14px;
       line-height: 1.6;
       color: #dbe9f8;
-      white-space: pre-wrap;
+      white-space: normal;
     }
     .prose-review h1,
     .prose-review h2,
@@ -2731,6 +2731,13 @@ def build_dashboard_html() -> str:
     }
     .prose-review li {
       margin: 4px 0;
+    }
+    .prose-review p {
+      margin: 8px 0 12px;
+    }
+    .prose-review strong {
+      color: #f4fbff;
+      font-weight: 700;
     }
     .prose-review code {
       font-family: "JetBrains Mono", monospace;
@@ -3349,24 +3356,57 @@ def build_dashboard_html() -> str:
     }
 
     function markdownToHtml(value) {
-      const text = String(value || '').trim();
+      const text = String(value || '')
+        .replace(/\\r\\n/g, '\\n')
+        .replace(/^```(?:markdown|md)?\\s*$/gim, '')
+        .replace(/^```\\s*$/gm, '')
+        .trim();
       if (!text) return '<span class="muted">AI-review для выбранной даты пока не найден.</span>';
-      let html = escapeHtml(text);
-      html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-      html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-      html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-      html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
-      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-      html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-      html = html.replace(/(<li>.*<\\/li>)/gs, '<ul>$1</ul>');
-      html = html.replace(/<\\/ul>\\s*<ul>/g, '');
-      html = html.replace(/\\n{2,}/g, '</p><p>');
-      html = `<p>${html}</p>`;
-      html = html.replace(/<p>\\s*(<h[1-3]>)/g, '$1');
-      html = html.replace(/(<\\/h[1-3]>)\\s*<\\/p>/g, '$1');
-      html = html.replace(/<p>\\s*(<ul>)/g, '$1');
-      html = html.replace(/(<\\/ul>)\\s*<\\/p>/g, '$1');
-      return html;
+      const inlineMarkdown = (raw) => escapeHtml(raw)
+        .replace(/\\*\\*([^*\\n]+?)\\*\\*/g, '<strong>$1</strong>')
+        .replace(/`([^`\\n]+?)`/g, '<code>$1</code>');
+      const blocks = [];
+      let paragraph = [];
+      let listItems = [];
+
+      const flushParagraph = () => {
+        if (!paragraph.length) return;
+        blocks.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`);
+        paragraph = [];
+      };
+      const flushList = () => {
+        if (!listItems.length) return;
+        blocks.push(`<ul>${listItems.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ul>`);
+        listItems = [];
+      };
+
+      text.split('\\n').forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed === '---') {
+          flushParagraph();
+          flushList();
+          return;
+        }
+        const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
+        if (heading) {
+          flushParagraph();
+          flushList();
+          const level = heading[1].length;
+          blocks.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+          return;
+        }
+        const bullet = trimmed.match(/^[-*]\\s+(.+)$/);
+        if (bullet) {
+          flushParagraph();
+          listItems.push(bullet[1]);
+          return;
+        }
+        flushList();
+        paragraph.push(trimmed);
+      });
+      flushParagraph();
+      flushList();
+      return blocks.join('');
     }
 
     function renderPnlChart(series, selectedDate) {
