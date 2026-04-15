@@ -1,0 +1,14 @@
+[Unit]
+Description=Oil Bot Runtime Watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/oil-bot
+Environment=APP_DIR=/opt/oil-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/oil-bot/.venv/bin/python /opt/oil-bot/scripts/oil_bot_watchdog.py --base-dir /opt/oil-bot --service oil-bot --stale-seconds 600 --min-restart-interval-seconds 600
+
+[Install]
+WantedBy=multi-user.target

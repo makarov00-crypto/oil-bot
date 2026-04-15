@@ -47,6 +47,7 @@ TRADE_RECOVERY_SCRIPT_PATH = BASE_DIR / "scripts" / "recover_trade_operations.py
 TRADE_RECOVERY_LOCK_PATH = BASE_DIR / ".locks" / "trade_operations_recovery.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 STATE_STALE_MINUTES = 20
+RUNTIME_STALE_MINUTES = 10
 
 
 app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
@@ -1108,6 +1109,19 @@ def load_runtime_status() -> dict:
         return load_json(RUNTIME_STATUS_PATH)
     except Exception:
         return {}
+
+
+def runtime_heartbeat_age_seconds(runtime: dict) -> float | None:
+    raw_value = runtime.get("last_cycle_at") or runtime.get("updated_at")
+    if not raw_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
 
 
 def load_news_snapshot() -> dict:
@@ -2237,10 +2251,17 @@ def summarize_states(states: dict[str, dict], portfolio: dict | None = None) -> 
 def build_health_payload(states: dict[str, dict]) -> dict:
     bot_service = get_bot_service_status()
     dashboard_service = get_dashboard_service_status()
+    runtime = load_runtime_status()
+    heartbeat_age = runtime_heartbeat_age_seconds(runtime)
+    runtime_stale = heartbeat_age is None or heartbeat_age > RUNTIME_STALE_MINUTES * 60
+    services_ok = bot_service.get("active") == "active" and dashboard_service.get("active") == "active"
     return {
-        "ok": bot_service.get("active") == "active" and dashboard_service.get("active") == "active",
+        "ok": services_ok and not runtime_stale,
         "bot_service": bot_service,
         "dashboard_service": dashboard_service,
+        "runtime_stale": runtime_stale,
+        "runtime_heartbeat_age_seconds": round(heartbeat_age, 1) if heartbeat_age is not None else None,
+        "runtime_stale_threshold_seconds": RUNTIME_STALE_MINUTES * 60,
         "symbols": sorted(states.keys()),
         "symbols_count": len(states),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -3505,6 +3526,8 @@ def build_dashboard_html() -> str:
         <tr><td>Бот</td><td>${signalBadge(data.health.bot_service.active || '-')}</td></tr>
         <tr><td>Панель</td><td>${signalBadge(data.health.dashboard_service.active || '-')}</td></tr>
         <tr><td>Health</td><td>${data.health.ok ? '<span class="good mono">OK</span>' : '<span class="bad mono">FAIL</span>'}</td></tr>
+        <tr><td>Runtime stale</td><td>${data.health.runtime_stale ? '<span class="bad mono">ДА</span>' : '<span class="good mono">НЕТ</span>'}</td></tr>
+        <tr><td>Возраст цикла</td><td class="mono">${data.health.runtime_heartbeat_age_seconds ?? '-'} сек</td></tr>
         <tr><td>Инструментов</td><td class="mono">${data.health.symbols_count}</td></tr>
         <tr><td>Срез health</td><td class="mono">${escapeHtml(data.health.generated_at_moscow || '-')}</td></tr>
         <tr><td>Режим</td><td>${escapeHtml(runtime.mode === 'DRY_RUN' ? 'ТЕСТ' : (runtime.mode || '-'))}</td></tr>

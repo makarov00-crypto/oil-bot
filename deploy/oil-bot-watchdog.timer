@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Oil Bot Runtime Watchdog
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+Persistent=true
+Unit=oil-bot-watchdog.service
+
+[Install]
+WantedBy=timers.target
