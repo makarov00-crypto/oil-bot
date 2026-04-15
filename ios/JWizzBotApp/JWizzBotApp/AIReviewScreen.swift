@@ -252,8 +252,13 @@ private struct AIReviewMarkdownView: View {
 
     private func parseBlocks(_ markdown: String) -> [Block] {
         let lines = markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { line in
+                let lowercased = line.lowercased()
+                return lowercased != "```" && lowercased != "```markdown" && lowercased != "```md"
+            }
 
         var blocks: [Block] = []
         var currentBullets: [String] = []
@@ -290,10 +295,24 @@ private struct AIReviewMarkdownView: View {
                 continue
             }
 
+            if rawLine.hasPrefix("## ") {
+                flushBullets()
+                flushParagraph()
+                blocks.append(.h2(String(rawLine.dropFirst(3))))
+                continue
+            }
+
             if rawLine.hasPrefix("### ") {
                 flushBullets()
                 flushParagraph()
                 blocks.append(.h2(String(rawLine.dropFirst(4))))
+                continue
+            }
+
+            if rawLine.hasPrefix("- Модель:") || rawLine.hasPrefix("- Сформировано:") {
+                flushBullets()
+                flushParagraph()
+                blocks.append(.meta(String(rawLine.dropFirst(2))))
                 continue
             }
 
