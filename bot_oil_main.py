@@ -2242,9 +2242,9 @@ def add_williams_indicators(df: pd.DataFrame) -> pd.DataFrame:
     ao_slow = median_price.rolling(20).mean()
     result["ao"] = ao_fast - ao_slow
 
-    high_low_range = (result["high"] - result["low"]).replace(0, pd.NA)
+    high_low_range = (result["high"] - result["low"]).astype(float).replace(0.0, float("nan"))
     money_flow_multiplier = ((result["close"] - result["low"]) - (result["high"] - result["close"])) / high_low_range
-    money_flow_multiplier = money_flow_multiplier.fillna(0.0)
+    money_flow_multiplier = money_flow_multiplier.fillna(0.0).astype(float)
     money_flow_volume = money_flow_multiplier * result["volume"]
     adl = money_flow_volume.cumsum()
     result["chaikin"] = adl.ewm(span=5, adjust=False).mean() - adl.ewm(span=20, adjust=False).mean()
