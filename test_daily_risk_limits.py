@@ -1,0 +1,61 @@
+import unittest
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import bot_oil_main as mod
+
+
+class DailyRiskLimitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.instrument = mod.InstrumentConfig(symbol="TEST", figi="FIGI", display_name="Test")
+        self.config = SimpleNamespace(
+            account_id="acc",
+            max_daily_loss=5.0,
+            dry_run=False,
+        )
+
+    def test_daily_loss_limit_uses_global_closed_net_pnl(self) -> None:
+        rows = [
+            {"event": "CLOSE", "symbol": "BRK6", "net_pnl_rub": -1800.0},
+            {"event": "CLOSE", "symbol": "NGJ6", "net_pnl_rub": -1190.58},
+            {"event": "CLOSE", "symbol": "SRM6", "net_pnl_rub": 100.0},
+            {"event": "OPEN", "symbol": "CNYRUBF", "net_pnl_rub": -5.0},
+        ]
+        snapshot = mod.AccountSnapshot(total_portfolio=50000.0, free_rub=10000.0, blocked_guarantee_rub=0.0)
+
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows), patch.object(
+            mod, "get_account_snapshot", return_value=snapshot
+        ):
+            status = mod.get_daily_loss_limit_status(None, self.config)
+
+        self.assertFalse(status["allowed"])
+        self.assertEqual(status["net_pnl_rub"], -2890.58)
+        self.assertEqual(status["limit_rub"], 2500.0)
+
+    def test_open_position_is_blocked_after_global_daily_loss_limit(self) -> None:
+        state = mod.InstrumentState(last_signal_summary=["old"])
+        snapshot = mod.AccountSnapshot(total_portfolio=50000.0, free_rub=10000.0, blocked_guarantee_rub=0.0)
+        rows = [
+            {"event": "CLOSE", "symbol": "BRK6", "net_pnl_rub": -2600.0},
+        ]
+
+        with TemporaryDirectory() as temp_dir, patch.object(
+            mod, "STATE_DIR", mod.Path(temp_dir)
+        ), patch.object(
+            mod, "get_today_trade_journal_rows", return_value=rows
+        ), patch.object(
+            mod, "get_account_snapshot", return_value=snapshot
+        ), patch.object(
+            mod, "get_last_price", side_effect=AssertionError("price should not be requested")
+        ):
+            mod.open_position(None, self.config, self.instrument, state, "LONG", "test_strategy", "entry")
+
+        self.assertEqual(state.position_side, "FLAT")
+        self.assertEqual(state.last_risk_stop_day, mod.datetime.now(mod.MOSCOW_TZ).date().isoformat())
+        self.assertIn("глобальный дневной стоп", state.last_error)
+        self.assertEqual(state.last_allocator_quantity, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

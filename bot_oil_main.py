@@ -702,6 +702,10 @@ def calculate_closed_trade_totals(rows: list[dict[str, Any]] | None = None) -> d
     }
 
 
+def get_today_closed_net_pnl_rub(rows: list[dict[str, Any]] | None = None) -> float:
+    return float(calculate_closed_trade_totals(rows)["net_pnl_rub"])
+
+
 def reconcile_state_accounting(symbol: str, state: InstrumentState) -> None:
     gross = 0.0
     commission = 0.0
@@ -3058,14 +3062,61 @@ def ensure_risk_limits(
     config: BotConfig,
 ) -> bool:
     reset_daily_pnl_if_needed(state)
+    return get_daily_loss_limit_status(client, config)["allowed"]
+
+
+def get_daily_loss_limit_status(client: Client, config: BotConfig) -> dict[str, Any]:
     if config.max_daily_loss <= 0:
-        return True
+        return {
+            "allowed": True,
+            "enabled": False,
+            "net_pnl_rub": get_today_closed_net_pnl_rub(),
+            "limit_rub": 0.0,
+            "equity_rub": 0.0,
+        }
     snapshot = get_account_snapshot(client, config)
     equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
     if equity <= 0:
-        return True
+        return {
+            "allowed": True,
+            "enabled": True,
+            "net_pnl_rub": get_today_closed_net_pnl_rub(),
+            "limit_rub": 0.0,
+            "equity_rub": 0.0,
+        }
     daily_loss_limit_rub = equity * (abs(config.max_daily_loss) / 100.0)
-    return state.realized_pnl > -daily_loss_limit_rub
+    net_pnl_rub = get_today_closed_net_pnl_rub()
+    return {
+        "allowed": net_pnl_rub > -daily_loss_limit_rub,
+        "enabled": True,
+        "net_pnl_rub": round(net_pnl_rub, 2),
+        "limit_rub": round(daily_loss_limit_rub, 2),
+        "equity_rub": round(equity, 2),
+    }
+
+
+def format_daily_loss_block_reason(status: dict[str, Any]) -> str:
+    return (
+        "глобальный дневной стоп: закрытый NET "
+        f"{float(status.get('net_pnl_rub') or 0.0):.2f} RUB <= "
+        f"-{float(status.get('limit_rub') or 0.0):.2f} RUB "
+        f"({float(status.get('equity_rub') or 0.0):.2f} RUB * "
+        f"{float(status.get('limit_pct') or 0.0):.2f}%)."
+    )
+
+
+def get_global_daily_loss_block_reason(client: Client, config: BotConfig) -> str:
+    status = get_daily_loss_limit_status(client, config)
+    if status.get("allowed"):
+        return ""
+    status["limit_pct"] = abs(float(config.max_daily_loss or 0.0))
+    return format_daily_loss_block_reason(status)
+
+
+def mark_daily_risk_stop_if_needed(state: InstrumentState) -> None:
+    today = datetime.now(MOSCOW_TZ).date().isoformat()
+    if state.last_risk_stop_day != today:
+        state.last_risk_stop_day = today
 
 
 def get_account_snapshot(client: Client, config: BotConfig) -> AccountSnapshot:
@@ -4214,7 +4265,16 @@ def open_position(
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
-    session_name = get_market_session()
+    risk_block_reason = get_global_daily_loss_block_reason(client, config)
+    if risk_block_reason:
+        mark_daily_risk_stop_if_needed(state)
+        state.last_error = risk_block_reason
+        state.last_signal_summary = [risk_block_reason, *state.last_signal_summary[:2]]
+        state.last_allocator_summary = f"Аллокатор заблокирован: {risk_block_reason}"
+        state.last_allocator_quantity = 0
+        save_state(instrument.symbol, state)
+        logging.warning("symbol=%s status=entry_blocked_daily_loss reason=%s", instrument.symbol, risk_block_reason)
+        return
     price = get_last_price(client, instrument)
     quantity = calculate_order_quantity(client, config, instrument, state, price, signal, strategy_name)
     if quantity <= 0:
@@ -4519,12 +4579,6 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             state.last_error = weekend_message
         state.last_signal = "HOLD"
         return
-    if not ensure_risk_limits(client, state, config):
-        today = datetime.now(UTC).date().isoformat()
-        if state.last_risk_stop_day != today:
-            state.last_risk_stop_day = today
-            save_state(instrument.symbol, state)
-        return
 
     try:
         lower_df = add_indicators(
@@ -4639,17 +4693,23 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         )
     else:
         try:
-            allocator_sizing = calculate_position_sizing_context(
-                client,
-                config,
-                instrument,
-                state,
-                current_price,
-                signal,
-                primary_strategy_name,
-            )
-            state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
-            state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
+            daily_loss_block_reason = get_global_daily_loss_block_reason(client, config)
+            if daily_loss_block_reason:
+                mark_daily_risk_stop_if_needed(state)
+                state.last_allocator_quantity = 0
+                state.last_allocator_summary = f"Аллокатор заблокирован: {daily_loss_block_reason}"
+            else:
+                allocator_sizing = calculate_position_sizing_context(
+                    client,
+                    config,
+                    instrument,
+                    state,
+                    current_price,
+                    signal,
+                    primary_strategy_name,
+                )
+                state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
+                state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
         except Exception as error:
             state.last_allocator_summary = f"Аллокатор временно недоступен: {error}"
             logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
@@ -4659,12 +4719,23 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
 
     if state.position_side == "FLAT":
         if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol):
-            reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
-            if reentry_allowed:
-                open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
+            daily_loss_block_reason = get_global_daily_loss_block_reason(client, config)
+            if daily_loss_block_reason:
+                mark_daily_risk_stop_if_needed(state)
+                state.last_error = daily_loss_block_reason
+                state.last_signal_summary = [daily_loss_block_reason, *state.last_signal_summary[:2]]
+                logging.warning(
+                    "symbol=%s status=entry_blocked_daily_loss reason=%s",
+                    instrument.symbol,
+                    daily_loss_block_reason,
+                )
             else:
-                logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
-                state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
+                reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
+                if reentry_allowed:
+                    open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
+                else:
+                    logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
+                    state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
     else:
         check_exit(client, config, instrument, state, lower_df, signal)
 
