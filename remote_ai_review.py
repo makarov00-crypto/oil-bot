@@ -24,7 +24,7 @@ REMOTE_RUNTIME_DIR = Path("logs/remote_runtime")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AI review locally against server runtime data")
-    parser.add_argument("--ssh", default="root@80.249.150.196", help="SSH target for the trading server")
+    parser.add_argument("--ssh", default="oilbot@5.101.114.51", help="SSH target for the trading server")
     parser.add_argument("--remote-dir", default="/opt/oil-bot", help="Project directory on the remote server")
     parser.add_argument("--date", dest="target_date", help="Дата в формате YYYY-MM-DD")
     parser.add_argument("--preview", action="store_true", help="Только показать prompt без вызова OpenAI")
