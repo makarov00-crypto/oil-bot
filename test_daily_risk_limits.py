@@ -58,8 +58,8 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertIn("глобальный дневной стоп", state.last_error)
         self.assertEqual(state.last_allocator_quantity, 0)
 
-    def test_weekend_blocks_new_entries_for_all_symbols(self) -> None:
-        self.assertFalse(mod.session_allows_new_entries("WEEKEND", "BRK6"))
+    def test_weekend_blocks_currency_but_allows_other_symbols_before_cutoff(self) -> None:
+        self.assertTrue(mod.session_allows_new_entries("WEEKEND", "BRK6"))
         self.assertFalse(mod.session_allows_new_entries("WEEKEND", "CNYRUBF"))
 
     def test_weekend_session_closes_after_1900_moscow(self) -> None:

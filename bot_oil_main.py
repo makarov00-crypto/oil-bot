@@ -2090,13 +2090,17 @@ def get_session_position_multiplier(session_name: str, symbol: str | None = None
 
 
 def session_allows_new_entries(session_name: str, symbol: str) -> bool:
-    if session_name in {"CLOSED", "WEEKEND"}:
+    if session_name == "CLOSED":
         return False
+    if session_name == "WEEKEND":
+        return not is_currency_symbol(symbol)
     return True
 
 
 def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str) -> bool:
-    if session_name in {"CLOSED", "WEEKEND"}:
+    if session_name == "CLOSED":
+        return False
+    if session_name == "WEEKEND" and is_currency_symbol(symbol):
         return False
     if session_name in {"DAY", "MORNING"}:
         return True
