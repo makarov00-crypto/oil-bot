@@ -47,6 +47,8 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(
             mod, "get_account_snapshot", return_value=snapshot
         ), patch.object(
+            mod, "get_market_session", return_value="DAY"
+        ), patch.object(
             mod, "get_last_price", side_effect=AssertionError("price should not be requested")
         ):
             mod.open_position(None, self.config, self.instrument, state, "LONG", "test_strategy", "entry")
@@ -55,6 +57,47 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(state.last_risk_stop_day, mod.datetime.now(mod.MOSCOW_TZ).date().isoformat())
         self.assertIn("глобальный дневной стоп", state.last_error)
         self.assertEqual(state.last_allocator_quantity, 0)
+
+    def test_weekend_blocks_new_entries_for_all_symbols(self) -> None:
+        self.assertFalse(mod.session_allows_new_entries("WEEKEND", "BRK6"))
+        self.assertFalse(mod.session_allows_new_entries("WEEKEND", "CNYRUBF"))
+
+    def test_recent_strategy_performance_blocks_toxic_combo(self) -> None:
+        rows = [
+            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -120.0},
+            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -80.0},
+            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -75.0},
+            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -60.0},
+            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": 20.0},
+            {"event": "CLOSE", "symbol": "CNYRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -500.0},
+        ]
+
+        stats = mod.calculate_recent_strategy_performance(
+            "USDRUBF",
+            "opening_range_breakout",
+            rows=rows,
+        )
+
+        self.assertEqual(stats["closed_count"], 5)
+        self.assertEqual(stats["wins"], 1)
+        self.assertEqual(stats["net_pnl_rub"], -315.0)
+        with patch.object(mod, "get_trade_journal_rows_since", return_value=rows):
+            reason = mod.recent_strategy_performance_block_reason("USDRUBF", "opening_range_breakout")
+
+        self.assertIn("performance guard", reason)
+        self.assertIn("USDRUBF", reason)
+
+    def test_recent_strategy_performance_allows_healthy_combo(self) -> None:
+        rows = [
+            {"event": "CLOSE", "symbol": "RBM6", "strategy": "range_break_continuation", "net_pnl_rub": 20.0},
+            {"event": "CLOSE", "symbol": "RBM6", "strategy": "range_break_continuation", "net_pnl_rub": 15.0},
+            {"event": "CLOSE", "symbol": "RBM6", "strategy": "range_break_continuation", "net_pnl_rub": -5.0},
+        ]
+
+        with patch.object(mod, "get_trade_journal_rows_since", return_value=rows):
+            reason = mod.recent_strategy_performance_block_reason("RBM6", "range_break_continuation")
+
+        self.assertEqual(reason, "")
 
 
 if __name__ == "__main__":

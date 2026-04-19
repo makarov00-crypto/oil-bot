@@ -46,6 +46,11 @@ from strategies import get_strategy_profile as get_primary_strategy_profile
 
 APP_NAME = "oil-bot-main"
 WATCHLIST_REFRESH_SECONDS = 300
+RECENT_STRATEGY_GUARD_DAYS = 5
+RECENT_STRATEGY_GUARD_MIN_TRADES = 5
+RECENT_STRATEGY_GUARD_MAX_WIN_RATE = 25.0
+RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB = -250.0
+RECENT_STRATEGY_GUARD_HARD_LOSS_RUB = -500.0
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
@@ -665,6 +670,16 @@ def get_today_trade_journal_rows() -> list[dict[str, Any]]:
     for row in load_trade_journal():
         row_time = str(row.get("time", ""))
         if row_time.startswith(today):
+            rows.append(row)
+    return rows
+
+
+def get_trade_journal_rows_since(start_day: date) -> list[dict[str, Any]]:
+    start_value = start_day.isoformat()
+    rows = []
+    for row in load_trade_journal():
+        row_day = str(row.get("time", ""))[:10]
+        if row_day >= start_value:
             rows.append(row)
     return rows
 
@@ -2073,17 +2088,13 @@ def get_session_position_multiplier(session_name: str, symbol: str | None = None
 
 
 def session_allows_new_entries(session_name: str, symbol: str) -> bool:
-    if session_name == "CLOSED":
+    if session_name in {"CLOSED", "WEEKEND"}:
         return False
-    if session_name != "WEEKEND":
-        return True
-    return not is_currency_symbol(symbol)
+    return True
 
 
 def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str) -> bool:
-    if session_name == "CLOSED":
-        return False
-    if session_name == "WEEKEND" and is_currency_symbol(symbol):
+    if session_name in {"CLOSED", "WEEKEND"}:
         return False
     if session_name in {"DAY", "MORNING"}:
         return True
@@ -3111,6 +3122,88 @@ def get_global_daily_loss_block_reason(client: Client, config: BotConfig) -> str
         return ""
     status["limit_pct"] = abs(float(config.max_daily_loss or 0.0))
     return format_daily_loss_block_reason(status)
+
+
+def calculate_recent_strategy_performance(
+    symbol: str,
+    strategy_name: str,
+    *,
+    lookback_days: int = RECENT_STRATEGY_GUARD_DAYS,
+    rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    start_day = datetime.now(MOSCOW_TZ).date() - timedelta(days=max(1, lookback_days - 1))
+    if rows is None:
+        source_rows = get_trade_journal_rows_since(start_day)
+    else:
+        start_value = start_day.isoformat()
+        source_rows = [
+            row
+            for row in rows
+            if not str(row.get("time", ""))[:10] or str(row.get("time", ""))[:10] >= start_value
+        ]
+    target_symbol = str(symbol or "").upper()
+    target_strategy = str(strategy_name or "")
+    closed_rows = [
+        row
+        for row in source_rows
+        if str(row.get("event", "")).upper() == "CLOSE"
+        and str(row.get("symbol", "")).upper() == target_symbol
+        and str(row.get("strategy", "") or "") == target_strategy
+    ]
+    total_net = 0.0
+    wins = 0
+    losses = 0
+    for row in closed_rows:
+        if row.get("net_pnl_rub") not in (None, ""):
+            try:
+                net = float(row.get("net_pnl_rub") or 0.0)
+            except Exception:
+                net = 0.0
+        else:
+            try:
+                net = float(row.get("pnl_rub") or 0.0)
+            except Exception:
+                net = 0.0
+        total_net += net
+        if net > 0:
+            wins += 1
+        elif net < 0:
+            losses += 1
+    total = len(closed_rows)
+    win_rate = (wins / total * 100.0) if total else 0.0
+    return {
+        "symbol": target_symbol,
+        "strategy": target_strategy,
+        "lookback_days": lookback_days,
+        "closed_count": total,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 1),
+        "net_pnl_rub": round(total_net, 2),
+    }
+
+
+def recent_strategy_performance_block_reason(symbol: str, strategy_name: str) -> str:
+    stats = calculate_recent_strategy_performance(symbol, strategy_name)
+    closed_count = int(stats["closed_count"])
+    losses = int(stats["losses"])
+    wins = int(stats["wins"])
+    win_rate = float(stats["win_rate"])
+    net_pnl = float(stats["net_pnl_rub"])
+    toxic_series = (
+        closed_count >= RECENT_STRATEGY_GUARD_MIN_TRADES
+        and win_rate <= RECENT_STRATEGY_GUARD_MAX_WIN_RATE
+        and net_pnl <= RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB
+    )
+    hard_loss = closed_count >= 3 and net_pnl <= RECENT_STRATEGY_GUARD_HARD_LOSS_RUB
+    no_win_loss_streak = closed_count >= 3 and wins == 0 and losses >= 3 and net_pnl <= RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB
+    if not (toxic_series or hard_loss or no_win_loss_streak):
+        return ""
+    return (
+        f"performance guard: {stats['symbol']} {stats['strategy']} за {stats['lookback_days']} дн. "
+        f"закрытий={closed_count}, win rate={win_rate:.1f}%, net={net_pnl:.2f} RUB. "
+        "Новые входы по этой связке временно заблокированы."
+    )
 
 
 def mark_daily_risk_stop_if_needed(state: InstrumentState) -> None:
@@ -4265,6 +4358,20 @@ def open_position(
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
+    session_name = get_market_session()
+    if not session_allows_new_entries(session_name, instrument.symbol):
+        session_block_reason = f"Новые входы заблокированы для сессии {session_name}."
+        state.last_error = session_block_reason
+        state.last_signal_summary = [session_block_reason, *state.last_signal_summary[:2]]
+        state.last_allocator_summary = f"Аллокатор заблокирован: {session_block_reason}"
+        state.last_allocator_quantity = 0
+        save_state(instrument.symbol, state)
+        logging.info(
+            "symbol=%s session=%s status=entry_blocked_session",
+            instrument.symbol,
+            session_name,
+        )
+        return
     risk_block_reason = get_global_daily_loss_block_reason(client, config)
     if risk_block_reason:
         mark_daily_risk_stop_if_needed(state)
@@ -4274,6 +4381,20 @@ def open_position(
         state.last_allocator_quantity = 0
         save_state(instrument.symbol, state)
         logging.warning("symbol=%s status=entry_blocked_daily_loss reason=%s", instrument.symbol, risk_block_reason)
+        return
+    performance_block_reason = recent_strategy_performance_block_reason(instrument.symbol, strategy_name)
+    if performance_block_reason:
+        state.last_error = performance_block_reason
+        state.last_signal_summary = [performance_block_reason, *state.last_signal_summary[:2]]
+        state.last_allocator_summary = f"Аллокатор заблокирован: {performance_block_reason}"
+        state.last_allocator_quantity = 0
+        save_state(instrument.symbol, state)
+        logging.warning(
+            "symbol=%s strategy=%s status=entry_blocked_performance reason=%s",
+            instrument.symbol,
+            strategy_name,
+            performance_block_reason,
+        )
         return
     price = get_last_price(client, instrument)
     quantity = calculate_order_quantity(client, config, instrument, state, price, signal, strategy_name)
@@ -4569,7 +4690,9 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         return
     if session_name == "WEEKEND" and is_currency_symbol(instrument.symbol):
         weekend_message = "Выходной день: валютный фьючерс не торгуется."
-        if state.last_error != weekend_message or state.last_signal != "HOLD":
+        if state.position_side != "FLAT" or has_pending_order(state):
+            state.last_signal_summary = [weekend_message, *state.last_signal_summary[:2]]
+        elif state.last_error != weekend_message or state.last_signal != "HOLD":
             state.last_error = weekend_message
             state.last_signal = "HOLD"
             state.last_news_impact = "инструмент недоступен на выходных"
@@ -4577,8 +4700,9 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             logging.info("symbol=%s status=weekend_currency_closed", instrument.symbol)
         else:
             state.last_error = weekend_message
-        state.last_signal = "HOLD"
-        return
+        if state.position_side == "FLAT" and not has_pending_order(state):
+            state.last_signal = "HOLD"
+            return
 
     try:
         lower_df = add_indicators(
@@ -4691,6 +4815,8 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             f"Аллокатор ждёт завершения заявки: действие {pending_action}, "
             f"направление {pending_side}, лотов {state.pending_order_qty}."
         )
+    elif not session_allows_new_entries(session_name, instrument.symbol):
+        state.last_allocator_summary = f"Аллокатор заблокирован: новые входы недоступны для сессии {session_name}."
     else:
         try:
             daily_loss_block_reason = get_global_daily_loss_block_reason(client, config)
@@ -4699,17 +4825,25 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                 state.last_allocator_quantity = 0
                 state.last_allocator_summary = f"Аллокатор заблокирован: {daily_loss_block_reason}"
             else:
-                allocator_sizing = calculate_position_sizing_context(
-                    client,
-                    config,
-                    instrument,
-                    state,
-                    current_price,
-                    signal,
+                performance_block_reason = recent_strategy_performance_block_reason(
+                    instrument.symbol,
                     primary_strategy_name,
                 )
-                state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
-                state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
+                if performance_block_reason:
+                    state.last_allocator_quantity = 0
+                    state.last_allocator_summary = f"Аллокатор заблокирован: {performance_block_reason}"
+                else:
+                    allocator_sizing = calculate_position_sizing_context(
+                        client,
+                        config,
+                        instrument,
+                        state,
+                        current_price,
+                        signal,
+                        primary_strategy_name,
+                    )
+                    state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
+                    state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
         except Exception as error:
             state.last_allocator_summary = f"Аллокатор временно недоступен: {error}"
             logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
@@ -4730,12 +4864,26 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                     daily_loss_block_reason,
                 )
             else:
-                reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
-                if reentry_allowed:
-                    open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
+                performance_block_reason = recent_strategy_performance_block_reason(
+                    instrument.symbol,
+                    primary_strategy_name,
+                )
+                if performance_block_reason:
+                    state.last_error = performance_block_reason
+                    state.last_signal_summary = [performance_block_reason, *state.last_signal_summary[:2]]
+                    logging.warning(
+                        "symbol=%s strategy=%s status=entry_blocked_performance reason=%s",
+                        instrument.symbol,
+                        primary_strategy_name,
+                        performance_block_reason,
+                    )
                 else:
-                    logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
-                    state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
+                    reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
+                    if reentry_allowed:
+                        open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
+                    else:
+                        logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
+                        state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
     else:
         check_exit(client, config, instrument, state, lower_df, signal)
 
