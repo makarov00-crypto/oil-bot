@@ -2059,9 +2059,11 @@ def get_day_bounds_utc_for_date(target_day: date) -> tuple[datetime, datetime]:
 
 def get_market_session(now: datetime | None = None) -> str:
     now = now or current_moscow_time()
-    if now.weekday() >= 5:
-        return "WEEKEND"
     current_minutes = now.hour * 60 + now.minute
+    if now.weekday() >= 5:
+        if current_minutes < 19 * 60:
+            return "WEEKEND"
+        return "CLOSED"
     if current_minutes < 8 * 60 + 50:
         return "CLOSED"
     if current_minutes < 10 * 60:

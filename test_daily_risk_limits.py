@@ -62,6 +62,17 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertFalse(mod.session_allows_new_entries("WEEKEND", "BRK6"))
         self.assertFalse(mod.session_allows_new_entries("WEEKEND", "CNYRUBF"))
 
+    def test_weekend_session_closes_after_1900_moscow(self) -> None:
+        saturday_before_cutoff = mod.datetime(2026, 4, 18, 18, 59, tzinfo=mod.MOSCOW_TZ)
+        saturday_at_cutoff = mod.datetime(2026, 4, 18, 19, 0, tzinfo=mod.MOSCOW_TZ)
+        sunday_before_cutoff = mod.datetime(2026, 4, 19, 18, 59, tzinfo=mod.MOSCOW_TZ)
+        sunday_after_cutoff = mod.datetime(2026, 4, 19, 19, 1, tzinfo=mod.MOSCOW_TZ)
+
+        self.assertEqual(mod.get_market_session(saturday_before_cutoff), "WEEKEND")
+        self.assertEqual(mod.get_market_session(saturday_at_cutoff), "CLOSED")
+        self.assertEqual(mod.get_market_session(sunday_before_cutoff), "WEEKEND")
+        self.assertEqual(mod.get_market_session(sunday_after_cutoff), "CLOSED")
+
     def test_recent_strategy_performance_blocks_toxic_combo(self) -> None:
         rows = [
             {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -120.0},
