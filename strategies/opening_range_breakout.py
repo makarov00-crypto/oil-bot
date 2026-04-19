@@ -3,6 +3,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from instrument_groups import get_instrument_group
+
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 FX_OPENING_RANGE_START = time(9, 0)
@@ -70,13 +72,17 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     rsi_short_ok = 28.0 <= rsi <= 58.0
     higher_tf_long_ok = higher_tf_bias != "SHORT"
     higher_tf_short_ok = higher_tf_bias != "LONG"
+    is_fx = get_instrument_group(instrument.symbol).name == "fx"
     is_expensive_fx = instrument.symbol in {"USDRUBF", "UCM6"}
-    if is_expensive_fx:
+    if is_fx:
         volume_ok = volume_avg > 0 and volume >= volume_avg * 0.95
         impulse_ok = body_avg > 0 and body >= body_avg * 0.70
+        volatility_ok = atr_pct >= 0.0008
+        higher_tf_long_ok = higher_tf_bias == "LONG"
+        higher_tf_short_ok = higher_tf_bias == "SHORT"
     commission_room_ok = True
-    if is_expensive_fx:
-        commission_room_ok = max(opening_width_pct, atr_pct) >= 0.0010
+    if is_fx:
+        commission_room_ok = max(opening_width_pct, atr_pct) >= (0.0012 if is_expensive_fx else 0.0010)
     hard_or_strong_soft_up = breakout_up or (soft_breakout_up and volume_ok and impulse_ok and momentum_up)
     hard_or_strong_soft_down = breakout_down or (soft_breakout_down and volume_ok and impulse_ok and momentum_down)
 
@@ -189,6 +195,31 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     long_ok = higher_tf_long_ok and hard_or_strong_soft_up and trend_up and hold_above_range and commission_room_ok and long_score >= 6
     short_ok = higher_tf_short_ok and hard_or_strong_soft_down and trend_down and hold_below_range and commission_room_ok and short_score >= 6
+    if is_fx:
+        long_ok = (
+            higher_tf_long_ok
+            and breakout_up
+            and trend_up
+            and hold_above_range
+            and volume_ok
+            and impulse_ok
+            and momentum_up
+            and volatility_ok
+            and commission_room_ok
+            and long_score >= 8
+        )
+        short_ok = (
+            higher_tf_short_ok
+            and breakout_down
+            and trend_down
+            and hold_below_range
+            and volume_ok
+            and impulse_ok
+            and momentum_down
+            and volatility_ok
+            and commission_room_ok
+            and short_score >= 8
+        )
 
     if long_ok:
         return "LONG", "Сигнал LONG (opening_range_breakout): " + "; ".join(long_reasons) + "."

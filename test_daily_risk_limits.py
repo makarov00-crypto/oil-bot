@@ -92,7 +92,9 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(stats["closed_count"], 5)
         self.assertEqual(stats["wins"], 1)
         self.assertEqual(stats["net_pnl_rub"], -315.0)
-        with patch.object(mod, "get_trade_journal_rows_since", return_value=rows):
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=[]), patch.object(
+            mod, "get_trade_journal_rows_since", return_value=rows
+        ):
             reason = mod.recent_strategy_performance_block_reason("USDRUBF", "opening_range_breakout")
 
         self.assertIn("performance guard", reason)
@@ -105,8 +107,109 @@ class DailyRiskLimitTests(unittest.TestCase):
             {"event": "CLOSE", "symbol": "RBM6", "strategy": "range_break_continuation", "net_pnl_rub": -5.0},
         ]
 
-        with patch.object(mod, "get_trade_journal_rows_since", return_value=rows):
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=[]), patch.object(
+            mod, "get_trade_journal_rows_since", return_value=rows
+        ):
             reason = mod.recent_strategy_performance_block_reason("RBM6", "range_break_continuation")
+
+        self.assertEqual(reason, "")
+
+    def test_intraday_chop_guard_blocks_same_day_losing_combo(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
+        rows = [
+            {
+                "time": f"{today}T10:15:00+03:00",
+                "event": "CLOSE",
+                "symbol": "SRM6",
+                "strategy": "range_break_continuation",
+                "net_pnl_rub": -42.0,
+            },
+            {
+                "time": f"{today}T11:20:00+03:00",
+                "event": "CLOSE",
+                "symbol": "SRM6",
+                "strategy": "range_break_continuation",
+                "net_pnl_rub": -35.0,
+            },
+            {
+                "time": f"{today}T11:45:00+03:00",
+                "event": "CLOSE",
+                "symbol": "BRK6",
+                "strategy": "range_break_continuation",
+                "net_pnl_rub": -500.0,
+            },
+        ]
+
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
+            reason = mod.recent_strategy_performance_block_reason("SRM6", "range_break_continuation")
+
+        self.assertIn("anti-chop guard", reason)
+        self.assertIn("SRM6", reason)
+
+    def test_intraday_chop_guard_allows_combo_after_same_day_win(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
+        rows = [
+            {
+                "time": f"{today}T10:15:00+03:00",
+                "event": "CLOSE",
+                "symbol": "SRM6",
+                "strategy": "range_break_continuation",
+                "net_pnl_rub": -42.0,
+            },
+            {
+                "time": f"{today}T11:20:00+03:00",
+                "event": "CLOSE",
+                "symbol": "SRM6",
+                "strategy": "range_break_continuation",
+                "net_pnl_rub": 12.0,
+            },
+        ]
+
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows), patch.object(
+            mod, "get_trade_journal_rows_since", return_value=rows
+        ):
+            reason = mod.recent_strategy_performance_block_reason("SRM6", "range_break_continuation")
+
+        self.assertEqual(reason, "")
+
+    def test_profit_lock_triggers_after_giving_back_commission_covered_move(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="TEST",
+            figi="FIGI",
+            display_name="Test",
+            min_price_increment=1.0,
+            min_price_increment_amount=1.0,
+        )
+        state = mod.InstrumentState(
+            entry_price=100.0,
+            max_price=180.0,
+            position_qty=1,
+            position_side="LONG",
+            entry_commission_rub=5.0,
+        )
+
+        reason = mod.build_profit_lock_exit_reason(instrument, state, 108.0)
+
+        self.assertIn("Profit-lock", reason)
+        self.assertIn("позиция уже давала 80.00 RUB", reason)
+
+    def test_profit_lock_waits_until_move_covers_commission(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="TEST",
+            figi="FIGI",
+            display_name="Test",
+            min_price_increment=1.0,
+            min_price_increment_amount=1.0,
+        )
+        state = mod.InstrumentState(
+            entry_price=100.0,
+            max_price=130.0,
+            position_qty=1,
+            position_side="LONG",
+            entry_commission_rub=5.0,
+        )
+
+        reason = mod.build_profit_lock_exit_reason(instrument, state, 108.0)
 
         self.assertEqual(reason, "")
 

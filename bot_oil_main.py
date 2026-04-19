@@ -51,6 +51,12 @@ RECENT_STRATEGY_GUARD_MIN_TRADES = 5
 RECENT_STRATEGY_GUARD_MAX_WIN_RATE = 25.0
 RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB = -250.0
 RECENT_STRATEGY_GUARD_HARD_LOSS_RUB = -500.0
+INTRADAY_CHOP_GUARD_STRATEGIES = {
+    "opening_range_breakout",
+    "range_break_continuation",
+    "breakdown_continuation",
+    "momentum_breakout",
+}
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
@@ -3130,6 +3136,78 @@ def get_global_daily_loss_block_reason(client: Client, config: BotConfig) -> str
     return format_daily_loss_block_reason(status)
 
 
+def estimate_round_trip_commission_rub(state: InstrumentState) -> float:
+    entry_commission = float(state.entry_commission_rub or 0.0)
+    if entry_commission > 0:
+        return max(entry_commission * 2.0, entry_commission + 1.0)
+    return 10.0
+
+
+def build_profit_lock_exit_reason(
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    current_price: float,
+) -> str:
+    if state.entry_price is None or state.position_qty <= 0 or state.position_side == "FLAT":
+        return ""
+    if state.position_side == "LONG":
+        best_price = max(float(state.max_price or current_price), current_price)
+    else:
+        best_price = min(float(state.min_price or current_price), current_price)
+    best_gross = calculate_futures_pnl_rub(
+        instrument,
+        state.entry_price,
+        best_price,
+        state.position_qty,
+        state.position_side,
+    )
+    current_gross = calculate_futures_pnl_rub(
+        instrument,
+        state.entry_price,
+        current_price,
+        state.position_qty,
+        state.position_side,
+    )
+    round_trip_commission = estimate_round_trip_commission_rub(state)
+    lock_trigger = max(round_trip_commission * 2.5, 50.0)
+    lock_floor = max(round_trip_commission * 0.75, 10.0)
+    if best_gross < lock_trigger:
+        return ""
+    if current_gross > lock_floor:
+        return ""
+    return (
+        "Profit-lock: позиция уже давала "
+        f"{best_gross:.2f} RUB gross, текущий результат {current_gross:.2f} RUB; "
+        f"защищаем движение после покрытия комиссии ~{round_trip_commission:.2f} RUB."
+    )
+
+
+def calculate_today_strategy_performance(symbol: str, strategy_name: str) -> dict[str, Any]:
+    return calculate_recent_strategy_performance(
+        symbol,
+        strategy_name,
+        lookback_days=1,
+        rows=get_today_trade_journal_rows(),
+    )
+
+
+def intraday_chop_block_reason(symbol: str, strategy_name: str) -> str:
+    if strategy_name not in INTRADAY_CHOP_GUARD_STRATEGIES:
+        return ""
+    stats = calculate_today_strategy_performance(symbol, strategy_name)
+    closed_count = int(stats["closed_count"])
+    losses = int(stats["losses"])
+    wins = int(stats["wins"])
+    net_pnl = float(stats["net_pnl_rub"])
+    if closed_count < 2 or losses < 2 or wins > 0 or net_pnl > -50.0:
+        return ""
+    return (
+        f"anti-chop guard: {stats['symbol']} {stats['strategy']} сегодня "
+        f"закрытий={closed_count}, убытков={losses}, net={net_pnl:.2f} RUB. "
+        "Новые breakout/range входы по этой связке заблокированы до конца дня."
+    )
+
+
 def calculate_recent_strategy_performance(
     symbol: str,
     strategy_name: str,
@@ -3190,6 +3268,9 @@ def calculate_recent_strategy_performance(
 
 
 def recent_strategy_performance_block_reason(symbol: str, strategy_name: str) -> str:
+    chop_reason = intraday_chop_block_reason(symbol, strategy_name)
+    if chop_reason:
+        return chop_reason
     stats = calculate_recent_strategy_performance(symbol, strategy_name)
     closed_count = int(stats["closed_count"])
     losses = int(stats["losses"])
@@ -4636,8 +4717,11 @@ def check_exit(
         )
         opposite_signal_confirmed = fresh_signal == "SHORT" and close < ema20 and close <= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
+        profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if price <= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
+        elif min_hold_passed and profit_lock_reason:
+            close_position(client, config, instrument, state, profit_lock_reason)
         elif price <= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} <= {trailing_price:.4f}")
         elif min_hold_passed and state.breakeven_armed and rsi >= profile.rsi_exit_long and not is_trend_rollover:
@@ -4662,8 +4746,11 @@ def check_exit(
         )
         opposite_signal_confirmed = fresh_signal == "LONG" and close > ema20 and close >= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
+        profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if price >= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
+        elif min_hold_passed and profit_lock_reason:
+            close_position(client, config, instrument, state, profit_lock_reason)
         elif price >= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} >= {trailing_price:.4f}")
         elif min_hold_passed and state.breakeven_armed and rsi <= profile.rsi_exit_short and not is_trend_rollover:
