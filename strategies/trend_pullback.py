@@ -56,15 +56,15 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
 
     if symbol == "GNM6":
         return StrategyProfile(
-            ema_slope_threshold=config.ema_slope_threshold,
-            near_ema20_pct=0.0060,
-            volume_factor=0.95,
-            atr_min_pct=0.0015,
-            impulse_body_factor=0.80,
+            ema_slope_threshold=0.0,
+            near_ema20_pct=0.0065,
+            volume_factor=0.82,
+            atr_min_pct=0.0010,
+            impulse_body_factor=0.60,
             long_rsi_min=38.0,
-            long_rsi_max=54.0,
-            short_rsi_min=40.0,
-            short_rsi_max=62.0,
+            long_rsi_max=62.0,
+            short_rsi_min=34.0,
+            short_rsi_max=58.0,
             rsi_exit_long=config.rsi_exit_long,
             rsi_exit_short=config.rsi_exit_short,
             allow_short=True,
@@ -170,6 +170,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     if uses_pullback_trend_regime(instrument.symbol):
         trend_long = close > ema200 and close > ema50 and ema50_slope > 0
         trend_short = close < ema200 and close < ema50 and ema50_slope < 0
+    if instrument.symbol == "GNM6":
+        trend_long = close > ema20 and close > ema50 and ema20 >= ema50 * 0.999
+        trend_short = close < ema20 and close < ema50 and ema20 <= ema50 * 1.001
     if instrument.symbol == "UCM6":
         trend_long = close > ema20 and close > ema50 and ema20 >= ema50 * 0.9995
         trend_short = close < ema20 and close < ema50 and ema20 <= ema50 * 1.0005

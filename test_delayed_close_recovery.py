@@ -556,6 +556,11 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
         self.assertEqual(strategies, ["failed_breakout", "range_break_continuation", "trend_pullback"])
 
+    def test_gnm6_uses_pullback_first_primary_strategy(self) -> None:
+        strategies = strategy_registry.get_primary_strategies("GNM6")
+
+        self.assertEqual(strategies, ["trend_pullback", "momentum_breakout", "trend_rollover"])
+
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [
             {

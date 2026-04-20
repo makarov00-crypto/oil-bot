@@ -3946,7 +3946,7 @@ def select_exit_indicator_df(
     lower_df: pd.DataFrame,
     higher_tf_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    higher_tf_exit_symbols = {"NGJ6", "RBM6", "SRM6", "VBM6"}
+    higher_tf_exit_symbols = {"GNM6", "NGJ6", "RBM6", "SRM6", "VBM6"}
     if (
         (instrument.symbol in higher_tf_exit_symbols or get_instrument_group(instrument.symbol).name == "fx")
         and higher_tf_df is not None
@@ -4869,6 +4869,12 @@ def check_exit(
             breakeven_profit_pct=max(exit_profile.breakeven_profit_pct, 0.0060),
             trailing_stop_pct=max(exit_profile.trailing_stop_pct, 0.0080),
         )
+    if instrument.symbol == "GNM6":
+        exit_profile = ExitProfile(
+            min_hold_minutes=max(exit_profile.min_hold_minutes, 30),
+            breakeven_profit_pct=max(exit_profile.breakeven_profit_pct, 0.0060),
+            trailing_stop_pct=max(exit_profile.trailing_stop_pct, 0.0070),
+        )
     is_trend_rollover = state.entry_strategy == "trend_rollover"
     prev = exit_df.iloc[-2]
     prev2 = exit_df.iloc[-3]
@@ -4891,7 +4897,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = max(stop_price, state.entry_price)
         trailing_price = (state.max_price or price) * (1 - exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (instrument.symbol in {"GNM6", "NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_down = macd_crossed_down_with_ema_loss(exit_df)
         else:
             macd_down = (
@@ -4910,7 +4916,7 @@ def check_exit(
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
-            instrument.symbol not in {"NGJ6", "RBM6", "SRM6", "VBM6"}
+            instrument.symbol not in {"GNM6", "NGJ6", "RBM6", "SRM6", "VBM6"}
             and get_instrument_group(instrument.symbol).name != "fx"
             or state.breakeven_armed
         ) and price <= trailing_price:
@@ -4929,7 +4935,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = min(stop_price, state.entry_price)
         trailing_price = (state.min_price or price) * (1 + exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (instrument.symbol in {"GNM6", "NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_up = macd_crossed_up_with_ema_reclaim(exit_df)
         else:
             macd_up = (
@@ -4948,7 +4954,7 @@ def check_exit(
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
-            instrument.symbol not in {"NGJ6", "RBM6", "SRM6", "VBM6"}
+            instrument.symbol not in {"GNM6", "NGJ6", "RBM6", "SRM6", "VBM6"}
             and get_instrument_group(instrument.symbol).name != "fx"
             or state.breakeven_armed
         ) and price >= trailing_price:
@@ -5016,7 +5022,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         raise
 
     higher_tf_df: pd.DataFrame | None = None
-    if instrument.symbol in {"NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx":
+    if instrument.symbol in {"GNM6", "NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx":
         try:
             higher_tf_df = get_configured_higher_tf_df(client, config, instrument)
         except RuntimeError as error:

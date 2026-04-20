@@ -254,6 +254,30 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def test_brk6_uses_rollover_strategy_for_intraday_reversal(self) -> None:
         self.assertIn("trend_rollover", get_primary_strategies("BRK6"))
 
+    def test_gnm6_prefers_pullback_before_breakout_and_rollover(self) -> None:
+        self.assertEqual(get_primary_strategies("GNM6")[:3], ["trend_pullback", "momentum_breakout", "trend_rollover"])
+
+    def test_gnm6_allows_higher_tf_long_pullback_on_15m_structure(self) -> None:
+        from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
+
+        df = candle_rows(
+            [
+                {"open": 4818.0, "close": 4822.0, "high": 4828.0, "low": 4814.0, "ema20": 4816.0, "ema50": 4808.0, "ema200": 4790.0, "ema50_slope": 0.20, "macd": 1.0, "macd_signal": 0.4, "atr": 7.0, "volume": 82, "volume_avg": 100, "body": 4.0, "body_avg": 5.0, "bb_mid": 4816.0, "bb_upper": 4865.0},
+                {"open": 4822.0, "close": 4832.0, "high": 4836.0, "low": 4820.0, "ema20": 4820.0, "ema50": 4811.0, "ema200": 4792.0, "ema50_slope": 0.20, "macd": 1.5, "macd_signal": 0.6, "atr": 7.0, "volume": 86, "volume_avg": 100, "body": 10.0, "body_avg": 5.0, "bb_mid": 4820.0, "bb_upper": 4868.0},
+                {"open": 4832.0, "close": 4844.0, "high": 4848.0, "low": 4828.0, "ema20": 4824.0, "ema50": 4814.0, "ema200": 4794.0, "ema50_slope": 0.20, "macd": 2.2, "macd_signal": 0.9, "atr": 7.0, "volume": 100, "volume_avg": 100, "body": 12.0, "body_avg": 5.0, "bb_mid": 4824.0, "bb_upper": 4870.0},
+                {"open": 4844.0, "close": 4835.0, "high": 4846.0, "low": 4828.0, "ema20": 4828.0, "ema50": 4817.0, "ema200": 4796.0, "ema50_slope": 0.20, "macd": 2.0, "macd_signal": 1.0, "atr": 7.0, "volume": 78, "volume_avg": 100, "body": 9.0, "body_avg": 5.0, "bb_mid": 4828.0, "bb_upper": 4870.0},
+                {"open": 4835.0, "close": 4829.0, "high": 4838.0, "low": 4825.0, "ema20": 4829.0, "ema50": 4820.0, "ema200": 4798.0, "ema50_slope": 0.20, "macd": 1.7, "macd_signal": 1.1, "atr": 7.0, "volume": 76, "volume_avg": 100, "body": 6.0, "body_avg": 5.0, "bb_mid": 4829.0, "bb_upper": 4868.0},
+                {"open": 4829.0, "close": 4831.0, "high": 4836.0, "low": 4824.0, "ema20": 4830.0, "ema50": 4822.0, "ema200": 4800.0, "ema50_slope": 0.20, "macd": 1.8, "macd_signal": 1.2, "atr": 7.0, "volume": 78, "volume_avg": 100, "body": 2.0, "body_avg": 5.0, "bb_mid": 4830.0, "bb_upper": 4868.0},
+                {"open": 4831.0, "close": 4842.0, "high": 4848.0, "low": 4830.0, "ema20": 4832.0, "ema50": 4825.0, "ema200": 4802.0, "ema50_slope": 0.20, "rsi": 58.0, "macd": 2.4, "macd_signal": 1.4, "atr": 7.0, "volume": 90, "volume_avg": 100, "body": 11.0, "body_avg": 5.0, "bb_mid": 4832.0, "bb_upper": 4868.0},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
+
+        signal, reason = evaluate_trend_pullback(df, self.config, instrument, "LONG")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("старший ТФ=LONG", reason)
+
     def test_imoexf_uses_failed_breakout_strategy_for_reversal(self) -> None:
         self.assertIn("failed_breakout", get_primary_strategies("IMOEXF"))
 
@@ -427,11 +451,13 @@ class StrategyQualityFilterTests(unittest.TestCase):
             ]
         )
         ngj6 = InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Natural Gas")
+        gnm6 = InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
         brk6 = InstrumentConfig(symbol="BRK6", figi="FIGI", display_name="Brent")
         rbm6 = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
         usdrubf = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
 
         self.assertIs(mod.select_exit_indicator_df(ngj6, lower_df, higher_df), higher_df)
+        self.assertIs(mod.select_exit_indicator_df(gnm6, lower_df, higher_df), higher_df)
         self.assertIs(mod.select_exit_indicator_df(rbm6, lower_df, higher_df), higher_df)
         self.assertIs(mod.select_exit_indicator_df(usdrubf, lower_df, higher_df), higher_df)
         self.assertIs(mod.select_exit_indicator_df(brk6, lower_df, higher_df), lower_df)
