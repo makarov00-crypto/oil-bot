@@ -539,11 +539,22 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("нового экстремума", reason)
 
-    def test_imoexf_does_not_use_failed_breakout_primary_strategy(self) -> None:
+    def test_imoexf_uses_failed_breakout_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("IMOEXF")
 
-        self.assertNotIn("failed_breakout", strategies)
-        self.assertEqual(strategies, ["range_break_continuation", "trend_pullback"])
+        self.assertIn("failed_breakout", strategies)
+        self.assertEqual(strategies, ["range_break_continuation", "failed_breakout", "trend_pullback"])
+
+    def test_srm6_uses_failed_breakout_primary_strategy(self) -> None:
+        strategies = strategy_registry.get_primary_strategies("SRM6")
+
+        self.assertIn("failed_breakout", strategies)
+        self.assertEqual(strategies, ["range_break_continuation", "failed_breakout", "trend_pullback"])
+
+    def test_rbm6_uses_reversal_first_primary_strategy(self) -> None:
+        strategies = strategy_registry.get_primary_strategies("RBM6")
+
+        self.assertEqual(strategies, ["failed_breakout", "range_break_continuation", "trend_pullback"])
 
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [

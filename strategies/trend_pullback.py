@@ -70,6 +70,22 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
             allow_short=True,
         )
 
+    if symbol == "UCM6":
+        return StrategyProfile(
+            ema_slope_threshold=0.0,
+            near_ema20_pct=0.0038,
+            volume_factor=0.80,
+            atr_min_pct=0.00045,
+            impulse_body_factor=0.55,
+            long_rsi_min=42.0,
+            long_rsi_max=64.0,
+            short_rsi_min=30.0,
+            short_rsi_max=58.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
     if group == "fx":
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
@@ -140,11 +156,13 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     body_avg = float(last["body_avg"])
     near_ema20 = abs(close - ema20) / close <= profile.near_ema20_pct if close else False
     near_bb_mid = abs(close - float(last["bb_mid"])) / close <= profile.near_ema20_pct if close else False
-    pullback_ok = (near_ema20 or near_bb_mid) if uses_pullback_trend_regime(instrument.symbol) else near_ema20
+    pullback_ok = (near_ema20 or near_bb_mid) if uses_pullback_trend_regime(instrument.symbol) or instrument.symbol == "UCM6" else near_ema20
     volume_ok = volume_avg > 0 and volume >= volume_avg * profile.volume_factor
     impulse_ok = body_avg > 0 and body >= body_avg * profile.impulse_body_factor
     macd_turn_up = macd > macd_signal and macd > prev_macd and prev_macd >= prev_prev_macd
     macd_turn_down = profile.allow_short and macd < macd_signal and macd <= prev_macd
+    if instrument.symbol == "UCM6":
+        macd_turn_up = macd > macd_signal and macd > prev_macd
     if instrument.symbol == "NGJ6":
         macd_turn_down = macd_turn_down and prev_macd >= prev_prev_macd
     trend_long = close > ema50 and ema50_slope > profile.ema_slope_threshold
@@ -152,6 +170,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     if uses_pullback_trend_regime(instrument.symbol):
         trend_long = close > ema200 and close > ema50 and ema50_slope > 0
         trend_short = close < ema200 and close < ema50 and ema50_slope < 0
+    if instrument.symbol == "UCM6":
+        trend_long = close > ema20 and close > ema50 and ema20 >= ema50 * 0.9995
+        trend_short = close < ema20 and close < ema50 and ema20 <= ema50 * 1.0005
     not_overbought = close < float(last["bb_upper"])
     not_oversold = close > float(last["bb_lower"])
     volatility_ok = atr_pct >= profile.atr_min_pct
@@ -187,7 +208,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
         long_blockers.append(f"старший ТФ не LONG, а {higher_tf_bias}")
     if not trend_long:
         long_blockers.append("нет подтверждённого восходящего тренда по EMA50")
-    if uses_pullback_trend_regime(instrument.symbol):
+    if uses_pullback_trend_regime(instrument.symbol) or instrument.symbol == "UCM6":
         if not pullback_ok:
             long_blockers.append("нет отката к EMA20 или средней Bollinger")
     elif not near_ema20:
@@ -210,7 +231,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
             short_blockers.append(f"старший ТФ не SHORT, а {higher_tf_bias}")
         if not trend_short:
             short_blockers.append("нет подтверждённого нисходящего тренда по EMA50")
-        if uses_pullback_trend_regime(instrument.symbol):
+        if uses_pullback_trend_regime(instrument.symbol) or instrument.symbol == "UCM6":
             if not pullback_ok:
                 short_blockers.append("нет отката к EMA20 или средней Bollinger")
         elif not near_ema20:

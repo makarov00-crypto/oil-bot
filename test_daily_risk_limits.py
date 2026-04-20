@@ -125,6 +125,58 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertEqual(reason, "")
 
+    def test_strategy_performance_groups_broker_multi_lot_close_as_one_trade(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
+        rows = [
+            {
+                "time": f"{today}T12:15:00+03:00",
+                "event": "CLOSE",
+                "symbol": "CNYRUBF",
+                "side": "LONG",
+                "strategy": "opening_range_breakout",
+                "qty_lots": 1,
+                "net_pnl_rub": -71.77,
+                "broker_op_id": "op-1",
+                "broker_op_unit": 0,
+            },
+            {
+                "time": f"{today}T12:15:00+03:00",
+                "event": "CLOSE",
+                "symbol": "CNYRUBF",
+                "side": "LONG",
+                "strategy": "opening_range_breakout",
+                "qty_lots": 1,
+                "net_pnl_rub": -71.77,
+                "broker_op_id": "op-1",
+                "broker_op_unit": 1,
+            },
+            {
+                "time": f"{today}T12:15:00+03:00",
+                "event": "CLOSE",
+                "symbol": "CNYRUBF",
+                "side": "LONG",
+                "strategy": "opening_range_breakout",
+                "qty_lots": 1,
+                "net_pnl_rub": -71.77,
+                "broker_op_id": "op-1",
+                "broker_op_unit": 2,
+            },
+        ]
+
+        stats = mod.calculate_recent_strategy_performance(
+            "CNYRUBF",
+            "opening_range_breakout",
+            rows=rows,
+        )
+
+        self.assertEqual(stats["closed_count"], 1)
+        self.assertEqual(stats["losses"], 1)
+        self.assertEqual(stats["net_pnl_rub"], -215.31)
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
+            reason = mod.recent_strategy_performance_block_reason("CNYRUBF", "opening_range_breakout")
+
+        self.assertEqual(reason, "")
+
     def test_intraday_chop_guard_blocks_same_day_losing_combo(self) -> None:
         today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
         rows = [

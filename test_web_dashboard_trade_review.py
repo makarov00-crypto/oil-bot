@@ -12,6 +12,15 @@ else:
 
 class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
+        catalog = dashboard.build_instrument_catalog()
+
+        for symbol in ["BRK6", "NGJ6", "RBM6", "SRM6", "UCM6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
+            with self.subTest(symbol=symbol):
+                self.assertIn(symbol, catalog)
+                self.assertNotEqual(catalog[symbol], symbol)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_pairs_multi_lot_open_with_unit_closes(self) -> None:
         rows = [
             {

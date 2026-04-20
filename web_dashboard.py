@@ -52,6 +52,19 @@ RUNTIME_STALE_MINUTES = 10
 
 app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
 
+INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
+    "BRK6": "BR-5.26 Нефть Brent",
+    "USDRUBF": "USDRUBF Доллар - Рубль",
+    "CNYRUBF": "CNYRUBF Юань - Рубль",
+    "IMOEXF": "IMOEXF Индекс МосБиржи",
+    "SRM6": "SBRF-6.26 Сбер Банк",
+    "GNM6": "GOLDM-6.26 Золото (мини)",
+    "NGJ6": "NG-4.26 Природный газ",
+    "RBM6": "RGBI-6.26 Индекс гос. облигаций",
+    "UCM6": "UCNY-6.26 Доллар США - Юань",
+    "VBM6": "VTBR-6.26 Банк ВТБ",
+}
+
 
 STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "momentum_breakout": {
@@ -135,7 +148,7 @@ def build_manual_instruments_payload() -> dict:
         templates.append(
             {
                 "symbol": normalized,
-                "display_name": normalized,
+                "display_name": INSTRUMENT_DISPLAY_NAMES.get(normalized, normalized),
                 "primary_strategies": get_primary_strategies(normalized),
                 "secondary_strategies": get_secondary_strategies(normalized),
             }
@@ -148,15 +161,7 @@ def build_manual_instruments_payload() -> dict:
 
 
 def build_instrument_catalog(portfolio: dict | None = None, trades: list[dict] | None = None) -> dict[str, str]:
-    catalog = {
-        "BRK6": "BR-5.26 Нефть Brent",
-        "USDRUBF": "USDRUBF Доллар - Рубль",
-        "CNYRUBF": "CNYRUBF Юань - Рубль",
-        "IMOEXF": "IMOEXF Индекс МосБиржи",
-        "SRM6": "SBRF-6.26 Сбер Банк",
-        "GNM6": "GOLDM-6.26 Золото (мини)",
-        "NGJ6": "NG-4.26 Природный газ",
-    }
+    catalog = dict(INSTRUMENT_DISPLAY_NAMES)
     for item in (portfolio or {}).get("broker_open_positions", []) or []:
         symbol = str(item.get("symbol") or "").strip().upper()
         display_name = str(item.get("display_name") or "").strip()
@@ -3202,6 +3207,9 @@ def build_dashboard_html() -> str:
       SRM6: 'SBRF-6.26 Сбер Банк',
       GNM6: 'GOLDM-6.26 Золото (мини)',
       NGJ6: 'NG-4.26 Природный газ',
+      RBM6: 'RGBI-6.26 Индекс гос. облигаций',
+      UCM6: 'UCNY-6.26 Доллар США - Юань',
+      VBM6: 'VTBR-6.26 Банк ВТБ',
     };
 
     function renderInstrumentLabel(symbol, explicitName = '') {

@@ -1,4 +1,5 @@
 from instrument_groups import get_instrument_group
+from strategies.quality_filters import is_vbm6_post_gap_chop
 
 
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
@@ -41,9 +42,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     volatility_ok = atr_pct >= 0.0004
     rsi_short_ok = 28.0 <= rsi <= 58.0
     rsi_long_ok = 42.0 <= rsi <= 72.0
+    rbm6_volume_reversal_short = False
+    rbm6_volume_reversal_long = False
+    fx_mature_trend_short = False
+    fx_mature_trend_long = False
     group_name = get_instrument_group(instrument.symbol).name
     is_fx = group_name == "fx"
     is_equity_continuation = group_name in {"equity_index", "equity_futures"}
+    is_bond_index = group_name == "bond_index"
     is_expensive_fx = instrument.symbol in {"USDRUBF", "UCM6"}
     if instrument.symbol == "SRM6":
         higher_tf_short_ok = higher_tf_bias == "SHORT"
@@ -72,8 +78,32 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
             impulse_ok = body_avg > 0 and body >= body_avg * 0.80
             volatility_ok = atr_pct >= 0.0008
+            fx_mature_trend_short = (
+                higher_tf_bias == "SHORT"
+                and trend_short
+                and continuation_short
+                and momentum_down
+                and rsi_short_ok
+                and volume_avg > 0
+                and volume >= volume_avg * 0.80
+                and body_avg > 0
+                and body >= body_avg * 0.50
+                and max(range_width_pct, atr_pct) >= 0.00075
+            )
+            fx_mature_trend_long = (
+                higher_tf_bias == "LONG"
+                and trend_long
+                and continuation_long
+                and momentum_up
+                and rsi_long_ok
+                and volume_avg > 0
+                and volume >= volume_avg * 0.80
+                and body_avg > 0
+                and body >= body_avg * 0.50
+                and max(range_width_pct, atr_pct) >= 0.00075
+            )
 
-    if is_equity_continuation:
+    if is_equity_continuation or is_bond_index:
         volume_ok = volume_avg > 0 and volume >= volume_avg * 0.95
         impulse_ok = body_avg > 0 and body >= body_avg * 0.80
         continuation_short = trend_short and close <= prev_close and high <= ema20 * 1.0015
@@ -87,9 +117,42 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         continuation_short = trend_short and close <= prev_close and high <= ema20 * 1.0010
         continuation_long = trend_long and close >= prev_close and low >= ema20 * 0.9990
 
+    if instrument.symbol == "RBM6":
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.95
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.70
+        rsi_short_ok = 30.0 <= rsi <= 64.0
+        rsi_long_ok = 34.0 <= rsi <= 72.0
+        rbm6_volume_reversal_short = (
+            trend_short
+            and close <= prev_close
+            and close < ema20
+            and volume_avg > 0
+            and volume >= volume_avg * 1.35
+            and body_avg > 0
+            and body >= body_avg * 0.90
+            and momentum_down
+            and rsi_short_ok
+            and (volatility_ok or fx_mature_trend_short)
+        )
+        rbm6_volume_reversal_long = (
+            trend_long
+            and close >= prev_close
+            and close > ema20
+            and volume_avg > 0
+            and volume >= volume_avg * 1.20
+            and body_avg > 0
+            and body >= body_avg * 0.80
+            and momentum_up
+            and rsi_long_ok
+            and (volatility_ok or fx_mature_trend_long)
+        )
+        higher_tf_short_ok = higher_tf_bias == "SHORT" or rbm6_volume_reversal_short
+        higher_tf_long_ok = higher_tf_bias == "LONG" or rbm6_volume_reversal_long
+
     commission_room_ok = True
     if is_fx:
         commission_room_ok = max(range_width_pct, atr_pct) >= (0.0011 if is_expensive_fx else 0.0009)
+    post_gap_chop = instrument.symbol == "VBM6" and is_vbm6_post_gap_chop(df)
 
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
@@ -140,6 +203,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_blockers.append("волатильность слишком низкая")
     if not commission_room_ok:
         short_blockers.append("ожидаемое движение мало относительно комиссии")
+    if post_gap_chop:
+        short_blockers.append("VBM6 после гэпа перешёл в узкий боковик без продолжения")
 
     if not higher_tf_long_ok:
         long_blockers.append(f"старший ТФ против LONG: {higher_tf_bias}")
@@ -168,6 +233,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("волатильность слишком низкая")
     if not commission_room_ok:
         long_blockers.append("ожидаемое движение мало относительно комиссии")
+    if post_gap_chop:
+        long_blockers.append("VBM6 после гэпа перешёл в узкий боковик без продолжения")
 
     short_score = sum(
         [
@@ -226,8 +293,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         )
 
     if is_fx:
-        short_break_ok = breakdown_down or (soft_breakdown_down and volume_ok and impulse_ok and momentum_down)
-        long_break_ok = breakout_up or (soft_breakout_up and volume_ok and impulse_ok and momentum_up)
+        short_break_ok = breakdown_down or (soft_breakdown_down and volume_ok and impulse_ok and momentum_down) or fx_mature_trend_short
+        long_break_ok = breakout_up or (soft_breakout_up and volume_ok and impulse_ok and momentum_up) or fx_mature_trend_long
         short_ok = (
             higher_tf_short_ok
             and trend_short
@@ -235,11 +302,11 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and short_break_ok
             and rsi_short_ok
             and momentum_down
-            and volume_ok
-            and impulse_ok
-            and volatility_ok
-            and commission_room_ok
-            and short_score >= 8
+            and (volume_ok or fx_mature_trend_short)
+            and (impulse_ok or fx_mature_trend_short)
+            and (volatility_ok or fx_mature_trend_short)
+            and (commission_room_ok or fx_mature_trend_short)
+            and (short_score >= 8 or fx_mature_trend_short)
         )
         long_ok = (
             higher_tf_long_ok
@@ -248,11 +315,11 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and long_break_ok
             and rsi_long_ok
             and momentum_up
-            and volume_ok
-            and impulse_ok
-            and volatility_ok
-            and commission_room_ok
-            and long_score >= 8
+            and (volume_ok or fx_mature_trend_long)
+            and (impulse_ok or fx_mature_trend_long)
+            and (volatility_ok or fx_mature_trend_long)
+            and (commission_room_ok or fx_mature_trend_long)
+            and (long_score >= 8 or fx_mature_trend_long)
         )
 
     if instrument.symbol == "IMOEXF":
@@ -269,32 +336,39 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and short_score >= 8
         )
 
-    if is_equity_continuation and not strict_imoexf_long:
+    if (is_equity_continuation or is_bond_index) and not strict_imoexf_long:
         short_break_ok = breakdown_down or (soft_breakdown_down and volume_ok and impulse_ok)
         long_break_ok = breakout_up or (soft_breakout_up and volume_ok and impulse_ok)
         short_ok = (
             higher_tf_short_ok
             and trend_short
-            and continuation_short
-            and short_break_ok
+            and (continuation_short or rbm6_volume_reversal_short)
+            and (short_break_ok or rbm6_volume_reversal_short)
             and rsi_short_ok
             and momentum_down
             and volume_ok
             and impulse_ok
             and volatility_ok
-            and short_score >= 7
+            and (short_score >= 7 or rbm6_volume_reversal_short)
         )
         long_ok = (
             higher_tf_long_ok
             and trend_long
-            and continuation_long
-            and long_break_ok
+            and (continuation_long or rbm6_volume_reversal_long)
+            and (long_break_ok or rbm6_volume_reversal_long)
             and rsi_long_ok
             and momentum_up
             and volume_ok
             and impulse_ok
             and volatility_ok
-            and long_score >= 7
+            and (long_score >= 7 or rbm6_volume_reversal_long)
+        )
+
+    if post_gap_chop:
+        return (
+            "HOLD",
+            "Сигнал HOLD (range_break_continuation): VBM6 после гэпа перешёл в узкий боковик "
+            "без нового экстремума, объём выдохся, MACD не подтверждает продолжение.",
         )
 
     if short_ok:

@@ -16,6 +16,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     volume_avg = float(last["volume_avg"])
     body = float(last["body"])
     body_avg = float(last["body_avg"])
+    bb_upper = float(last.get("bb_upper", close))
+    bb_mid = float(last.get("bb_mid", ema20))
 
     range_high = float(recent["high"].max())
     range_low = float(recent["low"].min())
@@ -34,6 +36,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     rsi_short_ok = 22.0 <= rsi <= 54.0
     higher_tf_long_ok = higher_tf_bias != "SHORT"
     higher_tf_short_ok = higher_tf_bias != "LONG"
+    ngj6_late_long_chase = False
+    ngj6_volume_reversal_short = False
 
     if instrument.symbol == "BRK6":
         volume_ok = volume_avg > 0 and volume >= volume_avg * 0.75
@@ -57,6 +61,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         higher_tf_short_ok = higher_tf_bias == "SHORT"
 
     if instrument.symbol == "NGJ6":
+        recent_above_ema20 = sum(1 for _, row in df.iloc[-6:-1].iterrows() if float(row["close"]) > float(row["ema20"]))
+        macd_hist = macd - macd_signal
+        prev_macd_hist = prev_macd - prev_macd_signal
         volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
         impulse_ok = body_avg > 0 and body >= body_avg * 0.95
         rsi_long_ok = 42.0 <= rsi <= 72.0
@@ -68,6 +75,27 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         soft_breakout_down = close < ema20 and close < ema50 and close <= range_low * 1.0010
         macd_up = macd > macd_signal and (macd >= prev_macd or (macd - macd_signal) >= 0.02)
         macd_down = macd < macd_signal and (macd <= prev_macd or (macd_signal - macd) >= 0.02)
+        ngj6_late_long_chase = (
+            close_above_trend
+            and rsi >= 61.0
+            and recent_above_ema20 >= 4
+            and (close >= bb_upper * 0.997 or (close - ema20) / close >= 0.0060)
+            and macd_hist <= prev_macd_hist * 1.10
+        )
+        ngj6_volume_reversal_short = (
+            close < ema20
+            and close <= bb_mid
+            and close <= prev["close"]
+            and (breakout_down or soft_breakout_down or close < range_low * 1.0020)
+            and volume_avg > 0
+            and volume >= volume_avg * 1.35
+            and body_avg > 0
+            and body >= body_avg * 1.05
+            and 30.0 <= rsi <= 54.0
+            and macd_down
+            and volatility_ok
+        )
+        higher_tf_short_ok = higher_tf_bias == "SHORT" or ngj6_volume_reversal_short
 
     soft_breakout_quality_up = True
     soft_breakout_quality_down = True
@@ -130,6 +158,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("мягкий breakout вверх без сильного объёма/импульса")
     if not rsi_long_ok:
         long_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 46-78")
+    if ngj6_late_long_chase:
+        long_blockers.append("NGJ6: поздний breakout у верхней Bollinger после зрелого роста")
     if not macd_up:
         long_blockers.append("MACD не подтверждает рост")
     if not impulse_ok:
@@ -240,6 +270,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and close_above_trend
             and (breakout_up or soft_breakout_up)
             and soft_breakout_quality_up
+            and not ngj6_late_long_chase
             and rsi_long_ok
             and macd_up
             and impulse_ok
@@ -250,13 +281,13 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_ok = (
             higher_tf_short_ok
             and close_below_trend
-            and breakout_down
+            and (breakout_down or ngj6_volume_reversal_short)
             and rsi_short_ok
             and macd_down
             and impulse_ok
             and volume_ok
             and volatility_ok
-            and short_score >= 8
+            and (short_score >= 8 or ngj6_volume_reversal_short)
         )
 
     if long_ok:

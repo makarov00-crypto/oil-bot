@@ -9,7 +9,7 @@ from instrument_groups import get_instrument_group
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 FX_OPENING_RANGE_START = time(9, 0)
 FX_OPENING_RANGE_CANDLES = 6
-FX_OPENING_RANGE_CUTOFF = time(16, 0)
+FX_OPENING_RANGE_FOLLOW_CANDLES = 6
 
 
 def _get_today_opening_range(df: pd.DataFrame) -> pd.DataFrame:
@@ -23,13 +23,46 @@ def _get_today_opening_range(df: pd.DataFrame) -> pd.DataFrame:
     return session_df.iloc[:FX_OPENING_RANGE_CANDLES].copy()
 
 
+def _get_today_session_df(df: pd.DataFrame) -> pd.DataFrame:
+    result = df.copy()
+    result["time_msk"] = result["time"].dt.tz_convert(MOSCOW_TZ)
+    last_day = result["time_msk"].iloc[-1].date()
+    return result[
+        (result["time_msk"].dt.date == last_day)
+        & (result["time_msk"].dt.time >= FX_OPENING_RANGE_START)
+    ].reset_index(drop=True)
+
+
+def _opening_range_is_stale(
+    df: pd.DataFrame,
+    opening_high: float,
+    opening_low: float,
+    *,
+    follow_candles: int = FX_OPENING_RANGE_FOLLOW_CANDLES,
+) -> tuple[bool, str]:
+    session_df = _get_today_session_df(df)
+    if len(session_df) <= FX_OPENING_RANGE_CANDLES + follow_candles:
+        return False, ""
+    post_range_df = session_df.iloc[FX_OPENING_RANGE_CANDLES:].reset_index(drop=True)
+    for index, row in post_range_df.iterrows():
+        close = float(row["close"])
+        ema20 = float(row["ema20"])
+        if close > opening_high and close > ema20:
+            age = len(post_range_df) - index - 1
+            if age > follow_candles:
+                return True, f"пробой вверх opening range уже зрелый: прошло {age} свечей"
+            return False, ""
+        if close < opening_low and close < ema20:
+            age = len(post_range_df) - index - 1
+            if age > follow_candles:
+                return True, f"пробой вниз opening range уже зрелый: прошло {age} свечей"
+            return False, ""
+    return False, ""
+
+
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
     last = df.iloc[-1]
     prev = df.iloc[-2]
-    time_msk = last["time"].tz_convert(MOSCOW_TZ)
-
-    if time_msk.time() > FX_OPENING_RANGE_CUTOFF:
-        return "HOLD", "Сигнал HOLD (opening_range_breakout): режим opening range активен только до 14:00 МСК."
 
     opening_range_df = _get_today_opening_range(df)
     if len(opening_range_df) < 3:
@@ -54,6 +87,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     opening_mid = (opening_high + opening_low) / 2
     opening_width_pct = (opening_high - opening_low) / close if close else 0.0
     range_compression_ok = opening_width_pct <= 0.0060
+    opening_range_stale, stale_reason = _opening_range_is_stale(df, opening_high, opening_low)
+    if opening_range_stale:
+        return (
+            "HOLD",
+            "Сигнал HOLD (opening_range_breakout): "
+            + stale_reason
+            + "; дальше движение должен оценивать range_break_continuation.",
+        )
 
     breakout_up = close > opening_high and close > ema20
     breakout_down = close < opening_low and close < ema20

@@ -4,9 +4,11 @@ from instrument_groups import get_instrument_group
 PRIMARY_STRATEGIES_BY_SYMBOL = {
     "BRK6": ["momentum_breakout", "trend_rollover", "trend_pullback"],
     "GNM6": ["trend_rollover", "momentum_breakout", "trend_pullback"],
-    "IMOEXF": ["range_break_continuation", "trend_pullback"],
-    "NGJ6": ["momentum_breakout", "trend_pullback"],
-    "SRM6": ["range_break_continuation", "trend_pullback"],
+    "IMOEXF": ["range_break_continuation", "failed_breakout", "trend_pullback"],
+    "NGJ6": ["trend_pullback", "momentum_breakout"],
+    "RBM6": ["failed_breakout", "range_break_continuation", "trend_pullback"],
+    "SRM6": ["range_break_continuation", "failed_breakout", "trend_pullback"],
+    "UCM6": ["trend_pullback", "range_break_continuation", "opening_range_breakout"],
 }
 
 PRIMARY_STRATEGIES_BY_GROUP = {
@@ -14,6 +16,7 @@ PRIMARY_STRATEGIES_BY_GROUP = {
     "fx": ["opening_range_breakout", "range_break_continuation", "trend_pullback"],
     "equity_index": ["range_break_continuation", "failed_breakout", "trend_pullback"],
     "equity_futures": ["range_break_continuation", "failed_breakout", "trend_pullback"],
+    "bond_index": ["failed_breakout", "range_break_continuation", "trend_pullback"],
 }
 
 

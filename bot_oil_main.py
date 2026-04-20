@@ -683,6 +683,51 @@ def get_today_trade_journal_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def _trade_net_pnl(row: dict[str, Any]) -> float:
+    for key in ("net_pnl_rub", "pnl_rub"):
+        if row.get(key) in (None, ""):
+            continue
+        try:
+            return float(row.get(key) or 0.0)
+        except Exception:
+            return 0.0
+    return 0.0
+
+
+def aggregate_closed_strategy_trades(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    trades: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    for index, row in enumerate(rows):
+        if str(row.get("event", "")).upper() != "CLOSE":
+            continue
+        broker_op_id = str(row.get("broker_op_id") or "").strip()
+        if broker_op_id:
+            key = (
+                f"broker:{str(row.get('symbol', '')).upper()}:"
+                f"{str(row.get('strategy', '') or '')}:"
+                f"{str(row.get('side', '')).upper()}:"
+                f"{broker_op_id}"
+            )
+        else:
+            key = f"row:{index}"
+        if key not in trades:
+            ordered_keys.append(key)
+            trades[key] = {
+                "symbol": str(row.get("symbol", "")).upper(),
+                "strategy": str(row.get("strategy", "") or ""),
+                "side": str(row.get("side", "")).upper(),
+                "time": str(row.get("time") or ""),
+                "rows": 0,
+                "qty_lots": 0,
+                "net_pnl_rub": 0.0,
+            }
+        item = trades[key]
+        item["rows"] = int(item["rows"]) + 1
+        item["qty_lots"] = int(item["qty_lots"]) + max(1, int(row.get("qty_lots") or 0))
+        item["net_pnl_rub"] = round(float(item["net_pnl_rub"]) + _trade_net_pnl(row), 2)
+    return [trades[key] for key in ordered_keys]
+
+
 def get_trade_journal_rows_since(start_day: date) -> list[dict[str, Any]]:
     start_value = start_day.isoformat()
     rows = []
@@ -2189,6 +2234,13 @@ def get_lower_tf_lookback_hours(config: BotConfig, symbol: str | None = None) ->
     return lookback_hours
 
 
+def get_higher_tf_lookback_hours(config: BotConfig, symbol: str | None = None) -> int:
+    base_hours = max(120, int((config.higher_tf_interval_minutes * 240) / 60) + 1)
+    if symbol and get_instrument_group(symbol).name == "fx":
+        return max(base_hours, 168)
+    return base_hours
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     if "time" in result.columns:
@@ -2301,6 +2353,18 @@ def get_higher_tf_bias(client: Client, config: BotConfig, instrument: Instrument
     if short_score > long_score:
         return "SHORT"
     return "FLAT"
+
+
+def get_configured_higher_tf_df(client: Client, config: BotConfig, instrument: InstrumentConfig) -> pd.DataFrame:
+    return add_indicators(
+        get_candles(
+            client,
+            config,
+            instrument,
+            config.higher_tf_interval,
+            lookback_hours=get_higher_tf_lookback_hours(config, instrument.symbol),
+        )
+    )
 
 
 def evaluate_signal(
@@ -3230,33 +3294,26 @@ def calculate_recent_strategy_performance(
         ]
     target_symbol = str(symbol or "").upper()
     target_strategy = str(strategy_name or "")
-    closed_rows = [
-        row
-        for row in source_rows
-        if str(row.get("event", "")).upper() == "CLOSE"
-        and str(row.get("symbol", "")).upper() == target_symbol
-        and str(row.get("strategy", "") or "") == target_strategy
+    closed_trades = [
+        trade
+        for trade in aggregate_closed_strategy_trades(source_rows)
+        if str(trade.get("symbol", "")).upper() == target_symbol
+        and str(trade.get("strategy", "") or "") == target_strategy
     ]
     total_net = 0.0
     wins = 0
     losses = 0
-    for row in closed_rows:
-        if row.get("net_pnl_rub") not in (None, ""):
-            try:
-                net = float(row.get("net_pnl_rub") or 0.0)
-            except Exception:
-                net = 0.0
-        else:
-            try:
-                net = float(row.get("pnl_rub") or 0.0)
-            except Exception:
-                net = 0.0
+    for trade in closed_trades:
+        try:
+            net = float(trade.get("net_pnl_rub") or 0.0)
+        except Exception:
+            net = 0.0
         total_net += net
         if net > 0:
             wins += 1
         elif net < 0:
             losses += 1
-    total = len(closed_rows)
+    total = len(closed_trades)
     win_rate = (wins / total * 100.0) if total else 0.0
     return {
         "symbol": target_symbol,
@@ -3882,6 +3939,114 @@ def position_held_long_enough(state: InstrumentState, config: BotConfig, min_hol
     held_for = datetime.now(UTC) - opened_at.astimezone(UTC)
     required_minutes = min_hold_minutes if min_hold_minutes is not None else config.min_hold_minutes
     return held_for >= timedelta(minutes=required_minutes)
+
+
+def select_exit_indicator_df(
+    instrument: InstrumentConfig,
+    lower_df: pd.DataFrame,
+    higher_tf_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    higher_tf_exit_symbols = {"NGJ6", "RBM6", "SRM6", "VBM6"}
+    if (
+        (instrument.symbol in higher_tf_exit_symbols or get_instrument_group(instrument.symbol).name == "fx")
+        and higher_tf_df is not None
+        and len(higher_tf_df) >= 3
+    ):
+        return higher_tf_df
+    return lower_df
+
+
+def macd_crossed_down_with_ema_loss(df: pd.DataFrame) -> bool:
+    if len(df) < 3:
+        return False
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev2 = df.iloc[-3]
+    macd = float(last["macd"])
+    macd_signal = float(last["macd_signal"])
+    prev_macd = float(prev["macd"])
+    prev_macd_signal = float(prev["macd_signal"])
+    prev2_macd = float(prev2["macd"])
+    prev2_macd_signal = float(prev2["macd_signal"])
+    close = float(last["close"])
+    ema20 = float(last["ema20"])
+    crossed = prev_macd >= prev_macd_signal and macd < macd_signal
+    confirmed = prev2_macd >= prev2_macd_signal and prev_macd < prev_macd_signal and macd < macd_signal
+    return close < ema20 and (crossed or confirmed)
+
+
+def macd_crossed_up_with_ema_reclaim(df: pd.DataFrame) -> bool:
+    if len(df) < 3:
+        return False
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev2 = df.iloc[-3]
+    macd = float(last["macd"])
+    macd_signal = float(last["macd_signal"])
+    prev_macd = float(prev["macd"])
+    prev_macd_signal = float(prev["macd_signal"])
+    prev2_macd = float(prev2["macd"])
+    prev2_macd_signal = float(prev2["macd_signal"])
+    close = float(last["close"])
+    ema20 = float(last["ema20"])
+    crossed = prev_macd <= prev_macd_signal and macd > macd_signal
+    confirmed = prev2_macd <= prev2_macd_signal and prev_macd > prev_macd_signal and macd > macd_signal
+    return close > ema20 and (crossed or confirmed)
+
+
+def rbm6_sideways_exhaustion_exit_reason(
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    df: pd.DataFrame,
+    current_price: float,
+) -> str:
+    if state.entry_price is None or state.position_qty <= 0 or state.position_side == "FLAT":
+        return ""
+    if len(df) < 8:
+        return ""
+    best_price = max(float(state.max_price or current_price), current_price) if state.position_side == "LONG" else min(float(state.min_price or current_price), current_price)
+    best_gross = calculate_futures_pnl_rub(
+        instrument,
+        state.entry_price,
+        best_price,
+        state.position_qty,
+        state.position_side,
+    )
+    current_gross = calculate_futures_pnl_rub(
+        instrument,
+        state.entry_price,
+        current_price,
+        state.position_qty,
+        state.position_side,
+    )
+    round_trip_commission = estimate_round_trip_commission_rub(state)
+    if best_gross < max(round_trip_commission * 2.0, 25.0):
+        return ""
+    recent = df.iloc[-5:]
+    previous = df.iloc[-8:-5]
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    macd_hist = float(last["macd"]) - float(last["macd_signal"])
+    prev_hist = float(prev["macd"]) - float(prev["macd_signal"])
+    if state.position_side == "LONG":
+        no_new_high = float(recent["high"].max()) <= float(previous["high"].max()) * 1.0004
+        momentum_fades = macd_hist <= prev_hist and float(last["rsi"]) <= 58.0
+        gave_back = current_gross <= best_gross * 0.65
+        if no_new_high and momentum_fades and gave_back:
+            return (
+                "RBM6 profit-lock: после импульса нет нового high на 15m, "
+                f"MACD затухает; фиксируем {current_gross:.2f} из max {best_gross:.2f} RUB gross."
+            )
+    else:
+        no_new_low = float(recent["low"].min()) >= float(previous["low"].min()) * 0.9996
+        momentum_fades = macd_hist >= prev_hist and float(last["rsi"]) >= 42.0
+        gave_back = current_gross <= best_gross * 0.65
+        if no_new_low and momentum_fades and gave_back:
+            return (
+                "RBM6 profit-lock: после импульса нет нового low на 15m, "
+                f"MACD затухает; фиксируем {current_gross:.2f} из max {best_gross:.2f} RUB gross."
+            )
+    return ""
 
 
 def price_has_new_extreme_since_exit(
@@ -4678,6 +4843,7 @@ def check_exit(
     state: InstrumentState,
     df: pd.DataFrame,
     fresh_signal: str,
+    higher_tf_df: pd.DataFrame | None = None,
 ) -> None:
     if state.position_qty <= 0 or state.position_side == "FLAT" or state.entry_price is None:
         return
@@ -4687,12 +4853,25 @@ def check_exit(
         state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or price, price)
     state.min_price = min(state.min_price or price, price)
-    last = df.iloc[-1]
+    exit_df = select_exit_indicator_df(instrument, df, higher_tf_df)
+    last = exit_df.iloc[-1]
     profile = get_strategy_profile(config, instrument)
     exit_profile = get_exit_profile(config, state.entry_strategy)
+    if get_instrument_group(instrument.symbol).name == "fx":
+        exit_profile = ExitProfile(
+            min_hold_minutes=min(exit_profile.min_hold_minutes, 15),
+            breakeven_profit_pct=min(exit_profile.breakeven_profit_pct, 0.0035),
+            trailing_stop_pct=min(exit_profile.trailing_stop_pct, 0.0035),
+        )
+    if instrument.symbol == "NGJ6":
+        exit_profile = ExitProfile(
+            min_hold_minutes=max(exit_profile.min_hold_minutes, 30),
+            breakeven_profit_pct=max(exit_profile.breakeven_profit_pct, 0.0060),
+            trailing_stop_pct=max(exit_profile.trailing_stop_pct, 0.0080),
+        )
     is_trend_rollover = state.entry_strategy == "trend_rollover"
-    prev = df.iloc[-2]
-    prev2 = df.iloc[-3]
+    prev = exit_df.iloc[-2]
+    prev2 = exit_df.iloc[-3]
     macd = float(last["macd"])
     macd_signal = float(last["macd_signal"])
     prev_macd = float(prev["macd"])
@@ -4712,20 +4891,29 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = max(stop_price, state.entry_price)
         trailing_price = (state.max_price or price) * (1 - exit_profile.trailing_stop_pct)
-        macd_down = (
-            prev2_macd >= prev2_macd_signal
-            and prev_macd < prev_macd_signal
-            and macd < macd_signal
-            and close < ema20
-        )
+        if (instrument.symbol in {"NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+            macd_down = macd_crossed_down_with_ema_loss(exit_df)
+        else:
+            macd_down = (
+                prev2_macd >= prev2_macd_signal
+                and prev_macd < prev_macd_signal
+                and macd < macd_signal
+                and close < ema20
+            )
         opposite_signal_confirmed = fresh_signal == "SHORT" and close < ema20 and close <= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
+        if instrument.symbol == "RBM6" and higher_tf_df is not None:
+            profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)
         if price <= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
-        elif price <= trailing_price:
+        elif (
+            instrument.symbol not in {"NGJ6", "RBM6", "SRM6", "VBM6"}
+            and get_instrument_group(instrument.symbol).name != "fx"
+            or state.breakeven_armed
+        ) and price <= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} <= {trailing_price:.4f}")
         elif min_hold_passed and state.breakeven_armed and rsi >= profile.rsi_exit_long and not is_trend_rollover:
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
@@ -4741,20 +4929,29 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = min(stop_price, state.entry_price)
         trailing_price = (state.min_price or price) * (1 + exit_profile.trailing_stop_pct)
-        macd_up = (
-            prev2_macd <= prev2_macd_signal
-            and prev_macd > prev_macd_signal
-            and macd > macd_signal
-            and close > ema20
-        )
+        if (instrument.symbol in {"NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+            macd_up = macd_crossed_up_with_ema_reclaim(exit_df)
+        else:
+            macd_up = (
+                prev2_macd <= prev2_macd_signal
+                and prev_macd > prev_macd_signal
+                and macd > macd_signal
+                and close > ema20
+            )
         opposite_signal_confirmed = fresh_signal == "LONG" and close > ema20 and close >= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
+        if instrument.symbol == "RBM6" and higher_tf_df is not None:
+            profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)
         if price >= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
-        elif price >= trailing_price:
+        elif (
+            instrument.symbol not in {"NGJ6", "RBM6", "SRM6", "VBM6"}
+            and get_instrument_group(instrument.symbol).name != "fx"
+            or state.breakeven_armed
+        ) and price >= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} >= {trailing_price:.4f}")
         elif min_hold_passed and state.breakeven_armed and rsi <= profile.rsi_exit_short and not is_trend_rollover:
             close_position(client, config, instrument, state, f"RSI вышел в зону перепроданности: {rsi:.2f} <= {profile.rsi_exit_short:.2f}")
@@ -4817,6 +5014,13 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             logging.info("symbol=%s status=waiting_for_candles", instrument.symbol)
             return
         raise
+
+    higher_tf_df: pd.DataFrame | None = None
+    if instrument.symbol in {"NGJ6", "RBM6", "SRM6", "VBM6"} or get_instrument_group(instrument.symbol).name == "fx":
+        try:
+            higher_tf_df = get_configured_higher_tf_df(client, config, instrument)
+        except RuntimeError as error:
+            logging.info("symbol=%s status=waiting_for_higher_tf_exit_context reason=%s", instrument.symbol, error)
 
     higher_tf_bias = get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
@@ -4981,7 +5185,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                         logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
                         state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
     else:
-        check_exit(client, config, instrument, state, lower_df, signal)
+        check_exit(client, config, instrument, state, lower_df, signal, higher_tf_df=higher_tf_df)
 
     reconcile_state_accounting(instrument.symbol, state)
     save_state(instrument.symbol, state)

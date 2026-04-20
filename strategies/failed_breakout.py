@@ -1,3 +1,6 @@
+from strategies.quality_filters import is_vbm6_post_gap_chop
+
+
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -38,6 +41,32 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     volatility_ok = atr_pct >= 0.0004
     rsi_short_ok = 35.0 <= rsi <= 68.0
     rsi_long_ok = 32.0 <= rsi <= 60.0
+    soft_higher_tf_reversal = instrument.symbol in {"IMOEXF", "RBM6", "SRM6", "VBM6"}
+    higher_tf_short_ok = higher_tf_bias == "SHORT" or soft_higher_tf_reversal
+    higher_tf_long_ok = higher_tf_bias == "LONG" or soft_higher_tf_reversal
+
+    if instrument.symbol == "IMOEXF":
+        trend_support_long = close > ema20
+        trend_support_short = close < ema20
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.85
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.60
+        rsi_long_ok = 35.0 <= rsi <= 65.0
+        rsi_short_ok = 35.0 <= rsi <= 70.0
+    if instrument.symbol in {"SRM6", "VBM6"}:
+        trend_support_long = close > ema20
+        trend_support_short = close < ema20
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.85
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.60
+        rsi_long_ok = 34.0 <= rsi <= 64.0
+        rsi_short_ok = 34.0 <= rsi <= 70.0
+    if instrument.symbol == "RBM6":
+        trend_support_long = close > ema20
+        trend_support_short = close < ema20
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.80
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.55
+        rsi_long_ok = 28.0 <= rsi <= 64.0
+        rsi_short_ok = 34.0 <= rsi <= 72.0
+    post_gap_chop = instrument.symbol == "VBM6" and is_vbm6_post_gap_chop(df)
 
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
@@ -63,7 +92,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     short_blockers: list[str] = []
     long_blockers: list[str] = []
 
-    if higher_tf_bias != "SHORT":
+    if not higher_tf_short_ok:
         short_blockers.append(f"старший ТФ не SHORT, а {higher_tf_bias}")
     if not failed_up:
         short_blockers.append("нет ложного пробоя вверх с возвратом в диапазон")
@@ -79,8 +108,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_blockers.append("объём не подтверждает возврат в диапазон")
     if not volatility_ok:
         short_blockers.append("волатильность слишком низкая")
+    if post_gap_chop:
+        short_blockers.append("VBM6 после гэпа перешёл в узкий боковик без чистого разворота")
 
-    if higher_tf_bias != "LONG":
+    if not higher_tf_long_ok:
         long_blockers.append(f"старший ТФ не LONG, а {higher_tf_bias}")
     if not failed_down:
         long_blockers.append("нет ложного пробоя вниз с возвратом в диапазон")
@@ -96,10 +127,12 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("объём не подтверждает возврат в диапазон")
     if not volatility_ok:
         long_blockers.append("волатильность слишком низкая")
+    if post_gap_chop:
+        long_blockers.append("VBM6 после гэпа перешёл в узкий боковик без чистого разворота")
 
     short_ok = all(
         [
-            higher_tf_bias == "SHORT",
+            higher_tf_short_ok,
             failed_up,
             trend_support_short,
             rsi_short_ok,
@@ -111,7 +144,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     )
     long_ok = all(
         [
-            higher_tf_bias == "LONG",
+            higher_tf_long_ok,
             failed_down,
             trend_support_long,
             rsi_long_ok,
@@ -121,6 +154,13 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             volatility_ok,
         ]
     )
+
+    if post_gap_chop:
+        return (
+            "HOLD",
+            "Сигнал HOLD (failed_breakout): VBM6 после гэпа перешёл в узкий боковик "
+            "без чистого разворота, объём выдохся, MACD не подтверждает новый вход.",
+        )
 
     if short_ok:
         return "SHORT", "Сигнал SHORT (failed_breakout): " + "; ".join(short_reasons) + "."
