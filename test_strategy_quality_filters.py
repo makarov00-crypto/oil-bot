@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from bot_oil_main import BotConfig, InstrumentConfig
+from strategy_registry import get_primary_strategies
 from strategies.breakdown_continuation import evaluate_signal as evaluate_range_break
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range
 
@@ -136,6 +137,9 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(signal, "HOLD")
         self.assertIn("пробой вниз диапазона", reason)
+
+    def test_brk6_uses_rollover_strategy_for_intraday_reversal(self) -> None:
+        self.assertIn("trend_rollover", get_primary_strategies("BRK6"))
 
 
 if __name__ == "__main__":

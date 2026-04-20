@@ -46,16 +46,19 @@ from strategies import get_strategy_profile as get_primary_strategy_profile
 
 APP_NAME = "oil-bot-main"
 WATCHLIST_REFRESH_SECONDS = 300
-RECENT_STRATEGY_GUARD_DAYS = 5
-RECENT_STRATEGY_GUARD_MIN_TRADES = 5
+RECENT_STRATEGY_GUARD_DAYS = 1
+RECENT_STRATEGY_GUARD_MIN_TRADES = 4
 RECENT_STRATEGY_GUARD_MAX_WIN_RATE = 25.0
 RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB = -250.0
 RECENT_STRATEGY_GUARD_HARD_LOSS_RUB = -500.0
 INTRADAY_CHOP_GUARD_STRATEGIES = {
+    "failed_breakout",
     "opening_range_breakout",
     "range_break_continuation",
     "breakdown_continuation",
     "momentum_breakout",
+    "trend_pullback",
+    "trend_rollover",
 }
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
@@ -3271,7 +3274,7 @@ def recent_strategy_performance_block_reason(symbol: str, strategy_name: str) ->
     chop_reason = intraday_chop_block_reason(symbol, strategy_name)
     if chop_reason:
         return chop_reason
-    stats = calculate_recent_strategy_performance(symbol, strategy_name)
+    stats = calculate_today_strategy_performance(symbol, strategy_name)
     closed_count = int(stats["closed_count"])
     losses = int(stats["losses"])
     wins = int(stats["wins"])
@@ -3282,14 +3285,14 @@ def recent_strategy_performance_block_reason(symbol: str, strategy_name: str) ->
         and win_rate <= RECENT_STRATEGY_GUARD_MAX_WIN_RATE
         and net_pnl <= RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB
     )
-    hard_loss = closed_count >= 3 and net_pnl <= RECENT_STRATEGY_GUARD_HARD_LOSS_RUB
-    no_win_loss_streak = closed_count >= 3 and wins == 0 and losses >= 3 and net_pnl <= RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB
+    hard_loss = closed_count >= 2 and net_pnl <= RECENT_STRATEGY_GUARD_HARD_LOSS_RUB
+    no_win_loss_streak = closed_count >= 3 and wins == 0 and losses >= 3 and net_pnl <= -150.0
     if not (toxic_series or hard_loss or no_win_loss_streak):
         return ""
     return (
-        f"performance guard: {stats['symbol']} {stats['strategy']} за {stats['lookback_days']} дн. "
+        f"daily performance guard: {stats['symbol']} {stats['strategy']} сегодня "
         f"закрытий={closed_count}, win rate={win_rate:.1f}%, net={net_pnl:.2f} RUB. "
-        "Новые входы по этой связке временно заблокированы."
+        "Новые входы по этой связке заблокированы до следующего торгового дня."
     )
 
 

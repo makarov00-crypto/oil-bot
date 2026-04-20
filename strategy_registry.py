@@ -2,7 +2,7 @@ from custom_instruments import get_custom_clone_source
 from instrument_groups import get_instrument_group
 
 PRIMARY_STRATEGIES_BY_SYMBOL = {
-    "BRK6": ["momentum_breakout", "trend_pullback"],
+    "BRK6": ["momentum_breakout", "trend_rollover", "trend_pullback"],
     "GNM6": ["trend_rollover", "momentum_breakout", "trend_pullback"],
     "IMOEXF": ["range_break_continuation", "trend_pullback"],
     "NGJ6": ["momentum_breakout", "trend_pullback"],

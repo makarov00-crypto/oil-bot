@@ -74,13 +74,14 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(mod.get_market_session(sunday_after_cutoff), "CLOSED")
 
     def test_recent_strategy_performance_blocks_toxic_combo(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
         rows = [
-            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -120.0},
-            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -80.0},
-            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -75.0},
-            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -60.0},
-            {"event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": 20.0},
-            {"event": "CLOSE", "symbol": "CNYRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -500.0},
+            {"time": f"{today}T10:10:00+03:00", "event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -120.0},
+            {"time": f"{today}T10:40:00+03:00", "event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -80.0},
+            {"time": f"{today}T11:15:00+03:00", "event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -75.0},
+            {"time": f"{today}T11:45:00+03:00", "event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -60.0},
+            {"time": f"{today}T12:20:00+03:00", "event": "CLOSE", "symbol": "USDRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": 20.0},
+            {"time": f"{today}T12:35:00+03:00", "event": "CLOSE", "symbol": "CNYRUBF", "strategy": "opening_range_breakout", "net_pnl_rub": -500.0},
         ]
 
         stats = mod.calculate_recent_strategy_performance(
@@ -92,12 +93,10 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(stats["closed_count"], 5)
         self.assertEqual(stats["wins"], 1)
         self.assertEqual(stats["net_pnl_rub"], -315.0)
-        with patch.object(mod, "get_today_trade_journal_rows", return_value=[]), patch.object(
-            mod, "get_trade_journal_rows_since", return_value=rows
-        ):
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
             reason = mod.recent_strategy_performance_block_reason("USDRUBF", "opening_range_breakout")
 
-        self.assertIn("performance guard", reason)
+        self.assertIn("daily performance guard", reason)
         self.assertIn("USDRUBF", reason)
 
     def test_recent_strategy_performance_allows_healthy_combo(self) -> None:
@@ -107,10 +106,22 @@ class DailyRiskLimitTests(unittest.TestCase):
             {"event": "CLOSE", "symbol": "RBM6", "strategy": "range_break_continuation", "net_pnl_rub": -5.0},
         ]
 
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
+            reason = mod.recent_strategy_performance_block_reason("RBM6", "range_break_continuation")
+
+        self.assertEqual(reason, "")
+
+    def test_recent_strategy_performance_ignores_previous_days(self) -> None:
+        rows = [
+            {"time": "2026-04-17T10:10:00+03:00", "event": "CLOSE", "symbol": "NGJ6", "strategy": "momentum_breakout", "net_pnl_rub": -220.0},
+            {"time": "2026-04-17T11:10:00+03:00", "event": "CLOSE", "symbol": "NGJ6", "strategy": "momentum_breakout", "net_pnl_rub": -180.0},
+            {"time": "2026-04-17T12:10:00+03:00", "event": "CLOSE", "symbol": "NGJ6", "strategy": "momentum_breakout", "net_pnl_rub": -160.0},
+        ]
+
         with patch.object(mod, "get_today_trade_journal_rows", return_value=[]), patch.object(
             mod, "get_trade_journal_rows_since", return_value=rows
         ):
-            reason = mod.recent_strategy_performance_block_reason("RBM6", "range_break_continuation")
+            reason = mod.recent_strategy_performance_block_reason("NGJ6", "momentum_breakout")
 
         self.assertEqual(reason, "")
 
@@ -165,9 +176,7 @@ class DailyRiskLimitTests(unittest.TestCase):
             },
         ]
 
-        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows), patch.object(
-            mod, "get_trade_journal_rows_since", return_value=rows
-        ):
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
             reason = mod.recent_strategy_performance_block_reason("SRM6", "range_break_continuation")
 
         self.assertEqual(reason, "")
