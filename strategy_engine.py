@@ -22,6 +22,11 @@ PRIMARY_EVALUATORS = {
 
 def evaluate_primary_signal_bundle(df, config, instrument, higher_tf_bias: str) -> tuple[str, str, str]:
     strategy_names = get_primary_strategies(instrument.symbol)
+    if instrument.symbol == "RBM6":
+        if higher_tf_bias == "SHORT":
+            strategy_names = ["range_break_continuation", "failed_breakout", "trend_pullback"]
+        elif higher_tf_bias == "LONG":
+            strategy_names = ["failed_breakout", "range_break_continuation", "trend_pullback"]
     hold_reasons: list[str] = []
 
     for strategy_name in strategy_names:

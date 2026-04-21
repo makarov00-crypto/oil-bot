@@ -41,7 +41,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     volatility_ok = atr_pct >= 0.0004
     rsi_short_ok = 35.0 <= rsi <= 68.0
     rsi_long_ok = 32.0 <= rsi <= 60.0
-    soft_higher_tf_reversal = instrument.symbol in {"IMOEXF", "RBM6", "SRM6", "VBM6"}
+    soft_higher_tf_reversal = instrument.symbol in {"IMOEXF", "RBM6", "SRM6"}
     higher_tf_short_ok = higher_tf_bias == "SHORT" or soft_higher_tf_reversal
     higher_tf_long_ok = higher_tf_bias == "LONG" or soft_higher_tf_reversal
 
@@ -59,6 +59,24 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         impulse_ok = body_avg > 0 and body >= body_avg * 0.60
         rsi_long_ok = 34.0 <= rsi <= 64.0
         rsi_short_ok = 34.0 <= rsi <= 70.0
+    if instrument.symbol == "VBM6":
+        higher_tf_short_ok = higher_tf_bias == "SHORT"
+        higher_tf_long_ok = (
+            higher_tf_bias == "LONG"
+            or (
+                failed_down
+                and close > ema20
+                and close > ema50
+                and close > prev_high
+                and float(prev["close"]) > float(prev["ema20"])
+                and volume_avg > 0
+                and volume >= volume_avg * 1.15
+                and body_avg > 0
+                and body >= body_avg * 0.90
+                and rejection_up
+                and 36.0 <= rsi <= 60.0
+            )
+        )
     if instrument.symbol == "RBM6":
         trend_support_long = close > ema20
         trend_support_short = close < ema20

@@ -179,6 +179,23 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     not_overbought = close < float(last["bb_upper"])
     not_oversold = close > float(last["bb_lower"])
     volatility_ok = atr_pct >= profile.atr_min_pct
+    ucm6_fast_short = False
+    if instrument.symbol == "UCM6":
+        bb_mid = float(last["bb_mid"])
+        ucm6_fast_short = (
+            higher_tf_bias == "SHORT"
+            and close < ema20
+            and close <= bb_mid
+            and close <= float(prev["close"])
+            and volume_avg > 0
+            and volume >= volume_avg * 1.05
+            and body_avg > 0
+            and body >= body_avg * 0.90
+            and 32.0 <= rsi <= 56.0
+            and macd < macd_signal
+            and macd <= prev_macd
+            and volatility_ok
+        )
     long_blockers: list[str] = []
     short_blockers: list[str] = []
 
@@ -249,6 +266,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
             short_blockers.append("объём не подтверждает вход")
         if not volatility_ok:
             short_blockers.append("волатильность ниже минимума по ATR")
+        if instrument.symbol == "UCM6" and not ucm6_fast_short:
+            short_blockers.append("для UCM6 нет быстрого short-слома через EMA20/BB-mid с объёмом")
 
     long_ok = all(
         [
@@ -276,6 +295,18 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
             volatility_ok,
         ]
     )
+    if instrument.symbol == "UCM6":
+        short_ok = (
+            higher_tf_bias == "SHORT"
+            and (trend_short or ucm6_fast_short)
+            and (pullback_ok or ucm6_fast_short)
+            and ((profile.short_rsi_min <= rsi <= profile.short_rsi_max) or ucm6_fast_short)
+            and (macd_turn_down or ucm6_fast_short)
+            and (impulse_ok or ucm6_fast_short)
+            and (volume_ok or ucm6_fast_short)
+            and volatility_ok
+            and not_overbought
+        )
     if instrument.symbol == "NGJ6":
         # Газу нужен чуть более живой pullback, иначе он почти не торгуется.
         short_ok = short_ok and near_ema20

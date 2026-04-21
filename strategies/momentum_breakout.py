@@ -38,6 +38,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     higher_tf_short_ok = higher_tf_bias != "LONG"
     ngj6_late_long_chase = False
     ngj6_volume_reversal_short = False
+    ngj6_pullback_reclaim_long = False
 
     if instrument.symbol == "BRK6":
         volume_ok = volume_avg > 0 and volume >= volume_avg * 0.75
@@ -62,6 +63,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     if instrument.symbol == "NGJ6":
         recent_above_ema20 = sum(1 for _, row in df.iloc[-6:-1].iterrows() if float(row["close"]) > float(row["ema20"]))
+        recent_below_ema20 = sum(1 for _, row in df.iloc[-6:-1].iterrows() if float(row["close"]) < float(row["ema20"]))
         macd_hist = macd - macd_signal
         prev_macd_hist = prev_macd - prev_macd_signal
         volume_ok = volume_avg > 0 and volume >= volume_avg * 1.05
@@ -82,19 +84,37 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and (close >= bb_upper * 0.997 or (close - ema20) / close >= 0.0060)
             and macd_hist <= prev_macd_hist * 1.10
         )
+        ngj6_pullback_reclaim_long = (
+            close > ema20
+            and close >= ema50
+            and close >= bb_mid
+            and close >= prev["close"]
+            and recent_below_ema20 >= 2
+            and volume_avg > 0
+            and volume >= volume_avg * 1.00
+            and body_avg > 0
+            and body >= body_avg * 0.80
+            and 40.0 <= rsi <= 64.0
+            and macd_up
+            and prev_macd <= prev_macd_signal + 0.0015
+            and volatility_ok
+        )
         ngj6_volume_reversal_short = (
             close < ema20
-            and close <= bb_mid
+            and close < ema50
+            and close <= bb_mid * 0.9995
             and close <= prev["close"]
             and (breakout_down or soft_breakout_down or close < range_low * 1.0020)
             and volume_avg > 0
-            and volume >= volume_avg * 1.35
+            and volume >= volume_avg * 1.45
             and body_avg > 0
-            and body >= body_avg * 1.05
-            and 30.0 <= rsi <= 54.0
+            and body >= body_avg * 1.10
+            and 28.0 <= rsi <= 46.0
             and macd_down
+            and macd_hist < prev_macd_hist
             and volatility_ok
         )
+        higher_tf_long_ok = higher_tf_bias == "LONG" or ngj6_pullback_reclaim_long
         higher_tf_short_ok = higher_tf_bias == "SHORT" or ngj6_volume_reversal_short
 
     soft_breakout_quality_up = True
@@ -160,6 +180,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 46-78")
     if ngj6_late_long_chase:
         long_blockers.append("NGJ6: поздний breakout у верхней Bollinger после зрелого роста")
+    if instrument.symbol == "NGJ6" and higher_tf_bias != "LONG" and not ngj6_pullback_reclaim_long:
+        long_blockers.append("NGJ6: нет подтверждённого reclaim выше EMA20/BB-mid после пролива")
     if not macd_up:
         long_blockers.append("MACD не подтверждает рост")
     if not impulse_ok:
@@ -171,6 +193,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     if not higher_tf_short_ok:
         short_blockers.append(f"старший ТФ не SHORT, а {higher_tf_bias}")
+    if instrument.symbol == "NGJ6" and close >= bb_mid and not ngj6_volume_reversal_short:
+        short_blockers.append("NGJ6: цена не закрепилась ниже средней Bollinger для шорта")
     if not breakout_down and not soft_breakout_down:
         short_blockers.append("нет подтверждённого breakout вниз")
     elif not soft_breakout_quality_down:
@@ -267,21 +291,20 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if instrument.symbol == "NGJ6":
         long_ok = (
             higher_tf_long_ok
-            and close_above_trend
-            and (breakout_up or soft_breakout_up)
-            and soft_breakout_quality_up
+            and (close_above_trend or ngj6_pullback_reclaim_long)
+            and ((breakout_up or soft_breakout_up) and soft_breakout_quality_up or ngj6_pullback_reclaim_long)
             and not ngj6_late_long_chase
             and rsi_long_ok
             and macd_up
             and impulse_ok
             and volume_ok
             and volatility_ok
-            and long_score >= 5
+            and (long_score >= 5 or ngj6_pullback_reclaim_long)
         )
         short_ok = (
             higher_tf_short_ok
             and close_below_trend
-            and (breakout_down or ngj6_volume_reversal_short)
+            and (breakout_down or (ngj6_volume_reversal_short and close <= range_low * 1.0015))
             and rsi_short_ok
             and macd_down
             and impulse_ok

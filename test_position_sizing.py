@@ -65,6 +65,33 @@ class PositionSizingTests(unittest.TestCase):
         self.assertGreaterEqual(sizing["qty_by_target"], 3)
         self.assertEqual(sizing["quantity"], 3)
 
+    def test_srm6_short_can_use_single_lot_when_working_budget_is_almost_enough(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="SRM6",
+            figi="FIGI",
+            display_name="SBER",
+            initial_margin_on_buy=6164.1,
+            initial_margin_on_sell=6164.1,
+        )
+        state = mod.InstrumentState(last_higher_tf_bias="SHORT", last_news_bias="NEUTRAL")
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=5972.04
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.20
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("средний", 1.0)
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, instrument, state, 33000.0, "SHORT", "range_break_continuation"
+            )
+
+        self.assertEqual(sizing["qty_by_working"], 0)
+        self.assertEqual(sizing["qty_by_headroom"], 0)
+        self.assertEqual(sizing["quantity"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     rsi_long_ok = 42.0 <= rsi <= 72.0
     rbm6_volume_reversal_short = False
     rbm6_volume_reversal_long = False
+    rbm6_mature_trend_short = False
+    rbm6_mature_trend_long = False
     fx_mature_trend_short = False
     fx_mature_trend_long = False
     group_name = get_instrument_group(instrument.symbol).name
@@ -122,6 +124,30 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         impulse_ok = body_avg > 0 and body >= body_avg * 0.70
         rsi_short_ok = 30.0 <= rsi <= 64.0
         rsi_long_ok = 34.0 <= rsi <= 72.0
+        rbm6_mature_trend_short = (
+            higher_tf_bias == "SHORT"
+            and trend_short
+            and continuation_short
+            and momentum_down
+            and rsi_short_ok
+            and volume_avg > 0
+            and volume >= volume_avg * 0.80
+            and body_avg > 0
+            and body >= body_avg * 0.55
+            and max(range_width_pct, atr_pct) >= 0.00035
+        )
+        rbm6_mature_trend_long = (
+            higher_tf_bias == "LONG"
+            and trend_long
+            and continuation_long
+            and momentum_up
+            and rsi_long_ok
+            and volume_avg > 0
+            and volume >= volume_avg * 0.80
+            and body_avg > 0
+            and body >= body_avg * 0.55
+            and max(range_width_pct, atr_pct) >= 0.00035
+        )
         rbm6_volume_reversal_short = (
             trend_short
             and close <= prev_close
@@ -146,8 +172,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and rsi_long_ok
             and (volatility_ok or fx_mature_trend_long)
         )
-        higher_tf_short_ok = higher_tf_bias == "SHORT" or rbm6_volume_reversal_short
-        higher_tf_long_ok = higher_tf_bias == "LONG" or rbm6_volume_reversal_long
+        higher_tf_short_ok = higher_tf_bias == "SHORT" or rbm6_volume_reversal_short or rbm6_mature_trend_short
+        higher_tf_long_ok = higher_tf_bias == "LONG" or rbm6_volume_reversal_long or rbm6_mature_trend_long
 
     commission_room_ok = True
     if is_fx:
@@ -342,26 +368,26 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_ok = (
             higher_tf_short_ok
             and trend_short
-            and (continuation_short or rbm6_volume_reversal_short)
-            and (short_break_ok or rbm6_volume_reversal_short)
+            and (continuation_short or rbm6_volume_reversal_short or rbm6_mature_trend_short)
+            and (short_break_ok or rbm6_volume_reversal_short or rbm6_mature_trend_short)
             and rsi_short_ok
             and momentum_down
-            and volume_ok
-            and impulse_ok
-            and volatility_ok
-            and (short_score >= 7 or rbm6_volume_reversal_short)
+            and (volume_ok or rbm6_mature_trend_short)
+            and (impulse_ok or rbm6_mature_trend_short)
+            and (volatility_ok or rbm6_mature_trend_short)
+            and (short_score >= 7 or rbm6_volume_reversal_short or rbm6_mature_trend_short)
         )
         long_ok = (
             higher_tf_long_ok
             and trend_long
-            and (continuation_long or rbm6_volume_reversal_long)
-            and (long_break_ok or rbm6_volume_reversal_long)
+            and (continuation_long or rbm6_volume_reversal_long or rbm6_mature_trend_long)
+            and (long_break_ok or rbm6_volume_reversal_long or rbm6_mature_trend_long)
             and rsi_long_ok
             and momentum_up
-            and volume_ok
-            and impulse_ok
-            and volatility_ok
-            and (long_score >= 7 or rbm6_volume_reversal_long)
+            and (volume_ok or rbm6_mature_trend_long)
+            and (impulse_ok or rbm6_mature_trend_long)
+            and (volatility_ok or rbm6_mature_trend_long)
+            and (long_score >= 7 or rbm6_volume_reversal_long or rbm6_mature_trend_long)
         )
 
     if post_gap_chop:
