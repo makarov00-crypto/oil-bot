@@ -191,6 +191,49 @@ class TradeStorageTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[1]["context"]["market_regime"], "trend_expansion")
 
+    def test_load_trade_rows_dedupes_duplicate_event_uids_during_resync(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            log_dir = temp_path / "logs"
+            state_dir = temp_path / "bot_state"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            state_dir.mkdir(parents=True, exist_ok=True)
+            journal_path = log_dir / "trade_journal.jsonl"
+            db_path = state_dir / "trade_analytics.sqlite3"
+
+            duplicate_close = {
+                "time": "2026-04-21T10:05:00+03:00",
+                "symbol": "TEST",
+                "event": "CLOSE",
+                "side": "LONG",
+                "qty_lots": 1,
+                "price": 101.0,
+                "pnl_rub": 10.0,
+                "strategy": "opening_range_breakout",
+                "context": {"market_regime": "trend_expansion"},
+            }
+            journal_rows = [
+                {
+                    "time": "2026-04-21T10:00:00+03:00",
+                    "symbol": "TEST",
+                    "event": "OPEN",
+                    "side": "LONG",
+                    "qty_lots": 1,
+                    "price": 100.0,
+                    "strategy": "opening_range_breakout",
+                },
+                duplicate_close,
+                dict(duplicate_close),
+            ]
+            journal_path.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in journal_rows) + "\n",
+                encoding="utf-8",
+            )
+
+            rows = load_trade_rows(journal_path, db_path)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[-1]["event"], "CLOSE")
+
 
 if __name__ == "__main__":
     unittest.main()

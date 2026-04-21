@@ -165,7 +165,11 @@ def _row_to_db_tuple(row: dict[str, Any], storage_order: int) -> tuple[Any, ...]
 
 def sync_journal_to_db(journal_path: Path, db_path: Path) -> None:
     ensure_trade_db(db_path)
-    rows = _load_journal_rows(journal_path)
+    source_rows = _load_journal_rows(journal_path)
+    deduped_by_uid: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, row in enumerate(source_rows):
+        deduped_by_uid[_event_uid(row)] = (index, row)
+    rows = [row for _, row in sorted(deduped_by_uid.values(), key=lambda item: item[0])]
     with _connect(db_path) as connection:
         connection.execute("DELETE FROM trade_events")
         connection.executemany(
