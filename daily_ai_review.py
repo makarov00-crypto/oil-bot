@@ -258,12 +258,19 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
     by_symbol: dict[str, float] = defaultdict(float)
     by_strategy: dict[str, float] = defaultdict(float)
     by_regime: dict[str, float] = defaultdict(float)
+    by_setup_quality: dict[str, float] = defaultdict(float)
     by_opens: dict[str, int] = defaultdict(int)
     for trade in trades:
         by_symbol[trade.symbol] += trade.pnl_rub
         by_strategy[trade.strategy] += trade.pnl_rub
         by_regime[trade.market_regime] += trade.pnl_rub
+        by_setup_quality[trade.setup_quality_label] += trade.pnl_rub
         by_opens[trade.symbol] += 1
+
+    best_regime = max(by_regime.items(), key=lambda item: item[1]) if by_regime else None
+    worst_regime = min(by_regime.items(), key=lambda item: item[1]) if by_regime else None
+    best_setup_quality = max(by_setup_quality.items(), key=lambda item: item[1]) if by_setup_quality else None
+    worst_setup_quality = min(by_setup_quality.items(), key=lambda item: item[1]) if by_setup_quality else None
 
     return {
         "closed_count": len(trades),
@@ -274,7 +281,12 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
         "by_symbol": dict(sorted(by_symbol.items())),
         "by_strategy": dict(sorted(by_strategy.items())),
         "by_regime": dict(sorted(by_regime.items())),
+        "by_setup_quality": dict(sorted(by_setup_quality.items())),
         "trade_count_by_symbol": dict(sorted(by_opens.items())),
+        "best_regime": {"name": best_regime[0], "pnl_rub": best_regime[1]} if best_regime else None,
+        "worst_regime": {"name": worst_regime[0], "pnl_rub": worst_regime[1]} if worst_regime else None,
+        "best_setup_quality": {"name": best_setup_quality[0], "pnl_rub": best_setup_quality[1]} if best_setup_quality else None,
+        "worst_setup_quality": {"name": worst_setup_quality[0], "pnl_rub": worst_setup_quality[1]} if worst_setup_quality else None,
     }
 
 
@@ -372,6 +384,29 @@ def build_prompt(
     by_regime_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_regime"].items()]
     if not by_regime_lines:
         by_regime_lines = ["- Нет данных по режимам рынка."]
+    by_setup_quality_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_setup_quality"].items()]
+    if not by_setup_quality_lines:
+        by_setup_quality_lines = ["- Нет данных по качеству сетапов."]
+
+    focal_points_lines = []
+    best_regime = summary.get("best_regime")
+    worst_regime = summary.get("worst_regime")
+    best_setup_quality = summary.get("best_setup_quality")
+    worst_setup_quality = summary.get("worst_setup_quality")
+    if best_regime:
+        focal_points_lines.append(f"- лучший режим: {best_regime['name']} ({best_regime['pnl_rub']:.2f} RUB)")
+    if worst_regime:
+        focal_points_lines.append(f"- худший режим: {worst_regime['name']} ({worst_regime['pnl_rub']:.2f} RUB)")
+    if best_setup_quality:
+        focal_points_lines.append(
+            f"- лучшее качество сетапа: {best_setup_quality['name']} ({best_setup_quality['pnl_rub']:.2f} RUB)"
+        )
+    if worst_setup_quality:
+        focal_points_lines.append(
+            f"- худшее качество сетапа: {worst_setup_quality['name']} ({worst_setup_quality['pnl_rub']:.2f} RUB)"
+        )
+    if not focal_points_lines:
+        focal_points_lines = ["- Недостаточно закрытых сделок для режимной сводки."]
 
     review_lines = [
         f"Дата: {target_day.isoformat()}",
@@ -390,8 +425,14 @@ def build_prompt(
         "Итог по стратегиям:",
         *by_strategy_lines,
         "",
+        "Фокусные точки результата:",
+        *focal_points_lines,
+        "",
         "Итог по режимам рынка:",
         *by_regime_lines,
+        "",
+        "Итог по качеству сетапов:",
+        *by_setup_quality_lines,
         "",
         "Открытые позиции:",
         *open_positions_lines,
