@@ -51,6 +51,8 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertEqual(summary["worst_setup_quality"]["name"], "weak")
         self.assertEqual(summary["best_strategy_regime"]["name"], "trend_pullback @ trend_expansion")
         self.assertEqual(summary["worst_strategy_regime"]["name"], "trend_pullback @ chop")
+        self.assertEqual(summary["top_positive_strategy_regimes"][0]["name"], "trend_pullback @ trend_expansion")
+        self.assertEqual(summary["top_negative_strategy_regimes"][0]["name"], "trend_pullback @ chop")
 
     def test_build_prompt_includes_regime_focus_and_setup_quality_sections(self) -> None:
         trades = [
@@ -91,6 +93,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 }
             },
             closed_trades=trades,
+            recent_closed_trades=trades,
         )
 
         self.assertIn("Фокусные точки результата:", prompt)
@@ -101,6 +104,8 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("- strong: 120.00 RUB", prompt)
         self.assertIn("Итог по сочетаниям стратегия/режим:", prompt)
         self.assertIn("- opening_range_breakout @ trend_expansion: 120.00 RUB", prompt)
+        self.assertIn("Сильные сочетания за последние 3 дня:", prompt)
+        self.assertIn("Токсичные сочетания за последние 3 дня:", prompt)
 
 
 if __name__ == "__main__":

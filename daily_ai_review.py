@@ -5,7 +5,7 @@ import json
 import os
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -276,6 +276,15 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
     worst_setup_quality = min(by_setup_quality.items(), key=lambda item: item[1]) if by_setup_quality else None
     best_strategy_regime = max(by_strategy_regime.items(), key=lambda item: item[1]) if by_strategy_regime else None
     worst_strategy_regime = min(by_strategy_regime.items(), key=lambda item: item[1]) if by_strategy_regime else None
+    top_positive_strategy_regimes = sorted(
+        ((name, pnl) for name, pnl in by_strategy_regime.items() if pnl > 0),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:3]
+    top_negative_strategy_regimes = sorted(
+        ((name, pnl) for name, pnl in by_strategy_regime.items() if pnl < 0),
+        key=lambda item: item[1],
+    )[:3]
 
     return {
         "closed_count": len(trades),
@@ -295,6 +304,8 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
         "worst_setup_quality": {"name": worst_setup_quality[0], "pnl_rub": worst_setup_quality[1]} if worst_setup_quality else None,
         "best_strategy_regime": {"name": best_strategy_regime[0], "pnl_rub": best_strategy_regime[1]} if best_strategy_regime else None,
         "worst_strategy_regime": {"name": worst_strategy_regime[0], "pnl_rub": worst_strategy_regime[1]} if worst_strategy_regime else None,
+        "top_positive_strategy_regimes": [{"name": name, "pnl_rub": pnl} for name, pnl in top_positive_strategy_regimes],
+        "top_negative_strategy_regimes": [{"name": name, "pnl_rub": pnl} for name, pnl in top_negative_strategy_regimes],
     }
 
 
@@ -328,8 +339,10 @@ def build_prompt(
     news: dict[str, Any],
     states: dict[str, dict[str, Any]],
     closed_trades: list[ClosedTrade],
+    recent_closed_trades: list[ClosedTrade] | None = None,
 ) -> str:
     summary = summarize_closed_trades(closed_trades)
+    recent_summary = summarize_closed_trades(recent_closed_trades or closed_trades)
     active_news = list(news.get("active_biases") or [])
     market_notes = build_market_observations(closed_trades, states)
 
@@ -398,6 +411,16 @@ def build_prompt(
     by_strategy_regime_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_strategy_regime"].items()]
     if not by_strategy_regime_lines:
         by_strategy_regime_lines = ["- Нет данных по сочетаниям стратегия/режим."]
+    recent_positive_lines = [
+        f"- {item['name']}: {item['pnl_rub']:.2f} RUB" for item in recent_summary["top_positive_strategy_regimes"]
+    ]
+    if not recent_positive_lines:
+        recent_positive_lines = ["- Нет устойчиво сильных сочетаний за период."]
+    recent_negative_lines = [
+        f"- {item['name']}: {item['pnl_rub']:.2f} RUB" for item in recent_summary["top_negative_strategy_regimes"]
+    ]
+    if not recent_negative_lines:
+        recent_negative_lines = ["- Нет устойчиво токсичных сочетаний за период."]
 
     focal_points_lines = []
     best_regime = summary.get("best_regime")
@@ -457,6 +480,12 @@ def build_prompt(
         "",
         "Итог по сочетаниям стратегия/режим:",
         *by_strategy_regime_lines,
+        "",
+        "Сильные сочетания за последние 3 дня:",
+        *recent_positive_lines,
+        "",
+        "Токсичные сочетания за последние 3 дня:",
+        *recent_negative_lines,
         "",
         "Открытые позиции:",
         *open_positions_lines,
@@ -541,7 +570,11 @@ def build_review_prompt(base_dir: Path, target_day: date) -> str:
     states = load_states(base_dir)
     trade_rows = load_trade_rows(base_dir, target_day)
     closed_trades = pair_closed_trades(trade_rows)
-    return build_prompt(target_day, portfolio, news, states, closed_trades)
+    recent_rows: list[dict[str, Any]] = []
+    for offset in range(3):
+        recent_rows.extend(load_trade_rows(base_dir, target_day - timedelta(days=offset)))
+    recent_closed_trades = pair_closed_trades(recent_rows)
+    return build_prompt(target_day, portfolio, news, states, closed_trades, recent_closed_trades)
 
 
 def main() -> int:

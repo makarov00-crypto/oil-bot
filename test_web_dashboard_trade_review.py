@@ -84,6 +84,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
             review["best_strategy_regime"]["label"],
             "opening_range_breakout @ режим trend_expansion | сетап strong",
         )
+        focus = dashboard.summarize_strategy_regime_focus(rows)
+        self.assertEqual(focus["strongest"][0]["label"], "opening_range_breakout @ режим trend_expansion | сетап strong")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_keeps_remaining_multi_lot_open_qty(self) -> None:

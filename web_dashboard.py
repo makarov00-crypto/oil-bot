@@ -1773,6 +1773,33 @@ def build_trade_review(
     }
 
 
+def summarize_strategy_regime_focus(rows: list[dict[str, Any]], limit: int = 3) -> dict[str, list[dict[str, Any]]]:
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for row in rows:
+        if str(row.get("event", "")).upper() != "CLOSE":
+            continue
+        strategy = str(row.get("strategy") or "-")
+        regime = trade_context_display(row)
+        label = f"{strategy} @ {regime}"
+        try:
+            pnl = float(row.get("pnl_rub") or 0.0)
+        except Exception:
+            pnl = 0.0
+        totals[label] = totals.get(label, 0.0) + pnl
+        counts[label] = counts.get(label, 0) + 1
+
+    strongest = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v > 0), key=lambda item: item[1], reverse=True)[:limit]
+    ]
+    toxic = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v < 0), key=lambda item: item[1])[:limit]
+    ]
+    return {"strongest": strongest, "toxic": toxic}
+
+
 def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) -> dict:
     rows = load_all_trade_rows()[-limit:]
     return build_trade_review(rows, states)
@@ -1785,7 +1812,13 @@ def load_trade_review_for_day(
     live_positions: dict[str, dict] | None = None,
 ) -> dict:
     rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()][-limit:]
-    return build_trade_review(rows, states, live_positions)
+    review = build_trade_review(rows, states, live_positions)
+    all_rows = load_all_trade_rows()
+    lookback_start = target_day - timedelta(days=2)
+    recent_rows = [row for row in all_rows if lookback_start <= row.get("_dt", datetime.min.replace(tzinfo=MOSCOW_TZ)).date() <= target_day]
+    review["focus_today"] = summarize_strategy_regime_focus(rows)
+    review["focus_3d"] = summarize_strategy_regime_focus(recent_rows)
+    return review
 
 
 def build_daily_performance(portfolio: dict, target_day: date, accounting_history: dict[str, Any] | None = None) -> dict:
@@ -3172,6 +3205,22 @@ def build_dashboard_html() -> str:
           <div class="muted">Худшая связка</div>
           <div class="metric metric-wide metric-compact" id="reviewWorstStrategyRegime">-</div>
         </div>
+        <div>
+          <div class="muted">Сильное сегодня</div>
+          <div class="metric metric-wide metric-compact" id="reviewFocusTodayStrong">-</div>
+        </div>
+        <div>
+          <div class="muted">Токсичное сегодня</div>
+          <div class="metric metric-wide metric-compact" id="reviewFocusTodayToxic">-</div>
+        </div>
+        <div>
+          <div class="muted">Сильное 3 дня</div>
+          <div class="metric metric-wide metric-compact" id="reviewFocus3dStrong">-</div>
+        </div>
+        <div>
+          <div class="muted">Токсичное 3 дня</div>
+          <div class="metric metric-wide metric-compact" id="reviewFocus3dToxic">-</div>
+        </div>
       </div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
@@ -3859,6 +3908,10 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewWorstRegime').textContent = review.worst_regime ? `${review.worst_regime.regime} (${Number(review.worst_regime.pnl_rub).toFixed(2)})` : '-';
       document.getElementById('reviewBestStrategyRegime').textContent = review.best_strategy_regime ? `${review.best_strategy_regime.label} (${Number(review.best_strategy_regime.pnl_rub).toFixed(2)})` : '-';
       document.getElementById('reviewWorstStrategyRegime').textContent = review.worst_strategy_regime ? `${review.worst_strategy_regime.label} (${Number(review.worst_strategy_regime.pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewFocusTodayStrong').textContent = review.focus_today?.strongest?.length ? `${review.focus_today.strongest[0].label} (${Number(review.focus_today.strongest[0].pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewFocusTodayToxic').textContent = review.focus_today?.toxic?.length ? `${review.focus_today.toxic[0].label} (${Number(review.focus_today.toxic[0].pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewFocus3dStrong').textContent = review.focus_3d?.strongest?.length ? `${review.focus_3d.strongest[0].label} (${Number(review.focus_3d.strongest[0].pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewFocus3dToxic').textContent = review.focus_3d?.toxic?.length ? `${review.focus_3d.toxic[0].label} (${Number(review.focus_3d.toxic[0].pnl_rub).toFixed(2)})` : '-';
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');
