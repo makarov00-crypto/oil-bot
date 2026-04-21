@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+
+from trade_storage import load_trade_rows as load_trade_rows_from_storage
 from zoneinfo import ZoneInfo
 
 import requests
@@ -126,6 +128,10 @@ def get_trade_journal_path(base_dir: Path) -> Path:
     return get_log_dir(base_dir) / "trade_journal.jsonl"
 
 
+def get_trade_db_path(base_dir: Path) -> Path:
+    return get_state_dir(base_dir) / "trade_analytics.sqlite3"
+
+
 def get_portfolio_snapshot_path(base_dir: Path) -> Path:
     return get_state_dir(base_dir) / "_portfolio_snapshot.json"
 
@@ -152,16 +158,16 @@ def load_states(base_dir: Path) -> dict[str, dict[str, Any]]:
 def load_trade_rows(base_dir: Path, target_day: date) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     trade_journal_path = get_trade_journal_path(base_dir)
-    if not trade_journal_path.exists():
-        return rows
-    for line in trade_journal_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except Exception:
-            continue
+    trade_db_path = get_trade_db_path(base_dir)
+    try:
+        source_rows = load_trade_rows_from_storage(
+            trade_journal_path,
+            trade_db_path,
+            target_day=target_day,
+        )
+    except Exception:
+        source_rows = []
+    for row in source_rows:
         raw_time = str(row.get("time") or "")
         if not raw_time:
             continue
@@ -170,8 +176,9 @@ def load_trade_rows(base_dir: Path, target_day: date) -> list[dict[str, Any]]:
         except ValueError:
             continue
         if dt.astimezone(MOSCOW_TZ).date() == target_day:
-            row["_dt"] = dt
-            rows.append(row)
+            item = dict(row)
+            item["_dt"] = dt
+            rows.append(item)
     return rows
 
 

@@ -26,6 +26,7 @@ from news_bias import NewsBias, select_active_biases
 from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
 from strategy_registry import get_secondary_strategies
 from strategy_engine import evaluate_primary_signal_bundle
+from trade_storage import append_trade_row, load_trade_rows as load_trade_rows_from_storage, sync_journal_to_db
 from tinkoff.invest import (
     CandleInterval,
     Client,
@@ -68,6 +69,7 @@ RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 LOG_DIR = Path(__file__).with_name("logs")
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
+TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
@@ -461,6 +463,24 @@ def parse_state_datetime(value: str) -> datetime | None:
     return parsed
 
 
+def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
+    if state is None:
+        return {}
+    signal_summary = [str(item) for item in list(state.last_signal_summary or [])[:4] if str(item).strip()]
+    context = {
+        "higher_tf_bias": str(state.last_higher_tf_bias or ""),
+        "news_bias": str(state.last_news_bias or ""),
+        "news_impact": str(state.last_news_impact or ""),
+        "allocator_quantity": int(state.last_allocator_quantity or 0),
+        "allocator_summary": str(state.last_allocator_summary or ""),
+        "entry_allocator_quantity": int(state.last_entry_allocator_quantity or 0),
+        "entry_allocator_summary": str(state.last_entry_allocator_summary or ""),
+        "signal_summary": signal_summary,
+        "execution_status": str(state.execution_status or ""),
+    }
+    return {key: value for key, value in context.items() if value not in ("", [], None)}
+
+
 def append_trade_journal(
     instrument: InstrumentConfig,
     event: str,
@@ -477,6 +497,7 @@ def append_trade_journal(
     source: str = "",
     strategy: str = "",
     dry_run: bool = True,
+    state: InstrumentState | None = None,
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     if isinstance(event_time, datetime):
@@ -554,22 +575,30 @@ def append_trade_journal(
         "mode": "DRY_RUN" if dry_run else "LIVE",
         "session": get_market_session(),
     }
+    context = build_trade_event_context(state)
+    if context:
+        row["context"] = context
     with TRADE_JOURNAL_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    append_trade_row(TRADE_DB_PATH, row)
 
 
 def load_trade_journal() -> list[dict[str, Any]]:
-    if not TRADE_JOURNAL_PATH.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in TRADE_JOURNAL_PATH.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except Exception as error:
-            logging.warning("Не удалось прочитать строку журнала сделок: %s", error)
-    return rows
+    try:
+        return load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH)
+    except Exception as error:
+        logging.warning("Не удалось загрузить журнал сделок из trade storage: %s", error)
+        if not TRADE_JOURNAL_PATH.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        for line in TRADE_JOURNAL_PATH.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception as inner_error:
+                logging.warning("Не удалось прочитать строку журнала сделок: %s", inner_error)
+        return rows
 
 
 def save_trade_journal(rows: list[dict[str, Any]]) -> None:
@@ -577,6 +606,7 @@ def save_trade_journal(rows: list[dict[str, Any]]) -> None:
     with TRADE_JOURNAL_PATH.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    sync_journal_to_db(TRADE_JOURNAL_PATH, TRADE_DB_PATH)
 
 
 def update_latest_unclosed_open_journal_entry(
@@ -1085,6 +1115,7 @@ def confirm_pending_open_from_broker(
             source="portfolio_confirmation",
             strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
             dry_run=config.dry_run,
+            state=state,
         )
     if entry_fee_rub is not None and entry_fee_rub > 0:
         state.entry_commission_rub = entry_fee_rub
@@ -1193,6 +1224,7 @@ def confirm_pending_close_from_broker(
         source=source,
         strategy=previous_strategy,
         dry_run=False,
+        state=state,
     )
     update_latest_close_journal_entry(
         instrument.symbol,
@@ -3102,6 +3134,7 @@ def sync_state_with_portfolio(
             source=recovery_source,
             strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
             dry_run=config.dry_run,
+            state=state,
         )
         save_state(instrument.symbol, state)
     elif state.position_side != "FLAT" and not has_matching_open_entry and state.delayed_close_recovery_needed:
@@ -4492,6 +4525,7 @@ def sync_pending_order(
                 source="order_fill",
                 strategy=state.entry_strategy,
                 dry_run=False,
+                state=state,
             )
         elif state.pending_order_action == "CLOSE":
             gross_pnl = 0.0
@@ -4524,6 +4558,7 @@ def sync_pending_order(
                 source="order_fill",
                 strategy=state.entry_strategy,
                 dry_run=False,
+                state=state,
             )
             state.last_exit_time = datetime.now(UTC).isoformat()
             state.last_exit_side = state.position_side
@@ -4719,6 +4754,7 @@ def open_position(
             source="dry_run",
             strategy=strategy_name,
             dry_run=True,
+            state=state,
         )
         return
 
@@ -4788,6 +4824,7 @@ def close_position(
             source="dry_run",
             strategy=state.entry_strategy,
             dry_run=True,
+            state=state,
         )
         state.last_exit_time = datetime.now(UTC).isoformat()
         state.last_exit_side = state.position_side

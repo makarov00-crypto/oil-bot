@@ -27,6 +27,7 @@ from daily_ai_review import (
     build_review_prompt,
     request_openai_text,
 )
+from trade_storage import load_trade_rows as load_trade_rows_from_storage
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -35,6 +36,7 @@ load_dotenv(BASE_DIR / ".env")
 STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
+TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
@@ -1193,19 +1195,8 @@ def build_capital_alert(states: dict[str, dict]) -> dict:
 
 
 def load_trade_rows(limit: int = 50) -> list[dict]:
-    if not TRADE_JOURNAL_PATH.exists():
-        return []
-    rows: list[dict] = []
     try:
-        with TRADE_JOURNAL_PATH.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except Exception:
-                    continue
+        rows = load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH, limit=limit)
     except Exception:
         return []
     normalized: list[dict] = []
@@ -1387,28 +1378,20 @@ def parse_trade_time(raw_value: str | None) -> datetime | None:
 
 
 def load_all_trade_rows() -> list[dict]:
-    if not TRADE_JOURNAL_PATH.exists():
-        return []
-    rows: list[dict] = []
     try:
-        with TRADE_JOURNAL_PATH.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                dt = parse_trade_time(row.get("time"))
-                if not dt:
-                    continue
-                row["_dt"] = dt
-                row["_date"] = dt.date().isoformat()
-                rows.append(row)
+        rows = load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH)
     except Exception:
         return []
-    return rows
+    normalized_rows: list[dict] = []
+    for row in rows:
+        dt = parse_trade_time(row.get("time"))
+        if not dt:
+            continue
+        item = dict(row)
+        item["_dt"] = dt
+        item["_date"] = dt.date().isoformat()
+        normalized_rows.append(item)
+    return normalized_rows
 
 
 def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
