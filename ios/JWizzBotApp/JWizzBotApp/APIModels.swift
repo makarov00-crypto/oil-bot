@@ -396,6 +396,7 @@ struct TradeReview: Decodable {
     let worstStrategyRegime: NamedLabelPnl?
     let focusToday: StrategyFocusSummary?
     let focus3d: StrategyFocusSummary?
+    let release1Summary: ReleaseAnalyticsSummary?
     let closedReviews: [ClosedReview]
     let currentOpen: [OpenTradeStub]?
 
@@ -415,9 +416,16 @@ struct TradeReview: Decodable {
         case worstStrategyRegime = "worst_strategy_regime"
         case focusToday = "focus_today"
         case focus3d = "focus_3d"
+        case release1Summary = "release1_summary"
         case closedReviews = "closed_reviews"
         case currentOpen = "current_open"
     }
+}
+
+struct ReleaseAnalyticsSummary: Decodable {
+    let working: String
+    let toxic: String
+    let watch: String
 }
 
 struct NamedPnl: Decodable {

@@ -1800,6 +1800,22 @@ def summarize_strategy_regime_focus(rows: list[dict[str, Any]], limit: int = 3) 
     return {"strongest": strongest, "toxic": toxic}
 
 
+def build_strategy_regime_summary(
+    focus_today: dict[str, list[dict[str, Any]]],
+    focus_3d: dict[str, list[dict[str, Any]]],
+) -> dict[str, str]:
+    working = focus_3d.get("strongest") or []
+    toxic = focus_3d.get("toxic") or []
+    today_strong = focus_today.get("strongest") or []
+    today_toxic = focus_today.get("toxic") or []
+
+    return {
+        "working": working[0]["label"] if working else "-",
+        "toxic": toxic[0]["label"] if toxic else "-",
+        "watch": (today_toxic[0]["label"] if today_toxic else (today_strong[0]["label"] if today_strong else "-")),
+    }
+
+
 def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) -> dict:
     rows = load_all_trade_rows()[-limit:]
     return build_trade_review(rows, states)
@@ -1818,6 +1834,7 @@ def load_trade_review_for_day(
     recent_rows = [row for row in all_rows if lookback_start <= row.get("_dt", datetime.min.replace(tzinfo=MOSCOW_TZ)).date() <= target_day]
     review["focus_today"] = summarize_strategy_regime_focus(rows)
     review["focus_3d"] = summarize_strategy_regime_focus(recent_rows)
+    review["release1_summary"] = build_strategy_regime_summary(review["focus_today"], review["focus_3d"])
     return review
 
 
@@ -3221,6 +3238,18 @@ def build_dashboard_html() -> str:
           <div class="muted">Токсичное 3 дня</div>
           <div class="metric metric-wide metric-compact" id="reviewFocus3dToxic">-</div>
         </div>
+        <div>
+          <div class="muted">Рабочая зона</div>
+          <div class="metric metric-wide metric-compact" id="reviewReleaseWorking">-</div>
+        </div>
+        <div>
+          <div class="muted">Под наблюдением</div>
+          <div class="metric metric-wide metric-compact" id="reviewReleaseWatch">-</div>
+        </div>
+        <div>
+          <div class="muted">Токсичная зона</div>
+          <div class="metric metric-wide metric-compact" id="reviewReleaseToxic">-</div>
+        </div>
       </div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
@@ -3912,6 +3941,9 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewFocusTodayToxic').textContent = review.focus_today?.toxic?.length ? `${review.focus_today.toxic[0].label} (${Number(review.focus_today.toxic[0].pnl_rub).toFixed(2)})` : '-';
       document.getElementById('reviewFocus3dStrong').textContent = review.focus_3d?.strongest?.length ? `${review.focus_3d.strongest[0].label} (${Number(review.focus_3d.strongest[0].pnl_rub).toFixed(2)})` : '-';
       document.getElementById('reviewFocus3dToxic').textContent = review.focus_3d?.toxic?.length ? `${review.focus_3d.toxic[0].label} (${Number(review.focus_3d.toxic[0].pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewReleaseWorking').textContent = review.release1_summary?.working || '-';
+      document.getElementById('reviewReleaseWatch').textContent = review.release1_summary?.watch || '-';
+      document.getElementById('reviewReleaseToxic').textContent = review.release1_summary?.toxic || '-';
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');

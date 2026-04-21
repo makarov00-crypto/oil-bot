@@ -166,6 +166,9 @@ struct TradesScreen: View {
                         MetricGlassTile(title: "Токсичное сегодня", value: focusText(payload.tradeReview.focusToday?.toxic.first))
                         MetricGlassTile(title: "Сильное 3 дня", value: focusText(payload.tradeReview.focus3d?.strongest.first))
                         MetricGlassTile(title: "Токсичное 3 дня", value: focusText(payload.tradeReview.focus3d?.toxic.first))
+                        MetricGlassTile(title: "Рабочая зона", value: payload.tradeReview.release1Summary?.working ?? "-")
+                        MetricGlassTile(title: "Под наблюдением", value: payload.tradeReview.release1Summary?.watch ?? "-")
+                        MetricGlassTile(title: "Токсичная зона", value: payload.tradeReview.release1Summary?.toxic ?? "-")
                     }
                 }
             }
