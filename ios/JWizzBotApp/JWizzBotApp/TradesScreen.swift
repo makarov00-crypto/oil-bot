@@ -158,6 +158,14 @@ struct TradesScreen: View {
                         MetricGlassTile(title: "Минусовых", value: "\(payload.tradeReview.losses)", tone: .red)
                         MetricGlassTile(title: "Итог по закрытым", value: formatRub(payload.tradeReview.closedTotalPnlRub), tone: statusTone(for: payload.tradeReview.closedTotalPnlRub))
                         MetricGlassTile(title: "Лучшая стратегия", value: bestStrategyText(payload.tradeReview.bestStrategy))
+                        MetricGlassTile(title: "Лучший режим", value: regimeText(payload.tradeReview.bestRegime))
+                        MetricGlassTile(title: "Худший режим", value: regimeText(payload.tradeReview.worstRegime))
+                        MetricGlassTile(title: "Лучшая связка", value: labelPnlText(payload.tradeReview.bestStrategyRegime))
+                        MetricGlassTile(title: "Худшая связка", value: labelPnlText(payload.tradeReview.worstStrategyRegime))
+                        MetricGlassTile(title: "Сильное сегодня", value: focusText(payload.tradeReview.focusToday?.strongest.first))
+                        MetricGlassTile(title: "Токсичное сегодня", value: focusText(payload.tradeReview.focusToday?.toxic.first))
+                        MetricGlassTile(title: "Сильное 3 дня", value: focusText(payload.tradeReview.focus3d?.strongest.first))
+                        MetricGlassTile(title: "Токсичное 3 дня", value: focusText(payload.tradeReview.focus3d?.toxic.first))
                     }
                 }
             }
@@ -194,6 +202,7 @@ struct TradesScreen: View {
                                         compactInfo("Цена входа", trade.price.map { String(format: "%.4f", $0) } ?? "-")
                                         compactInfo("Комиссия входа", formatTradePnl(trade.commissionRub))
                                         compactInfo("Причина", trade.reasonDisplay ?? trade.reason ?? "-")
+                                        compactInfo("Контекст", trade.contextDisplay ?? "-")
                                     }
                                 }
                             }
@@ -235,7 +244,13 @@ struct TradesScreen: View {
 
                             Divider().overlay(Color.white.opacity(0.08))
 
+                            if let entryContext = trade.entryContextDisplay, !entryContext.isEmpty {
+                                compactBlock(title: "Контекст входа", value: entryContext)
+                            }
                             compactBlock(title: "Причина выхода", value: trade.exitReason)
+                            if let exitContext = trade.exitContextDisplay, !exitContext.isEmpty {
+                                compactBlock(title: "Контекст выхода", value: exitContext)
+                            }
                             compactBlock(title: "Вердикт", value: trade.verdict)
                         }
                     }
@@ -286,6 +301,24 @@ struct TradesScreen: View {
     private func bestStrategyText(_ bestStrategy: NamedStrategyPnl?) -> String {
         guard let bestStrategy else { return "-" }
         return "\(bestStrategy.strategy) (\(String(format: "%.2f", bestStrategy.pnlRub)))"
+    }
+
+    private func regimeText(_ regime: NamedRegimePnl?) -> String {
+        guard let regime else { return "-" }
+        return "\(regime.regime) (\(String(format: "%.2f", regime.pnlRub)))"
+    }
+
+    private func labelPnlText(_ item: NamedLabelPnl?) -> String {
+        guard let item else { return "-" }
+        return "\(item.label) (\(String(format: "%.2f", item.pnlRub)))"
+    }
+
+    private func focusText(_ item: StrategyFocusItem?) -> String {
+        guard let item else { return "-" }
+        if let count = item.count {
+            return "\(item.label) (\(String(format: "%.2f", item.pnlRub)); \(count) сд.)"
+        }
+        return "\(item.label) (\(String(format: "%.2f", item.pnlRub)))"
     }
 
     private func entryCommissionText(_ value: String?) -> String {

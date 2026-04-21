@@ -390,6 +390,12 @@ struct TradeReview: Decodable {
     let worstSymbol: NamedPnl?
     let bestStrategy: NamedStrategyPnl?
     let worstStrategy: NamedStrategyPnl?
+    let bestRegime: NamedRegimePnl?
+    let worstRegime: NamedRegimePnl?
+    let bestStrategyRegime: NamedLabelPnl?
+    let worstStrategyRegime: NamedLabelPnl?
+    let focusToday: StrategyFocusSummary?
+    let focus3d: StrategyFocusSummary?
     let closedReviews: [ClosedReview]
     let currentOpen: [OpenTradeStub]?
 
@@ -403,6 +409,12 @@ struct TradeReview: Decodable {
         case worstSymbol = "worst_symbol"
         case bestStrategy = "best_strategy"
         case worstStrategy = "worst_strategy"
+        case bestRegime = "best_regime"
+        case worstRegime = "worst_regime"
+        case bestStrategyRegime = "best_strategy_regime"
+        case worstStrategyRegime = "worst_strategy_regime"
+        case focusToday = "focus_today"
+        case focus3d = "focus_3d"
         case closedReviews = "closed_reviews"
         case currentOpen = "current_open"
     }
@@ -428,6 +440,45 @@ struct NamedStrategyPnl: Decodable {
     }
 }
 
+struct NamedRegimePnl: Decodable {
+    let regime: String
+    let pnlRub: Double
+
+    enum CodingKeys: String, CodingKey {
+        case regime
+        case pnlRub = "pnl_rub"
+    }
+}
+
+struct NamedLabelPnl: Decodable {
+    let label: String
+    let pnlRub: Double
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case pnlRub = "pnl_rub"
+    }
+}
+
+struct StrategyFocusSummary: Decodable {
+    let strongest: [StrategyFocusItem]
+    let toxic: [StrategyFocusItem]
+}
+
+struct StrategyFocusItem: Decodable, Identifiable {
+    let label: String
+    let pnlRub: Double
+    let count: Int?
+
+    var id: String { "\(label)-\(pnlRub)" }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case pnlRub = "pnl_rub"
+        case count
+    }
+}
+
 struct OpenTradeStub: Decodable, Identifiable {
     let id: String
     let symbol: String
@@ -438,6 +489,7 @@ struct OpenTradeStub: Decodable, Identifiable {
     let commissionRub: String?
     let reason: String?
     let reasonDisplay: String?
+    let contextDisplay: String?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -450,6 +502,7 @@ struct OpenTradeStub: Decodable, Identifiable {
         commissionRub = try container.decodeLossyStringIfPresent(forKey: .commissionRub)
         reason = try container.decodeIfPresent(String.self, forKey: .reason)
         reasonDisplay = try container.decodeIfPresent(String.self, forKey: .reasonDisplay)
+        contextDisplay = try container.decodeIfPresent(String.self, forKey: .contextDisplay)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -461,6 +514,7 @@ struct OpenTradeStub: Decodable, Identifiable {
         case commissionRub = "commission_rub"
         case reason
         case reasonDisplay = "reason_display"
+        case contextDisplay = "context_display"
     }
 }
 
@@ -481,6 +535,8 @@ struct ClosedReview: Decodable, Identifiable {
     let netPnlRub: String?
     let entryReason: String?
     let exitReason: String
+    let entryContextDisplay: String?
+    let exitContextDisplay: String?
     let verdict: String
 
     init(from decoder: Decoder) throws {
@@ -502,6 +558,8 @@ struct ClosedReview: Decodable, Identifiable {
         netPnlRub = try container.decodeLossyStringIfPresent(forKey: .netPnlRub)
         entryReason = try container.decodeIfPresent(String.self, forKey: .entryReason)
         exitReason = try container.decode(String.self, forKey: .exitReason)
+        entryContextDisplay = try container.decodeIfPresent(String.self, forKey: .entryContextDisplay)
+        exitContextDisplay = try container.decodeIfPresent(String.self, forKey: .exitContextDisplay)
         verdict = try container.decode(String.self, forKey: .verdict)
     }
 
@@ -522,6 +580,8 @@ struct ClosedReview: Decodable, Identifiable {
         case netPnlRub = "net_pnl_rub"
         case entryReason = "entry_reason"
         case exitReason = "exit_reason"
+        case entryContextDisplay = "entry_context_display"
+        case exitContextDisplay = "exit_context_display"
         case verdict
     }
 }
