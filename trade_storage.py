@@ -23,6 +23,16 @@ def _load_journal_rows(journal_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _journal_row_count(journal_path: Path) -> int:
+    if not journal_path.exists():
+        return 0
+    count = 0
+    for line in journal_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            count += 1
+    return count
+
+
 def _event_uid(row: dict[str, Any]) -> str:
     broker_op_id = str(row.get("broker_op_id") or "").strip()
     if broker_op_id:
@@ -245,6 +255,12 @@ def ensure_trade_storage(journal_path: Path, db_path: Path) -> None:
     if not journal_path.exists():
         return
     if not db_path.exists() or db_path.stat().st_mtime < journal_path.stat().st_mtime:
+        sync_journal_to_db(journal_path, db_path)
+        return
+    journal_count = _journal_row_count(journal_path)
+    with _connect(db_path) as connection:
+        db_count = int(connection.execute("SELECT COUNT(*) FROM trade_events").fetchone()[0])
+    if journal_count > db_count:
         sync_journal_to_db(journal_path, db_path)
 
 

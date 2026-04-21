@@ -1,10 +1,12 @@
 import unittest
+import json
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import bot_oil_main as mod
-from trade_storage import load_trade_rows
+from trade_storage import ensure_trade_db, load_trade_rows
 
 
 class TradeStorageTests(unittest.TestCase):
@@ -99,6 +101,95 @@ class TradeStorageTests(unittest.TestCase):
                 db_rows = load_trade_rows(journal_path, db_path)
                 self.assertEqual(len(db_rows), 1)
                 self.assertEqual(float(db_rows[0]["net_pnl_rub"]), 9.5)
+
+    def test_load_trade_rows_resyncs_when_sqlite_row_count_is_stale(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            log_dir = temp_path / "logs"
+            state_dir = temp_path / "bot_state"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            state_dir.mkdir(parents=True, exist_ok=True)
+            journal_path = log_dir / "trade_journal.jsonl"
+            db_path = state_dir / "trade_analytics.sqlite3"
+
+            journal_rows = [
+                {
+                    "time": "2026-04-21T10:00:00+03:00",
+                    "symbol": "TEST",
+                    "event": "OPEN",
+                    "side": "LONG",
+                    "qty_lots": 1,
+                    "price": 100.0,
+                    "strategy": "opening_range_breakout",
+                },
+                {
+                    "time": "2026-04-21T10:05:00+03:00",
+                    "symbol": "TEST",
+                    "event": "CLOSE",
+                    "side": "LONG",
+                    "qty_lots": 1,
+                    "price": 101.0,
+                    "pnl_rub": 10.0,
+                    "strategy": "opening_range_breakout",
+                    "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong"},
+                },
+            ]
+            journal_path.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in journal_rows) + "\n",
+                encoding="utf-8",
+            )
+
+            ensure_trade_db(db_path)
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO trade_events (
+                        event_uid, storage_order, time, trade_date, symbol, display_name, event, side,
+                        qty_lots, lot_size, price, pnl_rub, gross_pnl_rub, commission_rub, net_pnl_rub,
+                        reason, source, strategy, mode, session, broker_op_id,
+                        higher_tf_bias, news_bias, news_impact, allocator_quantity, allocator_summary,
+                        entry_allocator_quantity, entry_allocator_summary, signal_summary_json,
+                        execution_status, context_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "stale-open",
+                        0,
+                        journal_rows[0]["time"],
+                        "2026-04-21",
+                        "TEST",
+                        "",
+                        "OPEN",
+                        "LONG",
+                        1,
+                        None,
+                        100.0,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "",
+                        "",
+                        "opening_range_breakout",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        0,
+                        "",
+                        0,
+                        "",
+                        "[]",
+                        "",
+                        "{}",
+                    ),
+                )
+
+            rows = load_trade_rows(journal_path, db_path)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1]["context"]["market_regime"], "trend_expansion")
 
 
 if __name__ == "__main__":
