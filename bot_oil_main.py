@@ -211,6 +211,13 @@ class InstrumentState:
     last_higher_tf_bias: str = ""
     last_news_bias: str = "NEUTRAL"
     last_news_impact: str = ""
+    last_market_regime: str = ""
+    last_setup_quality_label: str = ""
+    last_setup_quality_score: int = 0
+    last_volume_ratio: float = 0.0
+    last_body_ratio: float = 0.0
+    last_atr_pct: float = 0.0
+    last_range_width_pct: float = 0.0
     last_signal_summary: list[str] = field(default_factory=list)
     last_allocator_summary: str = ""
     last_allocator_quantity: int = 0
@@ -471,6 +478,13 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "higher_tf_bias": str(state.last_higher_tf_bias or ""),
         "news_bias": str(state.last_news_bias or ""),
         "news_impact": str(state.last_news_impact or ""),
+        "market_regime": str(state.last_market_regime or ""),
+        "setup_quality_label": str(state.last_setup_quality_label or ""),
+        "setup_quality_score": int(state.last_setup_quality_score or 0),
+        "volume_ratio": round(float(state.last_volume_ratio or 0.0), 3),
+        "body_ratio": round(float(state.last_body_ratio or 0.0), 3),
+        "atr_pct": round(float(state.last_atr_pct or 0.0), 6),
+        "range_width_pct": round(float(state.last_range_width_pct or 0.0), 6),
         "allocator_quantity": int(state.last_allocator_quantity or 0),
         "allocator_summary": str(state.last_allocator_summary or ""),
         "entry_allocator_quantity": int(state.last_entry_allocator_quantity or 0),
@@ -2464,6 +2478,74 @@ def build_market_view_lines(
         f"• Объём: {'норма' if volume_ok else 'слабый'}",
         f"• Импульс: {'есть' if impulse_ok else 'слабый'}",
     ]
+
+
+def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, dict[str, float]]:
+    last = df.iloc[-1]
+    recent = df.iloc[-5:] if len(df) >= 5 else df
+    close = float(last["close"])
+    ema20 = float(last["ema20"])
+    ema50 = float(last["ema50"])
+    atr_pct = float(last["atr"]) / close if close else 0.0
+    volume_avg = float(last["volume_avg"])
+    body_avg = float(last["body_avg"])
+    volume_ratio = (float(last["volume"]) / volume_avg) if volume_avg > 0 else 0.0
+    body_ratio = (float(last["body"]) / body_avg) if body_avg > 0 else 0.0
+    range_width_pct = (
+        (float(recent["high"].max()) - float(recent["low"].min())) / close if close else 0.0
+    )
+    long_trend = close > ema20 and ema20 >= ema50
+    short_trend = close < ema20 and ema20 <= ema50
+    near_ema20 = abs(close - ema20) / close <= 0.0025 if close else False
+
+    if volume_ratio < 0.9 and body_ratio < 0.7 and range_width_pct <= max(atr_pct * 2.0, 0.0035):
+        regime = "compression"
+    elif atr_pct <= 0.00055 and range_width_pct <= 0.0045:
+        regime = "chop"
+    elif higher_tf_bias == "LONG" and long_trend and near_ema20:
+        regime = "trend_pullback"
+    elif higher_tf_bias == "SHORT" and short_trend and near_ema20:
+        regime = "trend_pullback"
+    elif (higher_tf_bias == "LONG" and long_trend) or (higher_tf_bias == "SHORT" and short_trend):
+        regime = "trend_expansion"
+    elif volume_ratio >= 1.15 and body_ratio >= 1.0 and atr_pct >= 0.0008:
+        regime = "impulse"
+    else:
+        regime = "mixed"
+
+    return regime, {
+        "atr_pct": atr_pct,
+        "volume_ratio": volume_ratio,
+        "body_ratio": body_ratio,
+        "range_width_pct": range_width_pct,
+    }
+
+
+def estimate_setup_quality(
+    signal: str,
+    higher_tf_bias: str,
+    market_regime: str,
+    metrics: dict[str, float],
+    news_bias: NewsBias | None = None,
+) -> tuple[int, str]:
+    if signal not in {"LONG", "SHORT"}:
+        return 0, "none"
+    score = 1
+    if higher_tf_bias == signal:
+        score += 1
+    if float(metrics.get("volume_ratio") or 0.0) >= 1.0:
+        score += 1
+    if float(metrics.get("body_ratio") or 0.0) >= 0.8:
+        score += 1
+    if market_regime in {"trend_expansion", "trend_pullback", "impulse"}:
+        score += 1
+    if news_bias is not None and news_bias.bias == signal:
+        score += 1
+    if score >= 5:
+        return score, "strong"
+    if score >= 3:
+        return score, "medium"
+    return score, "weak"
 
 
 def build_periodic_status_message(
@@ -5162,6 +5244,21 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
     state.last_higher_tf_bias = higher_tf_bias
     state.last_news_bias = format_news_bias_label(news_bias)
     state.last_news_impact = describe_news_bias_impact(signal, news_bias)
+    market_regime, regime_metrics = classify_market_regime(lower_df, higher_tf_bias)
+    setup_quality_score, setup_quality_label = estimate_setup_quality(
+        signal,
+        higher_tf_bias,
+        market_regime,
+        regime_metrics,
+        news_bias,
+    )
+    state.last_market_regime = market_regime
+    state.last_setup_quality_score = setup_quality_score
+    state.last_setup_quality_label = setup_quality_label
+    state.last_volume_ratio = float(regime_metrics.get("volume_ratio") or 0.0)
+    state.last_body_ratio = float(regime_metrics.get("body_ratio") or 0.0)
+    state.last_atr_pct = float(regime_metrics.get("atr_pct") or 0.0)
+    state.last_range_width_pct = float(regime_metrics.get("range_width_pct") or 0.0)
     state.last_signal_summary = signal_summary
     state.last_allocator_quantity = 0
     if signal not in {"LONG", "SHORT"}:

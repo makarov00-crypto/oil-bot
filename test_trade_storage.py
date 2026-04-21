@@ -15,6 +15,13 @@ class TradeStorageTests(unittest.TestCase):
             last_higher_tf_bias="LONG",
             last_news_bias="LONG_HIGH",
             last_news_impact="сильный трендовый фон",
+            last_market_regime="trend_expansion",
+            last_setup_quality_label="strong",
+            last_setup_quality_score=5,
+            last_volume_ratio=1.23,
+            last_body_ratio=0.91,
+            last_atr_pct=0.0012,
+            last_range_width_pct=0.0055,
             last_allocator_quantity=2,
             last_allocator_summary="Аллокатор одобрил вход.",
             last_entry_allocator_quantity=1,
@@ -50,11 +57,14 @@ class TradeStorageTests(unittest.TestCase):
                 self.assertIn("context", rows[0])
                 self.assertEqual(rows[0]["context"]["higher_tf_bias"], "LONG")
                 self.assertEqual(rows[0]["context"]["allocator_quantity"], 2)
+                self.assertEqual(rows[0]["context"]["market_regime"], "trend_expansion")
+                self.assertEqual(rows[0]["context"]["setup_quality_label"], "strong")
 
                 db_rows = load_trade_rows(journal_path, db_path)
                 self.assertEqual(len(db_rows), 1)
                 self.assertEqual(db_rows[0]["context"]["news_bias"], "LONG_HIGH")
                 self.assertEqual(db_rows[0]["context"]["execution_status"], "confirmed_open")
+                self.assertEqual(db_rows[0]["context"]["setup_quality_score"], 5)
 
     def test_save_trade_journal_resyncs_sqlite_after_update(self) -> None:
         with TemporaryDirectory() as temp_dir:

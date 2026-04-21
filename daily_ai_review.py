@@ -91,6 +91,8 @@ class ClosedTrade:
     pnl_rub: float
     entry_reason: str
     exit_reason: str
+    market_regime: str
+    setup_quality_label: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -214,6 +216,8 @@ def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
                 pnl_rub=pnl_rub,
                 entry_reason=str((open_row or {}).get("reason") or "-"),
                 exit_reason=str(row.get("reason") or "-"),
+                market_regime=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("market_regime") or "-"),
+                setup_quality_label=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("setup_quality_label") or "-"),
             )
         )
     return closed
@@ -253,10 +257,12 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
 
     by_symbol: dict[str, float] = defaultdict(float)
     by_strategy: dict[str, float] = defaultdict(float)
+    by_regime: dict[str, float] = defaultdict(float)
     by_opens: dict[str, int] = defaultdict(int)
     for trade in trades:
         by_symbol[trade.symbol] += trade.pnl_rub
         by_strategy[trade.strategy] += trade.pnl_rub
+        by_regime[trade.market_regime] += trade.pnl_rub
         by_opens[trade.symbol] += 1
 
     return {
@@ -267,6 +273,7 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
         "win_rate": win_rate,
         "by_symbol": dict(sorted(by_symbol.items())),
         "by_strategy": dict(sorted(by_strategy.items())),
+        "by_regime": dict(sorted(by_regime.items())),
         "trade_count_by_symbol": dict(sorted(by_opens.items())),
     }
 
@@ -319,6 +326,7 @@ def build_prompt(
         trades_lines.append(
             f"- {trade.symbol} {trade.side} | {trade.strategy} | вход {trade.entry_time} @{format_price(trade.entry_price)} | "
             f"выход {trade.exit_time} @{format_price(trade.exit_price)} | {trade.pnl_rub:.2f} RUB | "
+            f"режим {trade.market_regime} | сетап {trade.setup_quality_label} | "
             f"вход: {trade.entry_reason} | выход: {trade.exit_reason}"
         )
     if not trades_lines:
@@ -361,6 +369,9 @@ def build_prompt(
     by_strategy_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_strategy"].items()]
     if not by_strategy_lines:
         by_strategy_lines = ["- Нет данных по стратегиям."]
+    by_regime_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_regime"].items()]
+    if not by_regime_lines:
+        by_regime_lines = ["- Нет данных по режимам рынка."]
 
     review_lines = [
         f"Дата: {target_day.isoformat()}",
@@ -378,6 +389,9 @@ def build_prompt(
         "",
         "Итог по стратегиям:",
         *by_strategy_lines,
+        "",
+        "Итог по режимам рынка:",
+        *by_regime_lines,
         "",
         "Открытые позиции:",
         *open_positions_lines,

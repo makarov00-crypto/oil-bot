@@ -1242,6 +1242,7 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
             item.get("event"),
             item.get("strategy"),
         )
+        item["context_display"] = trade_context_display(item)
         normalized.append(item)
     return normalized
 
@@ -1253,6 +1254,39 @@ def stringify_money(value: Any, default: str = "-") -> str:
         return f"{float(value):.2f}"
     except Exception:
         return str(value)
+
+
+def trade_context_display(row: dict[str, Any]) -> str:
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return "-"
+    parts: list[str] = []
+    regime = str(context.get("market_regime") or "").strip()
+    if regime:
+        parts.append(f"режим {regime}")
+    quality_label = str(context.get("setup_quality_label") or "").strip()
+    quality_score = context.get("setup_quality_score")
+    if quality_label:
+        score_text = ""
+        try:
+            if quality_score not in (None, ""):
+                score_text = f" {int(quality_score)}/6"
+        except Exception:
+            score_text = ""
+        parts.append(f"сетап {quality_label}{score_text}")
+    atr_pct = context.get("atr_pct")
+    if atr_pct not in (None, ""):
+        try:
+            parts.append(f"ATR {float(atr_pct) * 100:.2f}%")
+        except Exception:
+            pass
+    volume_ratio = context.get("volume_ratio")
+    if volume_ratio not in (None, ""):
+        try:
+            parts.append(f"объём x{float(volume_ratio):.2f}")
+        except Exception:
+            pass
+    return " | ".join(parts) if parts else "-"
 
 
 def humanize_strategy_name(strategy: str | None) -> str:
@@ -1435,6 +1469,7 @@ def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
             item.get("event"),
             item.get("strategy"),
         )
+        item["context_display"] = trade_context_display(item)
         normalized.append(item)
     return normalized
 
@@ -1556,6 +1591,8 @@ def format_trade_review_row(
         "net_pnl_rub": stringify_money(close_row.get("net_pnl_rub"), stringify_money(close_row.get("pnl_rub"))),
         "entry_reason": open_row.get("reason") if open_row else "-",
         "exit_reason": close_row.get("reason") or "-",
+        "entry_context_display": trade_context_display(open_row or {}),
+        "exit_context_display": trade_context_display(close_row),
         "verdict": verdict,
         "_exit_dt": exit_dt,
     }
@@ -3749,7 +3786,7 @@ def build_dashboard_html() -> str:
           <td class="mono right">${escapeHtml(commissionText)}</td>
           <td class="mono right ${pnlClass}">${escapeHtml(netText)}</td>
           <td>${escapeHtml(row.strategy || '-')}</td>
-          <td class="reason">${escapeHtml(row.reason_display || row.reason || '-')}</td>
+          <td class="reason">${escapeHtml(row.reason_display || row.reason || '-')}<br><span class="muted">${escapeHtml(row.context_display || '-')}</span></td>
         </tr>`);
         tradeCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
@@ -3769,6 +3806,7 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason_display || row.reason || '-')}</div>
+            <div class="mobile-card-text"><span class="muted">Контекст</span><br>${escapeHtml(row.context_display || '-')}</div>
           </div>
         </article>`);
       }
@@ -3804,7 +3842,7 @@ def build_dashboard_html() -> str:
           <td class="mono right">${escapeHtml(row.gross_pnl_rub ?? '-')}</td>
           <td class="mono right">${escapeHtml(row.commission_rub ?? '-')}</td>
           <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</td>
-          <td class="reason">${escapeHtml(row.exit_reason || '-')}</td>
+          <td class="reason">${escapeHtml(row.exit_reason || '-')}<br><span class="muted">${escapeHtml(row.exit_context_display || '-')}</span></td>
           <td>${escapeHtml(row.verdict || '-')}</td>
         </tr>`);
         reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -3822,6 +3860,7 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Причина выхода</span><br>${escapeHtml(row.exit_reason || '-')}</div>
+            <div class="mobile-card-text"><span class="muted">Контекст</span><br>${escapeHtml(row.exit_context_display || '-')}</div>
             <div class="mobile-card-text"><span class="muted">Вердикт</span><br>${escapeHtml(row.verdict || '-')}</div>
           </div>
         </article>`);
@@ -3844,7 +3883,7 @@ def build_dashboard_html() -> str:
             <td class="mono right">-</td>
             <td class="mono right">${escapeHtml(openCommissionText)}</td>
             <td class="mono right">-</td>
-            <td class="reason">${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}</td>
+            <td class="reason">${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}<br><span class="muted">${escapeHtml(row.context_display || '-')}</span></td>
             <td>открыта</td>
           </tr>`);
           reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -3861,6 +3900,7 @@ def build_dashboard_html() -> str:
             </div>
             <div class="mobile-card-footer">
               <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}</div>
+              <div class="mobile-card-text"><span class="muted">Контекст</span><br>${escapeHtml(row.context_display || '-')}</div>
             </div>
           </article>`);
         }
