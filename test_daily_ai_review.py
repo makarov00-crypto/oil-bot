@@ -43,10 +43,14 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertEqual(summary["by_regime"]["chop"], -50.0)
         self.assertEqual(summary["by_setup_quality"]["strong"], 150.0)
         self.assertEqual(summary["by_setup_quality"]["weak"], -50.0)
+        self.assertEqual(summary["by_strategy_regime"]["trend_pullback @ trend_expansion"], 150.0)
+        self.assertEqual(summary["by_strategy_regime"]["trend_pullback @ chop"], -50.0)
         self.assertEqual(summary["best_regime"]["name"], "trend_expansion")
         self.assertEqual(summary["worst_regime"]["name"], "chop")
         self.assertEqual(summary["best_setup_quality"]["name"], "strong")
         self.assertEqual(summary["worst_setup_quality"]["name"], "weak")
+        self.assertEqual(summary["best_strategy_regime"]["name"], "trend_pullback @ trend_expansion")
+        self.assertEqual(summary["worst_strategy_regime"]["name"], "trend_pullback @ chop")
 
     def test_build_prompt_includes_regime_focus_and_setup_quality_sections(self) -> None:
         trades = [
@@ -92,8 +96,11 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("Фокусные точки результата:", prompt)
         self.assertIn("- лучший режим: trend_expansion (120.00 RUB)", prompt)
         self.assertIn("- лучшее качество сетапа: strong (120.00 RUB)", prompt)
+        self.assertIn("- лучшая связка стратегия/режим: opening_range_breakout @ trend_expansion (120.00 RUB)", prompt)
         self.assertIn("Итог по качеству сетапов:", prompt)
         self.assertIn("- strong: 120.00 RUB", prompt)
+        self.assertIn("Итог по сочетаниям стратегия/режим:", prompt)
+        self.assertIn("- opening_range_breakout @ trend_expansion: 120.00 RUB", prompt)
 
 
 if __name__ == "__main__":

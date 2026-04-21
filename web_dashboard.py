@@ -1734,6 +1734,7 @@ def build_trade_review(
     by_symbol: dict[str, float] = {}
     by_strategy: dict[str, float] = {}
     by_regime: dict[str, float] = {}
+    by_strategy_regime: dict[str, float] = {}
     for item in closed_reviews:
         pnl = float(item.get("pnl_rub") or 0.0)
         by_symbol[item["symbol"]] = by_symbol.get(item["symbol"], 0.0) + pnl
@@ -1741,6 +1742,8 @@ def build_trade_review(
         by_strategy[strategy] = by_strategy.get(strategy, 0.0) + pnl
         regime = item.get("exit_context_display") or "-"
         by_regime[regime] = by_regime.get(regime, 0.0) + pnl
+        strategy_regime = f"{strategy} @ {regime}"
+        by_strategy_regime[strategy_regime] = by_strategy_regime.get(strategy_regime, 0.0) + pnl
 
     best_symbol = max(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
     worst_symbol = min(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
@@ -1748,6 +1751,8 @@ def build_trade_review(
     worst_strategy = min(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
     best_regime = max(by_regime.items(), key=lambda x: x[1]) if by_regime else None
     worst_regime = min(by_regime.items(), key=lambda x: x[1]) if by_regime else None
+    best_strategy_regime = max(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
+    worst_strategy_regime = min(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
 
     return {
         "closed_count": len(closed_reviews),
@@ -1761,6 +1766,8 @@ def build_trade_review(
         "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
         "best_regime": {"regime": best_regime[0], "pnl_rub": round(best_regime[1], 2)} if best_regime else None,
         "worst_regime": {"regime": worst_regime[0], "pnl_rub": round(worst_regime[1], 2)} if worst_regime else None,
+        "best_strategy_regime": {"label": best_strategy_regime[0], "pnl_rub": round(best_strategy_regime[1], 2)} if best_strategy_regime else None,
+        "worst_strategy_regime": {"label": worst_strategy_regime[0], "pnl_rub": round(worst_strategy_regime[1], 2)} if worst_strategy_regime else None,
         "closed_reviews": closed_reviews[:20],
         "current_open": current_open[:20],
     }
@@ -3157,6 +3164,14 @@ def build_dashboard_html() -> str:
           <div class="muted">Худший режим</div>
           <div class="metric metric-wide metric-compact" id="reviewWorstRegime">-</div>
         </div>
+        <div>
+          <div class="muted">Лучшая связка</div>
+          <div class="metric metric-wide metric-compact" id="reviewBestStrategyRegime">-</div>
+        </div>
+        <div>
+          <div class="muted">Худшая связка</div>
+          <div class="metric metric-wide metric-compact" id="reviewWorstStrategyRegime">-</div>
+        </div>
       </div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
@@ -3842,6 +3857,8 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewWorstStrategy').textContent = review.worst_strategy ? `${review.worst_strategy.strategy} (${Number(review.worst_strategy.pnl_rub).toFixed(2)})` : '-';
       document.getElementById('reviewBestRegime').textContent = review.best_regime ? `${review.best_regime.regime} (${Number(review.best_regime.pnl_rub).toFixed(2)})` : '-';
       document.getElementById('reviewWorstRegime').textContent = review.worst_regime ? `${review.worst_regime.regime} (${Number(review.worst_regime.pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewBestStrategyRegime').textContent = review.best_strategy_regime ? `${review.best_strategy_regime.label} (${Number(review.best_strategy_regime.pnl_rub).toFixed(2)})` : '-';
+      document.getElementById('reviewWorstStrategyRegime').textContent = review.worst_strategy_regime ? `${review.worst_strategy_regime.label} (${Number(review.worst_strategy_regime.pnl_rub).toFixed(2)})` : '-';
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');

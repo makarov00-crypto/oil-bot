@@ -80,6 +80,10 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["closed_total_pnl_rub"], 120.24)
         self.assertEqual([row["entry_time"] for row in review["closed_reviews"]], ["13.04 06:25:33"] * 3)
         self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong")
+        self.assertEqual(
+            review["best_strategy_regime"]["label"],
+            "opening_range_breakout @ режим trend_expansion | сетап strong",
+        )
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_keeps_remaining_multi_lot_open_qty(self) -> None:
