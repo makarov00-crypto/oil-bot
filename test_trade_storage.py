@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import bot_oil_main as mod
 from trade_storage import load_trade_rows
@@ -36,9 +37,9 @@ class TradeStorageTests(unittest.TestCase):
             state_dir = temp_path / "bot_state"
             journal_path = log_dir / "trade_journal.jsonl"
             db_path = state_dir / "trade_analytics.sqlite3"
-            with unittest.mock.patch.object(mod, "LOG_DIR", log_dir), unittest.mock.patch.object(
+            with patch.object(mod, "LOG_DIR", log_dir), patch.object(
                 mod, "TRADE_JOURNAL_PATH", journal_path
-            ), unittest.mock.patch.object(mod, "TRADE_DB_PATH", db_path):
+            ), patch.object(mod, "TRADE_DB_PATH", db_path):
                 mod.append_trade_journal(
                     self.instrument,
                     "OPEN",
@@ -73,9 +74,9 @@ class TradeStorageTests(unittest.TestCase):
             state_dir = temp_path / "bot_state"
             journal_path = log_dir / "trade_journal.jsonl"
             db_path = state_dir / "trade_analytics.sqlite3"
-            with unittest.mock.patch.object(mod, "LOG_DIR", log_dir), unittest.mock.patch.object(
+            with patch.object(mod, "LOG_DIR", log_dir), patch.object(
                 mod, "TRADE_JOURNAL_PATH", journal_path
-            ), unittest.mock.patch.object(mod, "TRADE_DB_PATH", db_path):
+            ), patch.object(mod, "TRADE_DB_PATH", db_path):
                 mod.append_trade_journal(
                     self.instrument,
                     "CLOSE",

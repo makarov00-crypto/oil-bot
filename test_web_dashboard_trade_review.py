@@ -44,6 +44,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "net_pnl_rub": 83.4,
                 "strategy": "opening_range_breakout",
                 "reason": "close",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong"},
             },
             {
                 "_dt": datetime(2026, 4, 13, 12, 15, 22, tzinfo=timezone.utc),
@@ -56,6 +57,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "net_pnl_rub": 18.42,
                 "strategy": "opening_range_breakout",
                 "reason": "close",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong"},
             },
             {
                 "_dt": datetime(2026, 4, 13, 12, 15, 22, tzinfo=timezone.utc),
@@ -68,6 +70,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "net_pnl_rub": 18.42,
                 "strategy": "opening_range_breakout",
                 "reason": "close",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong"},
             },
         ]
 
@@ -76,6 +79,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["closed_count"], 3)
         self.assertEqual(review["closed_total_pnl_rub"], 120.24)
         self.assertEqual([row["entry_time"] for row in review["closed_reviews"]], ["13.04 06:25:33"] * 3)
+        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_keeps_remaining_multi_lot_open_qty(self) -> None:
@@ -101,6 +105,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "net_pnl_rub": 83.4,
                 "strategy": "opening_range_breakout",
                 "reason": "close",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong"},
             },
         ]
 
