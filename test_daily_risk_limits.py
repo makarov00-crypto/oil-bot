@@ -341,6 +341,94 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertIn("сильна 3 дня", reason)
         self.assertIn("edge", reason)
 
+    def test_recent_strategy_regime_performance_uses_context_regime(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
+        rows = [
+            {
+                "time": f"{today}T10:00:00+03:00",
+                "event": "CLOSE",
+                "symbol": "NGJ6",
+                "strategy": "trend_pullback",
+                "net_pnl_rub": 90.0,
+                "context": {"market_regime": "trend_pullback"},
+            },
+            {
+                "time": f"{today}T11:00:00+03:00",
+                "event": "CLOSE",
+                "symbol": "NGJ6",
+                "strategy": "trend_pullback",
+                "net_pnl_rub": -40.0,
+                "context": {"market_regime": "chop"},
+            },
+        ]
+
+        stats = mod.calculate_recent_strategy_regime_performance(
+            "NGJ6",
+            "trend_pullback",
+            "trend_pullback",
+            rows=rows,
+        )
+
+        self.assertEqual(stats["closed_count"], 1)
+        self.assertEqual(stats["net_pnl_rub"], 90.0)
+
+    def test_strategy_regime_health_score_penalizes_toxic_regime(self) -> None:
+        with patch.object(
+            mod,
+            "calculate_recent_strategy_regime_performance",
+            return_value={"closed_count": 3, "net_pnl_rub": -160.0, "win_rate": 0.0},
+        ):
+            score, reason = mod.get_strategy_regime_health_score("NGJ6", "trend_pullback", "chop")
+
+        self.assertLess(score, 1.0)
+        self.assertIn("токсичен", reason)
+
+    def test_strategy_regime_health_score_rewards_working_regime(self) -> None:
+        with patch.object(
+            mod,
+            "calculate_recent_strategy_regime_performance",
+            return_value={"closed_count": 4, "net_pnl_rub": 180.0, "win_rate": 75.0},
+        ):
+            score, reason = mod.get_strategy_regime_health_score("RBM6", "failed_breakout", "trend_expansion")
+
+        self.assertGreater(score, 1.0)
+        self.assertIn("рабочий", reason)
+
+    def test_strategy_regime_guard_blocks_toxic_combination(self) -> None:
+        with patch.object(
+            mod,
+            "calculate_recent_strategy_regime_performance",
+            return_value={
+                "symbol": "NGJ6",
+                "strategy": "trend_pullback",
+                "closed_count": 3,
+                "wins": 0,
+                "losses": 3,
+                "net_pnl_rub": -220.0,
+            },
+        ):
+            reason = mod.strategy_regime_block_reason("NGJ6", "trend_pullback", "chop")
+
+        self.assertIn("strategy-regime guard", reason)
+        self.assertIn("в режиме chop", reason)
+
+    def test_strategy_regime_guard_allows_small_sample(self) -> None:
+        with patch.object(
+            mod,
+            "calculate_recent_strategy_regime_performance",
+            return_value={
+                "symbol": "NGJ6",
+                "strategy": "trend_pullback",
+                "closed_count": 2,
+                "wins": 0,
+                "losses": 2,
+                "net_pnl_rub": -220.0,
+            },
+        ):
+            reason = mod.strategy_regime_block_reason("NGJ6", "trend_pullback", "chop")
+
+        self.assertEqual(reason, "")
+
     def test_adaptive_exit_profile_tightens_in_chop_recovery_mode(self) -> None:
         config = SimpleNamespace(
             min_hold_minutes=30,

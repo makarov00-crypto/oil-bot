@@ -41,6 +41,8 @@ class PositionSizingTests(unittest.TestCase):
         ), patch.object(
             mod, "get_strategy_health_score", return_value=(1.08, "связка сильна 3 дня")
         ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.05, "режим trend_expansion рабочий")
+        ), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
@@ -65,6 +67,8 @@ class PositionSizingTests(unittest.TestCase):
         ), patch.object(
             mod, "get_strategy_health_score", return_value=(0.82, "связка слаба 3 дня")
         ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(0.80, "режим chop токсичен")
+        ), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
@@ -86,6 +90,8 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
         ), patch.object(
             mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим mixed нейтрален")
         ), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
@@ -111,6 +117,8 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.35)
         ), patch.object(
             mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим trend_expansion нейтрален")
         ), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
@@ -142,6 +150,8 @@ class PositionSizingTests(unittest.TestCase):
         ), patch.object(
             mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
         ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим mixed нейтрален")
+        ), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
@@ -167,6 +177,8 @@ class PositionSizingTests(unittest.TestCase):
         ), patch.object(
             mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
         ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим trend_expansion нейтрален")
+        ), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": True}
         ):
             sizing = mod.calculate_position_sizing_context(
@@ -191,6 +203,8 @@ class PositionSizingTests(unittest.TestCase):
         ), patch.object(
             mod, "get_strategy_health_score", return_value=(1.12, "связка сильна 3 дня")
         ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.10, "режим mixed рабочий")
+        ), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
@@ -199,6 +213,32 @@ class PositionSizingTests(unittest.TestCase):
 
         self.assertGreater(sizing["strategy_health_score"], 1.0)
         self.assertIn("сильна 3 дня", sizing["strategy_health_reason"])
+
+    def test_toxic_strategy_regime_reduces_participation(self) -> None:
+        self.state.last_setup_quality_label = "strong"
+        self.state.last_market_regime = "chop"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(0.78, "режим chop токсичен")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "failed_breakout"
+            )
+
+        self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
+        self.assertLess(sizing["strategy_regime_health_score"], 1.0)
 
 
 if __name__ == "__main__":
