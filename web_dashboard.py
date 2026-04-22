@@ -1290,7 +1290,13 @@ def trade_context_display(row: dict[str, Any]) -> str:
                 edge_text = f" {float(edge_score):.2f}"
         except Exception:
             edge_text = ""
-        parts.append(f"edge {edge_label}{edge_text}")
+        edge_map = {
+            "high": "качество входа высокое",
+            "confirmed": "качество входа подтверждённое",
+            "moderate": "качество входа умеренное",
+            "fragile": "качество входа слабое",
+        }
+        parts.append(f"{edge_map.get(edge_label, 'качество входа')} {edge_text}".strip())
     atr_pct = context.get("atr_pct")
     if atr_pct not in (None, ""):
         try:
@@ -3581,12 +3587,12 @@ def build_dashboard_html() -> str:
 
     function formatEdgeLabel(value) {
       const raw = String(value || '').trim();
-      if (!raw || raw === '-') return 'edge не определён';
+      if (!raw || raw === '-') return 'качество входа не определено';
       const map = {
-        high: 'Высокий edge',
-        confirmed: 'Подтверждённый edge',
-        moderate: 'Умеренный edge',
-        fragile: 'Хрупкий edge',
+        high: 'Высокое качество входа',
+        confirmed: 'Подтверждённое качество входа',
+        moderate: 'Умеренное качество входа',
+        fragile: 'Слабое качество входа',
       };
       return map[raw] || raw;
     }
@@ -4155,12 +4161,12 @@ def build_dashboard_html() -> str:
           review.worst_strategy_regime ? formatSignedRub(review.worst_strategy_regime.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Лучший edge',
+          'Лучшее качество входа',
           review.best_edge ? formatEdgeLabel(review.best_edge.label) : 'нет данных',
           review.best_edge ? formatSignedRub(review.best_edge.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Худший edge',
+          'Худшее качество входа',
           review.worst_edge ? formatEdgeLabel(review.worst_edge.label) : 'нет данных',
           review.worst_edge ? formatSignedRub(review.worst_edge.pnl_rub) : ''
         ),
@@ -4188,12 +4194,12 @@ def build_dashboard_html() -> str:
           review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Сильный edge за 3 дня',
+          'Лучшее качество входа за 3 дня',
           review.edge_focus_3d?.strongest?.length ? formatEdgeLabel(review.edge_focus_3d.strongest[0].label) : 'нет данных',
           review.edge_focus_3d?.strongest?.length ? [formatSignedRub(review.edge_focus_3d.strongest[0].pnl_rub), `${review.edge_focus_3d.strongest[0].count || 0} сдел.`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Хрупкий edge за 3 дня',
+          'Слабое качество входа за 3 дня',
           review.edge_focus_3d?.toxic?.length ? formatEdgeLabel(review.edge_focus_3d.toxic[0].label) : 'нет данных',
           review.edge_focus_3d?.toxic?.length ? [formatSignedRub(review.edge_focus_3d.toxic[0].pnl_rub), `${review.edge_focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
         ),
