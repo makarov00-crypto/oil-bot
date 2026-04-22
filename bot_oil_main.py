@@ -3415,6 +3415,8 @@ def get_daily_loss_limit_status(client: Client, config: BotConfig) -> dict[str, 
             "net_pnl_rub": get_today_closed_net_pnl_rub(),
             "limit_rub": 0.0,
             "equity_rub": 0.0,
+            "mode": "disabled",
+            "hard_limit_rub": 0.0,
         }
     snapshot = get_account_snapshot(client, config)
     equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
@@ -3425,15 +3427,26 @@ def get_daily_loss_limit_status(client: Client, config: BotConfig) -> dict[str, 
             "net_pnl_rub": get_today_closed_net_pnl_rub(),
             "limit_rub": 0.0,
             "equity_rub": 0.0,
+            "mode": "normal",
+            "hard_limit_rub": 0.0,
         }
     daily_loss_limit_rub = equity * (abs(config.max_daily_loss) / 100.0)
+    hard_loss_limit_rub = daily_loss_limit_rub * 1.35
     net_pnl_rub = get_today_closed_net_pnl_rub()
+    if net_pnl_rub <= -hard_loss_limit_rub:
+        mode = "blocked"
+    elif net_pnl_rub <= -daily_loss_limit_rub:
+        mode = "recovery"
+    else:
+        mode = "normal"
     return {
-        "allowed": net_pnl_rub > -daily_loss_limit_rub,
+        "allowed": mode != "blocked",
         "enabled": True,
         "net_pnl_rub": round(net_pnl_rub, 2),
         "limit_rub": round(daily_loss_limit_rub, 2),
+        "hard_limit_rub": round(hard_loss_limit_rub, 2),
         "equity_rub": round(equity, 2),
+        "mode": mode,
     }
 
 
@@ -3449,10 +3462,40 @@ def format_daily_loss_block_reason(status: dict[str, Any]) -> str:
 
 def get_global_daily_loss_block_reason(client: Client, config: BotConfig) -> str:
     status = get_daily_loss_limit_status(client, config)
-    if status.get("allowed"):
+    if status.get("mode") != "blocked":
         return ""
     status["limit_pct"] = abs(float(config.max_daily_loss or 0.0))
-    return format_daily_loss_block_reason(status)
+    return (
+        f"{format_daily_loss_block_reason(status)} "
+        f"Жёсткий стоп активирован после превышения расширенного порога "
+        f"-{float(status.get('hard_limit_rub') or 0.0):.2f} RUB."
+    )
+
+
+def get_daily_loss_recovery_entry_reason(
+    client: Client,
+    config: BotConfig,
+    state: InstrumentState,
+    signal: str,
+) -> str:
+    status = get_daily_loss_limit_status(client, config)
+    if status.get("mode") != "recovery":
+        return ""
+    if signal not in {"LONG", "SHORT"}:
+        return "мягкий дневной стоп: разрешены только направленные сигналы на вход."
+    if float(state.last_entry_edge_score or 0.0) < 0.78:
+        return (
+            "мягкий дневной стоп: после достижения дневного лимита разрешены только "
+            "входы высокого качества."
+        )
+    if float(state.last_market_regime_confidence or 0.0) < 0.68:
+        return (
+            "мягкий дневной стоп: нужен подтверждённый режим рынка, "
+            "текущая уверенность режима слишком низкая."
+        )
+    if str(state.last_higher_tf_bias or "").strip().upper() != signal:
+        return "мягкий дневной стоп: вход разрешён только по направлению старшего ТФ."
+    return ""
 
 
 def estimate_round_trip_commission_rub(state: InstrumentState) -> float:
@@ -4383,6 +4426,16 @@ def calculate_position_sizing_context(
     entry_edge_label = str(state.last_entry_edge_label or "")
     entry_edge_reason = str(state.last_entry_edge_reason or "")
     recovery_status = get_recovery_mode_status(instrument.symbol, strategy_name)
+    daily_loss_status = get_daily_loss_limit_status(client, config)
+    daily_loss_recovery_active = str(daily_loss_status.get("mode") or "") == "recovery"
+    daily_loss_recovery_reason = ""
+    daily_loss_recovery_multiplier = 1.0
+    if daily_loss_recovery_active:
+        daily_loss_recovery_multiplier = 0.45
+        daily_loss_recovery_reason = (
+            f"мягкий дневной стоп: восстановительный режим до "
+            f"-{float(daily_loss_status.get('hard_limit_rub') or 0.0):.2f} RUB"
+        )
     base_trade_share = max(0.05, min(config.base_trade_allocation_pct, 1.0))
     trade_aggression = max(0.35, min(config.portfolio_usage_pct, 1.0))
     target_trade_margin = (
@@ -4392,6 +4445,7 @@ def calculate_position_sizing_context(
         * instrument_weight
         * conviction_weight
         * adaptive_size_multiplier
+        * daily_loss_recovery_multiplier
         * max(session_multiplier, 0.0)
     )
     qty_by_target = int(target_trade_margin // margin_per_lot) if margin_per_lot > 0 else 0
@@ -4476,6 +4530,8 @@ def calculate_position_sizing_context(
         "entry_edge_label": entry_edge_label,
         "entry_edge_reason": entry_edge_reason,
         "recovery_mode_active": bool(recovery_status["active"]),
+        "daily_loss_recovery_active": daily_loss_recovery_active,
+        "daily_loss_recovery_reason": daily_loss_recovery_reason,
         "base_trade_share": base_trade_share,
         "target_trade_margin_rub": target_trade_margin,
         "margin_per_lot_rub": margin_per_lot,
@@ -4557,19 +4613,21 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     edge_score = float(sizing.get("entry_edge_score") or 0.0)
     edge_label = str(sizing.get("entry_edge_label") or "").strip()
     recovery_mode_active = bool(sizing.get("recovery_mode_active"))
+    daily_loss_recovery_active = bool(sizing.get("daily_loss_recovery_active"))
     recovery_hint = ", recovery mode" if recovery_mode_active else ""
+    daily_loss_hint = ", мягкий дневной стоп" if daily_loss_recovery_active else ""
     edge_hint = f", edge {edge_label} {edge_score:.2f}" if edge_score > 0.0 else ""
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
-            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{recovery_hint}, запас {margin_headroom:.0f} RUB, "
+            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{recovery_hint}{daily_loss_hint}, запас {margin_headroom:.0f} RUB, "
             f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
             f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"health {strategy_health_score:.2f}{edge_hint}{recovery_hint}, "
+        f"health {strategy_health_score:.2f}{edge_hint}{recovery_hint}{daily_loss_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."
@@ -5457,6 +5515,15 @@ def open_position(
         save_state(instrument.symbol, state)
         logging.warning("symbol=%s status=entry_blocked_daily_loss reason=%s", instrument.symbol, risk_block_reason)
         return
+    risk_recovery_reason = get_daily_loss_recovery_entry_reason(client, config, state, signal)
+    if risk_recovery_reason:
+        state.last_error = risk_recovery_reason
+        state.last_signal_summary = [risk_recovery_reason, *state.last_signal_summary[:2]]
+        state.last_allocator_summary = f"Аллокатор в режиме восстановления: {risk_recovery_reason}"
+        state.last_allocator_quantity = 0
+        save_state(instrument.symbol, state)
+        logging.info("symbol=%s status=entry_blocked_daily_loss_recovery reason=%s", instrument.symbol, risk_recovery_reason)
+        return
     performance_block_reason = recent_strategy_performance_block_reason(instrument.symbol, strategy_name)
     if performance_block_reason:
         state.last_error = performance_block_reason
@@ -6010,54 +6077,64 @@ def process_instrument(
                 state.last_allocator_quantity = 0
                 state.last_allocator_summary = f"Аллокатор заблокирован: {daily_loss_block_reason}"
             else:
-                performance_block_reason = recent_strategy_performance_block_reason(
-                    instrument.symbol,
-                    primary_strategy_name,
+                daily_loss_recovery_reason = get_daily_loss_recovery_entry_reason(
+                    client,
+                    config,
+                    state,
+                    signal,
                 )
-                if performance_block_reason:
+                if daily_loss_recovery_reason:
                     state.last_allocator_quantity = 0
-                    state.last_allocator_summary = f"Аллокатор заблокирован: {performance_block_reason}"
+                    state.last_allocator_summary = f"Аллокатор в режиме восстановления: {daily_loss_recovery_reason}"
                 else:
-                    strategy_regime_guard_reason = strategy_regime_block_reason(
+                    performance_block_reason = recent_strategy_performance_block_reason(
                         instrument.symbol,
                         primary_strategy_name,
-                        market_regime,
                     )
-                    if strategy_regime_guard_reason:
+                    if performance_block_reason:
                         state.last_allocator_quantity = 0
-                        state.last_allocator_summary = f"Аллокатор заблокирован: {strategy_regime_guard_reason}"
+                        state.last_allocator_summary = f"Аллокатор заблокирован: {performance_block_reason}"
                     else:
-                        recovery_block_reason = recovery_mode_block_reason(
-                            state,
+                        strategy_regime_guard_reason = strategy_regime_block_reason(
                             instrument.symbol,
                             primary_strategy_name,
-                            signal,
+                            market_regime,
                         )
-                        if recovery_block_reason:
+                        if strategy_regime_guard_reason:
                             state.last_allocator_quantity = 0
-                            state.last_allocator_summary = f"Аллокатор в recovery mode: {recovery_block_reason}"
+                            state.last_allocator_summary = f"Аллокатор заблокирован: {strategy_regime_guard_reason}"
                         else:
-                            regime_block_reason = regime_entry_block_reason(
+                            recovery_block_reason = recovery_mode_block_reason(
+                                state,
+                                instrument.symbol,
                                 primary_strategy_name,
                                 signal,
-                                market_regime,
-                                regime_metrics,
                             )
-                            if regime_block_reason:
+                            if recovery_block_reason:
                                 state.last_allocator_quantity = 0
-                                state.last_allocator_summary = f"Аллокатор заблокирован: {regime_block_reason}"
+                                state.last_allocator_summary = f"Аллокатор в recovery mode: {recovery_block_reason}"
                             else:
-                                allocator_sizing = calculate_position_sizing_context(
-                                    client,
-                                    config,
-                                    instrument,
-                                    state,
-                                    current_price,
-                                    signal,
+                                regime_block_reason = regime_entry_block_reason(
                                     primary_strategy_name,
+                                    signal,
+                                    market_regime,
+                                    regime_metrics,
                                 )
-                                state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
-                                state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
+                                if regime_block_reason:
+                                    state.last_allocator_quantity = 0
+                                    state.last_allocator_summary = f"Аллокатор заблокирован: {regime_block_reason}"
+                                else:
+                                    allocator_sizing = calculate_position_sizing_context(
+                                        client,
+                                        config,
+                                        instrument,
+                                        state,
+                                        current_price,
+                                        signal,
+                                        primary_strategy_name,
+                                    )
+                                    state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
+                                    state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
         except Exception as error:
             state.last_allocator_summary = f"Аллокатор временно недоступен: {error}"
             logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
@@ -6080,91 +6157,106 @@ def process_instrument(
                     daily_loss_block_reason,
                 )
             else:
-                performance_block_reason = recent_strategy_performance_block_reason(
-                    instrument.symbol,
-                    primary_strategy_name,
+                daily_loss_recovery_reason = get_daily_loss_recovery_entry_reason(
+                    client,
+                    config,
+                    state,
+                    signal,
                 )
-                if performance_block_reason:
-                    state.last_error = performance_block_reason
-                    state.last_signal_summary = [performance_block_reason, *state.last_signal_summary[:2]]
-                    logging.warning(
-                        "symbol=%s strategy=%s status=entry_blocked_performance reason=%s",
+                if daily_loss_recovery_reason:
+                    state.last_error = daily_loss_recovery_reason
+                    state.last_signal_summary = [daily_loss_recovery_reason, *state.last_signal_summary[:2]]
+                    logging.info(
+                        "symbol=%s status=entry_blocked_daily_loss_recovery reason=%s",
                         instrument.symbol,
-                        primary_strategy_name,
-                        performance_block_reason,
+                        daily_loss_recovery_reason,
                     )
                 else:
-                    reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
-                    if reentry_allowed:
-                        strategy_regime_guard_reason = strategy_regime_block_reason(
+                    performance_block_reason = recent_strategy_performance_block_reason(
+                        instrument.symbol,
+                        primary_strategy_name,
+                    )
+                    if performance_block_reason:
+                        state.last_error = performance_block_reason
+                        state.last_signal_summary = [performance_block_reason, *state.last_signal_summary[:2]]
+                        logging.warning(
+                            "symbol=%s strategy=%s status=entry_blocked_performance reason=%s",
                             instrument.symbol,
                             primary_strategy_name,
-                            market_regime,
+                            performance_block_reason,
                         )
-                        if strategy_regime_guard_reason:
-                            state.last_error = strategy_regime_guard_reason
-                            state.last_signal_summary = [strategy_regime_guard_reason, *state.last_signal_summary[:2]]
-                            logging.info(
-                                "symbol=%s strategy=%s status=entry_blocked_strategy_regime reason=%s",
+                    else:
+                        reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
+                        if reentry_allowed:
+                            strategy_regime_guard_reason = strategy_regime_block_reason(
                                 instrument.symbol,
                                 primary_strategy_name,
-                                strategy_regime_guard_reason,
+                                market_regime,
                             )
-                        else:
-                            recovery_block_reason = recovery_mode_block_reason(
-                                state,
-                                instrument.symbol,
-                                primary_strategy_name,
-                                signal,
-                            )
-                            if recovery_block_reason:
-                                state.last_error = recovery_block_reason
-                                state.last_signal_summary = [recovery_block_reason, *state.last_signal_summary[:2]]
+                            if strategy_regime_guard_reason:
+                                state.last_error = strategy_regime_guard_reason
+                                state.last_signal_summary = [strategy_regime_guard_reason, *state.last_signal_summary[:2]]
                                 logging.info(
-                                    "symbol=%s strategy=%s status=entry_blocked_recovery reason=%s",
+                                    "symbol=%s strategy=%s status=entry_blocked_strategy_regime reason=%s",
                                     instrument.symbol,
                                     primary_strategy_name,
-                                    recovery_block_reason,
+                                    strategy_regime_guard_reason,
                                 )
                             else:
-                                regime_block_reason = regime_entry_block_reason(
+                                recovery_block_reason = recovery_mode_block_reason(
+                                    state,
+                                    instrument.symbol,
                                     primary_strategy_name,
                                     signal,
-                                    market_regime,
-                                    regime_metrics,
                                 )
-                                if regime_block_reason:
-                                    state.last_error = regime_block_reason
-                                    state.last_signal_summary = [regime_block_reason, *state.last_signal_summary[:2]]
-                                    logging.info("symbol=%s strategy=%s status=entry_blocked_regime reason=%s", instrument.symbol, primary_strategy_name, regime_block_reason)
+                                if recovery_block_reason:
+                                    state.last_error = recovery_block_reason
+                                    state.last_signal_summary = [recovery_block_reason, *state.last_signal_summary[:2]]
+                                    logging.info(
+                                        "symbol=%s strategy=%s status=entry_blocked_recovery reason=%s",
+                                        instrument.symbol,
+                                        primary_strategy_name,
+                                        recovery_block_reason,
+                                    )
                                 else:
-                                    if collect_entry_candidate_only:
-                                        priority_score, priority_reason = calculate_entry_priority_score(
-                                            state,
-                                            instrument.symbol,
-                                            primary_strategy_name,
-                                        )
-                                        candidate_payload = {
-                                            "symbol": instrument.symbol,
-                                            "signal": signal,
-                                            "strategy_name": primary_strategy_name,
-                                            "reason": reason,
-                                            "priority_score": priority_score,
-                                            "priority_reason": priority_reason,
-                                            "entry_edge_score": float(state.last_entry_edge_score or 0.0),
-                                            "entry_edge_label": str(state.last_entry_edge_label or ""),
-                                            "regime_confidence": float(state.last_market_regime_confidence or 0.0),
-                                            "allocator_quantity": int(state.last_allocator_quantity or 0),
-                                        }
-                                        state.last_allocator_summary = (
-                                            f"{state.last_allocator_summary} "
-                                            f"Приоритет цикла {priority_score:.2f}: {priority_reason}."
-                                        ).strip()
+                                    regime_block_reason = regime_entry_block_reason(
+                                        primary_strategy_name,
+                                        signal,
+                                        market_regime,
+                                        regime_metrics,
+                                    )
+                                    if regime_block_reason:
+                                        state.last_error = regime_block_reason
+                                        state.last_signal_summary = [regime_block_reason, *state.last_signal_summary[:2]]
+                                        logging.info("symbol=%s strategy=%s status=entry_blocked_regime reason=%s", instrument.symbol, primary_strategy_name, regime_block_reason)
                                     else:
-                                        open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
-                    else:
-                        logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
-                        state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
+                                        if collect_entry_candidate_only:
+                                            priority_score, priority_reason = calculate_entry_priority_score(
+                                                state,
+                                                instrument.symbol,
+                                                primary_strategy_name,
+                                            )
+                                            candidate_payload = {
+                                                "symbol": instrument.symbol,
+                                                "signal": signal,
+                                                "strategy_name": primary_strategy_name,
+                                                "reason": reason,
+                                                "priority_score": priority_score,
+                                                "priority_reason": priority_reason,
+                                                "entry_edge_score": float(state.last_entry_edge_score or 0.0),
+                                                "entry_edge_label": str(state.last_entry_edge_label or ""),
+                                                "regime_confidence": float(state.last_market_regime_confidence or 0.0),
+                                                "allocator_quantity": int(state.last_allocator_quantity or 0),
+                                            }
+                                            state.last_allocator_summary = (
+                                                f"{state.last_allocator_summary} "
+                                                f"Приоритет цикла {priority_score:.2f}: {priority_reason}."
+                                            ).strip()
+                                        else:
+                                            open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
+                        else:
+                            logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
+                            state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
     else:
         check_exit(client, config, instrument, state, lower_df, signal, higher_tf_df=higher_tf_df)
 

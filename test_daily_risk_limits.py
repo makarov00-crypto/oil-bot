@@ -29,9 +29,10 @@ class DailyRiskLimitTests(unittest.TestCase):
         ):
             status = mod.get_daily_loss_limit_status(None, self.config)
 
-        self.assertFalse(status["allowed"])
+        self.assertTrue(status["allowed"])
         self.assertEqual(status["net_pnl_rub"], -2890.58)
         self.assertEqual(status["limit_rub"], 2500.0)
+        self.assertEqual(status["mode"], "recovery")
 
     def test_open_position_is_blocked_after_global_daily_loss_limit(self) -> None:
         state = mod.InstrumentState(last_signal_summary=["old"])
@@ -54,9 +55,99 @@ class DailyRiskLimitTests(unittest.TestCase):
             mod.open_position(None, self.config, self.instrument, state, "LONG", "test_strategy", "entry")
 
         self.assertEqual(state.position_side, "FLAT")
+        self.assertIn("мягкий дневной стоп", state.last_error)
+        self.assertEqual(state.last_allocator_quantity, 0)
+
+    def test_hard_daily_loss_limit_still_blocks_all_entries(self) -> None:
+        state = mod.InstrumentState(last_signal_summary=["old"])
+        snapshot = mod.AccountSnapshot(total_portfolio=50000.0, free_rub=10000.0, blocked_guarantee_rub=0.0)
+        rows = [{"event": "CLOSE", "symbol": "BRK6", "net_pnl_rub": -3600.0}]
+
+        with TemporaryDirectory() as temp_dir, patch.object(
+            mod, "STATE_DIR", mod.Path(temp_dir)
+        ), patch.object(
+            mod, "get_today_trade_journal_rows", return_value=rows
+        ), patch.object(
+            mod, "get_account_snapshot", return_value=snapshot
+        ), patch.object(
+            mod, "get_market_session", return_value="DAY"
+        ), patch.object(
+            mod, "get_last_price", side_effect=AssertionError("price should not be requested")
+        ):
+            mod.open_position(None, self.config, self.instrument, state, "LONG", "test_strategy", "entry")
+
+        self.assertEqual(state.position_side, "FLAT")
         self.assertEqual(state.last_risk_stop_day, mod.datetime.now(mod.MOSCOW_TZ).date().isoformat())
         self.assertIn("глобальный дневной стоп", state.last_error)
-        self.assertEqual(state.last_allocator_quantity, 0)
+
+    def test_daily_loss_recovery_allows_only_high_quality_entries(self) -> None:
+        snapshot = mod.AccountSnapshot(total_portfolio=50000.0, free_rub=10000.0, blocked_guarantee_rub=0.0)
+        rows = [{"event": "CLOSE", "symbol": "BRK6", "net_pnl_rub": -2600.0}]
+        weak_state = mod.InstrumentState(
+            last_entry_edge_score=0.62,
+            last_market_regime_confidence=0.74,
+            last_higher_tf_bias="LONG",
+        )
+        strong_state = mod.InstrumentState(
+            last_entry_edge_score=0.84,
+            last_market_regime_confidence=0.74,
+            last_higher_tf_bias="LONG",
+        )
+
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows), patch.object(
+            mod, "get_account_snapshot", return_value=snapshot
+        ):
+            weak_reason = mod.get_daily_loss_recovery_entry_reason(None, self.config, weak_state, "LONG")
+            strong_reason = mod.get_daily_loss_recovery_entry_reason(None, self.config, strong_state, "LONG")
+
+        self.assertIn("только входы высокого качества", weak_reason)
+        self.assertEqual(strong_reason, "")
+
+    def test_daily_loss_recovery_reduces_position_size(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="FX", initial_margin_on_buy=1000.0, initial_margin_on_sell=1000.0)
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.81,
+            last_entry_edge_score=0.84,
+            last_entry_edge_label="high",
+            last_higher_tf_bias="LONG",
+        )
+        config = SimpleNamespace(
+            account_id="acc",
+            max_daily_loss=5.0,
+            dry_run=False,
+            max_margin_usage_pct=0.35,
+            portfolio_usage_pct=0.85,
+            capital_reserve_pct=0.35,
+            base_trade_allocation_pct=0.22,
+            risk_per_trade_pct=0.0,
+            stop_loss_pct=0.008,
+            max_order_quantity=3,
+        )
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим trend_expansion нейтрален")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ), patch.object(
+            mod, "get_today_closed_net_pnl_rub", return_value=-1300.0
+        ):
+            sizing = mod.calculate_position_sizing_context(None, config, instrument, state, 11.3, "LONG", "trend_pullback")
+
+        self.assertTrue(sizing["daily_loss_recovery_active"])
+        self.assertLess(sizing["target_trade_margin_rub"], 3000.0)
 
     def test_weekend_blocks_currency_but_allows_other_symbols_before_cutoff(self) -> None:
         self.assertTrue(mod.session_allows_new_entries("WEEKEND", "BRK6"))
