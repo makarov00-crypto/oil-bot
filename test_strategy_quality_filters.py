@@ -92,6 +92,38 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = make_config()
 
+    def test_regime_filter_blocks_breakout_in_compression(self) -> None:
+        reason = mod.regime_entry_block_reason(
+            "opening_range_breakout",
+            "LONG",
+            "compression",
+            {"atr_pct": 0.0003, "volume_ratio": 0.8, "body_ratio": 0.6},
+        )
+
+        self.assertIn("режим compression", reason)
+        self.assertIn("слишком сжат", reason)
+
+    def test_regime_filter_blocks_pullback_outside_trend_context(self) -> None:
+        reason = mod.regime_entry_block_reason(
+            "trend_pullback",
+            "LONG",
+            "mixed",
+            {"atr_pct": 0.0007, "volume_ratio": 1.0, "body_ratio": 0.9},
+        )
+
+        self.assertIn("режим mixed", reason)
+        self.assertIn("нет направленного отката", reason)
+
+    def test_regime_filter_allows_failed_breakout_in_chop(self) -> None:
+        reason = mod.regime_entry_block_reason(
+            "failed_breakout",
+            "LONG",
+            "chop",
+            {"atr_pct": 0.0005, "volume_ratio": 0.9, "body_ratio": 0.8},
+        )
+
+        self.assertEqual(reason, "")
+
     def test_opening_range_blocks_expensive_fx_without_commission_room(self) -> None:
         df = candle_rows(
             [

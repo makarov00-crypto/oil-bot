@@ -2548,6 +2548,46 @@ def estimate_setup_quality(
     return score, "weak"
 
 
+def regime_entry_block_reason(
+    strategy_name: str,
+    signal: str,
+    market_regime: str,
+    metrics: dict[str, float],
+) -> str:
+    strategy = (strategy_name or "").strip()
+    if signal not in {"LONG", "SHORT"}:
+        return ""
+
+    atr_pct = float(metrics.get("atr_pct") or 0.0)
+    volume_ratio = float(metrics.get("volume_ratio") or 0.0)
+    body_ratio = float(metrics.get("body_ratio") or 0.0)
+
+    if market_regime == "compression":
+        if strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}:
+            return f"режим {market_regime} не подходит для стратегии {strategy}: рынок слишком сжат"
+
+    if market_regime == "chop":
+        if strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}:
+            return f"режим {market_regime} не подходит для стратегии {strategy}: слишком высокий риск ложного пробоя"
+
+    if strategy == "trend_pullback" and market_regime not in {"trend_pullback", "trend_expansion"}:
+        return f"режим {market_regime} не подходит для стратегии {strategy}: нет направленного отката в тренде"
+
+    if strategy in {"opening_range_breakout", "momentum_breakout"} and market_regime not in {"trend_expansion", "impulse"}:
+        return f"режим {market_regime} не подходит для стратегии {strategy}: нужен импульсный или расширяющийся рынок"
+
+    if strategy in {"range_break_continuation", "breakdown_continuation"}:
+        if market_regime not in {"trend_expansion", "impulse"}:
+            return f"режим {market_regime} не подходит для стратегии {strategy}: нужен зрелый направленный пробой"
+        if atr_pct < 0.00045 and volume_ratio < 0.95:
+            return f"режим {market_regime} не подходит для стратегии {strategy}: не хватает волатильности и объёма"
+
+    if strategy == "failed_breakout" and market_regime == "impulse" and body_ratio >= 1.15:
+        return f"режим {market_regime} не подходит для стратегии {strategy}: движение слишком импульсное против контртрендового входа"
+
+    return ""
+
+
 def build_periodic_status_message(
     config: BotConfig,
     instrument: InstrumentConfig,
@@ -5298,17 +5338,27 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                     state.last_allocator_quantity = 0
                     state.last_allocator_summary = f"Аллокатор заблокирован: {performance_block_reason}"
                 else:
-                    allocator_sizing = calculate_position_sizing_context(
-                        client,
-                        config,
-                        instrument,
-                        state,
-                        current_price,
-                        signal,
+                    regime_block_reason = regime_entry_block_reason(
                         primary_strategy_name,
+                        signal,
+                        market_regime,
+                        regime_metrics,
                     )
-                    state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
-                    state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
+                    if regime_block_reason:
+                        state.last_allocator_quantity = 0
+                        state.last_allocator_summary = f"Аллокатор заблокирован: {regime_block_reason}"
+                    else:
+                        allocator_sizing = calculate_position_sizing_context(
+                            client,
+                            config,
+                            instrument,
+                            state,
+                            current_price,
+                            signal,
+                            primary_strategy_name,
+                        )
+                        state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
+                        state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
         except Exception as error:
             state.last_allocator_summary = f"Аллокатор временно недоступен: {error}"
             logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
@@ -5345,7 +5395,18 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                 else:
                     reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
                     if reentry_allowed:
-                        open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
+                        regime_block_reason = regime_entry_block_reason(
+                            primary_strategy_name,
+                            signal,
+                            market_regime,
+                            regime_metrics,
+                        )
+                        if regime_block_reason:
+                            state.last_error = regime_block_reason
+                            state.last_signal_summary = [regime_block_reason, *state.last_signal_summary[:2]]
+                            logging.info("symbol=%s strategy=%s status=entry_blocked_regime reason=%s", instrument.symbol, primary_strategy_name, regime_block_reason)
+                        else:
+                            open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
                     else:
                         logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
                         state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
