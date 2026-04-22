@@ -4580,6 +4580,8 @@ def get_adaptive_exit_profile(
     regime = str(state.last_market_regime or "").strip().lower()
     regime_confidence = float(state.last_market_regime_confidence or 0.0)
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
+    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_label = str(state.last_entry_edge_label or "").strip().lower()
     recovery_active = False
     if state.entry_strategy:
         recovery_active = bool(get_recovery_mode_status(instrument.symbol, state.entry_strategy)["active"])
@@ -4613,6 +4615,28 @@ def get_adaptive_exit_profile(
             trailing_stop_pct=max(profile.trailing_stop_pct, 0.0065),
         )
         reasons.append("trend pullback context")
+
+    if 0.0 < edge_score < 0.45:
+        profile = ExitProfile(
+            min_hold_minutes=min(profile.min_hold_minutes, 18),
+            breakeven_profit_pct=min(profile.breakeven_profit_pct, 0.0040),
+            trailing_stop_pct=min(profile.trailing_stop_pct, 0.0038),
+        )
+        reasons.append(f"edge {edge_label or 'fragile'}")
+    elif edge_score >= 0.78:
+        profile = ExitProfile(
+            min_hold_minutes=max(profile.min_hold_minutes, 35),
+            breakeven_profit_pct=max(profile.breakeven_profit_pct, 0.0065),
+            trailing_stop_pct=max(profile.trailing_stop_pct, 0.0080),
+        )
+        reasons.append(f"edge {edge_label or 'high'}")
+    elif edge_score >= 0.62:
+        profile = ExitProfile(
+            min_hold_minutes=max(profile.min_hold_minutes, 28),
+            breakeven_profit_pct=max(profile.breakeven_profit_pct, 0.0055),
+            trailing_stop_pct=max(profile.trailing_stop_pct, 0.0068),
+        )
+        reasons.append(f"edge {edge_label or 'confirmed'}")
 
     return profile, ", ".join(reasons) if reasons else ""
 

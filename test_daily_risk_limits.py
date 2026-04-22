@@ -471,6 +471,52 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertGreaterEqual(adapted.trailing_stop_pct, 0.0075)
         self.assertIn("strong setup", reason)
 
+    def test_adaptive_exit_profile_tightens_for_fragile_edge(self) -> None:
+        config = SimpleNamespace(
+            min_hold_minutes=24,
+            breakeven_profit_pct=0.0055,
+            trailing_stop_pct=0.0055,
+        )
+        instrument = mod.InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="Index")
+        state = mod.InstrumentState(
+            entry_strategy="failed_breakout",
+            last_market_regime="mixed",
+            last_setup_quality_label="medium",
+            last_entry_edge_score=0.34,
+            last_entry_edge_label="fragile",
+        )
+        base_profile = mod.ExitProfile(min_hold_minutes=24, breakeven_profit_pct=0.0055, trailing_stop_pct=0.0055)
+
+        with patch.object(mod, "get_recovery_mode_status", return_value={"active": False}):
+            adapted, reason = mod.get_adaptive_exit_profile(config, instrument, state, base_profile)
+
+        self.assertLessEqual(adapted.min_hold_minutes, 18)
+        self.assertLessEqual(adapted.trailing_stop_pct, 0.0038)
+        self.assertIn("edge fragile", reason)
+
+    def test_adaptive_exit_profile_extends_room_for_high_edge(self) -> None:
+        config = SimpleNamespace(
+            min_hold_minutes=22,
+            breakeven_profit_pct=0.0045,
+            trailing_stop_pct=0.0050,
+        )
+        instrument = mod.InstrumentConfig(symbol="BRK6", figi="FIGI", display_name="Brent")
+        state = mod.InstrumentState(
+            entry_strategy="range_break_continuation",
+            last_market_regime="trend_expansion",
+            last_setup_quality_label="strong",
+            last_entry_edge_score=0.84,
+            last_entry_edge_label="high",
+        )
+        base_profile = mod.ExitProfile(min_hold_minutes=25, breakeven_profit_pct=0.0050, trailing_stop_pct=0.0060)
+
+        with patch.object(mod, "get_recovery_mode_status", return_value={"active": False}):
+            adapted, reason = mod.get_adaptive_exit_profile(config, instrument, state, base_profile)
+
+        self.assertGreaterEqual(adapted.min_hold_minutes, 35)
+        self.assertGreaterEqual(adapted.trailing_stop_pct, 0.0080)
+        self.assertIn("edge high", reason)
+
 
 if __name__ == "__main__":
     unittest.main()
