@@ -93,6 +93,7 @@ class ClosedTrade:
     exit_reason: str
     market_regime: str
     setup_quality_label: str
+    entry_edge_label: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -218,6 +219,7 @@ def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
                 exit_reason=str(row.get("reason") or "-"),
                 market_regime=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("market_regime") or "-"),
                 setup_quality_label=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("setup_quality_label") or "-"),
+                entry_edge_label=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("entry_edge_label") or "-"),
             )
         )
     return closed
@@ -259,6 +261,7 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
     by_strategy: dict[str, float] = defaultdict(float)
     by_regime: dict[str, float] = defaultdict(float)
     by_setup_quality: dict[str, float] = defaultdict(float)
+    by_edge: dict[str, float] = defaultdict(float)
     by_strategy_regime: dict[str, float] = defaultdict(float)
     by_opens: dict[str, int] = defaultdict(int)
     for trade in trades:
@@ -266,6 +269,7 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
         by_strategy[trade.strategy] += trade.pnl_rub
         by_regime[trade.market_regime] += trade.pnl_rub
         by_setup_quality[trade.setup_quality_label] += trade.pnl_rub
+        by_edge[trade.entry_edge_label] += trade.pnl_rub
         strategy_regime = f"{trade.strategy} @ {trade.market_regime}"
         by_strategy_regime[strategy_regime] += trade.pnl_rub
         by_opens[trade.symbol] += 1
@@ -274,6 +278,8 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
     worst_regime = min(by_regime.items(), key=lambda item: item[1]) if by_regime else None
     best_setup_quality = max(by_setup_quality.items(), key=lambda item: item[1]) if by_setup_quality else None
     worst_setup_quality = min(by_setup_quality.items(), key=lambda item: item[1]) if by_setup_quality else None
+    best_edge = max(by_edge.items(), key=lambda item: item[1]) if by_edge else None
+    worst_edge = min(by_edge.items(), key=lambda item: item[1]) if by_edge else None
     best_strategy_regime = max(by_strategy_regime.items(), key=lambda item: item[1]) if by_strategy_regime else None
     worst_strategy_regime = min(by_strategy_regime.items(), key=lambda item: item[1]) if by_strategy_regime else None
     top_positive_strategy_regimes = sorted(
@@ -296,12 +302,15 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
         "by_strategy": dict(sorted(by_strategy.items())),
         "by_regime": dict(sorted(by_regime.items())),
         "by_setup_quality": dict(sorted(by_setup_quality.items())),
+        "by_edge": dict(sorted(by_edge.items())),
         "by_strategy_regime": dict(sorted(by_strategy_regime.items())),
         "trade_count_by_symbol": dict(sorted(by_opens.items())),
         "best_regime": {"name": best_regime[0], "pnl_rub": best_regime[1]} if best_regime else None,
         "worst_regime": {"name": worst_regime[0], "pnl_rub": worst_regime[1]} if worst_regime else None,
         "best_setup_quality": {"name": best_setup_quality[0], "pnl_rub": best_setup_quality[1]} if best_setup_quality else None,
         "worst_setup_quality": {"name": worst_setup_quality[0], "pnl_rub": worst_setup_quality[1]} if worst_setup_quality else None,
+        "best_edge": {"name": best_edge[0], "pnl_rub": best_edge[1]} if best_edge else None,
+        "worst_edge": {"name": worst_edge[0], "pnl_rub": worst_edge[1]} if worst_edge else None,
         "best_strategy_regime": {"name": best_strategy_regime[0], "pnl_rub": best_strategy_regime[1]} if best_strategy_regime else None,
         "worst_strategy_regime": {"name": worst_strategy_regime[0], "pnl_rub": worst_strategy_regime[1]} if worst_strategy_regime else None,
         "top_positive_strategy_regimes": [{"name": name, "pnl_rub": pnl} for name, pnl in top_positive_strategy_regimes],
@@ -359,7 +368,7 @@ def build_prompt(
         trades_lines.append(
             f"- {trade.symbol} {trade.side} | {trade.strategy} | вход {trade.entry_time} @{format_price(trade.entry_price)} | "
             f"выход {trade.exit_time} @{format_price(trade.exit_price)} | {trade.pnl_rub:.2f} RUB | "
-            f"режим {trade.market_regime} | сетап {trade.setup_quality_label} | "
+            f"режим {trade.market_regime} | сетап {trade.setup_quality_label} | edge {trade.entry_edge_label} | "
             f"вход: {trade.entry_reason} | выход: {trade.exit_reason}"
         )
     if not trades_lines:
@@ -408,6 +417,9 @@ def build_prompt(
     by_setup_quality_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_setup_quality"].items()]
     if not by_setup_quality_lines:
         by_setup_quality_lines = ["- Нет данных по качеству сетапов."]
+    by_edge_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_edge"].items()]
+    if not by_edge_lines:
+        by_edge_lines = ["- Нет данных по edge."]
     by_strategy_regime_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_strategy_regime"].items()]
     if not by_strategy_regime_lines:
         by_strategy_regime_lines = ["- Нет данных по сочетаниям стратегия/режим."]
@@ -427,6 +439,8 @@ def build_prompt(
     worst_regime = summary.get("worst_regime")
     best_setup_quality = summary.get("best_setup_quality")
     worst_setup_quality = summary.get("worst_setup_quality")
+    best_edge = summary.get("best_edge")
+    worst_edge = summary.get("worst_edge")
     best_strategy_regime = summary.get("best_strategy_regime")
     worst_strategy_regime = summary.get("worst_strategy_regime")
     if best_regime:
@@ -441,6 +455,10 @@ def build_prompt(
         focal_points_lines.append(
             f"- худшее качество сетапа: {worst_setup_quality['name']} ({worst_setup_quality['pnl_rub']:.2f} RUB)"
         )
+    if best_edge:
+        focal_points_lines.append(f"- лучший edge: {best_edge['name']} ({best_edge['pnl_rub']:.2f} RUB)")
+    if worst_edge:
+        focal_points_lines.append(f"- худший edge: {worst_edge['name']} ({worst_edge['pnl_rub']:.2f} RUB)")
     if best_strategy_regime:
         focal_points_lines.append(
             f"- лучшая связка стратегия/режим: {best_strategy_regime['name']} ({best_strategy_regime['pnl_rub']:.2f} RUB)"
@@ -477,6 +495,9 @@ def build_prompt(
         "",
         "Итог по качеству сетапов:",
         *by_setup_quality_lines,
+        "",
+        "Итог по edge:",
+        *by_edge_lines,
         "",
         "Итог по сочетаниям стратегия/режим:",
         *by_strategy_regime_lines,

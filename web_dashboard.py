@@ -1306,6 +1306,14 @@ def trade_context_display(row: dict[str, Any]) -> str:
     return " | ".join(parts) if parts else "-"
 
 
+def trade_context_value(row: dict[str, Any], key: str, default: str = "-") -> str:
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return default
+    value = str(context.get(key) or "").strip()
+    return value or default
+
+
 def humanize_strategy_name(strategy: str | None) -> str:
     value = str(strategy or "").strip()
     mapping = {
@@ -1610,6 +1618,7 @@ def format_trade_review_row(
         "exit_reason": close_row.get("reason") or "-",
         "entry_context_display": trade_context_display(open_row or {}),
         "exit_context_display": trade_context_display(close_row),
+        "edge_label": trade_context_value(close_row, "entry_edge_label"),
         "verdict": verdict,
         "_exit_dt": exit_dt,
     }
@@ -1751,6 +1760,7 @@ def build_trade_review(
     by_symbol: dict[str, float] = {}
     by_strategy: dict[str, float] = {}
     by_regime: dict[str, float] = {}
+    by_edge: dict[str, float] = {}
     by_strategy_regime: dict[str, float] = {}
     for item in closed_reviews:
         pnl = float(item.get("pnl_rub") or 0.0)
@@ -1759,6 +1769,8 @@ def build_trade_review(
         by_strategy[strategy] = by_strategy.get(strategy, 0.0) + pnl
         regime = item.get("exit_context_display") or "-"
         by_regime[regime] = by_regime.get(regime, 0.0) + pnl
+        edge = item.get("edge_label") or "-"
+        by_edge[edge] = by_edge.get(edge, 0.0) + pnl
         strategy_regime = f"{strategy} @ {regime}"
         by_strategy_regime[strategy_regime] = by_strategy_regime.get(strategy_regime, 0.0) + pnl
 
@@ -1768,6 +1780,8 @@ def build_trade_review(
     worst_strategy = min(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
     best_regime = max(by_regime.items(), key=lambda x: x[1]) if by_regime else None
     worst_regime = min(by_regime.items(), key=lambda x: x[1]) if by_regime else None
+    best_edge = max(by_edge.items(), key=lambda x: x[1]) if by_edge else None
+    worst_edge = min(by_edge.items(), key=lambda x: x[1]) if by_edge else None
     best_strategy_regime = max(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
     worst_strategy_regime = min(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
 
@@ -1783,6 +1797,8 @@ def build_trade_review(
         "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
         "best_regime": {"regime": best_regime[0], "pnl_rub": round(best_regime[1], 2)} if best_regime else None,
         "worst_regime": {"regime": worst_regime[0], "pnl_rub": round(worst_regime[1], 2)} if worst_regime else None,
+        "best_edge": {"label": best_edge[0], "pnl_rub": round(best_edge[1], 2)} if best_edge else None,
+        "worst_edge": {"label": worst_edge[0], "pnl_rub": round(worst_edge[1], 2)} if worst_edge else None,
         "best_strategy_regime": {"label": best_strategy_regime[0], "pnl_rub": round(best_strategy_regime[1], 2)} if best_strategy_regime else None,
         "worst_strategy_regime": {"label": worst_strategy_regime[0], "pnl_rub": round(worst_strategy_regime[1], 2)} if worst_strategy_regime else None,
         "closed_reviews": closed_reviews[:20],
@@ -1799,6 +1815,33 @@ def summarize_strategy_regime_focus(rows: list[dict[str, Any]], limit: int = 3) 
         strategy = str(row.get("strategy") or "-")
         regime = trade_context_display(row)
         label = f"{strategy} @ {regime}"
+        try:
+            pnl = float(row.get("pnl_rub") or 0.0)
+        except Exception:
+            pnl = 0.0
+        totals[label] = totals.get(label, 0.0) + pnl
+        counts[label] = counts.get(label, 0) + 1
+
+    strongest = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v > 0), key=lambda item: item[1], reverse=True)[:limit]
+    ]
+    toxic = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v < 0), key=lambda item: item[1])[:limit]
+    ]
+    return {"strongest": strongest, "toxic": toxic}
+
+
+def summarize_edge_focus(rows: list[dict[str, Any]], limit: int = 3) -> dict[str, list[dict[str, Any]]]:
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for row in rows:
+        if str(row.get("event", "")).upper() != "CLOSE":
+            continue
+        label = trade_context_value(row, "entry_edge_label")
+        if label == "-":
+            continue
         try:
             pnl = float(row.get("pnl_rub") or 0.0)
         except Exception:
@@ -1851,6 +1894,8 @@ def load_trade_review_for_day(
     recent_rows = [row for row in all_rows if lookback_start <= row.get("_dt", datetime.min.replace(tzinfo=MOSCOW_TZ)).date() <= target_day]
     review["focus_today"] = summarize_strategy_regime_focus(rows)
     review["focus_3d"] = summarize_strategy_regime_focus(recent_rows)
+    review["edge_focus_today"] = summarize_edge_focus(rows)
+    review["edge_focus_3d"] = summarize_edge_focus(recent_rows)
     review["release1_summary"] = build_strategy_regime_summary(review["focus_today"], review["focus_3d"])
     return review
 
@@ -3534,6 +3579,18 @@ def build_dashboard_html() -> str:
       return raw;
     }
 
+    function formatEdgeLabel(value) {
+      const raw = String(value || '').trim();
+      if (!raw || raw === '-') return 'edge не определён';
+      const map = {
+        high: 'Высокий edge',
+        confirmed: 'Подтверждённый edge',
+        moderate: 'Умеренный edge',
+        fragile: 'Хрупкий edge',
+      };
+      return map[raw] || raw;
+    }
+
     function formatSignedRub(value) {
       const num = Number(value);
       if (!Number.isFinite(num)) return '-';
@@ -4097,6 +4154,16 @@ def build_dashboard_html() -> str:
           review.worst_strategy_regime ? formatStrategyRegimeLabel(review.worst_strategy_regime.label) : 'нет данных',
           review.worst_strategy_regime ? formatSignedRub(review.worst_strategy_regime.pnl_rub) : ''
         ),
+        buildReviewRow(
+          'Лучший edge',
+          review.best_edge ? formatEdgeLabel(review.best_edge.label) : 'нет данных',
+          review.best_edge ? formatSignedRub(review.best_edge.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Худший edge',
+          review.worst_edge ? formatEdgeLabel(review.worst_edge.label) : 'нет данных',
+          review.worst_edge ? formatSignedRub(review.worst_edge.pnl_rub) : ''
+        ),
       ].join('');
       const reviewFocusBody = document.getElementById('reviewFocusBody');
       reviewFocusBody.innerHTML = [
@@ -4119,6 +4186,16 @@ def build_dashboard_html() -> str:
           'Токсичное за 3 дня',
           review.focus_3d?.toxic?.length ? formatStrategyRegimeLabel(review.focus_3d.toxic[0].label) : 'нет данных',
           review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
+        ),
+        buildReviewRow(
+          'Сильный edge за 3 дня',
+          review.edge_focus_3d?.strongest?.length ? formatEdgeLabel(review.edge_focus_3d.strongest[0].label) : 'нет данных',
+          review.edge_focus_3d?.strongest?.length ? [formatSignedRub(review.edge_focus_3d.strongest[0].pnl_rub), `${review.edge_focus_3d.strongest[0].count || 0} сдел.`].join(' · ') : ''
+        ),
+        buildReviewRow(
+          'Хрупкий edge за 3 дня',
+          review.edge_focus_3d?.toxic?.length ? formatEdgeLabel(review.edge_focus_3d.toxic[0].label) : 'нет данных',
+          review.edge_focus_3d?.toxic?.length ? [formatSignedRub(review.edge_focus_3d.toxic[0].pnl_rub), `${review.edge_focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
         ),
         buildReviewRow('Рабочая зона', formatStrategyRegimeLabel(review.release1_summary?.working || '-')),
         buildReviewRow('Под наблюдением', formatStrategyRegimeLabel(review.release1_summary?.watch || '-')),

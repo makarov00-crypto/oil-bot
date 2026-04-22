@@ -20,6 +20,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 exit_reason="close",
                 market_regime="trend_expansion",
                 setup_quality_label="strong",
+                entry_edge_label="high",
             ),
             review.ClosedTrade(
                 symbol="NGJ6",
@@ -34,6 +35,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 exit_reason="close",
                 market_regime="chop",
                 setup_quality_label="weak",
+                entry_edge_label="fragile",
             ),
         ]
 
@@ -43,12 +45,16 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertEqual(summary["by_regime"]["chop"], -50.0)
         self.assertEqual(summary["by_setup_quality"]["strong"], 150.0)
         self.assertEqual(summary["by_setup_quality"]["weak"], -50.0)
+        self.assertEqual(summary["by_edge"]["high"], 150.0)
+        self.assertEqual(summary["by_edge"]["fragile"], -50.0)
         self.assertEqual(summary["by_strategy_regime"]["trend_pullback @ trend_expansion"], 150.0)
         self.assertEqual(summary["by_strategy_regime"]["trend_pullback @ chop"], -50.0)
         self.assertEqual(summary["best_regime"]["name"], "trend_expansion")
         self.assertEqual(summary["worst_regime"]["name"], "chop")
         self.assertEqual(summary["best_setup_quality"]["name"], "strong")
         self.assertEqual(summary["worst_setup_quality"]["name"], "weak")
+        self.assertEqual(summary["best_edge"]["name"], "high")
+        self.assertEqual(summary["worst_edge"]["name"], "fragile")
         self.assertEqual(summary["best_strategy_regime"]["name"], "trend_pullback @ trend_expansion")
         self.assertEqual(summary["worst_strategy_regime"]["name"], "trend_pullback @ chop")
         self.assertEqual(summary["top_positive_strategy_regimes"][0]["name"], "trend_pullback @ trend_expansion")
@@ -69,6 +75,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 exit_reason="profit_lock",
                 market_regime="trend_expansion",
                 setup_quality_label="strong",
+                entry_edge_label="high",
             )
         ]
 
@@ -99,9 +106,12 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("Фокусные точки результата:", prompt)
         self.assertIn("- лучший режим: trend_expansion (120.00 RUB)", prompt)
         self.assertIn("- лучшее качество сетапа: strong (120.00 RUB)", prompt)
+        self.assertIn("- лучший edge: high (120.00 RUB)", prompt)
         self.assertIn("- лучшая связка стратегия/режим: opening_range_breakout @ trend_expansion (120.00 RUB)", prompt)
         self.assertIn("Итог по качеству сетапов:", prompt)
         self.assertIn("- strong: 120.00 RUB", prompt)
+        self.assertIn("Итог по edge:", prompt)
+        self.assertIn("- high: 120.00 RUB", prompt)
         self.assertIn("Итог по сочетаниям стратегия/режим:", prompt)
         self.assertIn("- opening_range_breakout @ trend_expansion: 120.00 RUB", prompt)
         self.assertIn("Сильные сочетания за последние 3 дня:", prompt)
