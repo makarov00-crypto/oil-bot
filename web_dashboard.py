@@ -2709,6 +2709,84 @@ def build_dashboard_html() -> str:
       color: var(--muted);
       font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
     }
+    .review-kpi-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-top: 14px;
+    }
+    .review-kpi {
+      background: rgba(10, 18, 34, 0.68);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .review-kpi .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .review-kpi .value {
+      font: 700 22px/1.1 "Sora", "Manrope", sans-serif;
+      color: #eef6ff;
+    }
+    .review-kpi .value.compact {
+      font-size: 18px;
+    }
+    .review-layout {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      margin-top: 16px;
+    }
+    .review-block {
+      background: rgba(10, 18, 34, 0.62);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .review-block h3 {
+      margin: 0 0 10px;
+      font: 700 15px/1.2 "Sora", "Manrope", sans-serif;
+      color: #eef6ff;
+    }
+    .review-summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .review-summary-table td {
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(102, 174, 255, 0.10);
+      vertical-align: top;
+    }
+    .review-summary-table tr:last-child td {
+      border-bottom: 0;
+    }
+    .review-summary-label {
+      width: 120px;
+      color: var(--muted);
+      font-size: 12px;
+      padding-right: 12px;
+    }
+    .review-summary-value {
+      color: #dfeafb;
+      line-height: 1.35;
+    }
+    .review-summary-main {
+      font-weight: 600;
+      color: #eff6ff;
+    }
+    .review-summary-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .review-summary-empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
     .alert-panel {
       border-color: rgba(255, 202, 98, 0.28);
       box-shadow:
@@ -3168,87 +3246,52 @@ def build_dashboard_html() -> str:
     </section>
 
     <section class="panel" style="margin-top:16px;">
-      <h2>Обзор сделок</h2>
-      <div class="grid">
+      <div class="section-title">
         <div>
-          <div class="muted">Закрыто</div>
-          <div class="metric metric-compact" id="reviewClosed">-</div>
+          <h2>Обзор сделок</h2>
+          <div class="muted">Короткий разбор дня по инструментам, стратегиям и рыночным режимам.</div>
         </div>
-        <div>
-          <div class="muted">Плюсовых</div>
-          <div class="metric metric-compact" id="reviewWins">-</div>
+      </div>
+      <div class="review-kpi-grid">
+        <div class="review-kpi">
+          <div class="label">Закрыто сделок</div>
+          <div class="value" id="reviewClosed">-</div>
         </div>
-        <div>
-          <div class="muted">Минусовых</div>
-          <div class="metric metric-compact" id="reviewLosses">-</div>
+        <div class="review-kpi">
+          <div class="label">Плюсовых</div>
+          <div class="value compact" id="reviewWins">-</div>
         </div>
-        <div>
-          <div class="muted">Итог по закрытым</div>
-          <div class="metric metric-compact" id="reviewPnl">-</div>
+        <div class="review-kpi">
+          <div class="label">Минусовых</div>
+          <div class="value compact" id="reviewLosses">-</div>
         </div>
-        <div>
-          <div class="muted">Win rate</div>
-          <div class="metric metric-compact" id="reviewWinRate">-</div>
+        <div class="review-kpi">
+          <div class="label">Итог по закрытым</div>
+          <div class="value compact" id="reviewPnl">-</div>
         </div>
-        <div>
-          <div class="muted">Лучший инструмент</div>
-          <div class="metric metric-wide metric-compact" id="reviewBestSymbol">-</div>
+        <div class="review-kpi">
+          <div class="label">Доля прибыльных</div>
+          <div class="value compact" id="reviewWinRate">-</div>
         </div>
-        <div>
-          <div class="muted">Худший инструмент</div>
-          <div class="metric metric-wide metric-compact" id="reviewWorstSymbol">-</div>
+      </div>
+      <div class="review-layout">
+        <div class="review-block">
+          <h3>Что сработало и что тянет вниз</h3>
+          <table class="review-summary-table">
+            <tbody id="reviewPerformanceBody"></tbody>
+          </table>
         </div>
-        <div>
-          <div class="muted">Лучшая стратегия</div>
-          <div class="metric metric-wide metric-compact" id="reviewBestStrategy">-</div>
+        <div class="review-block">
+          <h3>Разбор по режимам и связкам</h3>
+          <table class="review-summary-table">
+            <tbody id="reviewRegimeBody"></tbody>
+          </table>
         </div>
-        <div>
-          <div class="muted">Худшая стратегия</div>
-          <div class="metric metric-wide metric-compact" id="reviewWorstStrategy">-</div>
-        </div>
-        <div>
-          <div class="muted">Лучший режим</div>
-          <div class="metric metric-wide metric-compact" id="reviewBestRegime">-</div>
-        </div>
-        <div>
-          <div class="muted">Худший режим</div>
-          <div class="metric metric-wide metric-compact" id="reviewWorstRegime">-</div>
-        </div>
-        <div>
-          <div class="muted">Лучшая связка</div>
-          <div class="metric metric-wide metric-compact" id="reviewBestStrategyRegime">-</div>
-        </div>
-        <div>
-          <div class="muted">Худшая связка</div>
-          <div class="metric metric-wide metric-compact" id="reviewWorstStrategyRegime">-</div>
-        </div>
-        <div>
-          <div class="muted">Сильное сегодня</div>
-          <div class="metric metric-wide metric-compact" id="reviewFocusTodayStrong">-</div>
-        </div>
-        <div>
-          <div class="muted">Токсичное сегодня</div>
-          <div class="metric metric-wide metric-compact" id="reviewFocusTodayToxic">-</div>
-        </div>
-        <div>
-          <div class="muted">Сильное 3 дня</div>
-          <div class="metric metric-wide metric-compact" id="reviewFocus3dStrong">-</div>
-        </div>
-        <div>
-          <div class="muted">Токсичное 3 дня</div>
-          <div class="metric metric-wide metric-compact" id="reviewFocus3dToxic">-</div>
-        </div>
-        <div>
-          <div class="muted">Рабочая зона</div>
-          <div class="metric metric-wide metric-compact" id="reviewReleaseWorking">-</div>
-        </div>
-        <div>
-          <div class="muted">Под наблюдением</div>
-          <div class="metric metric-wide metric-compact" id="reviewReleaseWatch">-</div>
-        </div>
-        <div>
-          <div class="muted">Токсичная зона</div>
-          <div class="metric metric-wide metric-compact" id="reviewReleaseToxic">-</div>
+        <div class="review-block">
+          <h3>На что смотреть сейчас</h3>
+          <table class="review-summary-table">
+            <tbody id="reviewFocusBody"></tbody>
+          </table>
         </div>
       </div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
@@ -3432,6 +3475,69 @@ def build_dashboard_html() -> str:
         return `${biasMap[bias] || bias} / ${formatStrength(strength)}`;
       }
       return biasMap[raw] || raw;
+    }
+
+    function formatStrategyLabel(value) {
+      const raw = String(value || '').trim();
+      if (!raw || raw === '-') return 'не определена';
+      const map = {
+        momentum_breakout: 'Импульсный пробой',
+        trend_pullback: 'Откат по тренду',
+        trend_rollover: 'Перезапуск тренда',
+        range_break_continuation: 'Продолжение пробоя диапазона',
+        failed_breakout: 'Ложный пробой',
+        opening_range_breakout: 'Пробой утреннего диапазона',
+        breakdown_continuation: 'Продолжение пробоя вниз',
+        williams: 'Подтверждение по Williams %R',
+      };
+      return map[raw] || raw.replaceAll('_', ' ');
+    }
+
+    function formatRegimeLabel(value) {
+      const raw = String(value || '').trim();
+      if (!raw || raw === '-') return 'режим не определён';
+      const map = {
+        trend_expansion: 'Расширение тренда',
+        trend_pullback: 'Откат в тренде',
+        impulse: 'Импульс',
+        compression: 'Сжатие',
+        chop: 'Пила',
+        mixed: 'Смешанный режим',
+      };
+      return map[raw] || raw.replaceAll('_', ' ');
+    }
+
+    function formatStrategyRegimeLabel(value) {
+      const raw = String(value || '').trim();
+      if (!raw || raw === '-') return 'нет данных';
+      const parts = raw.split(' @ ');
+      if (parts.length === 2) {
+        return `${formatStrategyLabel(parts[0])} / ${formatRegimeLabel(parts[1])}`;
+      }
+      return raw;
+    }
+
+    function formatSignedRub(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return '-';
+      const sign = num > 0 ? '+' : '';
+      return `${sign}${num.toFixed(2)} RUB`;
+    }
+
+    function reviewValueHtml(main, sub = '') {
+      const safeMain = escapeHtml(main || '-');
+      const safeSub = escapeHtml(sub || '');
+      return `<div class="review-summary-main">${safeMain}</div>${safeSub ? `<div class="review-summary-sub">${safeSub}</div>` : ''}`;
+    }
+
+    function buildReviewRow(label, main, sub = '') {
+      return `<tr><td class="review-summary-label">${escapeHtml(label)}</td><td class="review-summary-value">${reviewValueHtml(main, sub)}</td></tr>`;
+    }
+
+    function buildFocusItem(item, formatter = (value) => value) {
+      if (!item) return reviewValueHtml('нет данных');
+      const countText = Number.isFinite(Number(item.count)) ? `${Number(item.count)} сдел.` : '';
+      return reviewValueHtml(formatter(item.label), [formatSignedRub(item.pnl_rub), countText].filter(Boolean).join(' · '));
     }
 
     function formatSessionLabel(value) {
@@ -3929,21 +4035,78 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewLosses').textContent = review.losses ?? 0;
       document.getElementById('reviewPnl').textContent = formatRub(review.closed_total_pnl_rub);
       document.getElementById('reviewWinRate').textContent = `${Number(review.win_rate || 0).toFixed(1)}%`;
-      document.getElementById('reviewBestSymbol').textContent = review.best_symbol ? `${review.best_symbol.symbol} (${Number(review.best_symbol.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewWorstSymbol').textContent = review.worst_symbol ? `${review.worst_symbol.symbol} (${Number(review.worst_symbol.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewBestStrategy').textContent = review.best_strategy ? `${review.best_strategy.strategy} (${Number(review.best_strategy.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewWorstStrategy').textContent = review.worst_strategy ? `${review.worst_strategy.strategy} (${Number(review.worst_strategy.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewBestRegime').textContent = review.best_regime ? `${review.best_regime.regime} (${Number(review.best_regime.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewWorstRegime').textContent = review.worst_regime ? `${review.worst_regime.regime} (${Number(review.worst_regime.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewBestStrategyRegime').textContent = review.best_strategy_regime ? `${review.best_strategy_regime.label} (${Number(review.best_strategy_regime.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewWorstStrategyRegime').textContent = review.worst_strategy_regime ? `${review.worst_strategy_regime.label} (${Number(review.worst_strategy_regime.pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewFocusTodayStrong').textContent = review.focus_today?.strongest?.length ? `${review.focus_today.strongest[0].label} (${Number(review.focus_today.strongest[0].pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewFocusTodayToxic').textContent = review.focus_today?.toxic?.length ? `${review.focus_today.toxic[0].label} (${Number(review.focus_today.toxic[0].pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewFocus3dStrong').textContent = review.focus_3d?.strongest?.length ? `${review.focus_3d.strongest[0].label} (${Number(review.focus_3d.strongest[0].pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewFocus3dToxic').textContent = review.focus_3d?.toxic?.length ? `${review.focus_3d.toxic[0].label} (${Number(review.focus_3d.toxic[0].pnl_rub).toFixed(2)})` : '-';
-      document.getElementById('reviewReleaseWorking').textContent = review.release1_summary?.working || '-';
-      document.getElementById('reviewReleaseWatch').textContent = review.release1_summary?.watch || '-';
-      document.getElementById('reviewReleaseToxic').textContent = review.release1_summary?.toxic || '-';
+      const reviewPerformanceBody = document.getElementById('reviewPerformanceBody');
+      reviewPerformanceBody.innerHTML = [
+        buildReviewRow(
+          'Лучший инструмент',
+          review.best_symbol ? (instrumentNames[review.best_symbol.symbol] || review.best_symbol.symbol) : 'нет данных',
+          review.best_symbol ? formatSignedRub(review.best_symbol.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Худший инструмент',
+          review.worst_symbol ? (instrumentNames[review.worst_symbol.symbol] || review.worst_symbol.symbol) : 'нет данных',
+          review.worst_symbol ? formatSignedRub(review.worst_symbol.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Лучшая стратегия',
+          review.best_strategy ? formatStrategyLabel(review.best_strategy.strategy) : 'нет данных',
+          review.best_strategy ? formatSignedRub(review.best_strategy.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Худшая стратегия',
+          review.worst_strategy ? formatStrategyLabel(review.worst_strategy.strategy) : 'нет данных',
+          review.worst_strategy ? formatSignedRub(review.worst_strategy.pnl_rub) : ''
+        ),
+      ].join('');
+      const reviewRegimeBody = document.getElementById('reviewRegimeBody');
+      reviewRegimeBody.innerHTML = [
+        buildReviewRow(
+          'Лучший режим',
+          review.best_regime ? formatRegimeLabel(review.best_regime.regime) : 'нет данных',
+          review.best_regime ? formatSignedRub(review.best_regime.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Худший режим',
+          review.worst_regime ? formatRegimeLabel(review.worst_regime.regime) : 'нет данных',
+          review.worst_regime ? formatSignedRub(review.worst_regime.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Лучшая связка',
+          review.best_strategy_regime ? formatStrategyRegimeLabel(review.best_strategy_regime.label) : 'нет данных',
+          review.best_strategy_regime ? formatSignedRub(review.best_strategy_regime.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Худшая связка',
+          review.worst_strategy_regime ? formatStrategyRegimeLabel(review.worst_strategy_regime.label) : 'нет данных',
+          review.worst_strategy_regime ? formatSignedRub(review.worst_strategy_regime.pnl_rub) : ''
+        ),
+      ].join('');
+      const reviewFocusBody = document.getElementById('reviewFocusBody');
+      reviewFocusBody.innerHTML = [
+        buildReviewRow(
+          'Сильное сегодня',
+          review.focus_today?.strongest?.length ? formatStrategyRegimeLabel(review.focus_today.strongest[0].label) : 'нет данных',
+          review.focus_today?.strongest?.length ? [formatSignedRub(review.focus_today.strongest[0].pnl_rub), `${review.focus_today.strongest[0].count || 0} сдел.`].join(' · ') : ''
+        ),
+        buildReviewRow(
+          'Токсичное сегодня',
+          review.focus_today?.toxic?.length ? formatStrategyRegimeLabel(review.focus_today.toxic[0].label) : 'нет данных',
+          review.focus_today?.toxic?.length ? [formatSignedRub(review.focus_today.toxic[0].pnl_rub), `${review.focus_today.toxic[0].count || 0} сдел.`].join(' · ') : ''
+        ),
+        buildReviewRow(
+          'Сильное за 3 дня',
+          review.focus_3d?.strongest?.length ? formatStrategyRegimeLabel(review.focus_3d.strongest[0].label) : 'нет данных',
+          review.focus_3d?.strongest?.length ? [formatSignedRub(review.focus_3d.strongest[0].pnl_rub), `${review.focus_3d.strongest[0].count || 0} сдел.`].join(' · ') : ''
+        ),
+        buildReviewRow(
+          'Токсичное за 3 дня',
+          review.focus_3d?.toxic?.length ? formatStrategyRegimeLabel(review.focus_3d.toxic[0].label) : 'нет данных',
+          review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
+        ),
+        buildReviewRow('Рабочая зона', formatStrategyRegimeLabel(review.release1_summary?.working || '-')),
+        buildReviewRow('Под наблюдением', formatStrategyRegimeLabel(review.release1_summary?.watch || '-')),
+        buildReviewRow('Токсичная зона', formatStrategyRegimeLabel(review.release1_summary?.toxic || '-')),
+      ].join('');
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');
