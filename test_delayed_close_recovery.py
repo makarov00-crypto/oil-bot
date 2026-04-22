@@ -381,7 +381,10 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
             journal_path = log_dir / "trade_journal.jsonl"
-            with patch.object(mod, "LOG_DIR", log_dir), patch.object(mod, "TRADE_JOURNAL_PATH", journal_path):
+            trade_db_path = log_dir / "trade_analytics.sqlite3"
+            with patch.object(mod, "LOG_DIR", log_dir), patch.object(mod, "TRADE_JOURNAL_PATH", journal_path), patch.object(
+                mod, "TRADE_DB_PATH", trade_db_path
+            ):
                 event_time = datetime(2026, 4, 9, 14, 55, 4, 212691, tzinfo=timezone.utc)
                 mod.append_trade_journal(
                     instrument,
