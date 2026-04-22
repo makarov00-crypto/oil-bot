@@ -212,6 +212,11 @@ class InstrumentState:
     last_news_bias: str = "NEUTRAL"
     last_news_impact: str = ""
     last_market_regime: str = ""
+    last_market_regime_confidence: float = 0.0
+    last_market_regime_reason: str = ""
+    last_entry_edge_score: float = 0.0
+    last_entry_edge_label: str = ""
+    last_entry_edge_reason: str = ""
     last_setup_quality_label: str = ""
     last_setup_quality_score: int = 0
     last_volume_ratio: float = 0.0
@@ -479,6 +484,11 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "news_bias": str(state.last_news_bias or ""),
         "news_impact": str(state.last_news_impact or ""),
         "market_regime": str(state.last_market_regime or ""),
+        "market_regime_confidence": round(float(state.last_market_regime_confidence or 0.0), 3),
+        "market_regime_reason": str(state.last_market_regime_reason or ""),
+        "entry_edge_score": round(float(state.last_entry_edge_score or 0.0), 3),
+        "entry_edge_label": str(state.last_entry_edge_label or ""),
+        "entry_edge_reason": str(state.last_entry_edge_reason or ""),
         "setup_quality_label": str(state.last_setup_quality_label or ""),
         "setup_quality_score": int(state.last_setup_quality_score or 0),
         "volume_ratio": round(float(state.last_volume_ratio or 0.0), 3),
@@ -2485,7 +2495,11 @@ def build_market_view_lines(
     ]
 
 
-def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, dict[str, float]]:
+def clamp_float(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(value, upper))
+
+
+def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, dict[str, float | str]]:
     last = df.iloc[-1]
     recent = df.iloc[-5:] if len(df) >= 5 else df
     close = float(last["close"])
@@ -2499,30 +2513,100 @@ def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, 
     range_width_pct = (
         (float(recent["high"].max()) - float(recent["low"].min())) / close if close else 0.0
     )
+    ema_spread_pct = abs(ema20 - ema50) / close if close else 0.0
+    distance_to_ema20_pct = abs(close - ema20) / close if close else 0.0
     long_trend = close > ema20 and ema20 >= ema50
     short_trend = close < ema20 and ema20 <= ema50
     near_ema20 = abs(close - ema20) / close <= 0.0025 if close else False
+    directional_match = (
+        (higher_tf_bias == "LONG" and long_trend)
+        or (higher_tf_bias == "SHORT" and short_trend)
+    )
+    trend_strength = clamp_float((ema_spread_pct / 0.0032) + (distance_to_ema20_pct / 0.0035), 0.0, 1.0)
+    participation_strength = clamp_float(((max(volume_ratio, 0.0) - 0.85) / 0.45), 0.0, 1.0)
+    impulse_strength = clamp_float(((max(body_ratio, 0.0) - 0.75) / 0.55), 0.0, 1.0)
+    volatility_strength = clamp_float(((max(atr_pct, 0.0) - 0.00045) / 0.00055), 0.0, 1.0)
+    range_expansion_strength = clamp_float(((max(range_width_pct, 0.0) - 0.0035) / 0.0045), 0.0, 1.0)
+    compression_score = (
+        (1.0 if volume_ratio < 0.95 else 0.0) * 0.28
+        + (1.0 if body_ratio < 0.8 else 0.0) * 0.26
+        + (1.0 if range_width_pct <= max(atr_pct * 2.2, 0.0038) else 0.0) * 0.28
+        + (1.0 if distance_to_ema20_pct <= 0.002 else 0.0) * 0.18
+    )
+    chop_score = (
+        (1.0 if atr_pct <= 0.0006 else 0.0) * 0.26
+        + (1.0 if range_width_pct <= 0.0048 else 0.0) * 0.24
+        + (1.0 if ema_spread_pct <= 0.0014 else 0.0) * 0.24
+        + (1.0 if not directional_match else 0.0) * 0.26
+    )
+    pullback_score = (
+        (1.0 if directional_match else 0.0) * 0.32
+        + (1.0 if near_ema20 else 0.0) * 0.30
+        + trend_strength * 0.18
+        + (1.0 if body_ratio <= 1.05 else 0.0) * 0.10
+        + (1.0 if volume_ratio >= 0.9 else 0.0) * 0.10
+    )
+    trend_expansion_score = (
+        (1.0 if directional_match else 0.0) * 0.30
+        + trend_strength * 0.24
+        + range_expansion_strength * 0.18
+        + participation_strength * 0.14
+        + (1.0 if not near_ema20 else 0.0) * 0.14
+    )
+    impulse_score = (
+        participation_strength * 0.28
+        + impulse_strength * 0.30
+        + volatility_strength * 0.20
+        + range_expansion_strength * 0.12
+        + (1.0 if directional_match else 0.0) * 0.10
+    )
 
-    if volume_ratio < 0.9 and body_ratio < 0.7 and range_width_pct <= max(atr_pct * 2.0, 0.0035):
-        regime = "compression"
-    elif atr_pct <= 0.00055 and range_width_pct <= 0.0045:
-        regime = "chop"
-    elif higher_tf_bias == "LONG" and long_trend and near_ema20:
-        regime = "trend_pullback"
-    elif higher_tf_bias == "SHORT" and short_trend and near_ema20:
-        regime = "trend_pullback"
-    elif (higher_tf_bias == "LONG" and long_trend) or (higher_tf_bias == "SHORT" and short_trend):
-        regime = "trend_expansion"
-    elif volume_ratio >= 1.15 and body_ratio >= 1.0 and atr_pct >= 0.0008:
-        regime = "impulse"
-    else:
+    regime_scores = {
+        "compression": round(compression_score, 4),
+        "chop": round(chop_score, 4),
+        "trend_pullback": round(pullback_score, 4),
+        "trend_expansion": round(trend_expansion_score, 4),
+        "impulse": round(impulse_score, 4),
+    }
+    ranked_scores = sorted(regime_scores.items(), key=lambda item: item[1], reverse=True)
+    top_regime, top_score = ranked_scores[0]
+    second_score = ranked_scores[1][1] if len(ranked_scores) > 1 else 0.0
+    score_gap = max(0.0, top_score - second_score)
+    if top_score < 0.55:
         regime = "mixed"
+    else:
+        regime = top_regime
+
+    confidence = clamp_float(0.38 + top_score * 0.42 + score_gap * 0.35, 0.35, 0.95)
+
+    if regime == "compression":
+        reason_parts = ["низкие объём и импульс", "узкий диапазон", "цена прижата к EMA20"]
+    elif regime == "chop":
+        reason_parts = ["низкая волатильность", "плоские средние", "нет направленного преимущества"]
+    elif regime == "trend_pullback":
+        direction_text = "LONG" if higher_tf_bias == "LONG" else "SHORT"
+        reason_parts = [f"старший ТФ поддерживает {direction_text}", "есть тренд", "цена вернулась к EMA20"]
+    elif regime == "trend_expansion":
+        direction_text = "LONG" if higher_tf_bias == "LONG" else "SHORT"
+        reason_parts = [f"старший ТФ поддерживает {direction_text}", "EMA20/EMA50 выстроены", "диапазон расширяется"]
+    elif regime == "impulse":
+        reason_parts = ["объём выше нормы", "тело свечи усилено", "волатильность расширилась"]
+    else:
+        reason_parts = ["сигналы режима смешаны", "нет устойчивого преимущества", "нужна аккуратность"]
+    regime_reason = ", ".join(reason_parts[:3])
 
     return regime, {
         "atr_pct": atr_pct,
         "volume_ratio": volume_ratio,
         "body_ratio": body_ratio,
         "range_width_pct": range_width_pct,
+        "ema_spread_pct": ema_spread_pct,
+        "distance_to_ema20_pct": distance_to_ema20_pct,
+        "trend_strength": round(trend_strength, 4),
+        "regime_confidence": round(confidence, 4),
+        "regime_top_score": round(top_score, 4),
+        "regime_score_gap": round(score_gap, 4),
+        "regime_reason": regime_reason,
     }
 
 
@@ -2530,7 +2614,7 @@ def estimate_setup_quality(
     signal: str,
     higher_tf_bias: str,
     market_regime: str,
-    metrics: dict[str, float],
+    metrics: dict[str, float | str],
     news_bias: NewsBias | None = None,
 ) -> tuple[int, str]:
     if signal not in {"LONG", "SHORT"}:
@@ -2542,7 +2626,8 @@ def estimate_setup_quality(
         score += 1
     if float(metrics.get("body_ratio") or 0.0) >= 0.8:
         score += 1
-    if market_regime in {"trend_expansion", "trend_pullback", "impulse"}:
+    regime_confidence = float(metrics.get("regime_confidence") or 0.0)
+    if market_regime in {"trend_expansion", "trend_pullback", "impulse"} and regime_confidence >= 0.58:
         score += 1
     if news_bias is not None and news_bias.bias == signal:
         score += 1
@@ -2557,7 +2642,7 @@ def regime_entry_block_reason(
     strategy_name: str,
     signal: str,
     market_regime: str,
-    metrics: dict[str, float],
+    metrics: dict[str, float | str],
 ) -> str:
     strategy = (strategy_name or "").strip()
     if signal not in {"LONG", "SHORT"}:
@@ -2566,6 +2651,7 @@ def regime_entry_block_reason(
     atr_pct = float(metrics.get("atr_pct") or 0.0)
     volume_ratio = float(metrics.get("volume_ratio") or 0.0)
     body_ratio = float(metrics.get("body_ratio") or 0.0)
+    regime_confidence = float(metrics.get("regime_confidence") or 0.0)
 
     if market_regime == "compression":
         if strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}:
@@ -2580,15 +2666,21 @@ def regime_entry_block_reason(
 
     if strategy in {"opening_range_breakout", "momentum_breakout"} and market_regime not in {"trend_expansion", "impulse"}:
         return f"режим {market_regime} не подходит для стратегии {strategy}: нужен импульсный или расширяющийся рынок"
+    if strategy in {"opening_range_breakout", "momentum_breakout"} and regime_confidence < 0.54:
+        return f"режим {market_regime} пока не подтверждён для стратегии {strategy}: уверенность режима слишком низкая"
 
     if strategy in {"range_break_continuation", "breakdown_continuation"}:
         if market_regime not in {"trend_expansion", "impulse"}:
             return f"режим {market_regime} не подходит для стратегии {strategy}: нужен зрелый направленный пробой"
+        if regime_confidence < 0.52:
+            return f"режим {market_regime} пока не подтверждён для стратегии {strategy}: уверенность режима слишком низкая"
         if atr_pct < 0.00045 and volume_ratio < 0.95:
             return f"режим {market_regime} не подходит для стратегии {strategy}: не хватает волатильности и объёма"
 
     if strategy == "failed_breakout" and market_regime == "impulse" and body_ratio >= 1.15:
         return f"режим {market_regime} не подходит для стратегии {strategy}: движение слишком импульсное против контртрендового входа"
+    if strategy == "trend_pullback" and regime_confidence < 0.50:
+        return f"режим {market_regime} пока не подтверждён для стратегии {strategy}: откат недостаточно чистый"
 
     return ""
 
@@ -3659,6 +3751,85 @@ def get_strategy_regime_health_score(symbol: str, strategy_name: str, market_reg
     return score, ", ".join(reasons) if reasons else f"режим {target_regime} нейтрален"
 
 
+def get_entry_edge_profile(
+    state: InstrumentState,
+    symbol: str,
+    strategy_name: str,
+    signal: str,
+) -> tuple[float, str, str]:
+    if signal not in {"LONG", "SHORT"}:
+        return 0.0, "none", "нет сигнала"
+
+    edge = 0.50
+    reasons: list[str] = []
+
+    setup_label = str(state.last_setup_quality_label or "").strip().lower()
+    if setup_label == "strong":
+        edge += 0.16
+        reasons.append("сильный сетап")
+    elif setup_label == "medium":
+        edge += 0.05
+        reasons.append("средний сетап")
+    elif setup_label == "weak":
+        edge -= 0.14
+        reasons.append("слабый сетап")
+
+    regime = str(state.last_market_regime or "").strip().lower()
+    regime_confidence = float(state.last_market_regime_confidence or 0.0)
+    if regime in {"trend_expansion", "trend_pullback", "impulse"}:
+        edge += 0.08
+        reasons.append(f"режим {regime}")
+    elif regime in {"compression", "chop"}:
+        edge -= 0.10
+        reasons.append(f"режим {regime}")
+
+    if regime_confidence >= 0.75:
+        edge += 0.08
+        reasons.append("режим подтверждён")
+    elif 0.0 < regime_confidence < 0.50:
+        edge -= 0.12
+        reasons.append("режим неустойчив")
+
+    if str(state.last_higher_tf_bias or "").strip().upper() == signal:
+        edge += 0.06
+        reasons.append("по старшему ТФ")
+    else:
+        edge -= 0.04
+        reasons.append("против старшего ТФ")
+
+    strategy_health_score, strategy_health_reason = get_strategy_health_score(symbol, strategy_name)
+    if strategy_health_score >= 1.05:
+        edge += 0.06
+        reasons.append(strategy_health_reason)
+    elif strategy_health_score <= 0.90:
+        edge -= 0.08
+        reasons.append(strategy_health_reason)
+
+    regime_health_score, regime_health_reason = get_strategy_regime_health_score(symbol, strategy_name, regime)
+    if regime_health_score >= 1.05:
+        edge += 0.08
+        reasons.append(regime_health_reason)
+    elif regime_health_score <= 0.90:
+        edge -= 0.10
+        reasons.append(regime_health_reason)
+
+    recovery_status = get_recovery_mode_status(symbol, strategy_name)
+    if recovery_status["active"]:
+        edge -= 0.10
+        reasons.append("recovery mode")
+
+    edge = clamp_float(edge, 0.05, 0.95)
+    if edge >= 0.78:
+        label = "high"
+    elif edge >= 0.62:
+        label = "confirmed"
+    elif edge >= 0.45:
+        label = "moderate"
+    else:
+        label = "fragile"
+    return edge, label, ", ".join(reasons) if reasons else "нейтральный edge"
+
+
 def strategy_regime_block_reason(symbol: str, strategy_name: str, market_regime: str) -> str:
     target_regime = str(market_regime or "").strip().lower()
     if not target_regime or target_regime == "-":
@@ -4018,12 +4189,19 @@ def get_adaptive_entry_size_multiplier(
         reasons.append("слабый сетап")
 
     regime = str(state.last_market_regime or "").strip().lower()
+    regime_confidence = float(state.last_market_regime_confidence or 0.0)
     if regime in {"trend_expansion", "impulse"}:
         multiplier *= 1.05
         reasons.append(f"режим {regime}")
     elif regime in {"compression", "chop"}:
         multiplier *= 0.75
         reasons.append(f"режим {regime}")
+    if regime_confidence >= 0.76:
+        multiplier *= 1.04
+        reasons.append("режим подтверждён")
+    elif regime_confidence > 0.0 and regime_confidence < 0.50:
+        multiplier *= 0.84
+        reasons.append("режим неустойчив")
 
     health_score, health_reason = get_strategy_health_score(symbol, strategy_name)
     multiplier *= health_score
@@ -4043,6 +4221,18 @@ def get_adaptive_entry_size_multiplier(
     if recovery_status["active"]:
         multiplier *= 0.65
         reasons.append("recovery mode")
+
+    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_label = str(state.last_entry_edge_label or "").strip().lower()
+    if edge_score >= 0.78:
+        multiplier *= 1.08
+        reasons.append(f"edge {edge_label or 'high'}")
+    elif edge_score >= 0.62:
+        multiplier *= 1.04
+        reasons.append(f"edge {edge_label or 'confirmed'}")
+    elif 0.0 < edge_score < 0.45:
+        multiplier *= 0.78
+        reasons.append(f"edge {edge_label or 'fragile'}")
 
     multiplier = max(0.35, min(multiplier, 1.35))
     return multiplier, ", ".join(reasons) if reasons else "нейтральный размер"
@@ -4085,6 +4275,9 @@ def calculate_position_sizing_context(
         strategy_name,
         state.last_market_regime,
     )
+    entry_edge_score = float(state.last_entry_edge_score or 0.0)
+    entry_edge_label = str(state.last_entry_edge_label or "")
+    entry_edge_reason = str(state.last_entry_edge_reason or "")
     recovery_status = get_recovery_mode_status(instrument.symbol, strategy_name)
     base_trade_share = max(0.05, min(config.base_trade_allocation_pct, 1.0))
     trade_aggression = max(0.35, min(config.portfolio_usage_pct, 1.0))
@@ -4175,6 +4368,9 @@ def calculate_position_sizing_context(
         "strategy_health_reason": strategy_health_reason,
         "strategy_regime_health_score": strategy_regime_health_score,
         "strategy_regime_health_reason": strategy_regime_health_reason,
+        "entry_edge_score": entry_edge_score,
+        "entry_edge_label": entry_edge_label,
+        "entry_edge_reason": entry_edge_reason,
         "recovery_mode_active": bool(recovery_status["active"]),
         "base_trade_share": base_trade_share,
         "target_trade_margin_rub": target_trade_margin,
@@ -4254,19 +4450,22 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     broker_limit = int(sizing.get("broker_limit") or 0)
     qty_by_headroom = int(sizing.get("qty_by_headroom") or 0)
     strategy_health_score = float(sizing.get("strategy_health_score") or 1.0)
+    edge_score = float(sizing.get("entry_edge_score") or 0.0)
+    edge_label = str(sizing.get("entry_edge_label") or "").strip()
     recovery_mode_active = bool(sizing.get("recovery_mode_active"))
     recovery_hint = ", recovery mode" if recovery_mode_active else ""
+    edge_hint = f", edge {edge_label} {edge_score:.2f}" if edge_score > 0.0 else ""
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
-            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{recovery_hint}, запас {margin_headroom:.0f} RUB, "
+            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{recovery_hint}, запас {margin_headroom:.0f} RUB, "
             f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
             f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"health {strategy_health_score:.2f}{recovery_hint}, "
+        f"health {strategy_health_score:.2f}{edge_hint}{recovery_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."
@@ -4379,12 +4578,13 @@ def get_adaptive_exit_profile(
     profile = base_profile
     reasons: list[str] = []
     regime = str(state.last_market_regime or "").strip().lower()
+    regime_confidence = float(state.last_market_regime_confidence or 0.0)
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     recovery_active = False
     if state.entry_strategy:
         recovery_active = bool(get_recovery_mode_status(instrument.symbol, state.entry_strategy)["active"])
 
-    if regime in {"compression", "chop"} or setup_label == "weak" or recovery_active:
+    if regime in {"compression", "chop"} or setup_label == "weak" or recovery_active or (0.0 < regime_confidence < 0.48):
         profile = ExitProfile(
             min_hold_minutes=min(profile.min_hold_minutes, 20),
             breakeven_profit_pct=min(profile.breakeven_profit_pct, 0.0045),
@@ -4396,6 +4596,8 @@ def get_adaptive_exit_profile(
             reasons.append("weak setup")
         if recovery_active:
             reasons.append("recovery mode")
+        if 0.0 < regime_confidence < 0.48:
+            reasons.append("низкая уверенность режима")
     elif regime in {"trend_expansion", "impulse"} and setup_label == "strong":
         profile = ExitProfile(
             min_hold_minutes=max(profile.min_hold_minutes, 30),
@@ -5626,8 +5828,19 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
         news_bias,
     )
     state.last_market_regime = market_regime
+    state.last_market_regime_confidence = float(regime_metrics.get("regime_confidence") or 0.0)
+    state.last_market_regime_reason = str(regime_metrics.get("regime_reason") or "")
     state.last_setup_quality_score = setup_quality_score
     state.last_setup_quality_label = setup_quality_label
+    entry_edge_score, entry_edge_label, entry_edge_reason = get_entry_edge_profile(
+        state,
+        instrument.symbol,
+        primary_strategy_name,
+        signal,
+    )
+    state.last_entry_edge_score = entry_edge_score
+    state.last_entry_edge_label = entry_edge_label
+    state.last_entry_edge_reason = entry_edge_reason
     state.last_volume_ratio = float(regime_metrics.get("volume_ratio") or 0.0)
     state.last_body_ratio = float(regime_metrics.get("body_ratio") or 0.0)
     state.last_atr_pct = float(regime_metrics.get("atr_pct") or 0.0)

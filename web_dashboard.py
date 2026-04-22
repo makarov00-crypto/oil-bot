@@ -1263,7 +1263,14 @@ def trade_context_display(row: dict[str, Any]) -> str:
     parts: list[str] = []
     regime = str(context.get("market_regime") or "").strip()
     if regime:
-        parts.append(f"режим {regime}")
+        confidence = context.get("market_regime_confidence")
+        confidence_text = ""
+        try:
+            if confidence not in (None, ""):
+                confidence_text = f" ({float(confidence) * 100:.0f}%)"
+        except Exception:
+            confidence_text = ""
+        parts.append(f"режим {regime}{confidence_text}")
     quality_label = str(context.get("setup_quality_label") or "").strip()
     quality_score = context.get("setup_quality_score")
     if quality_label:
@@ -1274,6 +1281,16 @@ def trade_context_display(row: dict[str, Any]) -> str:
         except Exception:
             score_text = ""
         parts.append(f"сетап {quality_label}{score_text}")
+    edge_label = str(context.get("entry_edge_label") or "").strip()
+    edge_score = context.get("entry_edge_score")
+    if edge_label:
+        edge_text = ""
+        try:
+            if edge_score not in (None, ""):
+                edge_text = f" {float(edge_score):.2f}"
+        except Exception:
+            edge_text = ""
+        parts.append(f"edge {edge_label}{edge_text}")
     atr_pct = context.get("atr_pct")
     if atr_pct not in (None, ""):
         try:

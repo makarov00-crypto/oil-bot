@@ -119,10 +119,37 @@ class StrategyQualityFilterTests(unittest.TestCase):
             "failed_breakout",
             "LONG",
             "chop",
-            {"atr_pct": 0.0005, "volume_ratio": 0.9, "body_ratio": 0.8},
+            {"atr_pct": 0.0005, "volume_ratio": 0.9, "body_ratio": 0.8, "regime_confidence": 0.61},
         )
 
         self.assertEqual(reason, "")
+
+    def test_regime_filter_blocks_breakout_when_regime_confidence_is_low(self) -> None:
+        reason = mod.regime_entry_block_reason(
+            "opening_range_breakout",
+            "LONG",
+            "trend_expansion",
+            {"atr_pct": 0.0010, "volume_ratio": 1.15, "body_ratio": 1.1, "regime_confidence": 0.42},
+        )
+
+        self.assertIn("уверенность режима слишком низкая", reason)
+
+    def test_classify_market_regime_returns_confidence_and_reason(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 100.0, "close": 100.4, "high": 100.5, "low": 99.9, "ema20": 99.9, "ema50": 99.5, "atr": 0.25, "volume": 140, "volume_avg": 100, "body": 0.4, "body_avg": 0.22},
+                {"open": 100.4, "close": 100.9, "high": 101.0, "low": 100.3, "ema20": 100.1, "ema50": 99.7, "atr": 0.27, "volume": 145, "volume_avg": 100, "body": 0.5, "body_avg": 0.24},
+                {"open": 100.9, "close": 101.3, "high": 101.4, "low": 100.8, "ema20": 100.4, "ema50": 100.0, "atr": 0.28, "volume": 150, "volume_avg": 100, "body": 0.4, "body_avg": 0.24},
+                {"open": 101.3, "close": 101.7, "high": 101.8, "low": 101.2, "ema20": 100.8, "ema50": 100.3, "atr": 0.30, "volume": 155, "volume_avg": 100, "body": 0.4, "body_avg": 0.25},
+                {"open": 101.7, "close": 102.1, "high": 102.2, "low": 101.6, "ema20": 101.2, "ema50": 100.7, "atr": 0.32, "volume": 160, "volume_avg": 100, "body": 0.4, "body_avg": 0.25},
+            ]
+        )
+
+        regime, metrics = mod.classify_market_regime(df, "LONG")
+
+        self.assertIn(regime, {"trend_expansion", "impulse"})
+        self.assertGreater(float(metrics["regime_confidence"]), 0.55)
+        self.assertTrue(str(metrics["regime_reason"]))
 
     def test_opening_range_blocks_expensive_fx_without_commission_room(self) -> None:
         df = candle_rows(

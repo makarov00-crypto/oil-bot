@@ -240,6 +240,64 @@ class PositionSizingTests(unittest.TestCase):
         self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
         self.assertLess(sizing["strategy_regime_health_score"], 1.0)
 
+    def test_confirmed_edge_boosts_entry_multiplier(self) -> None:
+        self.state.last_setup_quality_label = "strong"
+        self.state.last_market_regime = "trend_expansion"
+        self.state.last_market_regime_confidence = 0.84
+        self.state.last_entry_edge_score = 0.83
+        self.state.last_entry_edge_label = "high"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим trend_expansion нейтрален")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+            )
+
+        self.assertGreater(sizing["adaptive_size_multiplier"], 1.15)
+        self.assertEqual(sizing["entry_edge_label"], "high")
+
+    def test_fragile_edge_reduces_entry_multiplier(self) -> None:
+        self.state.last_setup_quality_label = "medium"
+        self.state.last_market_regime = "mixed"
+        self.state.last_market_regime_confidence = 0.41
+        self.state.last_entry_edge_score = 0.34
+        self.state.last_entry_edge_label = "fragile"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим mixed нейтрален")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "failed_breakout"
+            )
+
+        self.assertLess(sizing["adaptive_size_multiplier"], 0.8)
+        self.assertEqual(sizing["entry_edge_label"], "fragile")
+
 
 if __name__ == "__main__":
     unittest.main()
