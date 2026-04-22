@@ -429,6 +429,51 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertEqual(reason, "")
 
+    def test_entry_priority_score_rewards_confirmed_candidate(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.83,
+            last_entry_edge_score=0.82,
+            last_higher_tf_bias="LONG",
+        )
+
+        with patch.object(mod, "get_strategy_health_score", return_value=(1.08, "связка сильна 3 дня")), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.07, "режим рабочий")
+        ), patch.object(mod, "get_recovery_mode_status", return_value={"active": False}):
+            score, reason = mod.calculate_entry_priority_score(state, "BRK6", "range_break_continuation")
+
+        self.assertGreater(score, 0.75)
+        self.assertIn("высокое качество входа", reason)
+        self.assertIn("режим подтверждён", reason)
+
+    def test_rank_cycle_entry_candidates_keeps_only_top_priority_set(self) -> None:
+        candidates = [
+            {"symbol": "BRK6", "priority_score": 0.86, "entry_edge_score": 0.82, "regime_confidence": 0.81, "allocator_quantity": 1},
+            {"symbol": "NGJ6", "priority_score": 0.74, "entry_edge_score": 0.71, "regime_confidence": 0.76, "allocator_quantity": 1},
+            {"symbol": "IMOEXF", "priority_score": 0.39, "entry_edge_score": 0.34, "regime_confidence": 0.42, "allocator_quantity": 1},
+        ]
+
+        selected, deferred = mod.rank_cycle_entry_candidates(candidates, max_entries=2, min_priority_score=0.45)
+
+        self.assertEqual([item["symbol"] for item in selected], ["BRK6", "NGJ6"])
+        self.assertEqual([item["symbol"] for item in deferred], ["IMOEXF"])
+
+    def test_mark_cycle_deferred_candidate_updates_allocator_summary(self) -> None:
+        symbol = "TESTRANK"
+        state = mod.InstrumentState(last_signal_summary=["старый сигнал"])
+        with patch.object(mod, "load_state", return_value=state), patch.object(mod, "save_state") as save_state:
+            mod.mark_cycle_deferred_candidate(
+                {"symbol": symbol},
+                "кандидат отложен: есть более сильный сигнал.",
+            )
+
+        self.assertEqual(state.last_allocator_quantity, 0)
+        self.assertIn("кандидат отложен", state.last_allocator_summary)
+        self.assertEqual(state.last_signal_summary[0], "кандидат отложен: есть более сильный сигнал.")
+        save_state.assert_called_once()
+
     def test_adaptive_exit_profile_tightens_in_chop_recovery_mode(self) -> None:
         config = SimpleNamespace(
             min_hold_minutes=30,

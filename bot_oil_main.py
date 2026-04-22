@@ -4238,6 +4238,110 @@ def get_adaptive_entry_size_multiplier(
     return multiplier, ", ".join(reasons) if reasons else "нейтральный размер"
 
 
+def calculate_entry_priority_score(
+    state: InstrumentState,
+    symbol: str,
+    strategy_name: str,
+) -> tuple[float, str]:
+    signal = str(state.last_signal or "").strip().upper()
+    if signal not in {"LONG", "SHORT"}:
+        return 0.0, "нет сигнала на вход"
+
+    score = 0.0
+    reasons: list[str] = []
+
+    edge_score = float(state.last_entry_edge_score or 0.0)
+    score += edge_score * 0.55
+    if edge_score >= 0.78:
+        reasons.append("высокое качество входа")
+    elif edge_score >= 0.62:
+        reasons.append("вход подтверждён")
+    elif edge_score > 0.0:
+        reasons.append("вход слабее среднего")
+
+    regime_confidence = float(state.last_market_regime_confidence or 0.0)
+    score += regime_confidence * 0.20
+    if regime_confidence >= 0.75:
+        reasons.append("режим подтверждён")
+    elif regime_confidence > 0.0 and regime_confidence < 0.50:
+        reasons.append("режим пока неустойчив")
+
+    setup_label = str(state.last_setup_quality_label or "").strip().lower()
+    if setup_label == "strong":
+        score += 0.12
+        reasons.append("strong setup")
+    elif setup_label == "medium":
+        score += 0.05
+    elif setup_label == "weak":
+        score -= 0.08
+        reasons.append("weak setup")
+
+    strategy_health_score, strategy_health_reason = get_strategy_health_score(symbol, strategy_name)
+    score += (strategy_health_score - 1.0) * 0.30
+    if strategy_health_score >= 1.05:
+        reasons.append(strategy_health_reason)
+    elif strategy_health_score <= 0.90:
+        reasons.append(strategy_health_reason)
+
+    regime_health_score, regime_health_reason = get_strategy_regime_health_score(
+        symbol,
+        strategy_name,
+        state.last_market_regime,
+    )
+    score += (regime_health_score - 1.0) * 0.25
+    if regime_health_score >= 1.05:
+        reasons.append(regime_health_reason)
+    elif regime_health_score <= 0.90:
+        reasons.append(regime_health_reason)
+
+    recovery_status = get_recovery_mode_status(symbol, strategy_name)
+    if recovery_status["active"]:
+        score -= 0.12
+        reasons.append("recovery mode")
+
+    score = clamp_float(score, 0.0, 1.0)
+    return score, ", ".join(reason for reason in reasons if reason) or "нейтральный приоритет"
+
+
+def rank_cycle_entry_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    max_entries: int = 2,
+    min_priority_score: float = 0.45,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            float(item.get("priority_score") or 0.0),
+            float(item.get("entry_edge_score") or 0.0),
+            float(item.get("regime_confidence") or 0.0),
+            int(item.get("allocator_quantity") or 0),
+        ),
+        reverse=True,
+    )
+    selected: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    for item in ranked:
+        score = float(item.get("priority_score") or 0.0)
+        if score < min_priority_score or len(selected) >= max_entries:
+            deferred.append(item)
+        else:
+            selected.append(item)
+    return selected, deferred
+
+
+def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> None:
+    symbol = str(candidate.get("symbol") or "").strip().upper()
+    if not symbol:
+        return
+    state = load_state(symbol)
+    state.last_allocator_quantity = 0
+    state.last_allocator_summary = f"Аллокатор отложил вход: {reason}"
+    if reason:
+        state.last_signal_summary = [reason, *state.last_signal_summary[:2]]
+    save_state(symbol, state)
+
+
 def calculate_position_sizing_context(
     client: Client,
     config: BotConfig,
@@ -5710,14 +5814,20 @@ def check_exit(
             close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал LONG")
 
 
-def process_instrument(client: Client, config: BotConfig, instrument: InstrumentConfig) -> None:
+def process_instrument(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    *,
+    collect_entry_candidate_only: bool = False,
+) -> dict[str, Any] | None:
     state = load_state(instrument.symbol)
     reconcile_state_accounting(instrument.symbol, state)
     if not config.dry_run:
         reconcile_delayed_close_from_broker(client, config, instrument, state)
         state = load_state(instrument.symbol)
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
-        return
+        return None
     session_name = get_market_session()
     if session_name == "CLOSED":
         closed_message = "Вне торговой сессии срочного рынка Мосбиржи."
@@ -5729,7 +5839,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             logging.info("symbol=%s status=session_closed", instrument.symbol)
         else:
             state.last_error = closed_message
-        return
+        return None
     if session_name == "WEEKEND" and is_currency_symbol(instrument.symbol):
         weekend_message = "Выходной день: валютный фьючерс не торгуется."
         if state.position_side != "FLAT" or has_pending_order(state):
@@ -5744,7 +5854,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             state.last_error = weekend_message
         if state.position_side == "FLAT" and not has_pending_order(state):
             state.last_signal = "HOLD"
-            return
+            return None
 
     try:
         lower_df = add_indicators(
@@ -5761,7 +5871,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             state.last_error = str(error)
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=waiting_for_candles", instrument.symbol)
-            return
+            return None
         raise
 
     higher_tf_df: pd.DataFrame | None = None
@@ -5952,6 +6062,8 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
             state.last_allocator_summary = f"Аллокатор временно недоступен: {error}"
             logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
 
+    candidate_payload: dict[str, Any] | None = None
+
     if signal_changed:
         logging.info("symbol=%s signal=%s side=%s qty=%s", instrument.symbol, signal, state.position_side, state.position_qty)
 
@@ -6026,7 +6138,30 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
                                     state.last_signal_summary = [regime_block_reason, *state.last_signal_summary[:2]]
                                     logging.info("symbol=%s strategy=%s status=entry_blocked_regime reason=%s", instrument.symbol, primary_strategy_name, regime_block_reason)
                                 else:
-                                    open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
+                                    if collect_entry_candidate_only:
+                                        priority_score, priority_reason = calculate_entry_priority_score(
+                                            state,
+                                            instrument.symbol,
+                                            primary_strategy_name,
+                                        )
+                                        candidate_payload = {
+                                            "symbol": instrument.symbol,
+                                            "signal": signal,
+                                            "strategy_name": primary_strategy_name,
+                                            "reason": reason,
+                                            "priority_score": priority_score,
+                                            "priority_reason": priority_reason,
+                                            "entry_edge_score": float(state.last_entry_edge_score or 0.0),
+                                            "entry_edge_label": str(state.last_entry_edge_label or ""),
+                                            "regime_confidence": float(state.last_market_regime_confidence or 0.0),
+                                            "allocator_quantity": int(state.last_allocator_quantity or 0),
+                                        }
+                                        state.last_allocator_summary = (
+                                            f"{state.last_allocator_summary} "
+                                            f"Приоритет цикла {priority_score:.2f}: {priority_reason}."
+                                        ).strip()
+                                    else:
+                                        open_position(client, config, instrument, state, signal, primary_strategy_name, reason)
                     else:
                         logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
                         state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
@@ -6035,6 +6170,7 @@ def process_instrument(client: Client, config: BotConfig, instrument: Instrument
 
     reconcile_state_accounting(instrument.symbol, state)
     save_state(instrument.symbol, state)
+    return candidate_payload
 
 
 def run_bot() -> int:
@@ -6075,8 +6211,38 @@ def run_bot() -> int:
                             watchlist_refresh_at,
                         )
                         maybe_refresh_news_snapshot()
+                        cycle_candidates: list[dict[str, Any]] = []
                         for instrument in watchlist:
-                            process_instrument(client, config, instrument)
+                            candidate = process_instrument(
+                                client,
+                                config,
+                                instrument,
+                                collect_entry_candidate_only=True,
+                            )
+                            if candidate:
+                                cycle_candidates.append(candidate)
+                        selected_candidates, deferred_candidates = rank_cycle_entry_candidates(cycle_candidates)
+                        selected_symbols = {str(item.get("symbol") or "").upper() for item in selected_candidates}
+                        for item in deferred_candidates:
+                            symbol = str(item.get("symbol") or "").upper()
+                            if not symbol:
+                                continue
+                            priority_score = float(item.get("priority_score") or 0.0)
+                            if priority_score < 0.45:
+                                defer_reason = (
+                                    f"кандидат {symbol} отложен: приоритет цикла {priority_score:.2f} "
+                                    f"ниже порога, {item.get('priority_reason') or 'сигнал недостаточно силён'}."
+                                )
+                            else:
+                                defer_reason = (
+                                    f"кандидат {symbol} отложен: в этом цикле есть более сильные входы, "
+                                    f"приоритет {priority_score:.2f}, {item.get('priority_reason') or 'конкуренция сигналов'}."
+                                )
+                            mark_cycle_deferred_candidate(item, defer_reason)
+                            logging.info("symbol=%s status=entry_deferred_cycle_rank reason=%s", symbol, defer_reason)
+                        for instrument in watchlist:
+                            if instrument.symbol.upper() in selected_symbols:
+                                process_instrument(client, config, instrument)
                         recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)
                         if recovered_closes:
                             logging.warning("journal_auto_recovery_applied recovered_closes=%s", recovered_closes)
