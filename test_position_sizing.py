@@ -39,7 +39,9 @@ class PositionSizingTests(unittest.TestCase):
         ), patch.object(
             mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
         ), patch.object(
-            mod, "calculate_today_strategy_performance", return_value={"closed_count": 0, "net_pnl_rub": 0.0, "win_rate": 0.0}
+            mod, "get_strategy_health_score", return_value=(1.08, "связка сильна 3 дня")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
                 None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
@@ -61,7 +63,9 @@ class PositionSizingTests(unittest.TestCase):
         ), patch.object(
             mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
         ), patch.object(
-            mod, "calculate_today_strategy_performance", return_value={"closed_count": 3, "net_pnl_rub": -220.0, "win_rate": 0.0}
+            mod, "get_strategy_health_score", return_value=(0.82, "связка слаба 3 дня")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
                 None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
@@ -80,6 +84,10 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_session_position_multiplier", return_value=1.0
         ), patch.object(
             mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
                 None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
@@ -101,6 +109,10 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_session_position_multiplier", return_value=1.0
         ), patch.object(
             mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.35)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
                 None, self.config, self.instrument, self.state, 11.3, "SHORT", "opening_range_breakout"
@@ -127,6 +139,10 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_session_position_multiplier", return_value=1.0
         ), patch.object(
             mod, "get_instrument_allocation_weight", return_value=("средний", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
                 None, self.config, instrument, state, 33000.0, "SHORT", "range_break_continuation"
@@ -135,6 +151,54 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(sizing["qty_by_working"], 0)
         self.assertEqual(sizing["qty_by_headroom"], 0)
         self.assertEqual(sizing["quantity"], 1)
+
+    def test_recovery_mode_further_reduces_size_even_for_strong_setup(self) -> None:
+        self.state.last_setup_quality_label = "strong"
+        self.state.last_market_regime = "trend_expansion"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": True}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "trend_pullback"
+            )
+
+        self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
+        self.assertTrue(sizing["recovery_mode_active"])
+
+    def test_health_score_can_boost_size_for_consistent_combo(self) -> None:
+        self.state.last_setup_quality_label = "medium"
+        self.state.last_market_regime = "mixed"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.12, "связка сильна 3 дня")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "failed_breakout"
+            )
+
+        self.assertGreater(sizing["strategy_health_score"], 1.0)
+        self.assertIn("сильна 3 дня", sizing["strategy_health_reason"])
 
 
 if __name__ == "__main__":

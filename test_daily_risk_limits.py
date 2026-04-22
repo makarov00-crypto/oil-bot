@@ -274,6 +274,115 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertEqual(reason, "")
 
+    def test_recovery_mode_blocks_non_defensive_strategy_after_losing_series(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
+        rows = [
+            {"time": f"{today}T10:00:00+03:00", "event": "CLOSE", "symbol": "NGJ6", "strategy": "momentum_breakout", "net_pnl_rub": -80.0},
+            {"time": f"{today}T11:00:00+03:00", "event": "CLOSE", "symbol": "NGJ6", "strategy": "momentum_breakout", "net_pnl_rub": -70.0},
+        ]
+        state = mod.InstrumentState(
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_higher_tf_bias="LONG",
+        )
+
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
+            reason = mod.recovery_mode_block_reason(state, "NGJ6", "momentum_breakout", "LONG")
+
+        self.assertIn("recovery mode", reason)
+        self.assertIn("точечные стратегии", reason)
+
+    def test_recovery_mode_allows_strong_pullback_with_higher_tf_alignment(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
+        rows = [
+            {"time": f"{today}T10:00:00+03:00", "event": "CLOSE", "symbol": "GNM6", "strategy": "trend_pullback", "net_pnl_rub": -80.0},
+            {"time": f"{today}T11:00:00+03:00", "event": "CLOSE", "symbol": "GNM6", "strategy": "trend_pullback", "net_pnl_rub": -70.0},
+        ]
+        state = mod.InstrumentState(
+            last_setup_quality_label="strong",
+            last_market_regime="trend_pullback",
+            last_higher_tf_bias="LONG",
+        )
+
+        with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
+            reason = mod.recovery_mode_block_reason(state, "GNM6", "trend_pullback", "LONG")
+
+        self.assertEqual(reason, "")
+
+    def test_strategy_health_score_penalizes_weak_three_day_combo(self) -> None:
+        with patch.object(
+            mod,
+            "calculate_today_strategy_performance",
+            return_value={"closed_count": 2, "net_pnl_rub": -130.0, "win_rate": 0.0},
+        ), patch.object(
+            mod,
+            "calculate_recent_strategy_performance",
+            return_value={"closed_count": 5, "net_pnl_rub": -310.0, "win_rate": 20.0},
+        ):
+            score, reason = mod.get_strategy_health_score("NGJ6", "momentum_breakout")
+
+        self.assertLess(score, 1.0)
+        self.assertIn("3 дня", reason)
+        self.assertIn("просадка", reason)
+
+    def test_strategy_health_score_rewards_stable_positive_combo(self) -> None:
+        with patch.object(
+            mod,
+            "calculate_today_strategy_performance",
+            return_value={"closed_count": 3, "net_pnl_rub": 120.0, "win_rate": 66.7},
+        ), patch.object(
+            mod,
+            "calculate_recent_strategy_performance",
+            return_value={"closed_count": 6, "net_pnl_rub": 260.0, "win_rate": 66.7},
+        ):
+            score, reason = mod.get_strategy_health_score("RBM6", "range_break_continuation")
+
+        self.assertGreater(score, 1.0)
+        self.assertIn("сильна 3 дня", reason)
+        self.assertIn("edge", reason)
+
+    def test_adaptive_exit_profile_tightens_in_chop_recovery_mode(self) -> None:
+        config = SimpleNamespace(
+            min_hold_minutes=30,
+            breakeven_profit_pct=0.008,
+            trailing_stop_pct=0.006,
+        )
+        instrument = mod.InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Gas")
+        state = mod.InstrumentState(
+            entry_strategy="trend_pullback",
+            last_market_regime="chop",
+            last_setup_quality_label="medium",
+        )
+        base_profile = mod.ExitProfile(min_hold_minutes=30, breakeven_profit_pct=0.008, trailing_stop_pct=0.006)
+
+        with patch.object(mod, "get_recovery_mode_status", return_value={"active": True}):
+            adapted, reason = mod.get_adaptive_exit_profile(config, instrument, state, base_profile)
+
+        self.assertLessEqual(adapted.min_hold_minutes, 20)
+        self.assertLessEqual(adapted.trailing_stop_pct, 0.0040)
+        self.assertIn("recovery mode", reason)
+
+    def test_adaptive_exit_profile_allows_strong_trend_more_room(self) -> None:
+        config = SimpleNamespace(
+            min_hold_minutes=20,
+            breakeven_profit_pct=0.004,
+            trailing_stop_pct=0.0045,
+        )
+        instrument = mod.InstrumentConfig(symbol="BRK6", figi="FIGI", display_name="Brent")
+        state = mod.InstrumentState(
+            entry_strategy="range_break_continuation",
+            last_market_regime="trend_expansion",
+            last_setup_quality_label="strong",
+        )
+        base_profile = mod.ExitProfile(min_hold_minutes=25, breakeven_profit_pct=0.005, trailing_stop_pct=0.006)
+
+        with patch.object(mod, "get_recovery_mode_status", return_value={"active": False}):
+            adapted, reason = mod.get_adaptive_exit_profile(config, instrument, state, base_profile)
+
+        self.assertGreaterEqual(adapted.min_hold_minutes, 30)
+        self.assertGreaterEqual(adapted.trailing_stop_pct, 0.0075)
+        self.assertIn("strong setup", reason)
+
 
 if __name__ == "__main__":
     unittest.main()
