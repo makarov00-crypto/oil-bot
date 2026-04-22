@@ -3795,6 +3795,48 @@ def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_n
     return min(weight, 1.65)
 
 
+def get_adaptive_entry_size_multiplier(
+    state: InstrumentState,
+    symbol: str,
+    strategy_name: str,
+) -> tuple[float, str]:
+    multiplier = 1.0
+    reasons: list[str] = []
+
+    setup_label = str(state.last_setup_quality_label or "").strip().lower()
+    if setup_label == "strong":
+        multiplier *= 1.10
+        reasons.append("сильный сетап")
+    elif setup_label == "medium":
+        multiplier *= 0.85
+        reasons.append("средний сетап")
+    elif setup_label == "weak":
+        multiplier *= 0.60
+        reasons.append("слабый сетап")
+
+    regime = str(state.last_market_regime or "").strip().lower()
+    if regime in {"trend_expansion", "impulse"}:
+        multiplier *= 1.05
+        reasons.append(f"режим {regime}")
+    elif regime in {"compression", "chop"}:
+        multiplier *= 0.75
+        reasons.append(f"режим {regime}")
+
+    stats = calculate_today_strategy_performance(symbol, strategy_name)
+    closed_count = int(stats.get("closed_count") or 0)
+    net_pnl = float(stats.get("net_pnl_rub") or 0.0)
+    win_rate = float(stats.get("win_rate") or 0.0)
+    if closed_count >= 3 and net_pnl > 0 and win_rate >= 50.0:
+        multiplier *= 1.10
+        reasons.append("связка сегодня в плюсе")
+    elif closed_count >= 2 and net_pnl < 0:
+        multiplier *= 0.75
+        reasons.append("связка сегодня в минусе")
+
+    multiplier = max(0.35, min(multiplier, 1.35))
+    return multiplier, ", ".join(reasons) if reasons else "нейтральный размер"
+
+
 def calculate_position_sizing_context(
     client: Client,
     config: BotConfig,
@@ -3818,6 +3860,11 @@ def calculate_position_sizing_context(
     allocatable_margin = max(0.0, working_margin_budget - reserve_rub)
     instrument_class, instrument_weight = get_instrument_allocation_weight(instrument.symbol)
     conviction_weight = get_signal_conviction_weight(state, signal, strategy_name)
+    adaptive_size_multiplier, adaptive_size_reason = get_adaptive_entry_size_multiplier(
+        state,
+        instrument.symbol,
+        strategy_name,
+    )
     base_trade_share = max(0.05, min(config.base_trade_allocation_pct, 1.0))
     trade_aggression = max(0.35, min(config.portfolio_usage_pct, 1.0))
     target_trade_margin = (
@@ -3826,6 +3873,7 @@ def calculate_position_sizing_context(
         * base_trade_share
         * instrument_weight
         * conviction_weight
+        * adaptive_size_multiplier
         * max(session_multiplier, 0.0)
     )
     qty_by_target = int(target_trade_margin // margin_per_lot) if margin_per_lot > 0 else 0
@@ -3900,6 +3948,8 @@ def calculate_position_sizing_context(
         "instrument_class": instrument_class,
         "instrument_weight": instrument_weight,
         "conviction_weight": conviction_weight,
+        "adaptive_size_multiplier": adaptive_size_multiplier,
+        "adaptive_size_reason": adaptive_size_reason,
         "base_trade_share": base_trade_share,
         "target_trade_margin_rub": target_trade_margin,
         "margin_per_lot_rub": margin_per_lot,

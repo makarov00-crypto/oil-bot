@@ -26,6 +26,50 @@ class PositionSizingTests(unittest.TestCase):
             max_order_quantity=3,
         )
 
+    def test_strong_setup_increases_target_trade_margin(self) -> None:
+        self.state.last_setup_quality_label = "strong"
+        self.state.last_market_regime = "trend_expansion"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "calculate_today_strategy_performance", return_value={"closed_count": 0, "net_pnl_rub": 0.0, "win_rate": 0.0}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+            )
+
+        self.assertGreater(sizing["adaptive_size_multiplier"], 1.0)
+        self.assertGreater(sizing["target_trade_margin_rub"], 3740.0)
+
+    def test_weak_setup_and_negative_day_reduce_size(self) -> None:
+        self.state.last_setup_quality_label = "weak"
+        self.state.last_market_regime = "chop"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.0
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "calculate_today_strategy_performance", return_value={"closed_count": 3, "net_pnl_rub": -220.0, "win_rate": 0.0}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+            )
+
+        self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
+        self.assertLess(sizing["target_trade_margin_rub"], 3740.0)
+
     def test_sizing_uses_margin_headroom_as_primary_budget(self) -> None:
         snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
         with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
