@@ -124,6 +124,42 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(len(review["current_open"]), 1)
         self.assertEqual(review["current_open"][0]["qty_lots"], 2)
 
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_trade_review_falls_back_to_open_context_when_close_context_missing(self) -> None:
+        rows = [
+            {
+                "_dt": datetime(2026, 4, 14, 8, 0, 0, tzinfo=timezone.utc),
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 80.0,
+                "strategy": "range_break_continuation",
+                "reason": "open",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "_dt": datetime(2026, 4, 14, 9, 0, 0, tzinfo=timezone.utc),
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 81.0,
+                "pnl_rub": 120.0,
+                "net_pnl_rub": 120.0,
+                "strategy": "range_break_continuation",
+                "reason": "close",
+            },
+        ]
+
+        review = dashboard.build_trade_review(rows)
+
+        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong")
+        self.assertEqual(review["best_edge"]["label"], "high")
+        self.assertEqual(review["closed_reviews"][0]["exit_context_display"], "режим trend_expansion | сетап strong")
+        focus = dashboard.summarize_strategy_regime_focus_from_reviews(review["closed_reviews"])
+        self.assertEqual(focus["strongest"][0]["label"], "range_break_continuation @ режим trend_expansion | сетап strong")
+
 
 if __name__ == "__main__":
     unittest.main()

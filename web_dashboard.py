@@ -1320,6 +1320,28 @@ def trade_context_value(row: dict[str, Any], key: str, default: str = "-") -> st
     return value or default
 
 
+def resolve_trade_context_display(close_row: dict[str, Any], open_row: dict[str, Any] | None) -> str:
+    close_display = trade_context_display(close_row)
+    if close_display != "-":
+        return close_display
+    open_display = trade_context_display(open_row or {})
+    if open_display != "-":
+        return open_display
+    return "-"
+
+
+def resolve_trade_context_value(
+    close_row: dict[str, Any],
+    open_row: dict[str, Any] | None,
+    key: str,
+    default: str = "-",
+) -> str:
+    close_value = trade_context_value(close_row, key, default)
+    if close_value != default:
+        return close_value
+    return trade_context_value(open_row or {}, key, default)
+
+
 def humanize_strategy_name(strategy: str | None) -> str:
     value = str(strategy or "").strip()
     mapping = {
@@ -1605,6 +1627,7 @@ def format_trade_review_row(
     entry_dt = open_row.get("_dt") if open_row else None
     exit_dt = close_row.get("_dt")
     exit_time = exit_dt.strftime("%d.%m %H:%M:%S") if exit_dt else (close_row.get("time") or "-")
+    resolved_context_display = resolve_trade_context_display(close_row, open_row)
     return {
         "symbol": str(close_row.get("symbol", "")),
         "side": close_row.get("side") or (open_row.get("side") if open_row else ""),
@@ -1623,8 +1646,8 @@ def format_trade_review_row(
         "entry_reason": open_row.get("reason") if open_row else "-",
         "exit_reason": close_row.get("reason") or "-",
         "entry_context_display": trade_context_display(open_row or {}),
-        "exit_context_display": trade_context_display(close_row),
-        "edge_label": trade_context_value(close_row, "entry_edge_label"),
+        "exit_context_display": resolved_context_display,
+        "edge_label": resolve_trade_context_value(close_row, open_row, "entry_edge_label"),
         "verdict": verdict,
         "_exit_dt": exit_dt,
     }
@@ -1839,6 +1862,34 @@ def summarize_strategy_regime_focus(rows: list[dict[str, Any]], limit: int = 3) 
     return {"strongest": strongest, "toxic": toxic}
 
 
+def summarize_strategy_regime_focus_from_reviews(
+    closed_reviews: list[dict[str, Any]],
+    limit: int = 3,
+) -> dict[str, list[dict[str, Any]]]:
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for item in closed_reviews:
+        strategy = str(item.get("strategy") or "-")
+        regime = str(item.get("exit_context_display") or "-")
+        label = f"{strategy} @ {regime}"
+        try:
+            pnl = float(item.get("pnl_rub") or 0.0)
+        except Exception:
+            pnl = 0.0
+        totals[label] = totals.get(label, 0.0) + pnl
+        counts[label] = counts.get(label, 0) + 1
+
+    strongest = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v > 0), key=lambda item: item[1], reverse=True)[:limit]
+    ]
+    toxic = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v < 0), key=lambda item: item[1])[:limit]
+    ]
+    return {"strongest": strongest, "toxic": toxic}
+
+
 def summarize_edge_focus(rows: list[dict[str, Any]], limit: int = 3) -> dict[str, list[dict[str, Any]]]:
     totals: dict[str, float] = {}
     counts: dict[str, int] = {}
@@ -1850,6 +1901,34 @@ def summarize_edge_focus(rows: list[dict[str, Any]], limit: int = 3) -> dict[str
             continue
         try:
             pnl = float(row.get("pnl_rub") or 0.0)
+        except Exception:
+            pnl = 0.0
+        totals[label] = totals.get(label, 0.0) + pnl
+        counts[label] = counts.get(label, 0) + 1
+
+    strongest = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v > 0), key=lambda item: item[1], reverse=True)[:limit]
+    ]
+    toxic = [
+        {"label": label, "pnl_rub": round(pnl, 2), "count": counts[label]}
+        for label, pnl in sorted(((k, v) for k, v in totals.items() if v < 0), key=lambda item: item[1])[:limit]
+    ]
+    return {"strongest": strongest, "toxic": toxic}
+
+
+def summarize_edge_focus_from_reviews(
+    closed_reviews: list[dict[str, Any]],
+    limit: int = 3,
+) -> dict[str, list[dict[str, Any]]]:
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for item in closed_reviews:
+        label = str(item.get("edge_label") or "-")
+        if label == "-":
+            continue
+        try:
+            pnl = float(item.get("pnl_rub") or 0.0)
         except Exception:
             pnl = 0.0
         totals[label] = totals.get(label, 0.0) + pnl
@@ -1898,10 +1977,11 @@ def load_trade_review_for_day(
     all_rows = load_all_trade_rows()
     lookback_start = target_day - timedelta(days=2)
     recent_rows = [row for row in all_rows if lookback_start <= row.get("_dt", datetime.min.replace(tzinfo=MOSCOW_TZ)).date() <= target_day]
-    review["focus_today"] = summarize_strategy_regime_focus(rows)
-    review["focus_3d"] = summarize_strategy_regime_focus(recent_rows)
-    review["edge_focus_today"] = summarize_edge_focus(rows)
-    review["edge_focus_3d"] = summarize_edge_focus(recent_rows)
+    recent_review = build_trade_review(recent_rows, states, live_positions)
+    review["focus_today"] = summarize_strategy_regime_focus_from_reviews(review.get("closed_reviews") or [])
+    review["focus_3d"] = summarize_strategy_regime_focus_from_reviews(recent_review.get("closed_reviews") or [])
+    review["edge_focus_today"] = summarize_edge_focus_from_reviews(review.get("closed_reviews") or [])
+    review["edge_focus_3d"] = summarize_edge_focus_from_reviews(recent_review.get("closed_reviews") or [])
     review["release1_summary"] = build_strategy_regime_summary(review["focus_today"], review["focus_3d"])
     return review
 
