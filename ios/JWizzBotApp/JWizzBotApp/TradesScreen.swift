@@ -376,18 +376,18 @@ struct TradesScreen: View {
         return "\(strategyRegimeText(item.label)) (\(String(format: "%.2f", item.pnlRub)))"
     }
 
-    private func bestSymbolText(_ bestSymbol: NamedSymbolPnl?) -> String {
+    private func bestSymbolText(_ bestSymbol: NamedPnl?) -> String {
         guard let bestSymbol else { return "-" }
         return "\(displayName(for: bestSymbol.symbol)) (\(String(format: "%.2f", bestSymbol.pnlRub)))"
     }
 
-    private func worstSymbolText(_ worstSymbol: NamedSymbolPnl?) -> String {
+    private func worstSymbolText(_ worstSymbol: NamedPnl?) -> String {
         guard let worstSymbol else { return "-" }
         return "\(displayName(for: worstSymbol.symbol)) (\(String(format: "%.2f", worstSymbol.pnlRub)))"
     }
 
     private func displayName(for symbol: String) -> String {
-        instrumentDisplayName(symbol)
+        symbol
     }
 
     private func formatStrategyLabel(_ value: String) -> String {
