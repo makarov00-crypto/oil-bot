@@ -33,6 +33,7 @@ struct DashboardPayload: Decodable {
     let trades: [TradeEvent]
     let manualInstruments: ManualInstrumentsPayload?
     let instrumentCatalog: [String: String]?
+    let allocatorDecisions: [AllocatorDecision]?
 
     enum CodingKeys: String, CodingKey {
         case generatedAtMoscow = "generated_at_moscow"
@@ -49,6 +50,7 @@ struct DashboardPayload: Decodable {
         case trades
         case manualInstruments = "manual_instruments"
         case instrumentCatalog = "instrument_catalog"
+        case allocatorDecisions = "allocator_decisions"
     }
 }
 
@@ -419,6 +421,51 @@ struct TradeReview: Decodable {
         case release1Summary = "release1_summary"
         case closedReviews = "closed_reviews"
         case currentOpen = "current_open"
+    }
+}
+
+struct AllocatorDecision: Decodable, Identifiable {
+    let id: String
+    let timeDisplay: String?
+    let decisionDisplay: String?
+    let symbol: String?
+    let signal: String?
+    let reason: String?
+    let priorityScore: Double?
+    let entryEdgeScore: Double?
+    let requestedMarginRub: Double?
+    let allocatableMarginRub: Double?
+    let replacedSymbol: String?
+    let replacedHoldScore: Double?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = UUID().uuidString
+        timeDisplay = try container.decodeIfPresent(String.self, forKey: .timeDisplay)
+        decisionDisplay = try container.decodeIfPresent(String.self, forKey: .decisionDisplay)
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol)
+        signal = try container.decodeIfPresent(String.self, forKey: .signal)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        priorityScore = try container.decodeIfPresent(Double.self, forKey: .priorityScore)
+        entryEdgeScore = try container.decodeIfPresent(Double.self, forKey: .entryEdgeScore)
+        requestedMarginRub = try container.decodeIfPresent(Double.self, forKey: .requestedMarginRub)
+        allocatableMarginRub = try container.decodeIfPresent(Double.self, forKey: .allocatableMarginRub)
+        replacedSymbol = try container.decodeIfPresent(String.self, forKey: .replacedSymbol)
+        replacedHoldScore = try container.decodeIfPresent(Double.self, forKey: .replacedHoldScore)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case timeDisplay = "time_display"
+        case decisionDisplay = "decision_display"
+        case symbol
+        case signal
+        case reason
+        case priorityScore = "priority_score"
+        case entryEdgeScore = "entry_edge_score"
+        case requestedMarginRub = "requested_margin_rub"
+        case allocatableMarginRub = "allocatable_margin_rub"
+        case replacedSymbol = "replaced_symbol"
+        case replacedHoldScore = "replaced_hold_score"
     }
 }
 

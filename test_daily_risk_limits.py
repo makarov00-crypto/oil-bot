@@ -637,9 +637,11 @@ class DailyRiskLimitTests(unittest.TestCase):
     def test_mark_cycle_deferred_candidate_updates_allocator_summary(self) -> None:
         symbol = "TESTRANK"
         state = mod.InstrumentState(last_signal_summary=["старый сигнал"])
-        with patch.object(mod, "load_state", return_value=state), patch.object(mod, "save_state") as save_state:
+        with patch.object(mod, "load_state", return_value=state), patch.object(
+            mod, "save_state"
+        ) as save_state, patch.object(mod, "append_allocator_decision") as append_decision:
             mod.mark_cycle_deferred_candidate(
-                {"symbol": symbol},
+                {"symbol": symbol, "signal": "LONG", "priority_score": 0.72},
                 "кандидат отложен: есть более сильный сигнал.",
             )
 
@@ -647,6 +649,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertIn("кандидат отложен", state.last_allocator_summary)
         self.assertEqual(state.last_signal_summary[0], "кандидат отложен: есть более сильный сигнал.")
         save_state.assert_called_once()
+        append_decision.assert_called_once()
 
     def test_capital_rotation_selects_strong_margin_blocked_candidate_over_weak_open_position(self) -> None:
         watchlist = [

@@ -36,6 +36,7 @@ load_dotenv(BASE_DIR / ".env")
 STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
+ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
@@ -1245,6 +1246,38 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
         item["context_display"] = trade_context_display(item)
         normalized.append(item)
     return normalized
+
+
+def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[dict[str, Any]]:
+    if not ALLOCATOR_DECISIONS_PATH.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in ALLOCATOR_DECISIONS_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        raw_time = str(row.get("time") or "")
+        try:
+            dt = datetime.fromisoformat(raw_time)
+        except Exception:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone(MOSCOW_TZ)
+        if local_dt.date() != target_day:
+            continue
+        item = dict(row)
+        item["time_display"] = local_dt.strftime("%H:%M:%S")
+        item["decision_display"] = {
+            "deferred": "отложен",
+            "rotation": "переключение",
+        }.get(str(item.get("decision") or ""), str(item.get("decision") or "-"))
+        rows.append(item)
+    rows.sort(key=lambda item: str(item.get("time") or ""), reverse=True)
+    return rows[:limit]
 
 
 def stringify_money(value: Any, default: str = "-") -> str:
@@ -3442,6 +3475,12 @@ def build_dashboard_html() -> str:
           </table>
         </div>
       </div>
+      <div class="review-block" style="margin-top:16px;">
+        <h3>Решения аллокатора</h3>
+        <table class="review-summary-table">
+          <tbody id="allocatorDecisionsBody"></tbody>
+        </table>
+      </div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="reviewTable" style="margin-top:16px;">
@@ -4288,6 +4327,26 @@ def build_dashboard_html() -> str:
         buildReviewRow('Токсичная зона', formatStrategyRegimeLabel(review.release1_summary?.toxic || '-')),
       ].join('');
 
+      const allocatorDecisionsBody = document.getElementById('allocatorDecisionsBody');
+      const allocatorDecisions = Array.isArray(data.allocator_decisions) ? data.allocator_decisions : [];
+      allocatorDecisionsBody.innerHTML = allocatorDecisions.length
+        ? allocatorDecisions.slice(0, 8).map((item) => {
+            const symbol = item.symbol ? (instrumentNames[item.symbol] || item.symbol) : '-';
+            const signal = item.signal ? ` ${displaySignal(item.signal)}` : '';
+            const replaced = item.replaced_symbol ? ` вместо ${instrumentNames[item.replaced_symbol] || item.replaced_symbol}` : '';
+            const score = Number(item.priority_score || 0);
+            const scoreText = score > 0 ? `приоритет ${score.toFixed(2)}` : '';
+            const margin = Number(item.requested_margin_rub || 0);
+            const marginText = margin > 0 ? `ГО ${formatRub(margin)}` : '';
+            const meta = [scoreText, marginText].filter(Boolean).join(' · ');
+            return buildReviewRow(
+              `${item.time_display || '-'} · ${item.decision_display || '-'}`,
+              `${symbol}${signal}${replaced}`,
+              [meta, item.reason || ''].filter(Boolean).join(' · ')
+            );
+          }).join('')
+        : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не вытеснял сигналы');
+
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');
       reviewBody.innerHTML = '';
@@ -4622,6 +4681,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "runtime": runtime,
         "news": load_news_snapshot(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
+        "allocator_decisions": load_allocator_decisions_for_day(target_day, 20),
         "summary": summarize_states(display_states, portfolio_view),
         "meta": load_meta(),
         "states": display_states,

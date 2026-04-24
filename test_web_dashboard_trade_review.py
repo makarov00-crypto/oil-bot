@@ -1,5 +1,8 @@
 import unittest
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 try:
     import web_dashboard as dashboard
@@ -159,6 +162,36 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["closed_reviews"][0]["exit_context_display"], "режим trend_expansion | сетап strong")
         focus = dashboard.summarize_strategy_regime_focus_from_reviews(review["closed_reviews"])
         self.assertEqual(focus["strongest"][0]["label"], "range_break_continuation @ режим trend_expansion | сетап strong")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_allocator_decisions_for_day_filters_and_labels_rows(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            decisions_path = dashboard.Path(temp_dir) / "allocator_decisions.jsonl"
+            rows = [
+                {
+                    "time": "2026-04-24T10:15:00+03:00",
+                    "decision": "deferred",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "reason": "недостаточно ГО",
+                    "priority_score": 0.84,
+                },
+                {
+                    "time": "2026-04-23T10:15:00+03:00",
+                    "decision": "rotation",
+                    "symbol": "NGJ6",
+                    "signal": "SHORT",
+                },
+            ]
+            decisions_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+            with patch.object(dashboard, "ALLOCATOR_DECISIONS_PATH", decisions_path):
+                loaded = dashboard.load_allocator_decisions_for_day(date(2026, 4, 24))
+
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["symbol"], "BRK6")
+        self.assertEqual(loaded[0]["decision_display"], "отложен")
+        self.assertEqual(loaded[0]["time_display"], "10:15:00")
 
 
 if __name__ == "__main__":

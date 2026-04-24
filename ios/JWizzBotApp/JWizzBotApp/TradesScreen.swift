@@ -191,6 +191,8 @@ struct TradesScreen: View {
                             ("Токсичная зона", strategyRegimeText(payload.tradeReview.release1Summary?.toxic)),
                         ]
                     )
+
+                    allocatorDecisionsBlock(payload: payload)
                 }
             }
 
@@ -309,6 +311,47 @@ struct TradesScreen: View {
         }
     }
 
+    @ViewBuilder
+    private func allocatorDecisionsBlock(payload: DashboardPayload) -> some View {
+        let decisions = Array((payload.allocatorDecisions ?? []).prefix(6))
+        if decisions.isEmpty {
+            reviewInfoBlock(
+                title: "Решения аллокатора",
+                rows: [
+                    ("Сегодня", "решений пока нет"),
+                    ("Смысл", "появятся отложенные входы и переключения капитала"),
+                ]
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Решения аллокатора")
+                    .font(.headline)
+                VStack(spacing: 0) {
+                    ForEach(Array(decisions.enumerated()), id: \.element.id) { index, decision in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .top, spacing: 10) {
+                                Text(allocatorDecisionTitle(decision))
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(decision.timeDisplay ?? "-")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(allocatorDecisionDetails(decision))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 9)
+                        if index < decisions.count - 1 {
+                            Divider().overlay(Color.white.opacity(0.08))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func filteredTrades(_ rows: [TradeEvent]) -> [TradeEvent] {
         let base = rows
         switch eventFilter {
@@ -384,6 +427,36 @@ struct TradesScreen: View {
     private func worstSymbolText(_ worstSymbol: NamedPnl?) -> String {
         guard let worstSymbol else { return "-" }
         return "\(displayName(for: worstSymbol.symbol)) (\(String(format: "%.2f", worstSymbol.pnlRub)))"
+    }
+
+    private func allocatorDecisionTitle(_ decision: AllocatorDecision) -> String {
+        let decisionText = decision.decisionDisplay ?? "решение"
+        let symbolText = decision.symbol.map { displayName(for: $0) } ?? "-"
+        let signalText = displaySignal(decision.signal)
+        return "\(decisionText): \(symbolText) \(signalText)"
+    }
+
+    private func allocatorDecisionDetails(_ decision: AllocatorDecision) -> String {
+        var parts: [String] = []
+        if let priority = decision.priorityScore {
+            parts.append("приоритет \(String(format: "%.2f", priority))")
+        }
+        if let edge = decision.entryEdgeScore {
+            parts.append("качество входа \(String(format: "%.2f", edge))")
+        }
+        if let requested = decision.requestedMarginRub {
+            parts.append("нужно ГО \(formatRub(requested))")
+        }
+        if let allocatable = decision.allocatableMarginRub {
+            parts.append("доступно ГО \(formatRub(allocatable))")
+        }
+        if let replaced = decision.replacedSymbol, !replaced.isEmpty {
+            parts.append("вытеснил \(displayName(for: replaced))")
+        }
+        if let reason = decision.reason, !reason.isEmpty {
+            parts.append(reason)
+        }
+        return parts.isEmpty ? "подробности появятся после следующего цикла" : parts.joined(separator: " · ")
     }
 
     private func displayName(for symbol: String) -> String {

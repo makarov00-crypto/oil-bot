@@ -69,6 +69,7 @@ RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 LOG_DIR = Path(__file__).with_name("logs")
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
+ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
@@ -605,6 +606,39 @@ def append_trade_journal(
     with TRADE_JOURNAL_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     append_trade_row(TRADE_DB_PATH, row)
+
+
+def append_allocator_decision(
+    *,
+    decision: str,
+    symbol: str,
+    signal: str = "",
+    reason: str = "",
+    priority_score: float = 0.0,
+    entry_edge_score: float = 0.0,
+    instrument_class: str = "",
+    requested_margin_rub: float = 0.0,
+    allocatable_margin_rub: float = 0.0,
+    replaced_symbol: str = "",
+    replaced_hold_score: float = 0.0,
+) -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    row = {
+        "time": datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat(),
+        "decision": decision,
+        "symbol": symbol,
+        "signal": signal,
+        "reason": reason,
+        "priority_score": round(float(priority_score or 0.0), 3),
+        "entry_edge_score": round(float(entry_edge_score or 0.0), 3),
+        "instrument_class": instrument_class,
+        "requested_margin_rub": round(float(requested_margin_rub or 0.0), 2),
+        "allocatable_margin_rub": round(float(allocatable_margin_rub or 0.0), 2),
+        "replaced_symbol": replaced_symbol,
+        "replaced_hold_score": round(float(replaced_hold_score or 0.0), 3),
+    }
+    with ALLOCATOR_DECISIONS_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({key: value for key, value in row.items() if value not in ("", None)}, ensure_ascii=False) + "\n")
 
 
 def load_trade_journal() -> list[dict[str, Any]]:
@@ -4620,6 +4654,19 @@ def execute_capital_rotation_plan(
     state.last_allocator_summary = close_reason
     state.last_signal_summary = [close_reason, *state.last_signal_summary[:2]]
     close_position(client, config, instrument, state, close_reason)
+    append_allocator_decision(
+        decision="rotation",
+        symbol=candidate_symbol,
+        signal=candidate_signal,
+        reason=close_reason,
+        priority_score=candidate_priority,
+        entry_edge_score=float(candidate.get("entry_edge_score") or 0.0),
+        instrument_class=str(candidate.get("instrument_class") or ""),
+        requested_margin_rub=float(candidate.get("requested_margin_rub") or 0.0),
+        allocatable_margin_rub=float(candidate.get("allocatable_margin_rub") or 0.0),
+        replaced_symbol=instrument.symbol,
+        replaced_hold_score=hold_score,
+    )
 
     deferred_reason = (
         f"выполняем переключение капитала: закрываем {instrument.symbol} и освобождаем ГО под "
@@ -4640,6 +4687,17 @@ def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> Non
     symbol = str(candidate.get("symbol") or "").strip().upper()
     if not symbol:
         return
+    append_allocator_decision(
+        decision="deferred",
+        symbol=symbol,
+        signal=str(candidate.get("signal") or ""),
+        reason=reason,
+        priority_score=float(candidate.get("priority_score") or 0.0),
+        entry_edge_score=float(candidate.get("entry_edge_score") or 0.0),
+        instrument_class=str(candidate.get("instrument_class") or ""),
+        requested_margin_rub=float(candidate.get("requested_margin_rub") or 0.0),
+        allocatable_margin_rub=float(candidate.get("allocatable_margin_rub") or 0.0),
+    )
     state = load_state(symbol)
     state.last_allocator_quantity = 0
     state.last_allocator_summary = f"Аллокатор отложил вход: {reason}"
