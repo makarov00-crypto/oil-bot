@@ -34,6 +34,7 @@ struct DashboardPayload: Decodable {
     let manualInstruments: ManualInstrumentsPayload?
     let instrumentCatalog: [String: String]?
     let allocatorDecisions: [AllocatorDecision]?
+    let signalObservations: SignalObservationSummary?
 
     enum CodingKeys: String, CodingKey {
         case generatedAtMoscow = "generated_at_moscow"
@@ -51,6 +52,7 @@ struct DashboardPayload: Decodable {
         case manualInstruments = "manual_instruments"
         case instrumentCatalog = "instrument_catalog"
         case allocatorDecisions = "allocator_decisions"
+        case signalObservations = "signal_observations"
     }
 }
 
@@ -466,6 +468,84 @@ struct AllocatorDecision: Decodable, Identifiable {
         case allocatableMarginRub = "allocatable_margin_rub"
         case replacedSymbol = "replaced_symbol"
         case replacedHoldScore = "replaced_hold_score"
+    }
+}
+
+struct SignalObservationSummary: Decodable {
+    let total: Int
+    let evaluated: Int
+    let pending: Int
+    let favorable: Int
+    let favorableRate: Double
+    let selected: Int
+    let deferred: Int
+    let deferredFavorable: Int
+    let selectedUnfavorable: Int
+    let items: [SignalObservationItem]
+
+    enum CodingKeys: String, CodingKey {
+        case total
+        case evaluated
+        case pending
+        case favorable
+        case favorableRate = "favorable_rate"
+        case selected
+        case deferred
+        case deferredFavorable = "deferred_favorable"
+        case selectedUnfavorable = "selected_unfavorable"
+        case items
+    }
+}
+
+struct SignalObservationItem: Decodable, Identifiable {
+    let id: String
+    let timeDisplay: String?
+    let evaluatedTimeDisplay: String?
+    let decisionDisplay: String?
+    let outcomeDisplay: String?
+    let displayName: String?
+    let symbol: String?
+    let signal: String?
+    let strategy: String?
+    let decisionReason: String?
+    let priorityScore: Double?
+    let entryEdgeScore: Double?
+    let movePct: Double?
+    let favorable: Bool?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try container.decodeIfPresent(String.self, forKey: .observationUID)) ?? UUID().uuidString
+        timeDisplay = try container.decodeIfPresent(String.self, forKey: .timeDisplay)
+        evaluatedTimeDisplay = try container.decodeIfPresent(String.self, forKey: .evaluatedTimeDisplay)
+        decisionDisplay = try container.decodeIfPresent(String.self, forKey: .decisionDisplay)
+        outcomeDisplay = try container.decodeIfPresent(String.self, forKey: .outcomeDisplay)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol)
+        signal = try container.decodeIfPresent(String.self, forKey: .signal)
+        strategy = try container.decodeIfPresent(String.self, forKey: .strategy)
+        decisionReason = try container.decodeIfPresent(String.self, forKey: .decisionReason)
+        priorityScore = try container.decodeIfPresent(Double.self, forKey: .priorityScore)
+        entryEdgeScore = try container.decodeIfPresent(Double.self, forKey: .entryEdgeScore)
+        movePct = try container.decodeIfPresent(Double.self, forKey: .movePct)
+        favorable = try container.decodeIfPresent(Bool.self, forKey: .favorable)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case observationUID = "observation_uid"
+        case timeDisplay = "time_display"
+        case evaluatedTimeDisplay = "evaluated_time_display"
+        case decisionDisplay = "decision_display"
+        case outcomeDisplay = "outcome_display"
+        case displayName = "display_name"
+        case symbol
+        case signal
+        case strategy
+        case decisionReason = "decision_reason"
+        case priorityScore = "priority_score"
+        case entryEdgeScore = "entry_edge_score"
+        case movePct = "move_pct"
+        case favorable
     }
 }
 

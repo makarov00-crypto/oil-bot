@@ -27,7 +27,10 @@ from daily_ai_review import (
     build_review_prompt,
     request_openai_text,
 )
-from trade_storage import load_trade_rows as load_trade_rows_from_storage
+from trade_storage import (
+    load_signal_observations as load_signal_observations_from_storage,
+    load_trade_rows as load_trade_rows_from_storage,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1278,6 +1281,72 @@ def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[
         rows.append(item)
     rows.sort(key=lambda item: str(item.get("time") or ""), reverse=True)
     return rows[:limit]
+
+
+def _display_observation_time(raw_value: Any) -> str:
+    raw_time = str(raw_value or "")
+    if not raw_time:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(raw_time)
+    except Exception:
+        return raw_time
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(MOSCOW_TZ).strftime("%H:%M:%S")
+
+
+def _format_observation_decision(value: Any) -> str:
+    return {
+        "selected": "выбран",
+        "deferred": "отложен",
+    }.get(str(value or ""), str(value or "-"))
+
+
+def _format_observation_outcome(row: dict[str, Any]) -> str:
+    if not row.get("evaluated_at"):
+        return "ждёт проверки"
+    if row.get("favorable") is True:
+        return "сигнал подтвердился"
+    if row.get("favorable") is False:
+        return "сигнал не подтвердился"
+    return "результат не определён"
+
+
+def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -> dict[str, Any]:
+    rows = load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day, limit=300)
+    rows.sort(key=lambda item: str(item.get("observed_at") or ""), reverse=True)
+    evaluated = [item for item in rows if item.get("evaluated_at")]
+    favorable = [item for item in evaluated if item.get("favorable") is True]
+    deferred = [item for item in rows if str(item.get("decision") or "") == "deferred"]
+    selected = [item for item in rows if str(item.get("decision") or "") == "selected"]
+    deferred_favorable = [item for item in deferred if item.get("favorable") is True]
+    selected_unfavorable = [item for item in selected if item.get("evaluated_at") and item.get("favorable") is False]
+    pending = [item for item in rows if not item.get("evaluated_at")]
+
+    items: list[dict[str, Any]] = []
+    for row in rows[:limit]:
+        item = dict(row)
+        item["time_display"] = _display_observation_time(row.get("observed_at"))
+        item["evaluated_time_display"] = _display_observation_time(row.get("evaluated_at"))
+        item["decision_display"] = _format_observation_decision(row.get("decision"))
+        item["outcome_display"] = _format_observation_outcome(row)
+        item["display_name"] = INSTRUMENT_DISPLAY_NAMES.get(str(row.get("symbol") or ""), str(row.get("symbol") or "-"))
+        items.append(item)
+
+    favorable_rate = round((len(favorable) / len(evaluated)) * 100, 1) if evaluated else 0.0
+    return {
+        "total": len(rows),
+        "evaluated": len(evaluated),
+        "pending": len(pending),
+        "favorable": len(favorable),
+        "favorable_rate": favorable_rate,
+        "selected": len(selected),
+        "deferred": len(deferred),
+        "deferred_favorable": len(deferred_favorable),
+        "selected_unfavorable": len(selected_unfavorable),
+        "items": items,
+    }
 
 
 def stringify_money(value: Any, default: str = "-") -> str:
@@ -3584,6 +3653,12 @@ def build_dashboard_html() -> str:
           <tbody id="allocatorDecisionsBody"></tbody>
         </table>
       </div>
+      <div class="review-block" style="margin-top:16px;">
+        <h3>Наблюдения сигналов</h3>
+        <table class="review-summary-table">
+          <tbody id="signalObservationsBody"></tbody>
+        </table>
+      </div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="reviewTable" style="margin-top:16px;">
@@ -4467,6 +4542,45 @@ def build_dashboard_html() -> str:
           }).join('')
         : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не вытеснял сигналы');
 
+      const signalObservationsBody = document.getElementById('signalObservationsBody');
+      const signalObservations = data.signal_observations || {};
+      const observationItems = Array.isArray(signalObservations.items) ? signalObservations.items : [];
+      const observationSummaryRows = [
+        buildReviewRow(
+          'Проверено',
+          `${signalObservations.evaluated || 0} из ${signalObservations.total || 0}`,
+          `подтвердились ${signalObservations.favorable || 0} · точность ${Number(signalObservations.favorable_rate || 0).toFixed(1)}% · ждут проверки ${signalObservations.pending || 0}`
+        ),
+        buildReviewRow(
+          'Упущенные шансы',
+          `${signalObservations.deferred_favorable || 0}`,
+          'отложенные сигналы, которые потом пошли в нужную сторону'
+        ),
+        buildReviewRow(
+          'Слабые выбранные',
+          `${signalObservations.selected_unfavorable || 0}`,
+          'выбранные сигналы, которые через горизонт не подтвердились'
+        ),
+      ];
+      signalObservationsBody.innerHTML = observationItems.length
+        ? observationSummaryRows.concat(observationItems.slice(0, 6).map((item) => {
+            const symbol = item.symbol ? (instrumentNames[item.symbol] || item.display_name || item.symbol) : '-';
+            const signal = item.signal ? ` ${displaySignal(item.signal)}` : '';
+            const move = Number(item.move_pct);
+            const moveText = Number.isFinite(move) ? `движение ${move.toFixed(2)}%` : '';
+            const priority = Number(item.priority_score);
+            const priorityText = Number.isFinite(priority) && priority > 0 ? `приоритет ${priority.toFixed(2)}` : '';
+            const meta = [item.outcome_display || '', moveText, priorityText].filter(Boolean).join(' · ');
+            return buildReviewRow(
+              `${item.time_display || '-'} · ${item.decision_display || '-'}`,
+              `${symbol}${signal}`,
+              [meta, item.decision_reason || ''].filter(Boolean).join(' · ')
+            );
+          })).join('')
+        : observationSummaryRows.concat([
+            buildReviewRow('Сегодня', 'наблюдений пока нет', 'появятся после новых выбранных и отложенных сигналов')
+          ]).join('');
+
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');
       reviewBody.innerHTML = '';
@@ -4812,6 +4926,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "news": load_news_snapshot(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "allocator_decisions": load_allocator_decisions_for_day(target_day, 20),
+        "signal_observations": load_signal_observation_summary_for_day(target_day, 20),
         "summary": summarize_states(display_states, portfolio_view),
         "meta": load_meta(),
         "states": display_states,

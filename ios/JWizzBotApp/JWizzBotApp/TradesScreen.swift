@@ -193,6 +193,7 @@ struct TradesScreen: View {
                     )
 
                     allocatorDecisionsBlock(payload: payload)
+                    signalObservationsBlock(payload: payload)
                 }
             }
 
@@ -352,6 +353,57 @@ struct TradesScreen: View {
         }
     }
 
+    @ViewBuilder
+    private func signalObservationsBlock(payload: DashboardPayload) -> some View {
+        let summary = payload.signalObservations
+        let items = Array((summary?.items ?? []).prefix(5))
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Наблюдения сигналов")
+                .font(.headline)
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                MetricGlassTile(title: "Проверено", value: "\(summary?.evaluated ?? 0)/\(summary?.total ?? 0)")
+                MetricGlassTile(title: "Подтвердились", value: "\(summary?.favorable ?? 0)", tone: .green)
+                MetricGlassTile(title: "Упущенные шансы", value: "\(summary?.deferredFavorable ?? 0)", tone: .orange)
+                MetricGlassTile(title: "Слабые выбранные", value: "\(summary?.selectedUnfavorable ?? 0)", tone: .red)
+            }
+
+            Text("Точность короткой проверки: \(String(format: "%.1f%%", summary?.favorableRate ?? 0)). Ждут проверки: \(summary?.pending ?? 0).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if items.isEmpty {
+                Text("Новые строки появятся после выбранных и отложенных сигналов.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .top, spacing: 10) {
+                                Text(signalObservationTitle(item))
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(item.timeDisplay ?? "-")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(signalObservationDetails(item))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 9)
+                        if index < items.count - 1 {
+                            Divider().overlay(Color.white.opacity(0.08))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func filteredTrades(_ rows: [TradeEvent]) -> [TradeEvent] {
         let base = rows
         switch eventFilter {
@@ -457,6 +509,33 @@ struct TradesScreen: View {
             parts.append(reason)
         }
         return parts.isEmpty ? "подробности появятся после следующего цикла" : parts.joined(separator: " · ")
+    }
+
+    private func signalObservationTitle(_ item: SignalObservationItem) -> String {
+        let decision = item.decisionDisplay ?? "наблюдение"
+        let symbol = item.displayName ?? item.symbol ?? "-"
+        let signal = displaySignal(item.signal)
+        return "\(decision): \(symbol) \(signal)"
+    }
+
+    private func signalObservationDetails(_ item: SignalObservationItem) -> String {
+        var parts: [String] = []
+        if let outcome = item.outcomeDisplay, !outcome.isEmpty {
+            parts.append(outcome)
+        }
+        if let move = item.movePct {
+            parts.append("движение \(String(format: "%.2f%%", move))")
+        }
+        if let priority = item.priorityScore {
+            parts.append("приоритет \(String(format: "%.2f", priority))")
+        }
+        if let edge = item.entryEdgeScore {
+            parts.append("качество входа \(String(format: "%.2f", edge))")
+        }
+        if let reason = item.decisionReason, !reason.isEmpty {
+            parts.append(reason)
+        }
+        return parts.isEmpty ? "подробности появятся после проверки сигнала" : parts.joined(separator: " · ")
     }
 
     private func displayName(for symbol: String) -> String {

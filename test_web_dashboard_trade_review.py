@@ -4,6 +4,8 @@ from datetime import date, datetime, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from trade_storage import append_signal_observation
+
 try:
     import web_dashboard as dashboard
 except ModuleNotFoundError as error:
@@ -201,6 +203,56 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(loaded[0]["symbol"], "BRK6")
         self.assertEqual(loaded[0]["decision_display"], "отложен")
         self.assertEqual(loaded[0]["time_display"], "10:15:00")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_signal_observation_summary_for_day_counts_learning_rows(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T10:15:00+03:00",
+                    "evaluated_at": "2026-04-24T10:30:00+03:00",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "strategy": "momentum_breakout",
+                    "decision": "deferred",
+                    "decision_reason": "не хватило ГО",
+                    "priority_score": 0.91,
+                    "observed_price": 80.0,
+                    "current_price": 80.8,
+                    "move_pct": 1.0,
+                    "favorable": True,
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T11:15:00+03:00",
+                    "evaluated_at": "2026-04-24T11:30:00+03:00",
+                    "symbol": "UCM6",
+                    "signal": "SHORT",
+                    "strategy": "opening_range_breakout",
+                    "decision": "selected",
+                    "decision_reason": "вошёл по приоритету",
+                    "priority_score": 0.82,
+                    "observed_price": 7.20,
+                    "current_price": 7.25,
+                    "move_pct": -0.69,
+                    "favorable": False,
+                },
+            )
+
+            with patch.object(dashboard, "TRADE_DB_PATH", db_path):
+                summary = dashboard.load_signal_observation_summary_for_day(date(2026, 4, 24))
+
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["evaluated"], 2)
+        self.assertEqual(summary["favorable"], 1)
+        self.assertEqual(summary["favorable_rate"], 50.0)
+        self.assertEqual(summary["deferred_favorable"], 1)
+        self.assertEqual(summary["selected_unfavorable"], 1)
+        self.assertEqual(summary["items"][0]["decision_display"], "выбран")
 
 
 if __name__ == "__main__":
