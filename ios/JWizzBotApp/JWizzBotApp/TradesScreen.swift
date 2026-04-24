@@ -366,6 +366,18 @@ struct TradesScreen: View {
                 MetricGlassTile(title: "Подтвердились", value: "\(summary?.favorable ?? 0)", tone: .green)
                 MetricGlassTile(title: "Упущенные шансы", value: "\(summary?.deferredFavorable ?? 0)", tone: .orange)
                 MetricGlassTile(title: "Слабые выбранные", value: "\(summary?.selectedUnfavorable ?? 0)", tone: .red)
+                MetricGlassTile(
+                    title: "Бонусы обучения",
+                    value: "\(summary?.learningBonusCount ?? 0)",
+                    tone: .green,
+                    help: "Сколько наблюдений вошло с повышением приоритета из-за недавней хорошей истории похожей связки."
+                )
+                MetricGlassTile(
+                    title: "Штрафы обучения",
+                    value: "\(summary?.learningPenaltyCount ?? 0)",
+                    tone: .red,
+                    help: "Сколько наблюдений вошло с понижением приоритета из-за слабой недавней статистики похожей связки."
+                )
             }
 
             Text("Точность короткой проверки: \(String(format: "%.1f%%", summary?.favorableRate ?? 0)). Ждут проверки: \(summary?.pending ?? 0).")
@@ -382,6 +394,16 @@ struct TradesScreen: View {
                 title: "Слабые связки",
                 emptyText: "Пока нет проверенных слабых связок.",
                 items: Array((summary?.combos?.weakest ?? []).prefix(3))
+            )
+            signalObservationLearningCombosBlock(
+                title: "Чаще усиливаем",
+                emptyText: "Пока нет устойчивых learning-бонусов.",
+                items: Array((summary?.learningCombos?.strongest ?? []).prefix(3))
+            )
+            signalObservationLearningCombosBlock(
+                title: "Чаще режем",
+                emptyText: "Пока нет устойчивых learning-штрафов.",
+                items: Array((summary?.learningCombos?.weakest ?? []).prefix(3))
             )
 
             if items.isEmpty {
@@ -432,6 +454,41 @@ struct TradesScreen: View {
                                 .font(.caption.weight(.semibold))
                                 .fixedSize(horizontal: false, vertical: true)
                             Text(signalObservationComboDetails(item))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 7)
+                        if index < items.count - 1 {
+                            Divider().overlay(Color.white.opacity(0.08))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func signalObservationLearningCombosBlock(
+        title: String,
+        emptyText: String,
+        items: [SignalObservationLearningCombo]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            if items.isEmpty {
+                Text(emptyText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.label)
+                                .font(.caption.weight(.semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(signalObservationLearningComboDetails(item))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -578,8 +635,15 @@ struct TradesScreen: View {
         if let priority = item.priorityScore {
             parts.append("приоритет \(String(format: "%.2f", priority))")
         }
+        if let learning = item.learningAdjustment, abs(learning) >= 0.005 {
+            let learningLabel = learning > 0 ? "обучение +\(String(format: "%.2f", learning))" : "обучение \(String(format: "%.2f", learning))"
+            parts.append(learningLabel)
+        }
         if let edge = item.entryEdgeScore {
             parts.append("качество входа \(String(format: "%.2f", edge))")
+        }
+        if let learningReason = item.learningReason, !learningReason.isEmpty {
+            parts.append(learningReason)
         }
         if let reason = item.decisionReason, !reason.isEmpty {
             parts.append(reason)
@@ -590,6 +654,13 @@ struct TradesScreen: View {
     private func signalObservationComboDetails(_ item: SignalObservationCombo) -> String {
         let sampleText = item.sampleWarning ? "\(item.evaluated) пров., мало данных" : "\(item.evaluated) пров."
         return "\(String(format: "%.1f%%", item.confirmationRate)) · \(sampleText) · среднее движение \(String(format: "%.2f%%", item.avgMovePct)) · выбрано \(item.selected) · отложено \(item.deferred)"
+    }
+
+    private func signalObservationLearningComboDetails(_ item: SignalObservationLearningCombo) -> String {
+        let adjustmentText = item.avgAdjustment > 0
+            ? "+\(String(format: "%.2f", item.avgAdjustment))"
+            : String(format: "%.2f", item.avgAdjustment)
+        return "\(item.count) корр. · бонусов \(item.bonusCount) · штрафов \(item.penaltyCount) · средняя поправка \(adjustmentText) · подтверждение \(String(format: "%.1f%%", item.confirmationRate))"
     }
 
     private func displayName(for symbol: String) -> String {

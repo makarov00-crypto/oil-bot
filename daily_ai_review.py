@@ -385,10 +385,37 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
     learning_penalty_rows = [
         row for row in rows if signal_observation_context_float(row, "learning_adjustment") <= -0.005
     ]
+    learning_groups: dict[str, dict[str, Any]] = {}
 
     groups: dict[str, dict[str, Any]] = {}
-    for row in evaluated:
+    for row in rows:
         label = signal_observation_combo_label(row)
+        learning_adjustment = signal_observation_context_float(row, "learning_adjustment")
+        if abs(learning_adjustment) >= 0.005:
+            learning_group = learning_groups.setdefault(
+                label,
+                {
+                    "label": label,
+                    "count": 0,
+                    "bonus_count": 0,
+                    "penalty_count": 0,
+                    "adjustment_sum": 0.0,
+                    "evaluated": 0,
+                    "favorable": 0,
+                },
+            )
+            learning_group["count"] += 1
+            learning_group["adjustment_sum"] += learning_adjustment
+            if learning_adjustment > 0:
+                learning_group["bonus_count"] += 1
+            else:
+                learning_group["penalty_count"] += 1
+            if row.get("evaluated_at"):
+                learning_group["evaluated"] += 1
+                if row.get("favorable") is True:
+                    learning_group["favorable"] += 1
+        if not row.get("evaluated_at"):
+            continue
         group = groups.setdefault(
             label,
             {
@@ -431,6 +458,35 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
         key=lambda item: (float(item["confirmation_rate"]), -int(item["evaluated"]), float(item["avg_move_pct"])),
     )[:limit]
 
+    learning_combos: list[dict[str, Any]] = []
+    for group in learning_groups.values():
+        count = int(group["count"] or 0)
+        evaluated_count = int(group["evaluated"] or 0)
+        favorable_count = int(group["favorable"] or 0)
+        avg_adjustment = (float(group["adjustment_sum"] or 0.0) / count) if count else 0.0
+        learning_combos.append(
+            {
+                "label": group["label"],
+                "count": count,
+                "bonus_count": int(group["bonus_count"] or 0),
+                "penalty_count": int(group["penalty_count"] or 0),
+                "avg_adjustment": avg_adjustment,
+                "evaluated": evaluated_count,
+                "confirmation_rate": (favorable_count / evaluated_count * 100.0) if evaluated_count else 0.0,
+            }
+        )
+
+    bonus_combos = sorted(
+        [item for item in learning_combos if item["bonus_count"] > 0],
+        key=lambda item: (item["bonus_count"], item["avg_adjustment"], item["confirmation_rate"]),
+        reverse=True,
+    )[:limit]
+    penalty_combos = sorted(
+        [item for item in learning_combos if item["penalty_count"] > 0],
+        key=lambda item: (item["penalty_count"], -item["avg_adjustment"], -item["confirmation_rate"]),
+        reverse=True,
+    )[:limit]
+
     def learning_lines(items: list[dict[str, Any]]) -> list[str]:
         rows_local: list[tuple[float, str]] = []
         for item in items:
@@ -460,6 +516,8 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
         "learning_penalty_count": len(learning_penalty_rows),
         "learning_bonus_examples": learning_lines(learning_bonus_rows),
         "learning_penalty_examples": learning_lines(learning_penalty_rows),
+        "learning_bonus_combos": bonus_combos,
+        "learning_penalty_combos": penalty_combos,
         "strongest": strongest,
         "weakest": weakest,
     }
@@ -606,12 +664,27 @@ def build_prompt(
             )
         return lines or ["- Недостаточно проверенных наблюдений."]
 
+    def learning_combo_lines(items: list[dict[str, Any]]) -> list[str]:
+        lines: list[str] = []
+        for item in items:
+            lines.append(
+                f"- {item['label']}: "
+                f"коррекций {int(item['count'])}, "
+                f"бонусов {int(item['bonus_count'])}, "
+                f"штрафов {int(item['penalty_count'])}, "
+                f"средняя поправка {float(item['avg_adjustment']):+.2f}, "
+                f"подтверждение {float(item['confirmation_rate']):.1f}%"
+            )
+        return lines or ["- Недостаточно learning-наблюдений."]
+
     daily_strong_signal_lines = combo_lines(signal_summary["strongest"])
     daily_weak_signal_lines = combo_lines(signal_summary["weakest"])
     recent_strong_signal_lines = combo_lines(recent_signal_summary["strongest"])
     recent_weak_signal_lines = combo_lines(recent_signal_summary["weakest"])
     daily_learning_bonus_lines = signal_summary["learning_bonus_examples"] or ["- Бонусов обучения за день не было."]
     daily_learning_penalty_lines = signal_summary["learning_penalty_examples"] or ["- Штрафов обучения за день не было."]
+    recent_learning_bonus_combo_lines = learning_combo_lines(recent_signal_summary["learning_bonus_combos"])
+    recent_learning_penalty_combo_lines = learning_combo_lines(recent_signal_summary["learning_penalty_combos"])
 
     focal_points_lines = []
     best_regime = summary.get("best_regime")
@@ -701,6 +774,12 @@ def build_prompt(
         "",
         "Где обучение понижало приоритет за день:",
         *daily_learning_penalty_lines,
+        "",
+        "Какие связки обучение чаще усиливает за последние 3 дня:",
+        *recent_learning_bonus_combo_lines,
+        "",
+        "Какие связки обучение чаще режет за последние 3 дня:",
+        *recent_learning_penalty_combo_lines,
         "",
         "Лучшие связки сигналов за последние 3 дня:",
         *recent_strong_signal_lines,

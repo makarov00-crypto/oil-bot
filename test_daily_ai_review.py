@@ -186,6 +186,10 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("бонус +0.05", prompt)
         self.assertIn("Где обучение понижало приоритет за день:", prompt)
         self.assertIn("штраф -0.08", prompt)
+        self.assertIn("Какие связки обучение чаще усиливает за последние 3 дня:", prompt)
+        self.assertIn("средняя поправка +0.05", prompt)
+        self.assertIn("Какие связки обучение чаще режет за последние 3 дня:", prompt)
+        self.assertIn("средняя поправка -0.08", prompt)
         self.assertIn("Слабые связки сигналов за последние 3 дня:", prompt)
 
 

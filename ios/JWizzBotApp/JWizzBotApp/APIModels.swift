@@ -487,7 +487,10 @@ struct SignalObservationSummary: Decodable {
     let deferred: Int
     let deferredFavorable: Int
     let selectedUnfavorable: Int
+    let learningBonusCount: Int
+    let learningPenaltyCount: Int
     let combos: SignalObservationCombos?
+    let learningCombos: SignalObservationLearningCombos?
     let items: [SignalObservationItem]
 
     enum CodingKeys: String, CodingKey {
@@ -500,7 +503,10 @@ struct SignalObservationSummary: Decodable {
         case deferred
         case deferredFavorable = "deferred_favorable"
         case selectedUnfavorable = "selected_unfavorable"
+        case learningBonusCount = "learning_bonus_count"
+        case learningPenaltyCount = "learning_penalty_count"
         case combos
+        case learningCombos = "learning_combos"
         case items
     }
 }
@@ -508,6 +514,11 @@ struct SignalObservationSummary: Decodable {
 struct SignalObservationCombos: Decodable {
     let strongest: [SignalObservationCombo]
     let weakest: [SignalObservationCombo]
+}
+
+struct SignalObservationLearningCombos: Decodable {
+    let strongest: [SignalObservationLearningCombo]
+    let weakest: [SignalObservationLearningCombo]
 }
 
 struct SignalObservationCombo: Decodable, Identifiable {
@@ -555,6 +566,39 @@ struct SignalObservationCombo: Decodable, Identifiable {
     }
 }
 
+struct SignalObservationLearningCombo: Decodable, Identifiable {
+    let id: String
+    let label: String
+    let count: Int
+    let bonusCount: Int
+    let penaltyCount: Int
+    let avgAdjustment: Double
+    let evaluated: Int
+    let confirmationRate: Double
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        label = try container.decodeIfPresent(String.self, forKey: .label) ?? "-"
+        count = try container.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        bonusCount = try container.decodeIfPresent(Int.self, forKey: .bonusCount) ?? 0
+        penaltyCount = try container.decodeIfPresent(Int.self, forKey: .penaltyCount) ?? 0
+        avgAdjustment = try container.decodeIfPresent(Double.self, forKey: .avgAdjustment) ?? 0
+        evaluated = try container.decodeIfPresent(Int.self, forKey: .evaluated) ?? 0
+        confirmationRate = try container.decodeIfPresent(Double.self, forKey: .confirmationRate) ?? 0
+        id = "\(label)-\(count)-\(avgAdjustment)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case count
+        case bonusCount = "bonus_count"
+        case penaltyCount = "penalty_count"
+        case avgAdjustment = "avg_adjustment"
+        case evaluated
+        case confirmationRate = "confirmation_rate"
+    }
+}
+
 struct SignalObservationItem: Decodable, Identifiable {
     let id: String
     let timeDisplay: String?
@@ -567,6 +611,8 @@ struct SignalObservationItem: Decodable, Identifiable {
     let strategy: String?
     let decisionReason: String?
     let priorityScore: Double?
+    let learningAdjustment: Double?
+    let learningReason: String?
     let entryEdgeScore: Double?
     let movePct: Double?
     let favorable: Bool?
@@ -584,6 +630,8 @@ struct SignalObservationItem: Decodable, Identifiable {
         strategy = try container.decodeIfPresent(String.self, forKey: .strategy)
         decisionReason = try container.decodeIfPresent(String.self, forKey: .decisionReason)
         priorityScore = try container.decodeIfPresent(Double.self, forKey: .priorityScore)
+        learningAdjustment = try container.decodeIfPresent(Double.self, forKey: .learningAdjustment)
+        learningReason = try container.decodeIfPresent(String.self, forKey: .learningReason)
         entryEdgeScore = try container.decodeIfPresent(Double.self, forKey: .entryEdgeScore)
         movePct = try container.decodeIfPresent(Double.self, forKey: .movePct)
         favorable = try container.decodeIfPresent(Bool.self, forKey: .favorable)
@@ -601,6 +649,8 @@ struct SignalObservationItem: Decodable, Identifiable {
         case strategy
         case decisionReason = "decision_reason"
         case priorityScore = "priority_score"
+        case learningAdjustment = "learning_adjustment"
+        case learningReason = "learning_reason"
         case entryEdgeScore = "entry_edge_score"
         case movePct = "move_pct"
         case favorable

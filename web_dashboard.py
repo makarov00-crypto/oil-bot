@@ -1424,6 +1424,69 @@ def _summarize_signal_observation_combos(rows: list[dict[str, Any]], limit: int 
     }
 
 
+def _summarize_signal_observation_learning_combos(rows: list[dict[str, Any]], limit: int = 3) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        learning_adjustment = _signal_observation_context_float(row, "learning_adjustment")
+        if abs(learning_adjustment) < 0.005:
+            continue
+        label = _signal_observation_combo_label(row)
+        group = groups.setdefault(
+            label,
+            {
+                "label": label,
+                "count": 0,
+                "bonus_count": 0,
+                "penalty_count": 0,
+                "adjustment_sum": 0.0,
+                "evaluated": 0,
+                "favorable": 0,
+            },
+        )
+        group["count"] += 1
+        group["adjustment_sum"] += learning_adjustment
+        if learning_adjustment > 0:
+            group["bonus_count"] += 1
+        else:
+            group["penalty_count"] += 1
+        if row.get("evaluated_at"):
+            group["evaluated"] += 1
+            if row.get("favorable") is True:
+                group["favorable"] += 1
+
+    items: list[dict[str, Any]] = []
+    for group in groups.values():
+        count = int(group["count"] or 0)
+        evaluated = int(group["evaluated"] or 0)
+        favorable = int(group["favorable"] or 0)
+        items.append(
+            {
+                "label": group["label"],
+                "count": count,
+                "bonus_count": int(group["bonus_count"] or 0),
+                "penalty_count": int(group["penalty_count"] or 0),
+                "avg_adjustment": round(float(group["adjustment_sum"] or 0.0) / count, 3) if count else 0.0,
+                "evaluated": evaluated,
+                "confirmation_rate": round((favorable / evaluated) * 100, 1) if evaluated else 0.0,
+            }
+        )
+
+    strongest = sorted(
+        [item for item in items if item["bonus_count"] > 0],
+        key=lambda item: (int(item["bonus_count"]), float(item["avg_adjustment"]), float(item["confirmation_rate"])),
+        reverse=True,
+    )[:limit]
+    weakest = sorted(
+        [item for item in items if item["penalty_count"] > 0],
+        key=lambda item: (int(item["penalty_count"]), -float(item["avg_adjustment"]), -float(item["confirmation_rate"])),
+        reverse=True,
+    )[:limit]
+    return {
+        "strongest": strongest,
+        "weakest": weakest,
+    }
+
+
 def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -> dict[str, Any]:
     rows = load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day, limit=300)
     rows.sort(key=lambda item: str(item.get("observed_at") or ""), reverse=True)
@@ -1469,6 +1532,7 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
         "learning_bonus_count": len(learning_bonus_rows),
         "learning_penalty_count": len(learning_penalty_rows),
         "combos": _summarize_signal_observation_combos(rows),
+        "learning_combos": _summarize_signal_observation_learning_combos(rows),
         "items": items,
     }
 
@@ -4674,14 +4738,23 @@ def build_dashboard_html() -> str:
       const signalObservations = data.signal_observations || {};
       const observationItems = Array.isArray(signalObservations.items) ? signalObservations.items : [];
       const observationCombos = signalObservations.combos || {};
+      const learningCombos = signalObservations.learning_combos || {};
       const strongestCombos = Array.isArray(observationCombos.strongest) ? observationCombos.strongest : [];
       const weakestCombos = Array.isArray(observationCombos.weakest) ? observationCombos.weakest : [];
+      const strongestLearningCombos = Array.isArray(learningCombos.strongest) ? learningCombos.strongest : [];
+      const weakestLearningCombos = Array.isArray(learningCombos.weakest) ? learningCombos.weakest : [];
       const formatObservationCombo = (item) => {
         const rate = Number(item.confirmation_rate || 0);
         const avgMove = Number(item.avg_move_pct || 0);
         const sample = Number(item.evaluated || 0);
         const sampleText = item.sample_warning ? `${sample} пров., мало данных` : `${sample} пров.`;
         return `${rate.toFixed(1)}% · ${sampleText} · среднее движение ${avgMove.toFixed(2)}%`;
+      };
+      const formatLearningCombo = (item) => {
+        const avgAdjustment = Number(item.avg_adjustment || 0);
+        const rate = Number(item.confirmation_rate || 0);
+        const count = Number(item.count || 0);
+        return `${count} корр. · средняя поправка ${avgAdjustment > 0 ? '+' : ''}${avgAdjustment.toFixed(2)} · подтверждение ${rate.toFixed(1)}%`;
       };
       const observationSummaryRows = [
         buildReviewRow(
@@ -4703,6 +4776,16 @@ def build_dashboard_html() -> str:
           'Коррекция обучения',
           `бонусов ${signalObservations.learning_bonus_count || 0} · штрафов ${signalObservations.learning_penalty_count || 0}`,
           'сколько наблюдений уже входили с повышением или понижением приоритета'
+        ),
+        buildReviewRow(
+          'Чаще усиливаем',
+          strongestLearningCombos.length ? strongestLearningCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
+          strongestLearningCombos.length ? strongestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых learning-бонусов'
+        ),
+        buildReviewRow(
+          'Чаще режем',
+          weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
+          weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых learning-штрафов'
         ),
         buildReviewRow(
           'Лучшие связки',
