@@ -194,6 +194,59 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("Явных операционных действий по learning-данным пока нет", prompt)
         self.assertIn("Слабые связки сигналов за последние 3 дня:", prompt)
 
+    def test_build_prompt_does_not_emit_learning_actions_from_pending_rows(self) -> None:
+        signal_rows = [
+            {
+                "observed_at": "2026-04-24T10:15:00+03:00",
+                "symbol": "UCM6",
+                "signal": "SHORT",
+                "strategy": "opening_range_breakout",
+                "decision": "selected",
+                "market_regime": "range_chop",
+                "setup_quality": "fragile",
+                "context": {
+                    "entry_edge_label": "fragile",
+                    "learning_adjustment": -0.08,
+                    "learning_reason": "обучение связки: штраф -0.08",
+                },
+            },
+            {
+                "observed_at": "2026-04-24T10:30:00+03:00",
+                "symbol": "UCM6",
+                "signal": "SHORT",
+                "strategy": "opening_range_breakout",
+                "decision": "selected",
+                "market_regime": "range_chop",
+                "setup_quality": "fragile",
+                "context": {
+                    "entry_edge_label": "fragile",
+                    "learning_adjustment": -0.07,
+                    "learning_reason": "обучение связки: штраф -0.07",
+                },
+            },
+        ]
+
+        prompt = review.build_prompt(
+            target_day=date(2026, 4, 24),
+            portfolio={
+                "bot_realized_pnl_rub": 0.0,
+                "bot_estimated_variation_margin_rub": 0.0,
+                "bot_total_pnl_rub": 0.0,
+                "open_positions_count": 0,
+                "total_portfolio_rub": 50000.0,
+            },
+            news={"active_biases": []},
+            states={},
+            closed_trades=[],
+            recent_closed_trades=[],
+            signal_observations=signal_rows,
+            recent_signal_observations=signal_rows,
+        )
+
+        self.assertIn("Операционные выводы по learning-наблюдениям:", prompt)
+        self.assertIn("Явных операционных действий по learning-данным пока нет", prompt)
+        self.assertNotIn("Снижать приоритет связки", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

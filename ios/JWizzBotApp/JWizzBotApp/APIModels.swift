@@ -494,6 +494,25 @@ struct SignalObservationSummary: Decodable {
     let actions: [String]?
     let items: [SignalObservationItem]
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        total = try container.decodeIfPresent(Int.self, forKey: .total) ?? 0
+        evaluated = try container.decodeIfPresent(Int.self, forKey: .evaluated) ?? 0
+        pending = try container.decodeIfPresent(Int.self, forKey: .pending) ?? 0
+        favorable = try container.decodeIfPresent(Int.self, forKey: .favorable) ?? 0
+        favorableRate = try container.decodeIfPresent(Double.self, forKey: .favorableRate) ?? 0
+        selected = try container.decodeIfPresent(Int.self, forKey: .selected) ?? 0
+        deferred = try container.decodeIfPresent(Int.self, forKey: .deferred) ?? 0
+        deferredFavorable = try container.decodeIfPresent(Int.self, forKey: .deferredFavorable) ?? 0
+        selectedUnfavorable = try container.decodeIfPresent(Int.self, forKey: .selectedUnfavorable) ?? 0
+        learningBonusCount = try container.decodeIfPresent(Int.self, forKey: .learningBonusCount) ?? 0
+        learningPenaltyCount = try container.decodeIfPresent(Int.self, forKey: .learningPenaltyCount) ?? 0
+        combos = try container.decodeIfPresent(SignalObservationCombos.self, forKey: .combos)
+        learningCombos = try container.decodeIfPresent(SignalObservationLearningCombos.self, forKey: .learningCombos)
+        actions = try container.decodeIfPresent([String].self, forKey: .actions)
+        items = try container.decodeIfPresent([SignalObservationItem].self, forKey: .items) ?? []
+    }
+
     enum CodingKeys: String, CodingKey {
         case total
         case evaluated

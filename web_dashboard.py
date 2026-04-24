@@ -1428,7 +1428,7 @@ def _summarize_signal_observation_learning_combos(rows: list[dict[str, Any]], li
     groups: dict[str, dict[str, Any]] = {}
     for row in rows:
         learning_adjustment = _signal_observation_context_float(row, "learning_adjustment")
-        if abs(learning_adjustment) < 0.005:
+        if abs(learning_adjustment) < 0.005 or not row.get("evaluated_at"):
             continue
         label = _signal_observation_combo_label(row)
         group = groups.setdefault(
@@ -1490,14 +1490,14 @@ def _summarize_signal_observation_learning_combos(rows: list[dict[str, Any]], li
 def _build_signal_learning_actions(summary: dict[str, Any]) -> list[str]:
     actions: list[str] = []
     for item in summary.get("learning_penalty_combos") or []:
-        if int(item.get("count") or 0) < 2:
+        if int(item.get("evaluated") or 0) < 2:
             continue
         actions.append(
             f"Снижать приоритет связки {item['label']}: штрафов {int(item['penalty_count'])}, "
             f"подтверждение {float(item['confirmation_rate']):.1f}%, средняя поправка {float(item['avg_adjustment']):+.2f}."
         )
     for item in summary.get("learning_bonus_combos") or []:
-        if int(item.get("count") or 0) < 2:
+        if int(item.get("evaluated") or 0) < 2:
             continue
         actions.append(
             f"Быстрее пропускать связку {item['label']}: бонусов {int(item['bonus_count'])}, "

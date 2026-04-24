@@ -375,6 +375,44 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(summary["combos"]["weakest"][0]["confirmation_rate"], 0.0)
         self.assertTrue(summary["combos"]["weakest"][0]["sample_warning"])
 
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_signal_observation_summary_ignores_pending_learning_for_actions(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
+            for observed_at, adjustment in [
+                ("2026-04-24T10:15:00+03:00", -0.07),
+                ("2026-04-24T10:30:00+03:00", -0.08),
+            ]:
+                append_signal_observation(
+                    db_path,
+                    {
+                        "observed_at": observed_at,
+                        "symbol": "UCM6",
+                        "signal": "SHORT",
+                        "strategy": "opening_range_breakout",
+                        "decision": "selected",
+                        "decision_reason": "pending learning row",
+                        "priority_score": 0.80,
+                        "market_regime": "range_chop",
+                        "setup_quality": "fragile",
+                        "observed_price": 7.18,
+                        "horizon_minutes": 15,
+                        "context": {
+                            "entry_edge_label": "fragile",
+                            "learning_adjustment": adjustment,
+                            "learning_reason": f"обучение связки: штраф {adjustment:+.2f}",
+                        },
+                    },
+                )
+
+            with patch.object(dashboard, "TRADE_DB_PATH", db_path):
+                summary = dashboard.load_signal_observation_summary_for_day(date(2026, 4, 24))
+
+        self.assertEqual(summary["pending"], 2)
+        self.assertEqual(summary["learning_penalty_count"], 2)
+        self.assertEqual(summary["learning_combos"]["weakest"], [])
+        self.assertEqual(summary["actions"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

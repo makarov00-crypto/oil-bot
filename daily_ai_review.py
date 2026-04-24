@@ -391,7 +391,7 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
     for row in rows:
         label = signal_observation_combo_label(row)
         learning_adjustment = signal_observation_context_float(row, "learning_adjustment")
-        if abs(learning_adjustment) >= 0.005:
+        if abs(learning_adjustment) >= 0.005 and row.get("evaluated_at"):
             learning_group = learning_groups.setdefault(
                 label,
                 {
@@ -410,10 +410,9 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
                 learning_group["bonus_count"] += 1
             else:
                 learning_group["penalty_count"] += 1
-            if row.get("evaluated_at"):
-                learning_group["evaluated"] += 1
-                if row.get("favorable") is True:
-                    learning_group["favorable"] += 1
+            learning_group["evaluated"] += 1
+            if row.get("favorable") is True:
+                learning_group["favorable"] += 1
         if not row.get("evaluated_at"):
             continue
         group = groups.setdefault(
@@ -526,14 +525,14 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
 def build_signal_learning_actions(summary: dict[str, Any]) -> list[str]:
     actions: list[str] = []
     for item in summary.get("learning_penalty_combos") or []:
-        if int(item.get("count") or 0) < 2:
+        if int(item.get("evaluated") or 0) < 2:
             continue
         actions.append(
             f"- Снижать приоритет связки {item['label']}: штрафов {int(item['penalty_count'])}, "
             f"подтверждение {float(item['confirmation_rate']):.1f}%, средняя поправка {float(item['avg_adjustment']):+.2f}."
         )
     for item in summary.get("learning_bonus_combos") or []:
-        if int(item.get("count") or 0) < 2:
+        if int(item.get("evaluated") or 0) < 2:
             continue
         actions.append(
             f"- Быстрее пропускать связку {item['label']}: бонусов {int(item['bonus_count'])}, "
