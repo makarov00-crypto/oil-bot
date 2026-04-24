@@ -298,6 +298,46 @@ class PositionSizingTests(unittest.TestCase):
         self.assertLess(sizing["adaptive_size_multiplier"], 0.8)
         self.assertEqual(sizing["entry_edge_label"], "fragile")
 
+    def test_moderate_edge_caps_target_trade_margin(self) -> None:
+        self.state.last_setup_quality_label = "medium"
+        self.state.last_market_regime = "trend_expansion"
+        self.state.last_market_regime_confidence = 0.66
+        self.state.last_entry_edge_score = 0.50
+        self.state.last_entry_edge_label = "moderate"
+        aggressive_config = SimpleNamespace(
+            account_id="acc",
+            max_margin_usage_pct=0.35,
+            portfolio_usage_pct=1.0,
+            capital_reserve_pct=0.35,
+            base_trade_allocation_pct=0.80,
+            risk_per_trade_pct=0.0,
+            stop_loss_pct=0.008,
+            max_order_quantity=20,
+        )
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.25
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим trend_expansion нейтрален")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, aggressive_config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+        )
+
+        self.assertEqual(sizing["entry_edge_cap_multiplier"], 0.55)
+        self.assertAlmostEqual(sizing["target_trade_margin_rub"], 7150.0)
+        self.assertLess(sizing["quantity"], 16)
+
 
 if __name__ == "__main__":
     unittest.main()

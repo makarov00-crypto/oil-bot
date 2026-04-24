@@ -4524,6 +4524,20 @@ def calculate_open_position_hold_score(
     return score, ", ".join(reasons) if reasons else "нейтральное удержание"
 
 
+def get_entry_edge_cap_multiplier(state: InstrumentState) -> tuple[float, str]:
+    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_label = str(state.last_entry_edge_label or "").strip().lower()
+    if edge_score <= 0.0 and not edge_label:
+        return 1.0, "качество входа ещё не оценено"
+    if edge_score >= 0.78 or edge_label == "high":
+        return 1.0, "высокое качество входа: полный потолок участия"
+    if edge_score >= 0.62 or edge_label == "confirmed":
+        return 0.75, "подтверждённый вход: умеренный потолок участия"
+    if edge_score >= 0.45 or edge_label == "moderate":
+        return 0.55, "среднее качество входа: сниженный потолок участия"
+    return 0.35, "слабое качество входа: минимальный потолок участия"
+
+
 def select_capital_rotation_plan(
     watchlist: Sequence[InstrumentConfig],
     candidates: list[dict[str, Any]],
@@ -4674,6 +4688,7 @@ def calculate_position_sizing_context(
     entry_edge_score = float(state.last_entry_edge_score or 0.0)
     entry_edge_label = str(state.last_entry_edge_label or "")
     entry_edge_reason = str(state.last_entry_edge_reason or "")
+    entry_edge_cap_multiplier, entry_edge_cap_reason = get_entry_edge_cap_multiplier(state)
     recovery_status = get_recovery_mode_status(instrument.symbol, strategy_name)
     daily_loss_status = get_daily_loss_limit_status(client, config)
     daily_loss_recovery_active = str(daily_loss_status.get("mode") or "") == "recovery"
@@ -4697,6 +4712,9 @@ def calculate_position_sizing_context(
         * daily_loss_recovery_multiplier
         * max(session_multiplier, 0.0)
     )
+    edge_cap_margin = allocatable_margin * entry_edge_cap_multiplier
+    if edge_cap_margin > 0.0:
+        target_trade_margin = min(target_trade_margin, edge_cap_margin)
     qty_by_target = int(target_trade_margin // margin_per_lot) if margin_per_lot > 0 else 0
     qty_by_allocatable = int(allocatable_margin // margin_per_lot) if margin_per_lot > 0 else 0
     qty_by_working = int(working_margin_budget // margin_per_lot) if margin_per_lot > 0 else 0
@@ -4778,6 +4796,9 @@ def calculate_position_sizing_context(
         "entry_edge_score": entry_edge_score,
         "entry_edge_label": entry_edge_label,
         "entry_edge_reason": entry_edge_reason,
+        "entry_edge_cap_multiplier": entry_edge_cap_multiplier,
+        "entry_edge_cap_reason": entry_edge_cap_reason,
+        "entry_edge_cap_margin_rub": edge_cap_margin,
         "recovery_mode_active": bool(recovery_status["active"]),
         "daily_loss_recovery_active": daily_loss_recovery_active,
         "daily_loss_recovery_reason": daily_loss_recovery_reason,
@@ -4861,22 +4882,24 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     strategy_health_score = float(sizing.get("strategy_health_score") or 1.0)
     edge_score = float(sizing.get("entry_edge_score") or 0.0)
     edge_label = str(sizing.get("entry_edge_label") or "").strip()
+    edge_cap_multiplier = float(sizing.get("entry_edge_cap_multiplier") or 1.0)
     recovery_mode_active = bool(sizing.get("recovery_mode_active"))
     daily_loss_recovery_active = bool(sizing.get("daily_loss_recovery_active"))
     recovery_hint = ", recovery mode" if recovery_mode_active else ""
     daily_loss_hint = ", мягкий дневной стоп" if daily_loss_recovery_active else ""
     edge_hint = f", edge {edge_label} {edge_score:.2f}" if edge_score > 0.0 else ""
+    edge_cap_hint = f", потолок качества {edge_cap_multiplier:.2f}" if edge_cap_multiplier < 1.0 else ""
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
-            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{recovery_hint}{daily_loss_hint}, запас {margin_headroom:.0f} RUB, "
+            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}, запас {margin_headroom:.0f} RUB, "
             f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
             f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"health {strategy_health_score:.2f}{edge_hint}{recovery_hint}{daily_loss_hint}, "
+        f"health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."
