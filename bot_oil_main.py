@@ -4347,6 +4347,26 @@ def calculate_entry_priority_score(
     return score, ", ".join(reason for reason in reasons if reason) or "нейтральный приоритет"
 
 
+def get_candidate_correlation_bucket(candidate: dict[str, Any]) -> str:
+    symbol = str(candidate.get("symbol") or "").strip().upper()
+    signal = str(candidate.get("signal") or "").strip().upper()
+    if not symbol or signal not in {"LONG", "SHORT"}:
+        return ""
+    if symbol in {"BRK6", "NGJ6"}:
+        family = "energy"
+    elif symbol == "GNM6":
+        family = "gold"
+    elif symbol in {"USDRUBF", "CNYRUBF", "UCM6"}:
+        family = "fx"
+    elif symbol in {"IMOEXF", "SRM6", "VBM6"}:
+        family = "equity"
+    elif symbol == "RBM6":
+        family = "bond"
+    else:
+        family = get_instrument_group(symbol).name
+    return f"{family}:{signal}"
+
+
 def rank_cycle_entry_candidates(
     candidates: list[dict[str, Any]],
     *,
@@ -4376,6 +4396,7 @@ def rank_cycle_entry_candidates(
     deferred: list[dict[str, Any]] = []
     used_budget_rub = 0.0
     class_counts: dict[str, int] = defaultdict(int)
+    correlation_counts: dict[str, int] = defaultdict(int)
     for item in ranked:
         score = float(item.get("priority_score") or 0.0)
         if score < min_priority_score:
@@ -4389,6 +4410,15 @@ def rank_cycle_entry_candidates(
             item["defer_reason"] = (
                 f"в этом цикле уже выбрано достаточно идей; приоритет {score:.2f}, "
                 f"{item.get('priority_reason') or 'конкуренция сигналов'}."
+            )
+            deferred.append(item)
+            continue
+
+        correlation_bucket = get_candidate_correlation_bucket(item)
+        if correlation_bucket and correlation_counts[correlation_bucket] >= 1 and score < 0.88:
+            item["defer_reason"] = (
+                f"похожая рыночная идея уже выбрана в этом цикле; "
+                f"группа {correlation_bucket}, приоритет {score:.2f}."
             )
             deferred.append(item)
             continue
@@ -4420,6 +4450,8 @@ def rank_cycle_entry_candidates(
             selected.append(item)
             used_budget_rub += requested_margin_rub
             class_counts[instrument_class] += 1
+            if correlation_bucket:
+                correlation_counts[correlation_bucket] += 1
     return selected, deferred
 
 

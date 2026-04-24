@@ -591,6 +591,49 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual([item["symbol"] for item in deferred], ["BRK6", "VBM6"])
         self.assertIn("не хватает свободного бюджета ГО", deferred[0]["defer_reason"])
 
+    def test_rank_cycle_entry_candidates_defers_similar_market_idea(self) -> None:
+        candidates = [
+            {
+                "symbol": "BRK6",
+                "signal": "LONG",
+                "priority_score": 0.84,
+                "entry_edge_score": 0.82,
+                "regime_confidence": 0.80,
+                "allocator_quantity": 1,
+                "instrument_class": "базовый",
+                "requested_margin_rub": 1800.0,
+                "allocatable_margin_rub": 7000.0,
+            },
+            {
+                "symbol": "NGJ6",
+                "signal": "LONG",
+                "priority_score": 0.78,
+                "entry_edge_score": 0.80,
+                "regime_confidence": 0.76,
+                "allocator_quantity": 1,
+                "instrument_class": "тяжёлый",
+                "requested_margin_rub": 5600.0,
+                "allocatable_margin_rub": 7000.0,
+            },
+            {
+                "symbol": "GNM6",
+                "signal": "SHORT",
+                "priority_score": 0.76,
+                "entry_edge_score": 0.79,
+                "regime_confidence": 0.75,
+                "allocator_quantity": 1,
+                "instrument_class": "средний",
+                "requested_margin_rub": 3200.0,
+                "allocatable_margin_rub": 7000.0,
+            },
+        ]
+
+        selected, deferred = mod.rank_cycle_entry_candidates(candidates, max_entries=3, min_priority_score=0.45)
+
+        self.assertEqual([item["symbol"] for item in selected], ["BRK6", "GNM6"])
+        self.assertEqual([item["symbol"] for item in deferred], ["NGJ6"])
+        self.assertIn("похожая рыночная идея", deferred[0]["defer_reason"])
+
     def test_mark_cycle_deferred_candidate_updates_allocator_summary(self) -> None:
         symbol = "TESTRANK"
         state = mod.InstrumentState(last_signal_summary=["старый сигнал"])
