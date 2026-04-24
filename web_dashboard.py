@@ -4074,6 +4074,8 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioTotalVm').textContent = formatRub(portfolio.bot_total_variation_margin_rub ?? portfolio.bot_total_varmargin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_analytical_total_pnl_rub ?? portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
+
+      try {
       const capitalAlert = data.capital_alert || {};
       const capitalPanel = document.getElementById('capitalAlertPanel');
       if (capitalPanel && capitalAlert.active) {
@@ -4273,6 +4275,9 @@ def build_dashboard_html() -> str:
         manualList.textContent = items.length
           ? `Ручные инструменты: ${items.map((item) => `${item.symbol} как ${item.clone_from}`).join(' | ')}`
           : 'Ручных инструментов пока нет.';
+      }
+      } catch (error) {
+        console.error('dashboard secondary render failed', error);
       }
 
       const tradeBody = document.querySelector('#tradesTable tbody');
@@ -4674,13 +4679,23 @@ const aiReview = data.ai_review || {};
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+      const showLoadError = (error) => {
+        console.error('dashboard load failed', error);
+        const status = document.getElementById('tradeRecoveryStatus');
+        if (status) {
+          status.textContent = `Не удалось обновить дашборд: ${error?.message || error || 'неизвестная ошибка'}`;
+        }
+      };
+      const refreshDashboard = () => {
+        loadData().catch(showLoadError);
+      };
       const filter = document.getElementById('eventStatusFilter');
       const dateInput = document.getElementById('selectedDate');
       if (filter) {
-        filter.addEventListener('change', loadData);
+        filter.addEventListener('change', refreshDashboard);
       }
       if (dateInput) {
-        dateInput.addEventListener('change', loadData);
+        dateInput.addEventListener('change', refreshDashboard);
       }
       const aiRefreshBtn = document.getElementById('aiReviewRefreshBtn');
       if (aiRefreshBtn) {
@@ -4709,8 +4724,8 @@ const aiReview = data.ai_review || {};
           closeNewsPopover();
         }
       });
-      loadData();
-      setInterval(loadData, 15000);
+      refreshDashboard();
+      setInterval(refreshDashboard, 15000);
     });
   </script>
 </body>
