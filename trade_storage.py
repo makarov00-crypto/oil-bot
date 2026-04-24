@@ -148,8 +148,15 @@ def ensure_trade_db(db_path: Path) -> None:
 
 
 def _signal_observation_uid(row: dict[str, Any]) -> str:
+    context = row.get("context") if isinstance(row.get("context"), dict) else {}
+    observation_key = str(
+        row.get("observation_key")
+        or context.get("observation_key")
+        or context.get("candle_time")
+        or str(row.get("observed_at") or row.get("time") or "")[:16]
+    ).strip()
     base = {
-        "observed_at": str(row.get("observed_at") or row.get("time") or ""),
+        "observation_key": observation_key,
         "symbol": str(row.get("symbol") or "").upper(),
         "signal": str(row.get("signal") or "").upper(),
         "strategy": str(row.get("strategy") or row.get("strategy_name") or ""),

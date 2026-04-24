@@ -671,8 +671,16 @@ def append_signal_observation_decision(
         "requested_margin_rub": float(candidate.get("requested_margin_rub") or 0.0),
         "candle_time": str(candidate.get("candle_time") or ""),
     }
+    observation_key = str(
+        candidate.get("observation_key")
+        or context.get("candle_time")
+        or observed_at[:16]
+    ).strip()
+    if observation_key:
+        context["observation_key"] = observation_key
     row = {
         "observed_at": observed_at,
+        "observation_key": observation_key,
         "symbol": str(candidate.get("symbol") or "").upper(),
         "signal": str(candidate.get("signal") or "").upper(),
         "strategy": str(candidate.get("strategy_name") or ""),
@@ -689,6 +697,48 @@ def append_signal_observation_decision(
         "context": {key: value for key, value in context.items() if value not in ("", None, 0.0)},
     }
     return append_signal_observation(TRADE_DB_PATH, row)
+
+
+def get_price_near_observation_horizon(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    target_time: datetime,
+    *,
+    window_minutes: int = 5,
+) -> tuple[float, datetime] | None:
+    from_time = target_time - timedelta(minutes=1)
+    to_time = target_time + timedelta(minutes=max(1, window_minutes))
+    try:
+        candles = client.market_data.get_candles(
+            figi=instrument.figi,
+            from_=from_time.astimezone(UTC),
+            to=to_time.astimezone(UTC),
+            interval=CandleInterval.CANDLE_INTERVAL_1_MIN,
+        )
+    except Exception as error:
+        logging.info("symbol=%s signal_observation_horizon_candles_unavailable error=%s", instrument.symbol, error)
+        return None
+
+    closest: tuple[float, datetime, float] | None = None
+    for candle in getattr(candles, "candles", []) or []:
+        candle_time = getattr(candle, "time", None)
+        if candle_time is None:
+            continue
+        if candle_time.tzinfo is None:
+            candle_time = candle_time.replace(tzinfo=UTC)
+        candle_time = candle_time.astimezone(UTC)
+        if candle_time < target_time.astimezone(UTC):
+            continue
+        close_price = quotation_to_float(getattr(candle, "close", None))
+        if close_price <= 0:
+            continue
+        time_delta_seconds = abs((candle_time - target_time.astimezone(UTC)).total_seconds())
+        if closest is None or time_delta_seconds < closest[2]:
+            closest = (close_price, candle_time, time_delta_seconds)
+    if closest is None:
+        return None
+    return closest[0], closest[1].astimezone(MOSCOW_TZ)
 
 
 def update_signal_observation_outcomes(
@@ -712,16 +762,21 @@ def update_signal_observation_outcomes(
         if observed_at is None:
             continue
         row_horizon = int(row.get("horizon_minutes") or horizon_minutes)
-        if now - observed_at < timedelta(minutes=max(1, row_horizon)):
+        target_time = observed_at + timedelta(minutes=max(1, row_horizon))
+        if now < target_time:
             continue
         observed_price = float(row.get("observed_price") or 0.0)
         if observed_price <= 0.0:
             continue
-        try:
-            current_price = get_last_price(client, instrument)
-        except Exception as error:
-            logging.info("symbol=%s signal_observation_outcome_wait price_error=%s", symbol, error)
+        horizon_snapshot = get_price_near_observation_horizon(client, config, instrument, target_time)
+        if horizon_snapshot is None:
+            logging.info(
+                "symbol=%s signal_observation_outcome_wait horizon_price_unavailable target_time=%s",
+                symbol,
+                target_time.astimezone(MOSCOW_TZ).isoformat(),
+            )
             continue
+        current_price, evaluated_at = horizon_snapshot
         signal = str(row.get("signal") or "").upper()
         if signal == "LONG":
             move_pct = (current_price - observed_price) / observed_price * 100.0
@@ -732,7 +787,7 @@ def update_signal_observation_outcomes(
         update_signal_observation_outcome(
             TRADE_DB_PATH,
             str(row.get("observation_uid") or ""),
-            evaluated_at=now.astimezone(MOSCOW_TZ).isoformat(),
+            evaluated_at=evaluated_at.isoformat(),
             current_price=current_price,
             move_pct=round(move_pct, 4),
             favorable=move_pct > 0.0,

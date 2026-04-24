@@ -283,6 +283,43 @@ class TradeStorageTests(unittest.TestCase):
             self.assertEqual(evaluated[0]["move_pct"], 1.5)
             self.assertTrue(evaluated[0]["favorable"])
 
+    def test_signal_observation_dedupes_same_candle_setup(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "trade_analytics.sqlite3"
+            first_uid = append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T10:00:05+03:00",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "strategy": "range_break_continuation",
+                    "decision": "selected",
+                    "decision_reason": "первый проход цикла",
+                    "observed_price": 80.0,
+                    "context": {"candle_time": "2026-04-24 10:00"},
+                },
+            )
+            second_uid = append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T10:00:15+03:00",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "strategy": "range_break_continuation",
+                    "decision": "selected",
+                    "decision_reason": "повторный проход цикла",
+                    "observed_price": 80.2,
+                    "context": {"candle_time": "2026-04-24 10:00"},
+                },
+            )
+
+            rows = load_signal_observations(db_path)
+
+        self.assertEqual(first_uid, second_uid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["decision_reason"], "повторный проход цикла")
+        self.assertEqual(rows[0]["observed_price"], 80.2)
+
 
 if __name__ == "__main__":
     unittest.main()

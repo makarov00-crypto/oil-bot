@@ -558,8 +558,8 @@ class DailyRiskLimitTests(unittest.TestCase):
                 mod.append_signal_observation(
                     mod.TRADE_DB_PATH,
                     {
-                        "observed_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
-                        "evaluated_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "observed_at": f"2026-04-24T10:{index:02d}:00+03:00",
+                        "evaluated_at": f"2026-04-24T10:{index:02d}:15+03:00",
                         "symbol": "BRK6",
                         "signal": "LONG",
                         "strategy": "trend_rollover",
@@ -568,7 +568,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                         "setup_quality": "strong",
                         "move_pct": -1.2 - index * 0.01,
                         "favorable": False,
-                        "context": {"entry_edge_label": "high"},
+                        "context": {"entry_edge_label": "high", "candle_time": f"2026-04-24 10:{index:02d}"},
                     },
                 )
             score, reason = mod.calculate_entry_priority_score(state, "BRK6", "trend_rollover")
@@ -592,12 +592,12 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
-            for _ in range(8):
+            for index in range(8):
                 mod.append_signal_observation(
                     mod.TRADE_DB_PATH,
                     {
-                        "observed_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
-                        "evaluated_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "observed_at": f"2026-04-24T10:{index:02d}:00+03:00",
+                        "evaluated_at": f"2026-04-24T10:{index:02d}:15+03:00",
                         "symbol": "UCM6",
                         "signal": "SHORT",
                         "strategy": "opening_range_breakout",
@@ -606,7 +606,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                         "setup_quality": "strong",
                         "move_pct": 0.9,
                         "favorable": True,
-                        "context": {"entry_edge_label": "confirmed"},
+                        "context": {"entry_edge_label": "confirmed", "candle_time": f"2026-04-24 10:{index:02d}"},
                     },
                 )
             score, reason = mod.calculate_entry_priority_score(state, "UCM6", "opening_range_breakout")
@@ -630,12 +630,12 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
-            for _ in range(2):
+            for index in range(2):
                 mod.append_signal_observation(
                     mod.TRADE_DB_PATH,
                     {
-                        "observed_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
-                        "evaluated_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "observed_at": f"2026-04-24T10:{index:02d}:00+03:00",
+                        "evaluated_at": f"2026-04-24T10:{index:02d}:15+03:00",
                         "symbol": "BRK6",
                         "signal": "LONG",
                         "strategy": "trend_rollover",
@@ -644,7 +644,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                         "setup_quality": "strong",
                         "move_pct": -2.0,
                         "favorable": False,
-                        "context": {"entry_edge_label": "high"},
+                        "context": {"entry_edge_label": "high", "candle_time": f"2026-04-24 10:{index:02d}"},
                     },
                 )
             score, reason = mod.calculate_entry_priority_score(state, "BRK6", "trend_rollover")
@@ -770,6 +770,7 @@ class DailyRiskLimitTests(unittest.TestCase):
             "signal": "LONG",
             "strategy_name": "range_break_continuation",
             "observed_at": "2026-04-24T10:00:00+03:00",
+            "candle_time": "2026-04-24 10:00",
             "observed_price": 80.0,
             "priority_score": 0.83,
             "entry_edge_score": 0.86,
@@ -791,6 +792,36 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["decision"], "selected")
         self.assertEqual(rows[0]["observed_price"], 80.0)
+        self.assertEqual(rows[0]["context"]["observation_key"], "2026-04-24 10:00")
+
+    def test_append_signal_observation_decision_dedupes_same_candle(self) -> None:
+        candidate = {
+            "symbol": "BRK6",
+            "signal": "LONG",
+            "strategy_name": "range_break_continuation",
+            "observed_price": 80.0,
+            "priority_score": 0.83,
+            "entry_edge_score": 0.86,
+            "candle_time": "2026-04-24 10:00",
+        }
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trade.sqlite3"):
+            first_uid = mod.append_signal_observation_decision(
+                {**candidate, "observed_at": "2026-04-24T10:00:05+03:00"},
+                decision="selected",
+                decision_reason="первый проход",
+            )
+            second_uid = mod.append_signal_observation_decision(
+                {**candidate, "observed_at": "2026-04-24T10:00:15+03:00", "observed_price": 80.2},
+                decision="selected",
+                decision_reason="второй проход",
+            )
+            rows = mod.load_signal_observations(mod.TRADE_DB_PATH)
+
+        self.assertEqual(first_uid, second_uid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["decision_reason"], "второй проход")
+        self.assertEqual(rows[0]["observed_price"], 80.2)
 
     def test_mark_cycle_deferred_candidate_persists_learning_reason(self) -> None:
         with TemporaryDirectory() as temp_dir, patch.object(mod, "ALLOCATOR_DECISIONS_PATH", mod.Path(temp_dir) / "allocator_decisions.jsonl"), patch.object(
@@ -832,13 +863,48 @@ class DailyRiskLimitTests(unittest.TestCase):
                 decision_reason="не хватило ГО",
                 horizon_minutes=15,
             )
-            with patch.object(mod, "get_last_price", return_value=7.10):
+            with patch.object(
+                mod,
+                "get_price_near_observation_horizon",
+                return_value=(7.10, mod.datetime(2026, 4, 24, 10, 15, tzinfo=mod.MOSCOW_TZ)),
+            ), patch.object(mod, "get_last_price", side_effect=AssertionError("live price should not be used")):
                 updated = mod.update_signal_observation_outcomes(None, self.config, [instrument], horizon_minutes=15)
             rows = mod.load_signal_observations(mod.TRADE_DB_PATH)
 
         self.assertEqual(updated, 1)
         self.assertTrue(rows[0]["favorable"])
         self.assertGreater(rows[0]["move_pct"], 0)
+        self.assertEqual(rows[0]["evaluated_at"], "2026-04-24T10:15:00+03:00")
+
+    def test_update_signal_observation_outcomes_waits_for_horizon_snapshot(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="UCM6", figi="FIGI", display_name="USD/CNY")
+        old_time = (mod.datetime.now(mod.UTC) - mod.timedelta(minutes=20)).astimezone(mod.MOSCOW_TZ).isoformat()
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trade.sqlite3"):
+            mod.append_signal_observation_decision(
+                {
+                    "symbol": "UCM6",
+                    "signal": "SHORT",
+                    "strategy_name": "breakdown_continuation",
+                    "observed_at": old_time,
+                    "observed_price": 7.20,
+                    "priority_score": 0.8,
+                    "entry_edge_score": 0.82,
+                    "candle_time": "2026-04-24 10:00",
+                },
+                decision="deferred",
+                decision_reason="не хватило ГО",
+                horizon_minutes=15,
+            )
+            with patch.object(mod, "get_price_near_observation_horizon", return_value=None), patch.object(
+                mod, "get_last_price", side_effect=AssertionError("live price should not be used")
+            ):
+                updated = mod.update_signal_observation_outcomes(None, self.config, [instrument], horizon_minutes=15)
+            rows = mod.load_signal_observations(mod.TRADE_DB_PATH)
+
+        self.assertEqual(updated, 0)
+        self.assertEqual(rows[0]["evaluated_at"], "")
+        self.assertIsNone(rows[0]["current_price"])
 
     def test_capital_rotation_selects_strong_margin_blocked_candidate_over_weak_open_position(self) -> None:
         watchlist = [
