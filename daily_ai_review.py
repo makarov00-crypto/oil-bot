@@ -9,7 +9,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from trade_storage import load_trade_rows as load_trade_rows_from_storage
+from trade_storage import (
+    load_signal_observations as load_signal_observations_from_storage,
+    load_trade_rows as load_trade_rows_from_storage,
+)
 from zoneinfo import ZoneInfo
 
 import requests
@@ -48,6 +51,7 @@ SYSTEM_INSTRUCTIONS = """Ты рыночный аналитик для фьюч�
    - где движение было, но бот использовал его слабо
    - где был лишний вход/выход
    - где бот вышел слишком рано или вошёл поздно
+   - какие выбранные или отложенные сигналы не подтвердились / подтвердились по журналу наблюдений
 5. Текущая картина на конец среза:
    - какие инструменты ещё выглядят направленно
    - где бот уже в позиции
@@ -58,6 +62,7 @@ SYSTEM_INSTRUCTIONS = """Ты рыночный аналитик для фьюч�
 - Не делай разделы "лучшие/худшие инструменты", "ошибки", "что менять завтра", "уровень риска".
 - Не оценивай работу бота как правильную или неправильную в общем виде.
 - Анализируй связку: рынок -> сигнал/движение -> действие бота.
+- Если есть блок наблюдений сигналов, используй его как факты короткой проверки сигнала, а не как окончательную истину.
 - Если данных недостаточно, скажи это явно.
 - Не делай общих выводов о всей системе по одному инструменту.
 - Ответ дай на русском языке, в Markdown.
@@ -183,6 +188,14 @@ def load_trade_rows(base_dir: Path, target_day: date) -> list[dict[str, Any]]:
             item["_dt"] = dt
             rows.append(item)
     return rows
+
+
+def load_signal_observation_rows(base_dir: Path, target_day: date) -> list[dict[str, Any]]:
+    try:
+        rows = load_signal_observations_from_storage(get_trade_db_path(base_dir), target_day=target_day, limit=500)
+    except Exception:
+        return []
+    return [dict(row) for row in rows]
 
 
 def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
@@ -318,6 +331,102 @@ def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
     }
 
 
+def signal_observation_context_value(row: dict[str, Any], key: str, default: str = "-") -> str:
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return default
+    value = str(context.get(key) or "").strip()
+    return value or default
+
+
+def signal_observation_combo_label(row: dict[str, Any]) -> str:
+    symbol = str(row.get("symbol") or "-")
+    signal = str(row.get("signal") or "-").upper()
+    strategy = str(row.get("strategy") or "-")
+    regime = str(row.get("market_regime") or "").strip() or signal_observation_context_value(row, "market_regime")
+    setup = str(row.get("setup_quality") or "").strip() or signal_observation_context_value(row, "setup_quality_label")
+    edge = signal_observation_context_value(row, "entry_edge_label", "")
+    parts = [symbol, signal, strategy]
+    if regime and regime != "-":
+        parts.append(f"режим {regime}")
+    if setup and setup != "-":
+        parts.append(f"сетап {setup}")
+    if edge:
+        parts.append(f"edge {edge}")
+    return " | ".join(parts)
+
+
+def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) -> dict[str, Any]:
+    evaluated = [row for row in rows if row.get("evaluated_at")]
+    favorable = [row for row in evaluated if row.get("favorable") is True]
+    pending = [row for row in rows if not row.get("evaluated_at")]
+    selected = [row for row in rows if str(row.get("decision") or "") == "selected"]
+    deferred = [row for row in rows if str(row.get("decision") or "") == "deferred"]
+    deferred_favorable = [row for row in deferred if row.get("favorable") is True]
+    selected_unfavorable = [
+        row for row in selected if row.get("evaluated_at") and row.get("favorable") is False
+    ]
+
+    groups: dict[str, dict[str, Any]] = {}
+    for row in evaluated:
+        label = signal_observation_combo_label(row)
+        group = groups.setdefault(
+            label,
+            {
+                "label": label,
+                "evaluated": 0,
+                "favorable": 0,
+                "selected": 0,
+                "deferred": 0,
+                "move_sum": 0.0,
+            },
+        )
+        group["evaluated"] += 1
+        if row.get("favorable") is True:
+            group["favorable"] += 1
+        if str(row.get("decision") or "") == "selected":
+            group["selected"] += 1
+        if str(row.get("decision") or "") == "deferred":
+            group["deferred"] += 1
+        try:
+            group["move_sum"] += float(row.get("move_pct") or 0.0)
+        except Exception:
+            pass
+
+    combos: list[dict[str, Any]] = []
+    for group in groups.values():
+        count = int(group["evaluated"] or 0)
+        hit_count = int(group["favorable"] or 0)
+        group["confirmation_rate"] = (hit_count / count * 100.0) if count else 0.0
+        group["avg_move_pct"] = (float(group.pop("move_sum") or 0.0) / count) if count else 0.0
+        group["sample_warning"] = count < 5
+        combos.append(group)
+
+    strongest = sorted(
+        combos,
+        key=lambda item: (float(item["confirmation_rate"]), int(item["evaluated"]), float(item["avg_move_pct"])),
+        reverse=True,
+    )[:limit]
+    weakest = sorted(
+        combos,
+        key=lambda item: (float(item["confirmation_rate"]), -int(item["evaluated"]), float(item["avg_move_pct"])),
+    )[:limit]
+
+    return {
+        "total": len(rows),
+        "evaluated": len(evaluated),
+        "pending": len(pending),
+        "favorable": len(favorable),
+        "favorable_rate": (len(favorable) / len(evaluated) * 100.0) if evaluated else 0.0,
+        "selected": len(selected),
+        "deferred": len(deferred),
+        "deferred_favorable": len(deferred_favorable),
+        "selected_unfavorable": len(selected_unfavorable),
+        "strongest": strongest,
+        "weakest": weakest,
+    }
+
+
 def build_market_observations(trades: list[ClosedTrade], states: dict[str, dict[str, Any]]) -> list[str]:
     notes: list[str] = []
     by_symbol: dict[str, list[ClosedTrade]] = defaultdict(list)
@@ -349,9 +458,13 @@ def build_prompt(
     states: dict[str, dict[str, Any]],
     closed_trades: list[ClosedTrade],
     recent_closed_trades: list[ClosedTrade] | None = None,
+    signal_observations: list[dict[str, Any]] | None = None,
+    recent_signal_observations: list[dict[str, Any]] | None = None,
 ) -> str:
     summary = summarize_closed_trades(closed_trades)
     recent_summary = summarize_closed_trades(recent_closed_trades or closed_trades)
+    signal_summary = summarize_signal_observations(signal_observations or [])
+    recent_signal_summary = summarize_signal_observations(recent_signal_observations or signal_observations or [])
     active_news = list(news.get("active_biases") or [])
     market_notes = build_market_observations(closed_trades, states)
 
@@ -434,6 +547,31 @@ def build_prompt(
     if not recent_negative_lines:
         recent_negative_lines = ["- Нет устойчиво токсичных сочетаний за период."]
 
+    signal_observation_lines = [
+        f"- всего наблюдений: {signal_summary['total']}",
+        f"- проверено: {signal_summary['evaluated']}, ждёт проверки: {signal_summary['pending']}",
+        f"- подтвердились: {signal_summary['favorable']} ({signal_summary['favorable_rate']:.1f}%)",
+        f"- выбранных сигналов: {signal_summary['selected']}, отложенных сигналов: {signal_summary['deferred']}",
+        f"- отложенные, которые подтвердились: {signal_summary['deferred_favorable']}",
+        f"- выбранные, которые не подтвердились: {signal_summary['selected_unfavorable']}",
+    ]
+
+    def combo_lines(items: list[dict[str, Any]]) -> list[str]:
+        lines: list[str] = []
+        for item in items:
+            warning = ", мало данных" if item.get("sample_warning") else ""
+            lines.append(
+                f"- {item['label']}: подтверждение {float(item['confirmation_rate']):.1f}%, "
+                f"проверок {int(item['evaluated'])}{warning}, среднее движение {float(item['avg_move_pct']):.2f}%, "
+                f"выбрано {int(item['selected'])}, отложено {int(item['deferred'])}"
+            )
+        return lines or ["- Недостаточно проверенных наблюдений."]
+
+    daily_strong_signal_lines = combo_lines(signal_summary["strongest"])
+    daily_weak_signal_lines = combo_lines(signal_summary["weakest"])
+    recent_strong_signal_lines = combo_lines(recent_signal_summary["strongest"])
+    recent_weak_signal_lines = combo_lines(recent_signal_summary["weakest"])
+
     focal_points_lines = []
     best_regime = summary.get("best_regime")
     worst_regime = summary.get("worst_regime")
@@ -507,6 +645,21 @@ def build_prompt(
         "",
         "Токсичные сочетания за последние 3 дня:",
         *recent_negative_lines,
+        "",
+        "Наблюдения сигналов за день:",
+        *signal_observation_lines,
+        "",
+        "Лучшие связки сигналов за день:",
+        *daily_strong_signal_lines,
+        "",
+        "Слабые связки сигналов за день:",
+        *daily_weak_signal_lines,
+        "",
+        "Лучшие связки сигналов за последние 3 дня:",
+        *recent_strong_signal_lines,
+        "",
+        "Слабые связки сигналов за последние 3 дня:",
+        *recent_weak_signal_lines,
         "",
         "Открытые позиции:",
         *open_positions_lines,
@@ -595,7 +748,20 @@ def build_review_prompt(base_dir: Path, target_day: date) -> str:
     for offset in range(3):
         recent_rows.extend(load_trade_rows(base_dir, target_day - timedelta(days=offset)))
     recent_closed_trades = pair_closed_trades(recent_rows)
-    return build_prompt(target_day, portfolio, news, states, closed_trades, recent_closed_trades)
+    signal_observations = load_signal_observation_rows(base_dir, target_day)
+    recent_signal_observations: list[dict[str, Any]] = []
+    for offset in range(3):
+        recent_signal_observations.extend(load_signal_observation_rows(base_dir, target_day - timedelta(days=offset)))
+    return build_prompt(
+        target_day,
+        portfolio,
+        news,
+        states,
+        closed_trades,
+        recent_closed_trades,
+        signal_observations,
+        recent_signal_observations,
+    )
 
 
 def main() -> int:

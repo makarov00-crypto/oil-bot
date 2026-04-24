@@ -117,6 +117,64 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("Сильные сочетания за последние 3 дня:", prompt)
         self.assertIn("Токсичные сочетания за последние 3 дня:", prompt)
 
+    def test_build_prompt_includes_signal_observation_learning_sections(self) -> None:
+        signal_rows = [
+            {
+                "observed_at": "2026-04-24T10:15:00+03:00",
+                "evaluated_at": "2026-04-24T10:30:00+03:00",
+                "symbol": "BRK6",
+                "signal": "LONG",
+                "strategy": "trend_rollover",
+                "decision": "selected",
+                "market_regime": "trend_expansion",
+                "setup_quality": "strong",
+                "move_pct": -1.6,
+                "favorable": False,
+                "context": {"entry_edge_label": "high"},
+            },
+            {
+                "observed_at": "2026-04-24T11:15:00+03:00",
+                "evaluated_at": "2026-04-24T11:30:00+03:00",
+                "symbol": "UCM6",
+                "signal": "SHORT",
+                "strategy": "opening_range_breakout",
+                "decision": "deferred",
+                "market_regime": "trend_expansion",
+                "setup_quality": "strong",
+                "move_pct": 0.7,
+                "favorable": True,
+                "context": {"entry_edge_label": "confirmed"},
+            },
+        ]
+
+        prompt = review.build_prompt(
+            target_day=date(2026, 4, 24),
+            portfolio={
+                "bot_realized_pnl_rub": 0.0,
+                "bot_estimated_variation_margin_rub": 0.0,
+                "bot_total_pnl_rub": 0.0,
+                "open_positions_count": 0,
+                "total_portfolio_rub": 50000.0,
+            },
+            news={"active_biases": []},
+            states={},
+            closed_trades=[],
+            recent_closed_trades=[],
+            signal_observations=signal_rows,
+            recent_signal_observations=signal_rows,
+        )
+
+        self.assertIn("Наблюдения сигналов за день:", prompt)
+        self.assertIn("- всего наблюдений: 2", prompt)
+        self.assertIn("- подтвердились: 1 (50.0%)", prompt)
+        self.assertIn("- отложенные, которые подтвердились: 1", prompt)
+        self.assertIn("- выбранные, которые не подтвердились: 1", prompt)
+        self.assertIn("Лучшие связки сигналов за день:", prompt)
+        self.assertIn("UCM6 | SHORT | opening_range_breakout", prompt)
+        self.assertIn("Слабые связки сигналов за день:", prompt)
+        self.assertIn("BRK6 | LONG | trend_rollover", prompt)
+        self.assertIn("Слабые связки сигналов за последние 3 дня:", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
