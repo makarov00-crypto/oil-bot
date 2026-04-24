@@ -4472,8 +4472,108 @@ def calculate_entry_priority_score(
         score -= 0.12
         reasons.append("recovery mode")
 
+    learning_adjustment, learning_reason = calculate_signal_learning_priority_adjustment(
+        state,
+        symbol,
+        strategy_name,
+    )
+    if learning_adjustment:
+        score += learning_adjustment
+    if learning_reason:
+        reasons.append(learning_reason)
+
     score = clamp_float(score, 0.0, 1.0)
     return score, ", ".join(reason for reason in reasons if reason) or "нейтральный приоритет"
+
+
+def calculate_signal_learning_priority_adjustment(
+    state: InstrumentState,
+    symbol: str,
+    strategy_name: str,
+    *,
+    lookback_days: int = 3,
+    min_evaluated: int = 5,
+) -> tuple[float, str]:
+    signal = str(state.last_signal or "").strip().upper()
+    if signal not in {"LONG", "SHORT"}:
+        return 0.0, ""
+
+    edge_label = str(state.last_entry_edge_label or "").strip().lower()
+    edge_score = float(state.last_entry_edge_score or 0.0)
+    market_regime = str(state.last_market_regime or "").strip()
+    setup_quality = str(state.last_setup_quality_label or "").strip()
+
+    rows: list[dict[str, Any]] = []
+    today = datetime.now(MOSCOW_TZ).date()
+    for offset in range(max(1, lookback_days)):
+        try:
+            rows.extend(load_signal_observations(TRADE_DB_PATH, target_day=today - timedelta(days=offset), limit=500))
+        except Exception as error:
+            logging.info("signal_learning_history_unavailable symbol=%s error=%s", symbol, error)
+            return 0.0, ""
+
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        if not row.get("evaluated_at"):
+            continue
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        row_edge = str((context or {}).get("entry_edge_label") or "").strip().lower()
+        if (
+            str(row.get("symbol") or "").upper() == symbol.upper()
+            and str(row.get("signal") or "").upper() == signal
+            and str(row.get("strategy") or "") == str(strategy_name or "")
+            and str(row.get("market_regime") or "").strip() == market_regime
+            and str(row.get("setup_quality") or "").strip() == setup_quality
+            and row_edge == edge_label
+        ):
+            matched.append(row)
+
+    evaluated = len(matched)
+    if evaluated < min_evaluated:
+        if evaluated > 0:
+            return 0.0, f"обучение связки: {evaluated} наблюд., мало данных"
+        return 0.0, ""
+
+    favorable = sum(1 for row in matched if row.get("favorable") is True)
+    confirmation_rate = favorable / evaluated
+    move_sum = 0.0
+    for row in matched:
+        try:
+            move_sum += float(row.get("move_pct") or 0.0)
+        except Exception:
+            pass
+    avg_move_pct = move_sum / evaluated if evaluated else 0.0
+
+    sample_weight = 0.65 if evaluated < 10 else 1.0
+    adjustment = 0.0
+    if confirmation_rate >= 0.70 and avg_move_pct > 0.0:
+        if edge_score < 0.45:
+            return 0.0, (
+                f"обучение связки: {confirmation_rate * 100:.0f}% подтверждений, "
+                "но текущий edge слабый, бонус не применён"
+            )
+        adjustment = 0.03 + min(0.04, (confirmation_rate - 0.70) / 0.30 * 0.04) + min(0.02, avg_move_pct / 2.0)
+        adjustment = min(0.08, adjustment * sample_weight)
+    elif confirmation_rate <= 0.35 or avg_move_pct < -0.25:
+        adjustment = -(
+            0.03
+            + min(0.05, max(0.0, 0.35 - confirmation_rate) / 0.35 * 0.05)
+            + min(0.02, abs(min(avg_move_pct, 0.0)) / 2.0)
+        )
+        adjustment = max(-0.10, adjustment * sample_weight)
+
+    if abs(adjustment) < 0.005:
+        return 0.0, (
+            f"обучение связки нейтрально: {confirmation_rate * 100:.0f}% подтверждений, "
+            f"{evaluated} наблюд., среднее движение {avg_move_pct:.2f}%"
+        )
+
+    direction = "бонус" if adjustment > 0 else "штраф"
+    return adjustment, (
+        f"обучение связки: {direction} {adjustment:+.2f}, "
+        f"{confirmation_rate * 100:.0f}% подтверждений, {evaluated} наблюд., "
+        f"среднее движение {avg_move_pct:.2f}%"
+    )
 
 
 def get_candidate_correlation_bucket(candidate: dict[str, Any]) -> str:

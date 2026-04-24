@@ -539,6 +539,119 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertIn("высокое качество входа", reason)
         self.assertIn("режим подтверждён", reason)
 
+    def test_entry_priority_score_penalizes_bad_signal_learning_combo(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.83,
+            last_entry_edge_score=0.82,
+            last_entry_edge_label="high",
+        )
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trades.sqlite3"), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "")
+        ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            for index in range(10):
+                mod.append_signal_observation(
+                    mod.TRADE_DB_PATH,
+                    {
+                        "observed_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "evaluated_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "symbol": "BRK6",
+                        "signal": "LONG",
+                        "strategy": "trend_rollover",
+                        "decision": "selected",
+                        "market_regime": "trend_expansion",
+                        "setup_quality": "strong",
+                        "move_pct": -1.2 - index * 0.01,
+                        "favorable": False,
+                        "context": {"entry_edge_label": "high"},
+                    },
+                )
+            score, reason = mod.calculate_entry_priority_score(state, "BRK6", "trend_rollover")
+
+        self.assertLess(score, 0.72)
+        self.assertIn("обучение связки: штраф", reason)
+        self.assertIn("0% подтверждений", reason)
+
+    def test_entry_priority_score_boosts_good_signal_learning_combo(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="SHORT",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.76,
+            last_entry_edge_score=0.79,
+            last_entry_edge_label="confirmed",
+        )
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trades.sqlite3"), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "")
+        ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            for _ in range(8):
+                mod.append_signal_observation(
+                    mod.TRADE_DB_PATH,
+                    {
+                        "observed_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "evaluated_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "symbol": "UCM6",
+                        "signal": "SHORT",
+                        "strategy": "opening_range_breakout",
+                        "decision": "selected",
+                        "market_regime": "trend_expansion",
+                        "setup_quality": "strong",
+                        "move_pct": 0.9,
+                        "favorable": True,
+                        "context": {"entry_edge_label": "confirmed"},
+                    },
+                )
+            score, reason = mod.calculate_entry_priority_score(state, "UCM6", "opening_range_breakout")
+
+        self.assertGreater(score, 0.76)
+        self.assertIn("обучение связки: бонус", reason)
+        self.assertIn("100% подтверждений", reason)
+
+    def test_entry_priority_score_ignores_small_signal_learning_sample(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.83,
+            last_entry_edge_score=0.82,
+            last_entry_edge_label="high",
+        )
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trades.sqlite3"), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "")
+        ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            for _ in range(2):
+                mod.append_signal_observation(
+                    mod.TRADE_DB_PATH,
+                    {
+                        "observed_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "evaluated_at": mod.datetime.now(mod.MOSCOW_TZ).isoformat(),
+                        "symbol": "BRK6",
+                        "signal": "LONG",
+                        "strategy": "trend_rollover",
+                        "decision": "selected",
+                        "market_regime": "trend_expansion",
+                        "setup_quality": "strong",
+                        "move_pct": -2.0,
+                        "favorable": False,
+                        "context": {"entry_edge_label": "high"},
+                    },
+                )
+            score, reason = mod.calculate_entry_priority_score(state, "BRK6", "trend_rollover")
+
+        self.assertGreater(score, 0.72)
+        self.assertIn("мало данных", reason)
+
     def test_rank_cycle_entry_candidates_keeps_only_top_priority_set(self) -> None:
         candidates = [
             {"symbol": "BRK6", "priority_score": 0.86, "entry_edge_score": 0.82, "regime_confidence": 0.81, "allocator_quantity": 1},
