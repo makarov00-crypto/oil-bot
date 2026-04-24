@@ -83,7 +83,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertEqual(review["closed_count"], 3)
         self.assertEqual(review["closed_total_pnl_rub"], 120.24)
-        self.assertEqual([row["entry_time"] for row in review["closed_reviews"]], ["13.04 06:25:33"] * 3)
+        self.assertEqual([row["entry_time"] for row in review["closed_reviews"]], ["13.04 09:25:33"] * 3)
         self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong | качество входа высокое")
         self.assertEqual(review["best_edge"]["label"], "high")
         self.assertEqual(
@@ -175,6 +175,46 @@ class DashboardTradeReviewTests(unittest.TestCase):
         )
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_trade_review_formats_iso_time_and_long_reason(self) -> None:
+        long_reason = (
+            "Сигнал SHORT (range_break_continuation): старший ТФ=SHORT; пробой вниз диапазона 11.0130: да; "
+            "мягкий пробой вниз: да; продолжение вниз после слома: да; цена ниже EMA20 и EMA50: да; "
+            "RSI=42.10 в рабочей зоне 28-58; объём достаточный; импульс свечи есть; MACD поддерживает снижение."
+        )
+        rows = [
+            {
+                "time": "2026-04-25T00:00:05.411333+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 11.01,
+                "strategy": "range_break_continuation",
+                "reason": long_reason,
+            },
+            {
+                "time": "2026-04-25T00:15:05.411333+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 10.99,
+                "pnl_rub": 10.0,
+                "net_pnl_rub": 10.0,
+                "strategy": "range_break_continuation",
+                "reason": long_reason,
+            },
+        ]
+
+        review = dashboard.build_trade_review(rows)
+
+        self.assertEqual(review["closed_reviews"][0]["entry_time"], "25.04 00:00:05")
+        self.assertEqual(review["closed_reviews"][0]["exit_time"], "25.04 00:15:05")
+        self.assertIn("Сигнал SHORT (range_break_continuation):", review["closed_reviews"][0]["exit_reason"])
+        self.assertIn("пробой вниз диапазона 11.0130: да", review["closed_reviews"][0]["exit_reason"])
+        self.assertTrue(review["closed_reviews"][0]["exit_reason"].endswith("..."))
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_allocator_decisions_for_day_filters_and_labels_rows(self) -> None:
         with TemporaryDirectory() as temp_dir:
             decisions_path = dashboard.Path(temp_dir) / "allocator_decisions.jsonl"
@@ -260,25 +300,75 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     },
                 },
             )
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T12:15:00+03:00",
+                    "evaluated_at": "2026-04-24T12:30:00+03:00",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "strategy": "momentum_breakout",
+                    "decision": "deferred",
+                    "decision_reason": "ещё один хороший сигнал",
+                    "priority_score": 0.88,
+                    "market_regime": "trend_expansion",
+                    "setup_quality": "strong",
+                    "observed_price": 80.2,
+                    "current_price": 80.9,
+                    "move_pct": 0.87,
+                    "favorable": True,
+                    "context": {
+                        "entry_edge_label": "confirmed",
+                        "learning_adjustment": 0.06,
+                        "learning_reason": "обучение связки: бонус +0.06, 70% подтверждений, 7 наблюд.",
+                    },
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T12:45:00+03:00",
+                    "evaluated_at": "2026-04-24T13:00:00+03:00",
+                    "symbol": "UCM6",
+                    "signal": "SHORT",
+                    "strategy": "opening_range_breakout",
+                    "decision": "selected",
+                    "decision_reason": "ещё один слабый вход",
+                    "priority_score": 0.80,
+                    "market_regime": "range_chop",
+                    "setup_quality": "fragile",
+                    "observed_price": 7.18,
+                    "current_price": 7.24,
+                    "move_pct": -0.84,
+                    "favorable": False,
+                    "context": {
+                        "entry_edge_label": "fragile",
+                        "learning_adjustment": -0.08,
+                        "learning_reason": "обучение связки: штраф -0.08, 18% подтверждений, 6 наблюд.",
+                    },
+                },
+            )
 
             with patch.object(dashboard, "TRADE_DB_PATH", db_path):
                 summary = dashboard.load_signal_observation_summary_for_day(date(2026, 4, 24))
 
-        self.assertEqual(summary["total"], 2)
-        self.assertEqual(summary["evaluated"], 2)
-        self.assertEqual(summary["favorable"], 1)
+        self.assertEqual(summary["total"], 4)
+        self.assertEqual(summary["evaluated"], 4)
+        self.assertEqual(summary["favorable"], 2)
         self.assertEqual(summary["favorable_rate"], 50.0)
-        self.assertEqual(summary["deferred_favorable"], 1)
-        self.assertEqual(summary["selected_unfavorable"], 1)
-        self.assertEqual(summary["learning_bonus_count"], 1)
-        self.assertEqual(summary["learning_penalty_count"], 1)
+        self.assertEqual(summary["deferred_favorable"], 2)
+        self.assertEqual(summary["selected_unfavorable"], 2)
+        self.assertEqual(summary["learning_bonus_count"], 2)
+        self.assertEqual(summary["learning_penalty_count"], 2)
         self.assertEqual(summary["items"][0]["decision_display"], "выбран")
-        self.assertEqual(summary["items"][0]["learning_adjustment"], -0.07)
-        self.assertIn("штраф -0.07", summary["items"][0]["learning_reason"])
-        self.assertEqual(summary["learning_combos"]["strongest"][0]["bonus_count"], 1)
-        self.assertEqual(summary["learning_combos"]["strongest"][0]["count"], 1)
-        self.assertEqual(summary["learning_combos"]["weakest"][0]["penalty_count"], 1)
-        self.assertEqual(summary["learning_combos"]["weakest"][0]["count"], 1)
+        self.assertEqual(summary["items"][0]["learning_adjustment"], -0.08)
+        self.assertIn("штраф -0.08", summary["items"][0]["learning_reason"])
+        self.assertEqual(summary["learning_combos"]["strongest"][0]["bonus_count"], 2)
+        self.assertEqual(summary["learning_combos"]["strongest"][0]["count"], 2)
+        self.assertEqual(summary["learning_combos"]["weakest"][0]["penalty_count"], 2)
+        self.assertEqual(summary["learning_combos"]["weakest"][0]["count"], 2)
+        self.assertTrue(any("Снижать приоритет связки" in item for item in summary["actions"]))
+        self.assertTrue(any("Быстрее пропускать связку" in item for item in summary["actions"]))
         self.assertEqual(summary["combos"]["strongest"][0]["symbol"], "BRK6")
         self.assertEqual(summary["combos"]["strongest"][0]["confirmation_rate"], 100.0)
         self.assertEqual(summary["combos"]["weakest"][0]["symbol"], "UCM6")

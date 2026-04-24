@@ -405,6 +405,12 @@ struct TradesScreen: View {
                 emptyText: "Пока нет устойчивых learning-штрафов.",
                 items: Array((summary?.learningCombos?.weakest ?? []).prefix(3))
             )
+            reviewInfoBlock(
+                title: "Что делать сейчас",
+                rows: Array((summary?.actions ?? ["Явных действий по learning-данным пока нет."]).prefix(3)).enumerated().map {
+                    ("Шаг \($0.offset + 1)", $0.element.replacingOccurrences(of: "- ", with: "", options: .anchored))
+                }
+            )
 
             if items.isEmpty {
                 Text("Новые строки появятся после выбранных и отложенных сигналов.")

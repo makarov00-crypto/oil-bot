@@ -523,6 +523,35 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
     }
 
 
+def build_signal_learning_actions(summary: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    for item in summary.get("learning_penalty_combos") or []:
+        if int(item.get("count") or 0) < 2:
+            continue
+        actions.append(
+            f"- Снижать приоритет связки {item['label']}: штрафов {int(item['penalty_count'])}, "
+            f"подтверждение {float(item['confirmation_rate']):.1f}%, средняя поправка {float(item['avg_adjustment']):+.2f}."
+        )
+    for item in summary.get("learning_bonus_combos") or []:
+        if int(item.get("count") or 0) < 2:
+            continue
+        actions.append(
+            f"- Быстрее пропускать связку {item['label']}: бонусов {int(item['bonus_count'])}, "
+            f"подтверждение {float(item['confirmation_rate']):.1f}%, средняя поправка {float(item['avg_adjustment']):+.2f}."
+        )
+    deferred_favorable = int(summary.get("deferred_favorable") or 0)
+    selected_unfavorable = int(summary.get("selected_unfavorable") or 0)
+    if deferred_favorable >= 2 and deferred_favorable > selected_unfavorable:
+        actions.append(
+            "- Проверить излишнюю осторожность аллокатора: хороших отложенных сигналов больше, чем слабых выбранных."
+        )
+    if selected_unfavorable >= 2 and selected_unfavorable > deferred_favorable:
+        actions.append(
+            "- Ужесточить отбор слабых выбранных сигналов: неподтвердившихся входов больше, чем упущенных хороших движений."
+        )
+    return actions[:5] or ["- Явных операционных действий по learning-данным пока нет."]
+
+
 def build_market_observations(trades: list[ClosedTrade], states: dict[str, dict[str, Any]]) -> list[str]:
     notes: list[str] = []
     by_symbol: dict[str, list[ClosedTrade]] = defaultdict(list)
@@ -685,6 +714,7 @@ def build_prompt(
     daily_learning_penalty_lines = signal_summary["learning_penalty_examples"] or ["- Штрафов обучения за день не было."]
     recent_learning_bonus_combo_lines = learning_combo_lines(recent_signal_summary["learning_bonus_combos"])
     recent_learning_penalty_combo_lines = learning_combo_lines(recent_signal_summary["learning_penalty_combos"])
+    learning_action_lines = build_signal_learning_actions(recent_signal_summary)
 
     focal_points_lines = []
     best_regime = summary.get("best_regime")
@@ -780,6 +810,9 @@ def build_prompt(
         "",
         "Какие связки обучение чаще режет за последние 3 дня:",
         *recent_learning_penalty_combo_lines,
+        "",
+        "Операционные выводы по learning-наблюдениям:",
+        *learning_action_lines,
         "",
         "Лучшие связки сигналов за последние 3 дня:",
         *recent_strong_signal_lines,

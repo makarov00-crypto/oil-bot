@@ -190,6 +190,8 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("средняя поправка +0.05", prompt)
         self.assertIn("Какие связки обучение чаще режет за последние 3 дня:", prompt)
         self.assertIn("средняя поправка -0.08", prompt)
+        self.assertIn("Операционные выводы по learning-наблюдениям:", prompt)
+        self.assertIn("Явных операционных действий по learning-данным пока нет", prompt)
         self.assertIn("Слабые связки сигналов за последние 3 дня:", prompt)
 
 

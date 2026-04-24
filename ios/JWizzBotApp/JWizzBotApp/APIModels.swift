@@ -491,6 +491,7 @@ struct SignalObservationSummary: Decodable {
     let learningPenaltyCount: Int
     let combos: SignalObservationCombos?
     let learningCombos: SignalObservationLearningCombos?
+    let actions: [String]?
     let items: [SignalObservationItem]
 
     enum CodingKeys: String, CodingKey {
@@ -507,6 +508,7 @@ struct SignalObservationSummary: Decodable {
         case learningPenaltyCount = "learning_penalty_count"
         case combos
         case learningCombos = "learning_combos"
+        case actions
         case items
     }
 }

@@ -1487,8 +1487,42 @@ def _summarize_signal_observation_learning_combos(rows: list[dict[str, Any]], li
     }
 
 
+def _build_signal_learning_actions(summary: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    for item in summary.get("learning_penalty_combos") or []:
+        if int(item.get("count") or 0) < 2:
+            continue
+        actions.append(
+            f"Снижать приоритет связки {item['label']}: штрафов {int(item['penalty_count'])}, "
+            f"подтверждение {float(item['confirmation_rate']):.1f}%, средняя поправка {float(item['avg_adjustment']):+.2f}."
+        )
+    for item in summary.get("learning_bonus_combos") or []:
+        if int(item.get("count") or 0) < 2:
+            continue
+        actions.append(
+            f"Быстрее пропускать связку {item['label']}: бонусов {int(item['bonus_count'])}, "
+            f"подтверждение {float(item['confirmation_rate']):.1f}%, средняя поправка {float(item['avg_adjustment']):+.2f}."
+        )
+    deferred_favorable = int(summary.get("deferred_favorable") or 0)
+    selected_unfavorable = int(summary.get("selected_unfavorable") or 0)
+    if deferred_favorable >= 2 and deferred_favorable > selected_unfavorable:
+        actions.append(
+            "Проверить излишнюю осторожность аллокатора: хорошие отложенные сигналы встречаются чаще, чем слабые выбранные."
+        )
+    if selected_unfavorable >= 2 and selected_unfavorable > deferred_favorable:
+        actions.append(
+            "Ужесточить отбор слабых выбранных сигналов: неподтвердившихся входов больше, чем упущенных хороших движений."
+        )
+    return actions[:4]
+
+
 def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -> dict[str, Any]:
     rows = load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day, limit=300)
+    recent_rows: list[dict[str, Any]] = []
+    for offset in range(3):
+        recent_rows.extend(
+            load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day - timedelta(days=offset), limit=300)
+        )
     rows.sort(key=lambda item: str(item.get("observed_at") or ""), reverse=True)
     evaluated = [item for item in rows if item.get("evaluated_at")]
     favorable = [item for item in evaluated if item.get("favorable") is True]
@@ -1519,7 +1553,9 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
         items.append(item)
 
     favorable_rate = round((len(favorable) / len(evaluated)) * 100, 1) if evaluated else 0.0
-    return {
+    learning_combos = _summarize_signal_observation_learning_combos(rows)
+    recent_learning_combos = _summarize_signal_observation_learning_combos(recent_rows, limit=5)
+    summary = {
         "total": len(rows),
         "evaluated": len(evaluated),
         "pending": len(pending),
@@ -1532,9 +1568,13 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
         "learning_bonus_count": len(learning_bonus_rows),
         "learning_penalty_count": len(learning_penalty_rows),
         "combos": _summarize_signal_observation_combos(rows),
-        "learning_combos": _summarize_signal_observation_learning_combos(rows),
+        "learning_combos": learning_combos,
+        "learning_bonus_combos": recent_learning_combos["strongest"],
+        "learning_penalty_combos": recent_learning_combos["weakest"],
         "items": items,
     }
+    summary["actions"] = _build_signal_learning_actions(summary)
+    return summary
 
 
 def stringify_money(value: Any, default: str = "-") -> str:
@@ -1600,6 +1640,35 @@ def trade_context_display(row: dict[str, Any]) -> str:
         except Exception:
             pass
     return " | ".join(parts) if parts else "-"
+
+
+def format_review_time_value(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S")
+    raw = str(value or "").strip()
+    if not raw:
+        return "-"
+    try:
+        return datetime.fromisoformat(raw).astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S")
+    except Exception:
+        return raw
+
+
+def summarize_trade_reason_text(value: Any, max_parts: int = 4, max_length: int = 220) -> str:
+    raw = " ".join(str(value or "-").split())
+    if raw in ("", "-"):
+        return "-"
+    if len(raw) <= max_length and raw.count(";") <= max_parts:
+        return raw
+    prefix, separator, remainder = raw.partition(":")
+    if not separator:
+        return raw[: max_length - 1].rstrip() + "..."
+    parts = [item.strip() for item in remainder.split(";") if item.strip()]
+    visible_parts = parts[:max_parts]
+    compact = f"{prefix.strip()}: {'; '.join(visible_parts)}"
+    if len(parts) > max_parts or len(compact) > max_length:
+        compact = compact[: max_length - 1].rstrip(" ;,") + "..."
+    return compact
 
 
 def trade_context_value(row: dict[str, Any], key: str, default: str = "-") -> str:
@@ -1916,14 +1985,15 @@ def format_trade_review_row(
 ) -> dict[str, Any]:
     entry_dt = open_row.get("_dt") if open_row else None
     exit_dt = close_row.get("_dt")
-    exit_time = exit_dt.strftime("%d.%m %H:%M:%S") if exit_dt else (close_row.get("time") or "-")
+    entry_time = format_review_time_value(entry_dt or ((open_row or {}).get("time") if open_row else ""))
+    exit_time = format_review_time_value(exit_dt or close_row.get("time"))
     resolved_context_display = resolve_trade_context_display(close_row, open_row)
     return {
         "symbol": str(close_row.get("symbol", "")),
         "side": close_row.get("side") or (open_row.get("side") if open_row else ""),
         "strategy": close_row.get("strategy") or (open_row.get("strategy") if open_row else ""),
         "session": close_row.get("session") or (open_row.get("session") if open_row else ""),
-        "entry_time": entry_dt.strftime("%d.%m %H:%M:%S") if entry_dt else "-",
+        "entry_time": entry_time,
         "exit_time": exit_time,
         "close_time": exit_time,
         "entry_price": f"{float(open_row['price']):.4f}" if open_row and open_row.get("price") is not None else "-",
@@ -1933,8 +2003,8 @@ def format_trade_review_row(
         "gross_pnl_rub": stringify_money(close_row.get("gross_pnl_rub")),
         "commission_rub": stringify_money(close_row.get("commission_rub")),
         "net_pnl_rub": stringify_money(close_row.get("net_pnl_rub"), stringify_money(close_row.get("pnl_rub"))),
-        "entry_reason": open_row.get("reason") if open_row else "-",
-        "exit_reason": close_row.get("reason") or "-",
+        "entry_reason": summarize_trade_reason_text(open_row.get("reason") if open_row else "-"),
+        "exit_reason": summarize_trade_reason_text(close_row.get("reason") or "-"),
         "entry_context_display": trade_context_display(open_row or {}),
         "exit_context_display": resolved_context_display,
         "edge_label": resolve_trade_context_value(close_row, open_row, "entry_edge_label"),
@@ -4737,6 +4807,7 @@ def build_dashboard_html() -> str:
       const signalObservationsBody = document.getElementById('signalObservationsBody');
       const signalObservations = data.signal_observations || {};
       const observationItems = Array.isArray(signalObservations.items) ? signalObservations.items : [];
+      const observationActions = Array.isArray(signalObservations.actions) ? signalObservations.actions : [];
       const observationCombos = signalObservations.combos || {};
       const learningCombos = signalObservations.learning_combos || {};
       const strongestCombos = Array.isArray(observationCombos.strongest) ? observationCombos.strongest : [];
@@ -4786,6 +4857,11 @@ def build_dashboard_html() -> str:
           'Чаще режем',
           weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
           weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых learning-штрафов'
+        ),
+        buildReviewRow(
+          'Что делать сейчас',
+          observationActions.length ? observationActions[0] : 'действий пока нет',
+          observationActions.length > 1 ? observationActions.slice(1, 3).join(' | ') : 'нужно накопить ещё learning-наблюдения'
         ),
         buildReviewRow(
           'Лучшие связки',
