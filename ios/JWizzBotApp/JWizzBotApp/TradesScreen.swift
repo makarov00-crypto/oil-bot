@@ -373,6 +373,17 @@ struct TradesScreen: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            signalObservationCombosBlock(
+                title: "Лучшие связки",
+                emptyText: "Нужно больше проверенных сигналов.",
+                items: Array((summary?.combos?.strongest ?? []).prefix(3))
+            )
+            signalObservationCombosBlock(
+                title: "Слабые связки",
+                emptyText: "Пока нет проверенных слабых связок.",
+                items: Array((summary?.combos?.weakest ?? []).prefix(3))
+            )
+
             if items.isEmpty {
                 Text("Новые строки появятся после выбранных и отложенных сигналов.")
                     .font(.caption)
@@ -395,6 +406,37 @@ struct TradesScreen: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 9)
+                        if index < items.count - 1 {
+                            Divider().overlay(Color.white.opacity(0.08))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func signalObservationCombosBlock(title: String, emptyText: String, items: [SignalObservationCombo]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            if items.isEmpty {
+                Text(emptyText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.label)
+                                .font(.caption.weight(.semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(signalObservationComboDetails(item))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 7)
                         if index < items.count - 1 {
                             Divider().overlay(Color.white.opacity(0.08))
                         }
@@ -536,6 +578,11 @@ struct TradesScreen: View {
             parts.append(reason)
         }
         return parts.isEmpty ? "подробности появятся после проверки сигнала" : parts.joined(separator: " · ")
+    }
+
+    private func signalObservationComboDetails(_ item: SignalObservationCombo) -> String {
+        let sampleText = item.sampleWarning ? "\(item.evaluated) пров., мало данных" : "\(item.evaluated) пров."
+        return "\(String(format: "%.1f%%", item.confirmationRate)) · \(sampleText) · среднее движение \(String(format: "%.2f%%", item.avgMovePct)) · выбрано \(item.selected) · отложено \(item.deferred)"
     }
 
     private func displayName(for symbol: String) -> String {

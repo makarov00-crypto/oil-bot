@@ -481,6 +481,7 @@ struct SignalObservationSummary: Decodable {
     let deferred: Int
     let deferredFavorable: Int
     let selectedUnfavorable: Int
+    let combos: SignalObservationCombos?
     let items: [SignalObservationItem]
 
     enum CodingKeys: String, CodingKey {
@@ -493,7 +494,58 @@ struct SignalObservationSummary: Decodable {
         case deferred
         case deferredFavorable = "deferred_favorable"
         case selectedUnfavorable = "selected_unfavorable"
+        case combos
         case items
+    }
+}
+
+struct SignalObservationCombos: Decodable {
+    let strongest: [SignalObservationCombo]
+    let weakest: [SignalObservationCombo]
+}
+
+struct SignalObservationCombo: Decodable, Identifiable {
+    let id: String
+    let label: String
+    let symbol: String?
+    let signal: String?
+    let strategyDisplay: String?
+    let evaluated: Int
+    let favorable: Int
+    let selected: Int
+    let deferred: Int
+    let confirmationRate: Double
+    let avgMovePct: Double
+    let sampleWarning: Bool
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        label = try container.decodeIfPresent(String.self, forKey: .label) ?? "-"
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol)
+        signal = try container.decodeIfPresent(String.self, forKey: .signal)
+        strategyDisplay = try container.decodeIfPresent(String.self, forKey: .strategyDisplay)
+        evaluated = try container.decodeIfPresent(Int.self, forKey: .evaluated) ?? 0
+        favorable = try container.decodeIfPresent(Int.self, forKey: .favorable) ?? 0
+        selected = try container.decodeIfPresent(Int.self, forKey: .selected) ?? 0
+        deferred = try container.decodeIfPresent(Int.self, forKey: .deferred) ?? 0
+        confirmationRate = try container.decodeIfPresent(Double.self, forKey: .confirmationRate) ?? 0
+        avgMovePct = try container.decodeIfPresent(Double.self, forKey: .avgMovePct) ?? 0
+        sampleWarning = try container.decodeIfPresent(Bool.self, forKey: .sampleWarning) ?? false
+        id = "\(label)-\(evaluated)-\(favorable)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case symbol
+        case signal
+        case strategyDisplay = "strategy_display"
+        case evaluated
+        case favorable
+        case selected
+        case deferred
+        case confirmationRate = "confirmation_rate"
+        case avgMovePct = "avg_move_pct"
+        case sampleWarning = "sample_warning"
     }
 }
 

@@ -1313,6 +1313,104 @@ def _format_observation_outcome(row: dict[str, Any]) -> str:
     return "результат не определён"
 
 
+def _signal_observation_context_value(row: dict[str, Any], key: str, default: str = "-") -> str:
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return default
+    value = str(context.get(key) or "").strip()
+    return value or default
+
+
+def _signal_observation_combo_label(row: dict[str, Any]) -> str:
+    symbol = str(row.get("symbol") or "-")
+    signal = str(row.get("signal") or "-").upper()
+    strategy = humanize_strategy_name(str(row.get("strategy") or ""))
+    regime = str(row.get("market_regime") or "").strip() or _signal_observation_context_value(row, "market_regime")
+    setup = str(row.get("setup_quality") or "").strip() or _signal_observation_context_value(row, "setup_quality_label")
+    edge = _signal_observation_context_value(row, "entry_edge_label", "")
+    parts = [
+        INSTRUMENT_DISPLAY_NAMES.get(symbol, symbol),
+        signal,
+        strategy,
+    ]
+    if regime and regime != "-":
+        parts.append(f"режим {regime}")
+    if setup and setup != "-":
+        parts.append(f"сетап {setup}")
+    if edge:
+        parts.append(f"edge {edge}")
+    return " · ".join(parts)
+
+
+def _summarize_signal_observation_combos(rows: list[dict[str, Any]], limit: int = 5) -> dict[str, Any]:
+    groups: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        if not row.get("evaluated_at"):
+            continue
+        symbol = str(row.get("symbol") or "-")
+        signal = str(row.get("signal") or "-").upper()
+        strategy = str(row.get("strategy") or "-")
+        regime = str(row.get("market_regime") or "").strip() or _signal_observation_context_value(row, "market_regime")
+        setup = str(row.get("setup_quality") or "").strip() or _signal_observation_context_value(row, "setup_quality_label")
+        edge = _signal_observation_context_value(row, "entry_edge_label", "")
+        key = (symbol, signal, strategy, regime, setup, edge)
+        group = groups.setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "display_name": INSTRUMENT_DISPLAY_NAMES.get(symbol, symbol),
+                "signal": signal,
+                "strategy": strategy,
+                "strategy_display": humanize_strategy_name(strategy),
+                "market_regime": regime,
+                "setup_quality": setup,
+                "entry_edge_label": edge,
+                "label": _signal_observation_combo_label(row),
+                "evaluated": 0,
+                "favorable": 0,
+                "selected": 0,
+                "deferred": 0,
+                "move_sum": 0.0,
+            },
+        )
+        group["evaluated"] += 1
+        if row.get("favorable") is True:
+            group["favorable"] += 1
+        if str(row.get("decision") or "") == "selected":
+            group["selected"] += 1
+        if str(row.get("decision") or "") == "deferred":
+            group["deferred"] += 1
+        try:
+            group["move_sum"] += float(row.get("move_pct") or 0.0)
+        except Exception:
+            pass
+
+    combos: list[dict[str, Any]] = []
+    for group in groups.values():
+        evaluated = int(group["evaluated"] or 0)
+        favorable = int(group["favorable"] or 0)
+        rate = round((favorable / evaluated) * 100, 1) if evaluated else 0.0
+        avg_move = round(float(group.pop("move_sum") or 0.0) / evaluated, 3) if evaluated else 0.0
+        group["confirmation_rate"] = rate
+        group["avg_move_pct"] = avg_move
+        group["sample_warning"] = evaluated < 5
+        combos.append(group)
+
+    strongest = sorted(
+        combos,
+        key=lambda item: (float(item.get("confirmation_rate") or 0.0), int(item.get("evaluated") or 0), float(item.get("avg_move_pct") or 0.0)),
+        reverse=True,
+    )[:limit]
+    weakest = sorted(
+        combos,
+        key=lambda item: (float(item.get("confirmation_rate") or 0.0), -int(item.get("evaluated") or 0), float(item.get("avg_move_pct") or 0.0)),
+    )[:limit]
+    return {
+        "strongest": strongest,
+        "weakest": weakest,
+    }
+
+
 def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -> dict[str, Any]:
     rows = load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day, limit=300)
     rows.sort(key=lambda item: str(item.get("observed_at") or ""), reverse=True)
@@ -1345,6 +1443,7 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
         "deferred": len(deferred),
         "deferred_favorable": len(deferred_favorable),
         "selected_unfavorable": len(selected_unfavorable),
+        "combos": _summarize_signal_observation_combos(rows),
         "items": items,
     }
 
@@ -4545,6 +4644,16 @@ def build_dashboard_html() -> str:
       const signalObservationsBody = document.getElementById('signalObservationsBody');
       const signalObservations = data.signal_observations || {};
       const observationItems = Array.isArray(signalObservations.items) ? signalObservations.items : [];
+      const observationCombos = signalObservations.combos || {};
+      const strongestCombos = Array.isArray(observationCombos.strongest) ? observationCombos.strongest : [];
+      const weakestCombos = Array.isArray(observationCombos.weakest) ? observationCombos.weakest : [];
+      const formatObservationCombo = (item) => {
+        const rate = Number(item.confirmation_rate || 0);
+        const avgMove = Number(item.avg_move_pct || 0);
+        const sample = Number(item.evaluated || 0);
+        const sampleText = item.sample_warning ? `${sample} пров., мало данных` : `${sample} пров.`;
+        return `${rate.toFixed(1)}% · ${sampleText} · среднее движение ${avgMove.toFixed(2)}%`;
+      };
       const observationSummaryRows = [
         buildReviewRow(
           'Проверено',
@@ -4560,6 +4669,16 @@ def build_dashboard_html() -> str:
           'Слабые выбранные',
           `${signalObservations.selected_unfavorable || 0}`,
           'выбранные сигналы, которые через горизонт не подтвердились'
+        ),
+        buildReviewRow(
+          'Лучшие связки',
+          strongestCombos.length ? strongestCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
+          strongestCombos.length ? strongestCombos.slice(0, 2).map(formatObservationCombo).join(' | ') : 'нужно больше проверенных сигналов'
+        ),
+        buildReviewRow(
+          'Слабые связки',
+          weakestCombos.length ? weakestCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
+          weakestCombos.length ? weakestCombos.slice(0, 2).map(formatObservationCombo).join(' | ') : 'нужно больше проверенных сигналов'
         ),
       ];
       signalObservationsBody.innerHTML = observationItems.length

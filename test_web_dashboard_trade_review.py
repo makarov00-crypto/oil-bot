@@ -219,10 +219,13 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "decision": "deferred",
                     "decision_reason": "не хватило ГО",
                     "priority_score": 0.91,
+                    "market_regime": "trend_expansion",
+                    "setup_quality": "strong",
                     "observed_price": 80.0,
                     "current_price": 80.8,
                     "move_pct": 1.0,
                     "favorable": True,
+                    "context": {"entry_edge_label": "confirmed"},
                 },
             )
             append_signal_observation(
@@ -236,10 +239,13 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "decision": "selected",
                     "decision_reason": "вошёл по приоритету",
                     "priority_score": 0.82,
+                    "market_regime": "range_chop",
+                    "setup_quality": "fragile",
                     "observed_price": 7.20,
                     "current_price": 7.25,
                     "move_pct": -0.69,
                     "favorable": False,
+                    "context": {"entry_edge_label": "fragile"},
                 },
             )
 
@@ -253,6 +259,11 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(summary["deferred_favorable"], 1)
         self.assertEqual(summary["selected_unfavorable"], 1)
         self.assertEqual(summary["items"][0]["decision_display"], "выбран")
+        self.assertEqual(summary["combos"]["strongest"][0]["symbol"], "BRK6")
+        self.assertEqual(summary["combos"]["strongest"][0]["confirmation_rate"], 100.0)
+        self.assertEqual(summary["combos"]["weakest"][0]["symbol"], "UCM6")
+        self.assertEqual(summary["combos"]["weakest"][0]["confirmation_rate"], 0.0)
+        self.assertTrue(summary["combos"]["weakest"][0]["sample_warning"])
 
 
 if __name__ == "__main__":
