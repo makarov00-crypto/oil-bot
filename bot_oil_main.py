@@ -26,7 +26,14 @@ from news_bias import NewsBias, select_active_biases
 from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
 from strategy_registry import get_secondary_strategies
 from strategy_engine import evaluate_primary_signal_bundle
-from trade_storage import append_trade_row, load_trade_rows as load_trade_rows_from_storage, sync_journal_to_db
+from trade_storage import (
+    append_signal_observation,
+    append_trade_row,
+    load_signal_observations,
+    load_trade_rows as load_trade_rows_from_storage,
+    sync_journal_to_db,
+    update_signal_observation_outcome,
+)
 from tinkoff.invest import (
     CandleInterval,
     Client,
@@ -639,6 +646,94 @@ def append_allocator_decision(
     }
     with ALLOCATOR_DECISIONS_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps({key: value for key, value in row.items() if value not in ("", None)}, ensure_ascii=False) + "\n")
+
+
+def append_signal_observation_decision(
+    candidate: dict[str, Any],
+    *,
+    decision: str,
+    decision_reason: str,
+    horizon_minutes: int = 15,
+) -> str:
+    observed_at = str(candidate.get("observed_at") or datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat())
+    context = {
+        "allocator_summary": str(candidate.get("allocator_summary") or ""),
+        "priority_reason": str(candidate.get("priority_reason") or ""),
+        "entry_edge_label": str(candidate.get("entry_edge_label") or ""),
+        "instrument_class": str(candidate.get("instrument_class") or ""),
+        "allocatable_margin_rub": float(candidate.get("allocatable_margin_rub") or 0.0),
+        "requested_margin_rub": float(candidate.get("requested_margin_rub") or 0.0),
+        "candle_time": str(candidate.get("candle_time") or ""),
+    }
+    row = {
+        "observed_at": observed_at,
+        "symbol": str(candidate.get("symbol") or "").upper(),
+        "signal": str(candidate.get("signal") or "").upper(),
+        "strategy": str(candidate.get("strategy_name") or ""),
+        "decision": decision,
+        "decision_reason": decision_reason,
+        "priority_score": float(candidate.get("priority_score") or 0.0),
+        "entry_edge_score": float(candidate.get("entry_edge_score") or 0.0),
+        "market_regime": str(candidate.get("market_regime") or ""),
+        "regime_confidence": float(candidate.get("regime_confidence") or 0.0),
+        "setup_quality": str(candidate.get("setup_quality_label") or ""),
+        "observed_price": float(candidate.get("observed_price") or 0.0),
+        "horizon_minutes": horizon_minutes,
+        "context": {key: value for key, value in context.items() if value not in ("", None, 0.0)},
+    }
+    return append_signal_observation(TRADE_DB_PATH, row)
+
+
+def update_signal_observation_outcomes(
+    client: Client,
+    config: BotConfig,
+    watchlist: Sequence[InstrumentConfig],
+    *,
+    horizon_minutes: int = 15,
+    limit: int = 200,
+) -> int:
+    instruments_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
+    rows = load_signal_observations(TRADE_DB_PATH, limit=limit, unevaluated_only=True)
+    now = datetime.now(UTC)
+    updated = 0
+    for row in rows:
+        symbol = str(row.get("symbol") or "").upper()
+        instrument = instruments_by_symbol.get(symbol)
+        if instrument is None:
+            continue
+        observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
+        if observed_at is None:
+            continue
+        row_horizon = int(row.get("horizon_minutes") or horizon_minutes)
+        if now - observed_at < timedelta(minutes=max(1, row_horizon)):
+            continue
+        observed_price = float(row.get("observed_price") or 0.0)
+        if observed_price <= 0.0:
+            continue
+        try:
+            current_price = get_last_price(client, instrument)
+        except Exception as error:
+            logging.info("symbol=%s signal_observation_outcome_wait price_error=%s", symbol, error)
+            continue
+        signal = str(row.get("signal") or "").upper()
+        if signal == "LONG":
+            move_pct = (current_price - observed_price) / observed_price * 100.0
+        elif signal == "SHORT":
+            move_pct = (observed_price - current_price) / observed_price * 100.0
+        else:
+            continue
+        update_signal_observation_outcome(
+            TRADE_DB_PATH,
+            str(row.get("observation_uid") or ""),
+            evaluated_at=now.astimezone(MOSCOW_TZ).isoformat(),
+            current_price=current_price,
+            move_pct=round(move_pct, 4),
+            favorable=move_pct > 0.0,
+        )
+        updated += 1
+    if updated:
+        logging.info("signal_observation_outcomes_updated count=%s", updated)
+    return updated
 
 
 def load_trade_journal() -> list[dict[str, Any]]:
@@ -6571,11 +6666,16 @@ def process_instrument(
                                                 "signal": signal,
                                                 "strategy_name": primary_strategy_name,
                                                 "reason": reason,
+                                                "observed_at": datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat(),
+                                                "observed_price": current_price,
+                                                "candle_time": candle_time,
                                                 "priority_score": priority_score,
                                                 "priority_reason": priority_reason,
                                                 "entry_edge_score": float(state.last_entry_edge_score or 0.0),
                                                 "entry_edge_label": str(state.last_entry_edge_label or ""),
+                                                "market_regime": str(state.last_market_regime or ""),
                                                 "regime_confidence": float(state.last_market_regime_confidence or 0.0),
+                                                "setup_quality_label": str(state.last_setup_quality_label or ""),
                                                 "allocator_quantity": int(state.last_allocator_quantity or 0),
                                                 "allocator_summary": str(state.last_allocator_summary or ""),
                                                 "instrument_class": str((allocator_sizing or {}).get("instrument_class") or "базовый"),
@@ -6651,6 +6751,18 @@ def run_bot() -> int:
                             if candidate:
                                 cycle_candidates.append(candidate)
                         selected_candidates, deferred_candidates = rank_cycle_entry_candidates(cycle_candidates)
+                        for item in selected_candidates:
+                            append_signal_observation_decision(
+                                item,
+                                decision="selected",
+                                decision_reason="кандидат выбран аллокатором для входа в этом цикле",
+                            )
+                        for item in deferred_candidates:
+                            append_signal_observation_decision(
+                                item,
+                                decision="deferred",
+                                decision_reason=str(item.get("defer_reason") or "кандидат отложен аллокатором"),
+                            )
                         rotation_target_symbol = ""
                         rotation_plan = select_capital_rotation_plan(watchlist, cycle_candidates)
                         if rotation_plan:
@@ -6683,6 +6795,7 @@ def run_bot() -> int:
                         recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)
                         if recovered_closes:
                             logging.warning("journal_auto_recovery_applied recovered_closes=%s", recovered_closes)
+                        update_signal_observation_outcomes(client, config, watchlist)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist)
                         maybe_send_hourly_summary(client, config, watchlist)
                         consecutive_errors = 0

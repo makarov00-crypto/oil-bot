@@ -6,7 +6,13 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import bot_oil_main as mod
-from trade_storage import ensure_trade_db, load_trade_rows
+from trade_storage import (
+    append_signal_observation,
+    ensure_trade_db,
+    load_signal_observations,
+    load_trade_rows,
+    update_signal_observation_outcome,
+)
 
 
 class TradeStorageTests(unittest.TestCase):
@@ -233,6 +239,49 @@ class TradeStorageTests(unittest.TestCase):
             rows = load_trade_rows(journal_path, db_path)
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[-1]["event"], "CLOSE")
+
+    def test_signal_observation_lifecycle_uses_sqlite(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "trade_analytics.sqlite3"
+            uid = append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T10:00:00+03:00",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "strategy": "range_break_continuation",
+                    "decision": "deferred",
+                    "decision_reason": "не хватило ГО",
+                    "priority_score": 0.81,
+                    "entry_edge_score": 0.84,
+                    "market_regime": "trend_expansion",
+                    "regime_confidence": 0.78,
+                    "setup_quality": "strong",
+                    "observed_price": 80.0,
+                    "horizon_minutes": 15,
+                    "context": {"allocator_summary": "нет ГО"},
+                },
+            )
+
+            rows = load_signal_observations(db_path, unevaluated_only=True)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["observation_uid"], uid)
+            self.assertEqual(rows[0]["symbol"], "BRK6")
+            self.assertEqual(rows[0]["context"]["allocator_summary"], "нет ГО")
+
+            update_signal_observation_outcome(
+                db_path,
+                uid,
+                evaluated_at="2026-04-24T10:20:00+03:00",
+                current_price=81.2,
+                move_pct=1.5,
+                favorable=True,
+            )
+
+            evaluated = load_signal_observations(db_path)
+            self.assertEqual(evaluated[0]["current_price"], 81.2)
+            self.assertEqual(evaluated[0]["move_pct"], 1.5)
+            self.assertTrue(evaluated[0]["favorable"])
 
 
 if __name__ == "__main__":
