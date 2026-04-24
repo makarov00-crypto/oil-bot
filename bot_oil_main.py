@@ -663,6 +663,7 @@ def append_signal_observation_decision(
     context = {
         "allocator_summary": str(candidate.get("allocator_summary") or ""),
         "priority_reason": str(candidate.get("priority_reason") or ""),
+        "learning_adjustment": round(float(candidate.get("learning_adjustment") or 0.0), 3),
         "learning_reason": str(candidate.get("learning_reason") or ""),
         "entry_edge_label": str(candidate.get("entry_edge_label") or ""),
         "instrument_class": str(candidate.get("instrument_class") or ""),

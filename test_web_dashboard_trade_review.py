@@ -229,7 +229,11 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "current_price": 80.8,
                     "move_pct": 1.0,
                     "favorable": True,
-                    "context": {"entry_edge_label": "confirmed"},
+                    "context": {
+                        "entry_edge_label": "confirmed",
+                        "learning_adjustment": 0.05,
+                        "learning_reason": "обучение связки: бонус +0.05, 67% подтверждений, 6 наблюд.",
+                    },
                 },
             )
             append_signal_observation(
@@ -249,7 +253,11 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "current_price": 7.25,
                     "move_pct": -0.69,
                     "favorable": False,
-                    "context": {"entry_edge_label": "fragile"},
+                    "context": {
+                        "entry_edge_label": "fragile",
+                        "learning_adjustment": -0.07,
+                        "learning_reason": "обучение связки: штраф -0.07, 20% подтверждений, 5 наблюд.",
+                    },
                 },
             )
 
@@ -262,7 +270,11 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(summary["favorable_rate"], 50.0)
         self.assertEqual(summary["deferred_favorable"], 1)
         self.assertEqual(summary["selected_unfavorable"], 1)
+        self.assertEqual(summary["learning_bonus_count"], 1)
+        self.assertEqual(summary["learning_penalty_count"], 1)
         self.assertEqual(summary["items"][0]["decision_display"], "выбран")
+        self.assertEqual(summary["items"][0]["learning_adjustment"], -0.07)
+        self.assertIn("штраф -0.07", summary["items"][0]["learning_reason"])
         self.assertEqual(summary["combos"]["strongest"][0]["symbol"], "BRK6")
         self.assertEqual(summary["combos"]["strongest"][0]["confirmation_rate"], 100.0)
         self.assertEqual(summary["combos"]["weakest"][0]["symbol"], "UCM6")

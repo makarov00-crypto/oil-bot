@@ -339,6 +339,19 @@ def signal_observation_context_value(row: dict[str, Any], key: str, default: str
     return value or default
 
 
+def signal_observation_context_float(row: dict[str, Any], key: str, default: float = 0.0) -> float:
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return default
+    value = context.get(key)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
 def signal_observation_combo_label(row: dict[str, Any]) -> str:
     symbol = str(row.get("symbol") or "-")
     signal = str(row.get("signal") or "-").upper()
@@ -365,6 +378,12 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
     deferred_favorable = [row for row in deferred if row.get("favorable") is True]
     selected_unfavorable = [
         row for row in selected if row.get("evaluated_at") and row.get("favorable") is False
+    ]
+    learning_bonus_rows = [
+        row for row in rows if signal_observation_context_float(row, "learning_adjustment") >= 0.005
+    ]
+    learning_penalty_rows = [
+        row for row in rows if signal_observation_context_float(row, "learning_adjustment") <= -0.005
     ]
 
     groups: dict[str, dict[str, Any]] = {}
@@ -412,6 +431,21 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
         key=lambda item: (float(item["confirmation_rate"]), -int(item["evaluated"]), float(item["avg_move_pct"])),
     )[:limit]
 
+    def learning_lines(items: list[dict[str, Any]]) -> list[str]:
+        rows_local: list[tuple[float, str]] = []
+        for item in items:
+            adjustment = signal_observation_context_float(item, "learning_adjustment")
+            reason = signal_observation_context_value(item, "learning_reason", "")
+            symbol = str(item.get("symbol") or "-")
+            signal = str(item.get("signal") or "-").upper()
+            strategy = str(item.get("strategy") or "-")
+            if not reason:
+                continue
+            rows_local.append((adjustment, f"{symbol} {signal} | {strategy}: {reason}"))
+        reverse = bool(items and signal_observation_context_float(items[0], "learning_adjustment") > 0)
+        rows_local.sort(key=lambda item: item[0], reverse=reverse)
+        return [text for _, text in rows_local[:limit]]
+
     return {
         "total": len(rows),
         "evaluated": len(evaluated),
@@ -422,6 +456,10 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
         "deferred": len(deferred),
         "deferred_favorable": len(deferred_favorable),
         "selected_unfavorable": len(selected_unfavorable),
+        "learning_bonus_count": len(learning_bonus_rows),
+        "learning_penalty_count": len(learning_penalty_rows),
+        "learning_bonus_examples": learning_lines(learning_bonus_rows),
+        "learning_penalty_examples": learning_lines(learning_penalty_rows),
         "strongest": strongest,
         "weakest": weakest,
     }
@@ -554,6 +592,7 @@ def build_prompt(
         f"- выбранных сигналов: {signal_summary['selected']}, отложенных сигналов: {signal_summary['deferred']}",
         f"- отложенные, которые подтвердились: {signal_summary['deferred_favorable']}",
         f"- выбранные, которые не подтвердились: {signal_summary['selected_unfavorable']}",
+        f"- learning-бонусов: {signal_summary['learning_bonus_count']}, learning-штрафов: {signal_summary['learning_penalty_count']}",
     ]
 
     def combo_lines(items: list[dict[str, Any]]) -> list[str]:
@@ -571,6 +610,8 @@ def build_prompt(
     daily_weak_signal_lines = combo_lines(signal_summary["weakest"])
     recent_strong_signal_lines = combo_lines(recent_signal_summary["strongest"])
     recent_weak_signal_lines = combo_lines(recent_signal_summary["weakest"])
+    daily_learning_bonus_lines = signal_summary["learning_bonus_examples"] or ["- Бонусов обучения за день не было."]
+    daily_learning_penalty_lines = signal_summary["learning_penalty_examples"] or ["- Штрафов обучения за день не было."]
 
     focal_points_lines = []
     best_regime = summary.get("best_regime")
@@ -654,6 +695,12 @@ def build_prompt(
         "",
         "Слабые связки сигналов за день:",
         *daily_weak_signal_lines,
+        "",
+        "Где обучение повышало приоритет за день:",
+        *daily_learning_bonus_lines,
+        "",
+        "Где обучение понижало приоритет за день:",
+        *daily_learning_penalty_lines,
         "",
         "Лучшие связки сигналов за последние 3 дня:",
         *recent_strong_signal_lines,

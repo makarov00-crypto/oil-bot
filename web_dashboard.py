@@ -1321,6 +1321,19 @@ def _signal_observation_context_value(row: dict[str, Any], key: str, default: st
     return value or default
 
 
+def _signal_observation_context_float(row: dict[str, Any], key: str, default: float = 0.0) -> float:
+    context = row.get("context")
+    if not isinstance(context, dict):
+        return default
+    value = context.get(key)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
 def _signal_observation_combo_label(row: dict[str, Any]) -> str:
     symbol = str(row.get("symbol") or "-")
     signal = str(row.get("signal") or "-").upper()
@@ -1421,15 +1434,25 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
     deferred_favorable = [item for item in deferred if item.get("favorable") is True]
     selected_unfavorable = [item for item in selected if item.get("evaluated_at") and item.get("favorable") is False]
     pending = [item for item in rows if not item.get("evaluated_at")]
+    learning_bonus_rows = [
+        item for item in rows if (_signal_observation_context_float(item, "learning_adjustment") >= 0.005)
+    ]
+    learning_penalty_rows = [
+        item for item in rows if (_signal_observation_context_float(item, "learning_adjustment") <= -0.005)
+    ]
 
     items: list[dict[str, Any]] = []
     for row in rows[:limit]:
         item = dict(row)
+        learning_adjustment = _signal_observation_context_float(row, "learning_adjustment")
+        learning_reason = _signal_observation_context_value(row, "learning_reason", "")
         item["time_display"] = _display_observation_time(row.get("observed_at"))
         item["evaluated_time_display"] = _display_observation_time(row.get("evaluated_at"))
         item["decision_display"] = _format_observation_decision(row.get("decision"))
         item["outcome_display"] = _format_observation_outcome(row)
         item["display_name"] = INSTRUMENT_DISPLAY_NAMES.get(str(row.get("symbol") or ""), str(row.get("symbol") or "-"))
+        item["learning_adjustment"] = learning_adjustment
+        item["learning_reason"] = learning_reason
         items.append(item)
 
     favorable_rate = round((len(favorable) / len(evaluated)) * 100, 1) if evaluated else 0.0
@@ -1443,6 +1466,8 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
         "deferred": len(deferred),
         "deferred_favorable": len(deferred_favorable),
         "selected_unfavorable": len(selected_unfavorable),
+        "learning_bonus_count": len(learning_bonus_rows),
+        "learning_penalty_count": len(learning_penalty_rows),
         "combos": _summarize_signal_observation_combos(rows),
         "items": items,
     }
@@ -4675,6 +4700,11 @@ def build_dashboard_html() -> str:
           'выбранные сигналы, которые через горизонт не подтвердились'
         ),
         buildReviewRow(
+          'Коррекция обучения',
+          `бонусов ${signalObservations.learning_bonus_count || 0} · штрафов ${signalObservations.learning_penalty_count || 0}`,
+          'сколько наблюдений уже входили с повышением или понижением приоритета'
+        ),
+        buildReviewRow(
           'Лучшие связки',
           strongestCombos.length ? strongestCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
           strongestCombos.length ? strongestCombos.slice(0, 2).map(formatObservationCombo).join(' | ') : 'нужно больше проверенных сигналов'
@@ -4693,11 +4723,15 @@ def build_dashboard_html() -> str:
             const moveText = Number.isFinite(move) ? `движение ${move.toFixed(2)}%` : '';
             const priority = Number(item.priority_score);
             const priorityText = Number.isFinite(priority) && priority > 0 ? `приоритет ${priority.toFixed(2)}` : '';
-            const meta = [item.outcome_display || '', moveText, priorityText].filter(Boolean).join(' · ');
+            const learning = Number(item.learning_adjustment || 0);
+            const learningText = Number.isFinite(learning) && Math.abs(learning) >= 0.005
+              ? `обучение ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
+              : '';
+            const meta = [item.outcome_display || '', moveText, priorityText, learningText].filter(Boolean).join(' · ');
             return buildReviewRow(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}`,
-              [meta, item.decision_reason || ''].filter(Boolean).join(' · ')
+              [meta, item.learning_reason || '', item.decision_reason || ''].filter(Boolean).join(' · ')
             );
           })).join('')
         : observationSummaryRows.concat([

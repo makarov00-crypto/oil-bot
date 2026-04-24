@@ -130,7 +130,11 @@ class DailyAiReviewTests(unittest.TestCase):
                 "setup_quality": "strong",
                 "move_pct": -1.6,
                 "favorable": False,
-                "context": {"entry_edge_label": "high"},
+                "context": {
+                    "entry_edge_label": "high",
+                    "learning_adjustment": -0.08,
+                    "learning_reason": "обучение связки: штраф -0.08, 0% подтверждений, 10 наблюд.",
+                },
             },
             {
                 "observed_at": "2026-04-24T11:15:00+03:00",
@@ -143,7 +147,11 @@ class DailyAiReviewTests(unittest.TestCase):
                 "setup_quality": "strong",
                 "move_pct": 0.7,
                 "favorable": True,
-                "context": {"entry_edge_label": "confirmed"},
+                "context": {
+                    "entry_edge_label": "confirmed",
+                    "learning_adjustment": 0.05,
+                    "learning_reason": "обучение связки: бонус +0.05, 67% подтверждений, 6 наблюд.",
+                },
             },
         ]
 
@@ -169,10 +177,15 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("- подтвердились: 1 (50.0%)", prompt)
         self.assertIn("- отложенные, которые подтвердились: 1", prompt)
         self.assertIn("- выбранные, которые не подтвердились: 1", prompt)
+        self.assertIn("- learning-бонусов: 1, learning-штрафов: 1", prompt)
         self.assertIn("Лучшие связки сигналов за день:", prompt)
         self.assertIn("UCM6 | SHORT | opening_range_breakout", prompt)
         self.assertIn("Слабые связки сигналов за день:", prompt)
         self.assertIn("BRK6 | LONG | trend_rollover", prompt)
+        self.assertIn("Где обучение повышало приоритет за день:", prompt)
+        self.assertIn("бонус +0.05", prompt)
+        self.assertIn("Где обучение понижало приоритет за день:", prompt)
+        self.assertIn("штраф -0.08", prompt)
         self.assertIn("Слабые связки сигналов за последние 3 дня:", prompt)
 
 
