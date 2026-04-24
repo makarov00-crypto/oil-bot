@@ -535,6 +535,10 @@ struct TradesScreen: View {
         if let priority = decision.priorityScore {
             parts.append("приоритет \(String(format: "%.2f", priority))")
         }
+        if let learning = decision.learningAdjustment, abs(learning) >= 0.005 {
+            let learningLabel = learning > 0 ? "обучение +\(String(format: "%.2f", learning))" : "обучение \(String(format: "%.2f", learning))"
+            parts.append(learningLabel)
+        }
         if let edge = decision.entryEdgeScore {
             parts.append("качество входа \(String(format: "%.2f", edge))")
         }
@@ -546,6 +550,9 @@ struct TradesScreen: View {
         }
         if let replaced = decision.replacedSymbol, !replaced.isEmpty {
             parts.append("вытеснил \(displayName(for: replaced))")
+        }
+        if let learningReason = decision.learningReason, !learningReason.isEmpty {
+            parts.append(learningReason)
         }
         if let reason = decision.reason, !reason.isEmpty {
             parts.append(reason)

@@ -439,6 +439,8 @@ struct AllocatorDecision: Decodable, Identifiable {
     let allocatableMarginRub: Double?
     let replacedSymbol: String?
     let replacedHoldScore: Double?
+    let learningAdjustment: Double?
+    let learningReason: String?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -454,6 +456,8 @@ struct AllocatorDecision: Decodable, Identifiable {
         allocatableMarginRub = try container.decodeIfPresent(Double.self, forKey: .allocatableMarginRub)
         replacedSymbol = try container.decodeIfPresent(String.self, forKey: .replacedSymbol)
         replacedHoldScore = try container.decodeIfPresent(Double.self, forKey: .replacedHoldScore)
+        learningAdjustment = try container.decodeIfPresent(Double.self, forKey: .learningAdjustment)
+        learningReason = try container.decodeIfPresent(String.self, forKey: .learningReason)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -468,6 +472,8 @@ struct AllocatorDecision: Decodable, Identifiable {
         case allocatableMarginRub = "allocatable_margin_rub"
         case replacedSymbol = "replaced_symbol"
         case replacedHoldScore = "replaced_hold_score"
+        case learningAdjustment = "learning_adjustment"
+        case learningReason = "learning_reason"
     }
 }
 

@@ -628,6 +628,8 @@ def append_allocator_decision(
     allocatable_margin_rub: float = 0.0,
     replaced_symbol: str = "",
     replaced_hold_score: float = 0.0,
+    learning_adjustment: float = 0.0,
+    learning_reason: str = "",
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     row = {
@@ -643,6 +645,8 @@ def append_allocator_decision(
         "allocatable_margin_rub": round(float(allocatable_margin_rub or 0.0), 2),
         "replaced_symbol": replaced_symbol,
         "replaced_hold_score": round(float(replaced_hold_score or 0.0), 3),
+        "learning_adjustment": round(float(learning_adjustment or 0.0), 3),
+        "learning_reason": learning_reason,
     }
     with ALLOCATOR_DECISIONS_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps({key: value for key, value in row.items() if value not in ("", None)}, ensure_ascii=False) + "\n")
@@ -659,6 +663,7 @@ def append_signal_observation_decision(
     context = {
         "allocator_summary": str(candidate.get("allocator_summary") or ""),
         "priority_reason": str(candidate.get("priority_reason") or ""),
+        "learning_reason": str(candidate.get("learning_reason") or ""),
         "entry_edge_label": str(candidate.get("entry_edge_label") or ""),
         "instrument_class": str(candidate.get("instrument_class") or ""),
         "allocatable_margin_rub": float(candidate.get("allocatable_margin_rub") or 0.0),
@@ -673,6 +678,7 @@ def append_signal_observation_decision(
         "decision": decision,
         "decision_reason": decision_reason,
         "priority_score": float(candidate.get("priority_score") or 0.0),
+        "learning_adjustment": float(candidate.get("learning_adjustment") or 0.0),
         "entry_edge_score": float(candidate.get("entry_edge_score") or 0.0),
         "market_regime": str(candidate.get("market_regime") or ""),
         "regime_confidence": float(candidate.get("regime_confidence") or 0.0),
@@ -4861,6 +4867,8 @@ def execute_capital_rotation_plan(
         allocatable_margin_rub=float(candidate.get("allocatable_margin_rub") or 0.0),
         replaced_symbol=instrument.symbol,
         replaced_hold_score=hold_score,
+        learning_adjustment=float(candidate.get("learning_adjustment") or 0.0),
+        learning_reason=str(candidate.get("learning_reason") or ""),
     )
 
     deferred_reason = (
@@ -4892,6 +4900,8 @@ def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> Non
         instrument_class=str(candidate.get("instrument_class") or ""),
         requested_margin_rub=float(candidate.get("requested_margin_rub") or 0.0),
         allocatable_margin_rub=float(candidate.get("allocatable_margin_rub") or 0.0),
+        learning_adjustment=float(candidate.get("learning_adjustment") or 0.0),
+        learning_reason=str(candidate.get("learning_reason") or ""),
     )
     state = load_state(symbol)
     state.last_allocator_quantity = 0
@@ -6761,6 +6771,11 @@ def process_instrument(
                                                 instrument.symbol,
                                                 primary_strategy_name,
                                             )
+                                            learning_adjustment, learning_reason = calculate_signal_learning_priority_adjustment(
+                                                state,
+                                                instrument.symbol,
+                                                primary_strategy_name,
+                                            )
                                             candidate_payload = {
                                                 "symbol": instrument.symbol,
                                                 "signal": signal,
@@ -6771,6 +6786,8 @@ def process_instrument(
                                                 "candle_time": candle_time,
                                                 "priority_score": priority_score,
                                                 "priority_reason": priority_reason,
+                                                "learning_adjustment": learning_adjustment,
+                                                "learning_reason": learning_reason,
                                                 "entry_edge_score": float(state.last_entry_edge_score or 0.0),
                                                 "entry_edge_label": str(state.last_entry_edge_label or ""),
                                                 "market_regime": str(state.last_market_regime or ""),

@@ -792,6 +792,27 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(rows[0]["decision"], "selected")
         self.assertEqual(rows[0]["observed_price"], 80.0)
 
+    def test_mark_cycle_deferred_candidate_persists_learning_reason(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "ALLOCATOR_DECISIONS_PATH", mod.Path(temp_dir) / "allocator_decisions.jsonl"), patch.object(
+            mod, "load_state", return_value=mod.InstrumentState()
+        ), patch.object(mod, "save_state"):
+            mod.mark_cycle_deferred_candidate(
+                {
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "priority_score": 0.64,
+                    "entry_edge_score": 0.82,
+                    "learning_adjustment": -0.08,
+                    "learning_reason": "обучение связки: штраф -0.08, 0% подтверждений, 10 наблюд.",
+                },
+                "не хватило ГО",
+            )
+            rows = [mod.json.loads(line) for line in mod.ALLOCATOR_DECISIONS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["learning_adjustment"], -0.08)
+        self.assertIn("штраф -0.08", rows[0]["learning_reason"])
+
     def test_update_signal_observation_outcomes_marks_favorable_short(self) -> None:
         instrument = mod.InstrumentConfig(symbol="UCM6", figi="FIGI", display_name="USD/CNY")
         old_time = (mod.datetime.now(mod.UTC) - mod.timedelta(minutes=20)).astimezone(mod.MOSCOW_TZ).isoformat()

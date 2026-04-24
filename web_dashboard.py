@@ -4630,13 +4630,17 @@ def build_dashboard_html() -> str:
             const replaced = item.replaced_symbol ? ` вместо ${instrumentNames[item.replaced_symbol] || item.replaced_symbol}` : '';
             const score = Number(item.priority_score || 0);
             const scoreText = score > 0 ? `приоритет ${score.toFixed(2)}` : '';
+            const learning = Number(item.learning_adjustment || 0);
+            const learningText = Number.isFinite(learning) && Math.abs(learning) >= 0.005
+              ? `обучение ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
+              : '';
             const margin = Number(item.requested_margin_rub || 0);
             const marginText = margin > 0 ? `ГО ${formatRub(margin)}` : '';
-            const meta = [scoreText, marginText].filter(Boolean).join(' · ');
+            const meta = [scoreText, learningText, marginText].filter(Boolean).join(' · ');
             return buildReviewRow(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}${replaced}`,
-              [meta, item.reason || ''].filter(Boolean).join(' · ')
+              [meta, item.learning_reason || '', item.reason || ''].filter(Boolean).join(' · ')
             );
           }).join('')
         : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не вытеснял сигналы');
