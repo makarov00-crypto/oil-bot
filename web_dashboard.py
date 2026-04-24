@@ -2725,6 +2725,15 @@ def build_dashboard_html() -> str:
       padding: 12px;
       outline: none;
     }
+    .portfolio-metric .metric {
+      font-size: clamp(18px, 1.35vw, 24px);
+      line-height: 1.16;
+      letter-spacing: 0;
+      text-shadow: none;
+    }
+    .portfolio-metric .metric-wide {
+      font-size: clamp(15px, 1.15vw, 20px);
+    }
     .portfolio-label {
       display: flex;
       align-items: center;
