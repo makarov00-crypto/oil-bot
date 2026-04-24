@@ -565,6 +565,82 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(state.last_signal_summary[0], "кандидат отложен: есть более сильный сигнал.")
         save_state.assert_called_once()
 
+    def test_capital_rotation_selects_strong_margin_blocked_candidate_over_weak_open_position(self) -> None:
+        watchlist = [
+            mod.InstrumentConfig(symbol="BRK6", figi="1", display_name="Brent"),
+            mod.InstrumentConfig(symbol="VBM6", figi="2", display_name="Bonds"),
+        ]
+        candidate = {
+            "symbol": "BRK6",
+            "signal": "LONG",
+            "priority_score": 0.88,
+            "priority_reason": "высокое качество входа, режим подтверждён",
+            "entry_edge_score": 0.84,
+            "allocator_quantity": 0,
+        }
+        weak_open_state = mod.InstrumentState(
+            position_qty=2,
+            position_side="SHORT",
+            entry_strategy="range_break_continuation",
+            entry_time=(mod.datetime.now(mod.UTC) - mod.timedelta(minutes=25)).isoformat(),
+            last_signal="HOLD",
+            last_market_regime="chop",
+            last_market_regime_confidence=0.44,
+            last_entry_edge_score=0.22,
+            position_variation_margin_rub=-18.0,
+            entry_commission_rub=4.8,
+        )
+        flat_state = mod.InstrumentState()
+
+        def fake_load_state(symbol: str) -> mod.InstrumentState:
+            return {"VBM6": weak_open_state, "BRK6": flat_state}[symbol]
+
+        with patch.object(mod, "load_state", side_effect=fake_load_state), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            plan = mod.select_capital_rotation_plan(watchlist, [candidate])
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["candidate"]["symbol"], "BRK6")
+        self.assertEqual(plan["position"]["instrument"].symbol, "VBM6")
+
+    def test_capital_rotation_does_not_replace_strong_profitable_position(self) -> None:
+        watchlist = [
+            mod.InstrumentConfig(symbol="BRK6", figi="1", display_name="Brent"),
+            mod.InstrumentConfig(symbol="GNM6", figi="2", display_name="Gold"),
+        ]
+        candidate = {
+            "symbol": "BRK6",
+            "signal": "LONG",
+            "priority_score": 0.86,
+            "priority_reason": "высокое качество входа, режим подтверждён",
+            "entry_edge_score": 0.82,
+            "allocator_quantity": 0,
+        }
+        strong_open_state = mod.InstrumentState(
+            position_qty=1,
+            position_side="SHORT",
+            entry_strategy="trend_pullback",
+            entry_time=(mod.datetime.now(mod.UTC) - mod.timedelta(minutes=40)).isoformat(),
+            last_signal="SHORT",
+            last_market_regime="trend_pullback",
+            last_market_regime_confidence=0.78,
+            last_entry_edge_score=0.84,
+            position_variation_margin_rub=320.0,
+            entry_commission_rub=8.8,
+        )
+        flat_state = mod.InstrumentState()
+
+        def fake_load_state(symbol: str) -> mod.InstrumentState:
+            return {"GNM6": strong_open_state, "BRK6": flat_state}[symbol]
+
+        with patch.object(mod, "load_state", side_effect=fake_load_state), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            plan = mod.select_capital_rotation_plan(watchlist, [candidate])
+
+        self.assertIsNone(plan)
+
     def test_adaptive_exit_profile_tightens_in_chop_recovery_mode(self) -> None:
         config = SimpleNamespace(
             min_hold_minutes=30,

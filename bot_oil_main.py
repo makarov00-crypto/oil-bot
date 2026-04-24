@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -3408,7 +3408,8 @@ def ensure_risk_limits(
 
 
 def get_daily_loss_limit_status(client: Client, config: BotConfig) -> dict[str, Any]:
-    if config.max_daily_loss <= 0:
+    max_daily_loss = float(getattr(config, "max_daily_loss", 0.0) or 0.0)
+    if max_daily_loss <= 0:
         return {
             "allowed": True,
             "enabled": False,
@@ -3430,7 +3431,7 @@ def get_daily_loss_limit_status(client: Client, config: BotConfig) -> dict[str, 
             "mode": "normal",
             "hard_limit_rub": 0.0,
         }
-    daily_loss_limit_rub = equity * (abs(config.max_daily_loss) / 100.0)
+    daily_loss_limit_rub = equity * (abs(max_daily_loss) / 100.0)
     hard_loss_limit_rub = daily_loss_limit_rub * 1.35
     net_pnl_rub = get_today_closed_net_pnl_rub()
     if net_pnl_rub <= -hard_loss_limit_rub:
@@ -4371,6 +4372,173 @@ def rank_cycle_entry_candidates(
         else:
             selected.append(item)
     return selected, deferred
+
+
+def position_is_mature_for_rotation(state: InstrumentState, min_hold_minutes: int = 7) -> bool:
+    entry_at = parse_state_datetime(state.entry_time)
+    if entry_at is None:
+        return True
+    return datetime.now(UTC) - entry_at >= timedelta(minutes=max(1, min_hold_minutes))
+
+
+def calculate_open_position_hold_score(
+    state: InstrumentState,
+    symbol: str,
+) -> tuple[float, str]:
+    if state.position_qty <= 0 or state.position_side == "FLAT":
+        return 0.0, "позиции нет"
+
+    score = 0.35
+    reasons: list[str] = []
+
+    signal = str(state.last_signal or "").strip().upper()
+    if signal == state.position_side:
+        score += 0.18
+        reasons.append("текущий сигнал ещё поддерживает позицию")
+    elif signal == "HOLD":
+        score += 0.05
+        reasons.append("позиция без нового подтверждения")
+    elif signal in {"LONG", "SHORT"} and signal != state.position_side:
+        score -= 0.18
+        reasons.append("текущий сигнал уже не в сторону позиции")
+
+    edge_score = float(state.last_entry_edge_score or 0.0)
+    score += edge_score * 0.25
+    if edge_score >= 0.78:
+        reasons.append("вход был высокого качества")
+    elif edge_score <= 0.55:
+        reasons.append("вход уже не выглядит сильным")
+
+    regime_confidence = float(state.last_market_regime_confidence or 0.0)
+    score += regime_confidence * 0.15
+
+    market_regime = str(state.last_market_regime or "").strip().lower()
+    if market_regime in {"chop", "compression"}:
+        score -= 0.10
+        reasons.append("рынок стал шумным")
+
+    recovery_status = get_recovery_mode_status(symbol, str(state.entry_strategy or ""))
+    if recovery_status.get("active"):
+        score -= 0.08
+        reasons.append("связка в recovery mode")
+
+    round_trip_commission = estimate_round_trip_commission_rub(state)
+    current_pnl = float(state.position_variation_margin_rub or 0.0)
+    if current_pnl >= round_trip_commission * 4.0:
+        score += 0.20
+        reasons.append("позиция уже хорошо в плюсе")
+    elif current_pnl >= round_trip_commission * 2.0:
+        score += 0.12
+    elif current_pnl > 0.0:
+        score += 0.05
+    elif current_pnl < 0.0:
+        score -= 0.12
+        reasons.append("позиция уже уходит в минус")
+
+    if not position_is_mature_for_rotation(state):
+        score += 0.08
+        reasons.append("позиция ещё слишком свежая")
+
+    score = clamp_float(score, 0.0, 1.0)
+    return score, ", ".join(reasons) if reasons else "нейтральное удержание"
+
+
+def select_capital_rotation_plan(
+    watchlist: Sequence[InstrumentConfig],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not candidates:
+        return None
+
+    best_candidate: dict[str, Any] | None = None
+    for candidate in sorted(candidates, key=lambda item: float(item.get("priority_score") or 0.0), reverse=True):
+        allocator_quantity = int(candidate.get("allocator_quantity") or 0)
+        priority_score = float(candidate.get("priority_score") or 0.0)
+        edge_score = float(candidate.get("entry_edge_score") or 0.0)
+        if allocator_quantity > 0:
+            continue
+        if priority_score < 0.72 or edge_score < 0.78:
+            continue
+        best_candidate = candidate
+        break
+    if best_candidate is None:
+        return None
+
+    weakest_position: dict[str, Any] | None = None
+    for instrument in watchlist:
+        symbol = instrument.symbol.upper()
+        if symbol == str(best_candidate.get("symbol") or "").upper():
+            continue
+        state = load_state(symbol)
+        if state.position_qty <= 0 or state.position_side == "FLAT" or has_pending_order(state):
+            continue
+        hold_score, hold_reason = calculate_open_position_hold_score(state, symbol)
+        if hold_score > 0.52:
+            continue
+        if not position_is_mature_for_rotation(state):
+            continue
+        if weakest_position is None or hold_score < float(weakest_position.get("hold_score") or 1.0):
+            weakest_position = {
+                "instrument": instrument,
+                "state": state,
+                "hold_score": hold_score,
+                "hold_reason": hold_reason,
+            }
+    if weakest_position is None:
+        return None
+
+    candidate_priority = float(best_candidate.get("priority_score") or 0.0)
+    hold_score = float(weakest_position.get("hold_score") or 0.0)
+    if candidate_priority < hold_score + 0.20:
+        return None
+
+    return {
+        "candidate": best_candidate,
+        "position": weakest_position,
+    }
+
+
+def execute_capital_rotation_plan(
+    client: Client,
+    config: BotConfig,
+    plan: dict[str, Any],
+) -> str:
+    candidate = dict(plan.get("candidate") or {})
+    position = dict(plan.get("position") or {})
+    instrument = position.get("instrument")
+    state = position.get("state")
+    if not isinstance(instrument, InstrumentConfig) or not isinstance(state, InstrumentState):
+        return ""
+
+    candidate_symbol = str(candidate.get("symbol") or "").upper()
+    candidate_signal = str(candidate.get("signal") or "").upper()
+    candidate_priority = float(candidate.get("priority_score") or 0.0)
+    candidate_reason = str(candidate.get("priority_reason") or "новый сигнал заметно сильнее")
+    hold_score = float(position.get("hold_score") or 0.0)
+    hold_reason = str(position.get("hold_reason") or "текущая позиция ослабла")
+
+    close_reason = (
+        f"Переключение капитала: освобождаем ГО под {candidate_symbol} {candidate_signal}; "
+        f"новый приоритет {candidate_priority:.2f}, текущая позиция удерживается на {hold_score:.2f}. "
+        f"{candidate_reason}. {hold_reason}."
+    )
+    state.last_allocator_summary = close_reason
+    state.last_signal_summary = [close_reason, *state.last_signal_summary[:2]]
+    close_position(client, config, instrument, state, close_reason)
+
+    deferred_reason = (
+        f"выполняем переключение капитала: закрываем {instrument.symbol} и освобождаем ГО под "
+        f"{candidate_symbol} {candidate_signal}; новый вход будет повторно проверен в следующем цикле."
+    )
+    mark_cycle_deferred_candidate(candidate, deferred_reason)
+    logging.info(
+        "symbol=%s status=capital_rotation_requested close_symbol=%s priority=%.2f hold=%.2f",
+        candidate_symbol,
+        instrument.symbol,
+        candidate_priority,
+        hold_score,
+    )
+    return candidate_symbol
 
 
 def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> None:
@@ -6247,6 +6415,7 @@ def process_instrument(
                                                 "entry_edge_label": str(state.last_entry_edge_label or ""),
                                                 "regime_confidence": float(state.last_market_regime_confidence or 0.0),
                                                 "allocator_quantity": int(state.last_allocator_quantity or 0),
+                                                "allocator_summary": str(state.last_allocator_summary or ""),
                                             }
                                             state.last_allocator_summary = (
                                                 f"{state.last_allocator_summary} "
@@ -6314,10 +6483,18 @@ def run_bot() -> int:
                             if candidate:
                                 cycle_candidates.append(candidate)
                         selected_candidates, deferred_candidates = rank_cycle_entry_candidates(cycle_candidates)
+                        rotation_target_symbol = ""
+                        rotation_plan = select_capital_rotation_plan(watchlist, cycle_candidates)
+                        if rotation_plan:
+                            rotation_target_symbol = execute_capital_rotation_plan(client, config, rotation_plan)
                         selected_symbols = {str(item.get("symbol") or "").upper() for item in selected_candidates}
+                        if rotation_target_symbol:
+                            selected_symbols.discard(rotation_target_symbol)
                         for item in deferred_candidates:
                             symbol = str(item.get("symbol") or "").upper()
                             if not symbol:
+                                continue
+                            if rotation_target_symbol and symbol == rotation_target_symbol:
                                 continue
                             priority_score = float(item.get("priority_score") or 0.0)
                             if priority_score < 0.45:
