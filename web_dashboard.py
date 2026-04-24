@@ -3698,6 +3698,18 @@ def build_dashboard_html() -> str:
       return `<span class="badge ${css}">${escapeHtml(labelMap[raw] || raw)}</span>`;
     }
 
+    function displaySignal(value) {
+      const raw = String(value || '-').toUpperCase();
+      const labelMap = {
+        LONG: 'ЛОНГ',
+        SHORT: 'ШОРТ',
+        HOLD: 'ОЖИДАНИЕ',
+        FLAT: 'ВНЕ ПОЗИЦИИ',
+        BLOCK: 'БЛОК',
+      };
+      return labelMap[raw] || raw || '-';
+    }
+
     function eventStatusBadge(value) {
       const raw = String(value || '-').toUpperCase();
       const css = raw === 'ACTIVE' ? 'long' : raw === 'CLOSED' ? 'short' : 'hold';
