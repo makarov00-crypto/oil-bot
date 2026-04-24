@@ -82,14 +82,17 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["closed_count"], 3)
         self.assertEqual(review["closed_total_pnl_rub"], 120.24)
         self.assertEqual([row["entry_time"] for row in review["closed_reviews"]], ["13.04 06:25:33"] * 3)
-        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong")
+        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong | качество входа высокое")
         self.assertEqual(review["best_edge"]["label"], "high")
         self.assertEqual(
             review["best_strategy_regime"]["label"],
-            "opening_range_breakout @ режим trend_expansion | сетап strong",
+            "opening_range_breakout @ режим trend_expansion | сетап strong | качество входа высокое",
         )
         focus = dashboard.summarize_strategy_regime_focus(rows)
-        self.assertEqual(focus["strongest"][0]["label"], "opening_range_breakout @ режим trend_expansion | сетап strong")
+        self.assertEqual(
+            focus["strongest"][0]["label"],
+            "opening_range_breakout @ режим trend_expansion | сетап strong | качество входа высокое",
+        )
         edge_focus = dashboard.summarize_edge_focus(rows)
         self.assertEqual(edge_focus["strongest"][0]["label"], "high")
 
@@ -157,11 +160,17 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         review = dashboard.build_trade_review(rows)
 
-        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong")
+        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong | качество входа высокое")
         self.assertEqual(review["best_edge"]["label"], "high")
-        self.assertEqual(review["closed_reviews"][0]["exit_context_display"], "режим trend_expansion | сетап strong")
+        self.assertEqual(
+            review["closed_reviews"][0]["exit_context_display"],
+            "режим trend_expansion | сетап strong | качество входа высокое",
+        )
         focus = dashboard.summarize_strategy_regime_focus_from_reviews(review["closed_reviews"])
-        self.assertEqual(focus["strongest"][0]["label"], "range_break_continuation @ режим trend_expansion | сетап strong")
+        self.assertEqual(
+            focus["strongest"][0]["label"],
+            "range_break_continuation @ режим trend_expansion | сетап strong | качество входа высокое",
+        )
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_allocator_decisions_for_day_filters_and_labels_rows(self) -> None:
