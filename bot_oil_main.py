@@ -4353,6 +4353,15 @@ def rank_cycle_entry_candidates(
     max_entries: int = 2,
     min_priority_score: float = 0.45,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    cycle_budget_rub = max(
+        [float(item.get("allocatable_margin_rub") or 0.0) for item in candidates] or [0.0]
+    )
+    class_limits = {
+        "тяжёлый": 1,
+        "средний": 2,
+        "базовый": 2,
+        "лёгкий": 2,
+    }
     ranked = sorted(
         candidates,
         key=lambda item: (
@@ -4365,12 +4374,52 @@ def rank_cycle_entry_candidates(
     )
     selected: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
+    used_budget_rub = 0.0
+    class_counts: dict[str, int] = defaultdict(int)
     for item in ranked:
         score = float(item.get("priority_score") or 0.0)
-        if score < min_priority_score or len(selected) >= max_entries:
+        if score < min_priority_score:
+            item["defer_reason"] = (
+                f"приоритет цикла {score:.2f} ниже порога, "
+                f"{item.get('priority_reason') or 'сигнал недостаточно силён'}."
+            )
+            deferred.append(item)
+            continue
+        if len(selected) >= max_entries:
+            item["defer_reason"] = (
+                f"в этом цикле уже выбрано достаточно идей; приоритет {score:.2f}, "
+                f"{item.get('priority_reason') or 'конкуренция сигналов'}."
+            )
+            deferred.append(item)
+            continue
+
+        instrument_class = str(item.get("instrument_class") or "базовый")
+        class_limit = class_limits.get(instrument_class, 2)
+        if class_counts[instrument_class] >= class_limit and score < 0.86:
+            item["defer_reason"] = (
+                f"по классу {instrument_class} уже набрано достаточно идей; "
+                f"приоритет {score:.2f}."
+            )
+            deferred.append(item)
+            continue
+
+        requested_margin_rub = float(item.get("requested_margin_rub") or 0.0)
+        if (
+            cycle_budget_rub > 0.0
+            and requested_margin_rub > 0.0
+            and used_budget_rub + requested_margin_rub > cycle_budget_rub
+            and selected
+            and score < 0.86
+        ):
+            item["defer_reason"] = (
+                f"в цикле не хватает свободного бюджета ГО: нужно {requested_margin_rub:.0f} RUB, "
+                f"после уже выбранных идей осталось {max(0.0, cycle_budget_rub - used_budget_rub):.0f} RUB."
+            )
             deferred.append(item)
         else:
             selected.append(item)
+            used_budget_rub += requested_margin_rub
+            class_counts[instrument_class] += 1
     return selected, deferred
 
 
@@ -6416,6 +6465,12 @@ def process_instrument(
                                                 "regime_confidence": float(state.last_market_regime_confidence or 0.0),
                                                 "allocator_quantity": int(state.last_allocator_quantity or 0),
                                                 "allocator_summary": str(state.last_allocator_summary or ""),
+                                                "instrument_class": str((allocator_sizing or {}).get("instrument_class") or "базовый"),
+                                                "allocatable_margin_rub": float((allocator_sizing or {}).get("allocatable_margin_rub") or 0.0),
+                                                "requested_margin_rub": float(
+                                                    ((allocator_sizing or {}).get("margin_per_lot_rub") or 0.0)
+                                                    * max(1, int((allocator_sizing or {}).get("quantity") or 0))
+                                                ),
                                             }
                                             state.last_allocator_summary = (
                                                 f"{state.last_allocator_summary} "
