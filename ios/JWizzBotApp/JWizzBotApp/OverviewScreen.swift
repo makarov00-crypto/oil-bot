@@ -78,14 +78,10 @@ struct OverviewScreen: View {
                 }
 
                 LazyVGrid(columns: twoColumns, spacing: 12) {
-                    MetricGlassTile(title: "Аналитический итог", value: formatRub(payload.portfolio.botAnalyticalTotalPnlRub), tone: statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub))
-                    MetricGlassTile(title: "Закрытые сделки, NET", value: formatRub(payload.portfolio.botClosedNetPnlRub), tone: statusTone(for: payload.portfolio.botClosedNetPnlRub))
-                    MetricGlassTile(title: "Комиссия по счёту", value: formatRub(payload.portfolio.botActualFeeRub), tone: statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)))
-                    MetricGlassTile(title: "Клиринговая ВМ", value: formatRub(payload.portfolio.botActualVarmarginRub), tone: statusTone(for: payload.portfolio.botActualVarmarginRub))
-                    MetricGlassTile(title: "Денежный эффект операций", value: formatRub(payload.portfolio.botOperationsCashEffectRub), tone: statusTone(for: payload.portfolio.botOperationsCashEffectRub))
-                    MetricGlassTile(title: "Текущая ВМ позиций", value: formatRub(payload.portfolio.botEstimatedVariationMarginRub), tone: statusTone(for: payload.portfolio.botEstimatedVariationMarginRub))
-                    MetricGlassTile(title: "Открытые позиции, live", value: formatRub(payload.portfolio.botOpenPositionsLivePnlRub), tone: statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub))
-                    MetricGlassTile(title: "Gross закрытых + live", value: formatRub(payload.portfolio.botTotalVariationMarginRub), tone: statusTone(for: payload.portfolio.botTotalVariationMarginRub))
+                    MetricGlassTile(title: "Итог бота", value: formatRub(payload.portfolio.botAnalyticalTotalPnlRub), tone: statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), help: portfolioHelp("analytical"))
+                    MetricGlassTile(title: "Закрытые сделки", value: formatRub(payload.portfolio.botClosedNetPnlRub), tone: statusTone(for: payload.portfolio.botClosedNetPnlRub), help: portfolioHelp("closed"))
+                    MetricGlassTile(title: "Открытые позиции", value: formatRub(payload.portfolio.botOpenPositionsLivePnlRub), tone: statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub), help: portfolioHelp("open_live"))
+                    MetricGlassTile(title: "Свободные деньги", value: formatRub(payload.portfolio.freeCashRub ?? payload.portfolio.freeRub), help: portfolioHelp("free"))
                     MetricGlassTile(title: "Открытых позиций", value: formatInt(payload.portfolio.openPositionsCount))
                 }
             }
@@ -100,17 +96,106 @@ struct OverviewScreen: View {
                     .joined(separator: " | ")
                 SectionHeader(title: "Портфель", subtitle: subtitle.isEmpty ? nil : subtitle)
 
-                Text("Здесь раздельно показаны данные брокера по счёту, денежный эффект операций и аналитический итог бота.")
+                Text("Разделено по смыслу: деньги на счёте, результат сделок бота и сверка с брокерской вариационной маржей.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                LazyVGrid(columns: twoColumns, spacing: 12) {
-                    MetricGlassTile(title: "Портфель", value: formatRub(payload.portfolio.totalPortfolioRub))
-                    MetricGlassTile(title: "Свободные RUB", value: formatRub(payload.portfolio.freeCashRub ?? payload.portfolio.freeRub))
-                    MetricGlassTile(title: "ГО", value: formatRub(payload.portfolio.blockedGuaranteeRub))
-                    MetricGlassTile(title: "Режим", value: displayMode(payload.portfolio.mode))
+                portfolioGroup(
+                    title: "Счёт брокера",
+                    subtitle: "Сколько денег есть и сколько уже занято под позиции.",
+                    rows: [
+                        PortfolioMetric("Стоимость портфеля", formatRub(payload.portfolio.totalPortfolioRub), .white, portfolioHelp("total")),
+                        PortfolioMetric("Свободные деньги", formatRub(payload.portfolio.freeCashRub ?? payload.portfolio.freeRub), .white, portfolioHelp("free")),
+                        PortfolioMetric("Занято под ГО", formatRub(payload.portfolio.blockedGuaranteeRub), .white, portfolioHelp("blocked")),
+                        PortfolioMetric("Режим", displayMode(payload.portfolio.mode), .white, portfolioHelp("mode")),
+                    ]
+                )
+
+                portfolioGroup(
+                    title: "Результат бота",
+                    subtitle: "То, что показывает торговая логика: закрытые сделки плюс текущий результат открытых позиций.",
+                    rows: [
+                        PortfolioMetric("Итог бота", formatRub(payload.portfolio.botAnalyticalTotalPnlRub), statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), portfolioHelp("analytical")),
+                        PortfolioMetric("Закрытые сделки", formatRub(payload.portfolio.botClosedNetPnlRub), statusTone(for: payload.portfolio.botClosedNetPnlRub), portfolioHelp("closed")),
+                        PortfolioMetric("Открытые позиции", formatRub(payload.portfolio.botOpenPositionsLivePnlRub), statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub), portfolioHelp("open_live")),
+                        PortfolioMetric("Gross закрытые + live", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
+                    ]
+                )
+
+                portfolioGroup(
+                    title: "Сверка с брокером",
+                    subtitle: "Брокерские движения по вариационной марже, комиссиям и денежному эффекту операций.",
+                    rows: [
+                        PortfolioMetric("Клиринговая ВМ", formatRub(payload.portfolio.botActualVarmarginRub), statusTone(for: payload.portfolio.botActualVarmarginRub), portfolioHelp("actual_vm")),
+                        PortfolioMetric("Комиссия", formatRub(payload.portfolio.botActualFeeRub), statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)), portfolioHelp("fee")),
+                        PortfolioMetric("Денежный эффект", formatRub(payload.portfolio.botOperationsCashEffectRub), statusTone(for: payload.portfolio.botOperationsCashEffectRub), portfolioHelp("cash_effect")),
+                        PortfolioMetric("Текущая ВМ", formatRub(payload.portfolio.botEstimatedVariationMarginRub), statusTone(for: payload.portfolio.botEstimatedVariationMarginRub), portfolioHelp("estimated_vm")),
+                    ]
+                )
+            }
+        }
+    }
+
+    private struct PortfolioMetric: Identifiable {
+        let id = UUID()
+        let title: String
+        let value: String
+        let tone: Color
+        let help: String
+
+        init(_ title: String, _ value: String, _ tone: Color = .white, _ help: String) {
+            self.title = title
+            self.value = value
+            self.tone = tone
+            self.help = help
+        }
+    }
+
+    private func portfolioGroup(title: String, subtitle: String, rows: [PortfolioMetric]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: twoColumns, spacing: 12) {
+                ForEach(rows) { row in
+                    MetricGlassTile(title: row.title, value: row.value, tone: row.tone, help: row.help)
                 }
             }
+        }
+    }
+
+    private func portfolioHelp(_ key: String) -> String {
+        switch key {
+        case "total":
+            return "Оценка всего счёта у брокера: свободные деньги плюс текущая стоимость/результат открытых позиций по данным портфельного среза."
+        case "free":
+            return "Деньги, которые сейчас не заняты гарантийным обеспечением и могут использоваться для новых входов."
+        case "blocked":
+            return "Гарантийное обеспечение по открытым фьючерсным позициям. Чем выше эта сумма, тем меньше места для новых сделок."
+        case "mode":
+            return "Режим работы бота: боевой, тестовый, выходной или ожидание. Он влияет на разрешение новых входов."
+        case "analytical":
+            return "Главная цифра для оценки бота: закрытые сделки NET плюс текущий live-результат открытых позиций."
+        case "closed":
+            return "Финальный результат закрытых сделок бота после комиссий. Эта часть уже зафиксирована."
+        case "open_live":
+            return "Плавающий результат открытых позиций прямо сейчас. Он ещё может измениться до закрытия сделки."
+        case "gross_live":
+            return "Грубая сверка: результат закрытых сделок до части корректировок плюс live-результат открытых позиций."
+        case "actual_vm":
+            return "Вариационная маржа, которую брокер уже провёл клирингом по счёту за выбранный день."
+        case "fee":
+            return "Комиссии брокера по операциям счёта. В PnL бота они уменьшают итоговый результат."
+        case "cash_effect":
+            return "Денежный эффект операций по счёту: клиринговая вариационная маржа минус комиссии и связанные движения."
+        case "estimated_vm":
+            return "Расчётная текущая вариационная маржа по открытым позициям до следующего окончательного клиринга."
+        default:
+            return "Пояснение к показателю портфеля."
         }
     }
 

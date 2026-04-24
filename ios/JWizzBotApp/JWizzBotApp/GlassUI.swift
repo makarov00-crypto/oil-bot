@@ -112,12 +112,21 @@ struct MetricGlassTile: View {
     let title: String
     let value: String
     var tone: Color = .white
+    var help: String? = nil
+    @State private var showsHelp = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if help != nil {
+                    Image(systemName: "info.circle")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.cyan.opacity(0.85))
+                }
+            }
             Text(value)
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(tone)
@@ -127,6 +136,17 @@ struct MetricGlassTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture {
+            if help != nil {
+                showsHelp = true
+            }
+        }
+        .alert(title, isPresented: $showsHelp) {
+            Button("Понятно", role: .cancel) {}
+        } message: {
+            Text(help ?? "")
+        }
     }
 }
 

@@ -2688,6 +2688,82 @@ def build_dashboard_html() -> str:
       line-height: 1.18;
       letter-spacing: -0.01em;
     }
+    .portfolio-layout {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      margin-top: 14px;
+    }
+    .portfolio-group {
+      background: rgba(10, 18, 34, 0.62);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 14px;
+      padding: 14px;
+    }
+    .portfolio-group h3 {
+      margin: 0 0 4px;
+      font: 700 16px/1.2 "Sora", "Manrope", sans-serif;
+      color: #eef6ff;
+    }
+    .portfolio-group p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .portfolio-metrics {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    }
+    .portfolio-metric {
+      position: relative;
+      min-height: 92px;
+      background: rgba(7, 13, 24, 0.66);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 12px;
+      padding: 12px;
+      outline: none;
+    }
+    .portfolio-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 7px;
+    }
+    .portfolio-help-icon {
+      display: inline-grid;
+      place-items: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(102, 174, 255, 0.26);
+      color: #bfe8ff;
+      font-size: 11px;
+      line-height: 1;
+    }
+    .portfolio-metric::after {
+      content: attr(data-help);
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: calc(100% + 8px);
+      z-index: 5;
+      display: none;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(5, 11, 22, 0.98);
+      border: 1px solid rgba(102, 174, 255, 0.24);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
+      color: #dbe9f8;
+      font: 500 12px/1.45 "Manrope", sans-serif;
+    }
+    .portfolio-metric:hover::after,
+    .portfolio-metric:focus-visible::after {
+      display: block;
+    }
     .muted { color: var(--muted); }
     .good { color: var(--good); }
     .bad { color: var(--bad); }
@@ -3212,60 +3288,78 @@ def build_dashboard_html() -> str:
         <div class="generated" id="portfolioGeneratedAt">Срез портфеля: -</div>
       </div>
       <div class="muted" style="margin-bottom:12px;" id="portfolioMeaning">
-        Блок разделён на три смысла: свободные средства и ГО брокера, денежный эффект операций счёта, и аналитический итог бота по закрытым и открытым позициям.
+        Показатели разделены по смыслу: деньги на счёте, результат бота и сверка с брокерскими движениями. Наведи мышкой на значок “?” у цифры, чтобы увидеть формулу.
       </div>
-      <div class="grid">
-        <div>
-          <div class="muted">Режим</div>
-            <div class="metric metric-wide" id="portfolioMode">-</div>
+      <div class="portfolio-layout">
+        <div class="portfolio-group">
+          <h3>Счёт брокера</h3>
+          <p>Сколько денег есть, сколько свободно и сколько занято под позиции.</p>
+          <div class="portfolio-metrics">
+            <div class="portfolio-metric" data-help="Оценка всего счёта у брокера: свободные деньги плюс текущая стоимость и результат открытых позиций по портфельному срезу." tabindex="0">
+              <div class="portfolio-label">Стоимость портфеля <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioTotal">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Деньги, которые сейчас не заняты гарантийным обеспечением и могут использоваться для новых входов." tabindex="0">
+              <div class="portfolio-label">Свободные деньги <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioFree">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Гарантийное обеспечение по открытым фьючерсным позициям. Чем выше эта сумма, тем меньше места для новых сделок." tabindex="0">
+              <div class="portfolio-label">Занято под ГО <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioBlocked">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Режим работы бота: боевой, тестовый, выходной или ожидание. Он влияет на разрешение новых входов." tabindex="0">
+              <div class="portfolio-label">Режим <span class="portfolio-help-icon">?</span></div>
+              <div class="metric metric-wide" id="portfolioMode">-</div>
+            </div>
+          </div>
         </div>
-        <div>
-          <div class="muted">Портфель</div>
-          <div class="metric" id="portfolioTotal">-</div>
+        <div class="portfolio-group">
+          <h3>Результат бота</h3>
+          <p>Главная оценка торговли: что уже закрыто и что сейчас плавает в открытых позициях.</p>
+          <div class="portfolio-metrics">
+            <div class="portfolio-metric" data-help="Главная цифра для оценки бота: закрытые сделки NET плюс текущий live-результат открытых позиций." tabindex="0">
+              <div class="portfolio-label">Итог бота <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioTotalPnl">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Финальный результат закрытых сделок бота после комиссий. Эта часть уже зафиксирована." tabindex="0">
+              <div class="portfolio-label">Закрытые сделки <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioRealized">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Плавающий результат открытых позиций прямо сейчас. Он ещё может измениться до закрытия сделки." tabindex="0">
+              <div class="portfolio-label">Открытые позиции <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioOpenLive">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Грубая сверка: результат закрытых сделок до части корректировок плюс live-результат открытых позиций." tabindex="0">
+              <div class="portfolio-label">Gross закрытые + live <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioTotalVm">-</div>
+            </div>
+          </div>
         </div>
-        <div>
-          <div class="muted">Свободные RUB</div>
-          <div class="metric" id="portfolioFree">-</div>
-        </div>
-        <div>
-          <div class="muted">ГО</div>
-          <div class="metric" id="portfolioBlocked">-</div>
-        </div>
-        <div>
-          <div class="muted">Закрытые сделки, NET</div>
-          <div class="metric" id="portfolioRealized">-</div>
-        </div>
-        <div>
-          <div class="muted">Комиссия по счёту</div>
-          <div class="metric" id="portfolioActualFee">-</div>
-        </div>
-        <div>
-          <div class="muted">Клиринговая ВМ</div>
-          <div class="metric" id="portfolioActualVm">-</div>
-        </div>
-        <div>
-          <div class="muted">Денежный эффект операций</div>
-          <div class="metric" id="portfolioCashEffect">-</div>
-        </div>
-        <div>
-          <div class="muted">Текущая вар. маржа позиций</div>
-          <div class="metric" id="portfolioVariation">-</div>
-        </div>
-        <div>
-          <div class="muted">Открытые позиции, live</div>
-          <div class="metric" id="portfolioOpenLive">-</div>
-        </div>
-        <div>
-          <div class="muted">Gross закрытых + live открытых</div>
-          <div class="metric" id="portfolioTotalVm">-</div>
-        </div>
-        <div>
-          <div class="muted">Аналитический итог бота</div>
-          <div class="metric" id="portfolioTotalPnl">-</div>
-        </div>
-        <div>
-          <div class="muted">Открытых позиций</div>
-          <div class="metric" id="portfolioOpenCount">-</div>
+        <div class="portfolio-group">
+          <h3>Сверка с брокером</h3>
+          <p>Брокерские движения по вариационной марже, комиссиям и денежному эффекту операций.</p>
+          <div class="portfolio-metrics">
+            <div class="portfolio-metric" data-help="Вариационная маржа, которую брокер уже провёл клирингом по счёту за выбранный день." tabindex="0">
+              <div class="portfolio-label">Клиринговая ВМ <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioActualVm">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Комиссии брокера по операциям счёта. В PnL бота они уменьшают итоговый результат." tabindex="0">
+              <div class="portfolio-label">Комиссия <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioActualFee">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Денежный эффект операций по счёту: клиринговая вариационная маржа минус комиссии и связанные движения." tabindex="0">
+              <div class="portfolio-label">Денежный эффект <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioCashEffect">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Расчётная текущая вариационная маржа по открытым позициям до следующего окончательного клиринга." tabindex="0">
+              <div class="portfolio-label">Текущая ВМ <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioVariation">-</div>
+            </div>
+            <div class="portfolio-metric" data-help="Количество открытых позиций бота, которые сейчас занимают ГО и дают live-результат." tabindex="0">
+              <div class="portfolio-label">Открытых позиций <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioOpenCount">-</div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
