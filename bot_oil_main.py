@@ -4952,6 +4952,18 @@ def execute_capital_rotation_plan(
     state.last_allocator_summary = close_reason
     state.last_signal_summary = [close_reason, *state.last_signal_summary[:2]]
     close_position(client, config, instrument, state, close_reason)
+    close_submitted = (
+        (config.dry_run and state.position_side == "FLAT")
+        or (has_pending_order(state) and state.pending_order_action == "CLOSE")
+    )
+    if not close_submitted:
+        logging.warning(
+            "symbol=%s status=capital_rotation_aborted close_symbol=%s execution_status=%s",
+            candidate_symbol,
+            instrument.symbol,
+            state.execution_status,
+        )
+        return ""
     append_allocator_decision(
         decision="rotation",
         symbol=candidate_symbol,
@@ -7015,6 +7027,8 @@ def run_bot() -> int:
                         selected_symbols: set[str] = set()
                         for item in selected_candidates:
                             symbol = str(item.get("symbol") or "").upper()
+                            if rotation_target_symbol and symbol == rotation_target_symbol:
+                                continue
                             instrument = watchlist_by_symbol.get(symbol)
                             if instrument is None:
                                 continue
@@ -7034,8 +7048,6 @@ def run_bot() -> int:
                                 state.pending_observation_uid = observation_uid
                                 save_state(symbol, state)
                             selected_symbols.add(symbol)
-                        if rotation_target_symbol:
-                            selected_symbols.discard(rotation_target_symbol)
                         for item in deferred_candidates:
                             symbol = str(item.get("symbol") or "").upper()
                             if not symbol:

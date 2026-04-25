@@ -982,6 +982,44 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertIsNone(plan)
 
+    def test_execute_capital_rotation_plan_aborts_when_close_not_submitted(self) -> None:
+        candidate = {
+            "symbol": "BRK6",
+            "signal": "LONG",
+            "priority_score": 0.88,
+            "priority_reason": "высокое качество входа, режим подтверждён",
+            "entry_edge_score": 0.84,
+            "instrument_class": "базовый",
+            "requested_margin_rub": 2000.0,
+            "allocatable_margin_rub": 0.0,
+            "learning_adjustment": 0.03,
+            "learning_reason": "обучение связки: бонус +0.03",
+        }
+        rotating_state = mod.InstrumentState(
+            position_qty=2,
+            position_side="SHORT",
+            execution_status="rejected",
+        )
+        plan = {
+            "candidate": candidate,
+            "position": {
+                "instrument": mod.InstrumentConfig(symbol="VBM6", figi="2", display_name="Bonds"),
+                "state": rotating_state,
+                "hold_score": 0.21,
+                "hold_reason": "позиция ослабла",
+            },
+        }
+
+        with patch.object(mod, "close_position") as close_position, patch.object(
+            mod, "append_allocator_decision"
+        ) as append_decision, patch.object(mod, "mark_cycle_deferred_candidate") as mark_deferred:
+            result = mod.execute_capital_rotation_plan(None, self.config, plan)
+
+        close_position.assert_called_once()
+        append_decision.assert_not_called()
+        mark_deferred.assert_not_called()
+        self.assertEqual(result, "")
+
     def test_adaptive_exit_profile_tightens_in_chop_recovery_mode(self) -> None:
         config = SimpleNamespace(
             min_hold_minutes=30,
