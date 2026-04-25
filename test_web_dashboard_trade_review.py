@@ -17,6 +17,128 @@ else:
 
 class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:
+        rows = []
+        base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)
+        rows.append(
+            {
+                "_dt": base_dt,
+                "_date": "2026-04-24",
+                "time": "2026-04-24T12:00:00+03:00",
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 80.0,
+                "strategy": "trend_rollover",
+                "reason": "open brk6",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            }
+        )
+        for idx in range(205):
+            dt = base_dt.replace(minute=0) + dashboard.timedelta(minutes=idx + 1)
+            rows.append(
+                {
+                    "_dt": dt,
+                    "_date": "2026-04-24",
+                    "time": dt.astimezone(timezone.utc).isoformat(),
+                    "symbol": "TMP",
+                    "side": "LONG",
+                    "event": "OPEN" if idx % 2 == 0 else "CLOSE",
+                    "qty_lots": 1,
+                    "price": 100.0 + idx,
+                    "strategy": "tmp",
+                    "reason": "tmp",
+                }
+            )
+        rows.append(
+            {
+                "_dt": base_dt + dashboard.timedelta(hours=5),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T17:00:00+03:00",
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 81.0,
+                "pnl_rub": 100.0,
+                "net_pnl_rub": 100.0,
+                "strategy": "trend_rollover",
+                "reason": "close brk6",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            }
+        )
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
+            review = dashboard.load_trade_review_for_day(date(2026, 4, 24), limit=20)
+
+        brk6 = next(item for item in review["closed_reviews"] if item["symbol"] == "BRK6")
+        self.assertEqual(brk6["entry_time"], "24.04 12:00:00")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_trade_review_for_day_uses_full_3day_window_for_focus(self) -> None:
+        rows = []
+        for idx in range(25):
+            dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc) + dashboard.timedelta(minutes=idx)
+            rows.append(
+                {
+                    "_dt": dt,
+                    "_date": "2026-04-24",
+                    "time": dt.isoformat(),
+                    "symbol": f"S{idx}",
+                    "side": "LONG",
+                    "event": "OPEN",
+                    "qty_lots": 1,
+                    "price": 100.0,
+                    "strategy": "trend_rollover",
+                    "reason": "open",
+                    "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+                }
+            )
+            rows.append(
+                {
+                    "_dt": dt + dashboard.timedelta(minutes=1),
+                    "_date": "2026-04-24",
+                    "time": (dt + dashboard.timedelta(minutes=1)).isoformat(),
+                    "symbol": f"S{idx}",
+                    "side": "LONG",
+                    "event": "CLOSE",
+                    "qty_lots": 1,
+                    "price": 101.0,
+                    "pnl_rub": 10.0,
+                    "net_pnl_rub": 10.0,
+                    "strategy": "trend_rollover",
+                    "reason": "close",
+                    "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+                }
+            )
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
+            review = dashboard.load_trade_review_for_day(date(2026, 4, 24), limit=20)
+
+        self.assertEqual(review["focus_3d"]["strongest"][0]["count"], 25)
+        self.assertEqual(len(review["closed_reviews"]), 20)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_daily_performance_omits_historical_pct_without_day_portfolio(self) -> None:
+        rows = [
+            {"_date": "2026-04-23", "event": "CLOSE", "pnl_rub": 100.0},
+            {"_date": "2026-04-24", "event": "CLOSE", "pnl_rub": 50.0},
+        ]
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows), patch.object(
+            dashboard, "datetime"
+        ) as fake_datetime:
+            fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+            result = dashboard.build_daily_performance({"total_portfolio_rub": 1000.0}, date(2026, 4, 24), {})
+
+        by_date = {item["date"]: item for item in result["series"]}
+        self.assertIsNone(by_date["2026-04-23"]["pnl_pct"])
+        self.assertIsNone(by_date["2026-04-23"]["cumulative_pnl_pct"])
+        self.assertEqual(by_date["2026-04-24"]["pnl_pct"], 5.0)
+        self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 15.0)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_portfolio_view_for_historical_day_ignores_current_live_positions(self) -> None:
         portfolio = {
             "bot_actual_varmargin_rub": 50.0,

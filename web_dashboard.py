@@ -2202,6 +2202,7 @@ def build_trade_review(
         "worst_edge": {"label": worst_edge[0], "pnl_rub": round(worst_edge[1], 2)} if worst_edge else None,
         "best_strategy_regime": {"label": best_strategy_regime[0], "pnl_rub": round(best_strategy_regime[1], 2)} if best_strategy_regime else None,
         "worst_strategy_regime": {"label": worst_strategy_regime[0], "pnl_rub": round(worst_strategy_regime[1], 2)} if worst_strategy_regime else None,
+        "closed_reviews_full": list(closed_reviews),
         "closed_reviews": closed_reviews[:20],
         "current_open": current_open[:20],
     }
@@ -2344,17 +2345,22 @@ def load_trade_review_for_day(
     states: dict[str, dict] | None = None,
     live_positions: dict[str, dict] | None = None,
 ) -> dict:
-    rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()][-limit:]
+    rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()]
     review = build_trade_review(rows, states, live_positions)
     all_rows = load_all_trade_rows()
     lookback_start = target_day - timedelta(days=2)
     recent_rows = [row for row in all_rows if lookback_start <= row.get("_dt", datetime.min.replace(tzinfo=MOSCOW_TZ)).date() <= target_day]
     recent_review = build_trade_review(recent_rows, states, live_positions)
-    review["focus_today"] = summarize_strategy_regime_focus_from_reviews(review.get("closed_reviews") or [])
-    review["focus_3d"] = summarize_strategy_regime_focus_from_reviews(recent_review.get("closed_reviews") or [])
-    review["edge_focus_today"] = summarize_edge_focus_from_reviews(review.get("closed_reviews") or [])
-    review["edge_focus_3d"] = summarize_edge_focus_from_reviews(recent_review.get("closed_reviews") or [])
+    full_closed_reviews = list(review.get("closed_reviews_full") or review.get("closed_reviews") or [])
+    full_recent_closed_reviews = list(recent_review.get("closed_reviews_full") or recent_review.get("closed_reviews") or [])
+    review["focus_today"] = summarize_strategy_regime_focus_from_reviews(full_closed_reviews)
+    review["focus_3d"] = summarize_strategy_regime_focus_from_reviews(full_recent_closed_reviews)
+    review["edge_focus_today"] = summarize_edge_focus_from_reviews(full_closed_reviews)
+    review["edge_focus_3d"] = summarize_edge_focus_from_reviews(full_recent_closed_reviews)
     review["release1_summary"] = build_strategy_regime_summary(review["focus_today"], review["focus_3d"])
+    review.pop("closed_reviews_full", None)
+    review["closed_reviews"] = full_closed_reviews[:20]
+    review["current_open"] = list(review.get("current_open") or [])[:20]
     return review
 
 
@@ -2363,6 +2369,7 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
     rows = load_all_trade_rows()
     by_day: dict[str, dict[str, float]] = {}
     cumulative = 0.0
+    today_key = datetime.now(MOSCOW_TZ).date().isoformat()
 
     days = sorted({row["_date"] for row in rows} | set((accounting_history or {}).keys()))
     for day_key in days:
@@ -2384,17 +2391,25 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
             elif trade_pnl < 0:
                 losses += 1
         cumulative += pnl
-        pct = (pnl / current_portfolio * 100.0) if current_portfolio else 0.0
-        cumulative_pct = (cumulative / current_portfolio * 100.0) if current_portfolio else 0.0
+        history_entry = dict((accounting_history or {}).get(day_key) or {})
+        portfolio_base = history_entry.get("total_portfolio_rub")
+        if portfolio_base in (None, "", 0, 0.0) and day_key == today_key and current_portfolio:
+            portfolio_base = current_portfolio
+        try:
+            portfolio_base_float = float(portfolio_base) if portfolio_base not in (None, "") else 0.0
+        except Exception:
+            portfolio_base_float = 0.0
+        pct = (pnl / portfolio_base_float * 100.0) if portfolio_base_float else None
+        cumulative_pct = (cumulative / portfolio_base_float * 100.0) if portfolio_base_float else None
         by_day[day_key] = {
             "date": day_key,
             "closed_count": len(day_rows),
             "wins": wins,
             "losses": losses,
             "pnl_rub": round(pnl, 2),
-            "pnl_pct": round(pct, 2),
+            "pnl_pct": round(pct, 2) if pct is not None else None,
             "cumulative_pnl_rub": round(cumulative, 2),
-            "cumulative_pnl_pct": round(cumulative_pct, 2),
+            "cumulative_pnl_pct": round(cumulative_pct, 2) if cumulative_pct is not None else None,
         }
 
     selected_key = target_day.isoformat()
@@ -2409,9 +2424,9 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
                 "wins": 0,
                 "losses": 0,
                 "pnl_rub": 0.0,
-                "pnl_pct": 0.0,
+                "pnl_pct": None,
                 "cumulative_pnl_rub": 0.0,
-                "cumulative_pnl_pct": 0.0,
+                "cumulative_pnl_pct": None,
             },
         ),
         "series": [by_day[day_key] for day_key in days],
