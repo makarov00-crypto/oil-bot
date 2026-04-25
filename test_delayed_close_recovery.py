@@ -376,6 +376,63 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertTrue(all(row["commission_rub"] == 11.0 for row in closes))
         self.assertEqual([row["broker_op_unit"] for row in closes], [0, 1])
 
+    def test_auto_recovery_matches_previous_day_open_closed_after_midnight(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-09T23:58:00+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "lot_size": 1,
+                "price": 101.0,
+                "commission_rub": 6.0,
+                "strategy": "range_break_continuation",
+                "mode": "LIVE",
+                "session": "NIGHT",
+            },
+        ]
+        saved = {}
+        config = SimpleNamespace(account_id="acc", dry_run=False)
+        fee_by_parent = {"close-op": 5.0}
+        trade_ops = [
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="close-op",
+                parent_id="parent",
+                op_type=mod.OperationType.OPERATION_TYPE_BUY,
+                side="LONG",
+                qty=1,
+                price=99.0,
+                dt=datetime(2026, 4, 9, 21, 5, tzinfo=timezone.utc),
+            )
+        ]
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", return_value=list(rows)), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ), patch.object(
+            mod, "fetch_trade_operations_for_day", return_value=(trade_ops, fee_by_parent)
+        ), patch.object(
+            mod, "infer_close_reason_for_recovery", return_value="overnight close"
+        ):
+            recovered = mod.reconcile_missing_trade_closes_from_broker(
+                None,
+                config,
+                [self.instrument],
+                target_day=datetime(2026, 4, 10, tzinfo=timezone.utc).date(),
+            )
+
+        self.assertEqual(recovered, 1)
+        closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0]["reason"], "overnight close")
+
     def test_infer_close_reason_for_recovery_matches_closest_delayed_queue_item(self) -> None:
         state = mod.InstrumentState(
             delayed_close_queue=[

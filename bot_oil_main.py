@@ -1683,17 +1683,22 @@ def build_trade_journal_queues_for_day(
     rows: list[dict[str, Any]],
     target_day: date,
 ) -> tuple[list[dict[str, Any]], set[str]]:
-    day_key = target_day.isoformat()
     queues: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     existing_close_signatures: set[str] = set()
     close_unit_counts: dict[tuple[str, str, int], int] = defaultdict(int)
 
-    target_rows = sorted(
-        [row for row in rows if str(row.get("time", "")).startswith(day_key)],
-        key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC),
-    )
+    relevant_rows: list[tuple[datetime, dict[str, Any]]] = []
+    for row in rows:
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if row_dt is None:
+            continue
+        if row_dt.astimezone(MOSCOW_TZ).date() > target_day:
+            continue
+        relevant_rows.append((row_dt, row))
 
-    for row in target_rows:
+    relevant_rows.sort(key=lambda item: item[0])
+
+    for row_dt, row in relevant_rows:
         symbol = str(row.get("symbol") or "").upper()
         side = str(row.get("side") or "").upper()
         event = str(row.get("event") or "").upper()
@@ -1715,10 +1720,9 @@ def build_trade_journal_queues_for_day(
             continue
         if event != "CLOSE":
             continue
-        row_dt = parse_state_datetime(str(row.get("time") or ""))
         close_qty = max(1, int(row.get("qty_lots") or 0))
-        broker_op_id = str(row.get("broker_op_id") or "")
-        if row_dt is not None:
+        if row_dt.astimezone(MOSCOW_TZ).date() == target_day:
+            broker_op_id = str(row.get("broker_op_id") or "")
             for unit in range(close_qty):
                 if broker_op_id:
                     broker_unit = int(row.get("broker_op_unit") or unit)
