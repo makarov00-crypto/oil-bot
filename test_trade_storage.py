@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import bot_oil_main as mod
+import trade_storage
 from trade_storage import (
     append_signal_observation,
     ensure_trade_db,
@@ -240,6 +241,12 @@ class TradeStorageTests(unittest.TestCase):
             rows = load_trade_rows(journal_path, db_path)
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[-1]["event"], "CLOSE")
+
+    def test_trade_date_uses_moscow_day_for_utc_timestamp(self) -> None:
+        self.assertEqual(
+            trade_storage._trade_date("2026-04-09T21:05:00+00:00"),
+            "2026-04-10",
+        )
 
     def test_signal_observation_lifecycle_uses_sqlite(self) -> None:
         with TemporaryDirectory() as temp_dir:

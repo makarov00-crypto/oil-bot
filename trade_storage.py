@@ -4,9 +4,11 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 SCHEMA_VERSION = 2
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _load_journal_rows(journal_path: Path) -> list[dict[str, Any]]:
@@ -59,7 +61,15 @@ def _event_uid(row: dict[str, Any]) -> str:
 
 def _trade_date(value: str) -> str:
     raw = str(value or "")
-    return raw[:10] if len(raw) >= 10 else ""
+    if not raw:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except Exception:
+        return raw[:10] if len(raw) >= 10 else ""
+    if parsed.tzinfo is None:
+        return parsed.date().isoformat()
+    return parsed.astimezone(MOSCOW_TZ).date().isoformat()
 
 
 def _context_value(context: dict[str, Any], key: str, default: Any = "") -> Any:

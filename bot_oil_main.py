@@ -955,11 +955,11 @@ def update_latest_close_journal_entry(
 
 
 def get_today_trade_journal_rows() -> list[dict[str, Any]]:
-    today = datetime.now(MOSCOW_TZ).date().isoformat()
+    today = datetime.now(MOSCOW_TZ).date()
     rows = []
     for row in load_trade_journal():
-        row_time = str(row.get("time", ""))
-        if row_time.startswith(today):
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if row_dt is not None and row_dt.astimezone(MOSCOW_TZ).date() == today:
             rows.append(row)
     return rows
 
@@ -1015,11 +1015,13 @@ def aggregate_closed_strategy_trades(rows: list[dict[str, Any]]) -> list[dict[st
 
 
 def get_trade_journal_rows_since(start_day: date) -> list[dict[str, Any]]:
-    start_value = start_day.isoformat()
     rows = []
     for row in load_trade_journal():
-        row_day = str(row.get("time", ""))[:10]
-        if row_day >= start_value:
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if row_dt is None:
+            rows.append(row)
+            continue
+        if row_dt.astimezone(MOSCOW_TZ).date() >= start_day:
             rows.append(row)
     return rows
 
@@ -3832,7 +3834,10 @@ def calculate_recent_strategy_performance(
         source_rows = [
             row
             for row in rows
-            if not str(row.get("time", ""))[:10] or str(row.get("time", ""))[:10] >= start_value
+            if (
+                (row_dt := parse_state_datetime(str(row.get("time") or ""))) is None
+                or row_dt.astimezone(MOSCOW_TZ).date().isoformat() >= start_value
+            )
         ]
     target_symbol = str(symbol or "").upper()
     target_strategy = str(strategy_name or "")
@@ -3885,7 +3890,10 @@ def calculate_recent_strategy_regime_performance(
         source_rows = [
             row
             for row in rows
-            if not str(row.get("time", ""))[:10] or str(row.get("time", ""))[:10] >= start_value
+            if (
+                (row_dt := parse_state_datetime(str(row.get("time") or ""))) is None
+                or row_dt.astimezone(MOSCOW_TZ).date().isoformat() >= start_value
+            )
         ]
     target_symbol = str(symbol or "").upper()
     target_strategy = str(strategy_name or "")
