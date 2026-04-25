@@ -2470,13 +2470,6 @@ def build_portfolio_view_for_day(
         )
         or 0.0
     )
-    broker_open_positions_pnl = 0.0
-    for item in (portfolio.get("broker_open_positions") or []):
-        try:
-            broker_open_positions_pnl += float(item.get("expected_yield_rub") or 0.0)
-        except Exception:
-            pass
-
     view["selected_date"] = day_key
     view["report_date"] = day_key
     view["selected_date_moscow"] = target_day.strftime("%d.%m.%Y")
@@ -2492,6 +2485,12 @@ def build_portfolio_view_for_day(
     view["bot_actual_fee_rub"] = round(selected_actual_fee, 2)
     view["bot_actual_cash_effect_rub"] = round(selected_cash_effect, 2)
     if selected_is_today:
+        broker_open_positions_pnl = 0.0
+        for item in (portfolio.get("broker_open_positions") or []):
+            try:
+                broker_open_positions_pnl += float(item.get("expected_yield_rub") or 0.0)
+            except Exception:
+                pass
         estimated_variation = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
         open_positions_count = portfolio.get("open_positions_count")
         live_varmargin_by_symbol: dict[str, float] = {}
@@ -2505,6 +2504,7 @@ def build_portfolio_view_for_day(
                 continue
             live_varmargin_by_symbol[symbol] = round(live_varmargin_by_symbol.get(symbol, 0.0) + live_value, 2)
     else:
+        broker_open_positions_pnl = 0.0
         estimated_variation = 0.0
         open_positions_count = 0
         live_varmargin_by_symbol = {}
@@ -2548,7 +2548,11 @@ def build_portfolio_view_for_day(
 def load_ai_review(target_day: date) -> dict:
     dated_path = AI_REVIEW_DIR / f"{target_day.isoformat()}_review.md"
     latest_path = AI_REVIEW_DIR / "latest_review.md"
-    source_path = dated_path if dated_path.exists() else latest_path
+    today = datetime.now(MOSCOW_TZ).date()
+    if target_day == today:
+        source_path = dated_path if dated_path.exists() else latest_path
+    else:
+        source_path = dated_path
     if not source_path.exists():
         return {
             "available": False,

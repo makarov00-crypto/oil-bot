@@ -1,10 +1,47 @@
 import unittest
 from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import daily_ai_review as review
 
 
 class DailyAiReviewTests(unittest.TestCase):
+    def test_build_review_prompt_for_historical_day_ignores_current_live_state(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            (base_dir / "logs").mkdir(parents=True, exist_ok=True)
+            (base_dir / "bot_state").mkdir(parents=True, exist_ok=True)
+            (base_dir / "logs" / "trade_journal.jsonl").write_text(
+                '{"time":"2026-04-24T10:00:00+03:00","symbol":"BRK6","event":"OPEN","side":"LONG","qty_lots":1,"price":80.0,"strategy":"trend_rollover","reason":"open"}\n'
+                '{"time":"2026-04-24T10:30:00+03:00","symbol":"BRK6","event":"CLOSE","side":"LONG","qty_lots":1,"price":81.0,"pnl_rub":100.0,"net_pnl_rub":100.0,"strategy":"trend_rollover","reason":"close"}\n',
+                encoding="utf-8",
+            )
+            (base_dir / "bot_state" / "_portfolio_snapshot.json").write_text(
+                '{"bot_total_pnl_rub":999.0,"open_positions_count":3,"total_portfolio_rub":70000.0}',
+                encoding="utf-8",
+            )
+            (base_dir / "bot_state" / "_news_snapshot.json").write_text(
+                '{"active_biases":[{"symbol":"LIVEONLY","bias":"LONG","strength":"HIGH","source":"test","reason":"current"}]}',
+                encoding="utf-8",
+            )
+            (base_dir / "bot_state" / "LIVEONLY.json").write_text(
+                '{"position_side":"LONG","position_qty":2,"last_signal":"BUY","last_strategy_name":"momentum_breakout","last_news_bias":"LONG_HIGH","last_signal_summary":["live state"]}',
+                encoding="utf-8",
+            )
+            (base_dir / "bot_state" / "_accounting_history.json").write_text(
+                '{"2026-04-24":{"total_pnl_rub":150.0}}',
+                encoding="utf-8",
+            )
+
+            prompt = review.build_review_prompt(base_dir, date(2026, 4, 24))
+
+        self.assertIn("- итог: 150.00 RUB", prompt)
+        self.assertIn("- Открытых позиций нет.", prompt)
+        self.assertIn("- Нет сохранённого сигнального среза для выбранной даты.", prompt)
+        self.assertIn("- Активных news bias сейчас нет.", prompt)
+        self.assertNotIn("LIVEONLY", prompt)
+
     def test_summarize_closed_trades_tracks_regimes_and_setup_quality(self) -> None:
         trades = [
             review.ClosedTrade(

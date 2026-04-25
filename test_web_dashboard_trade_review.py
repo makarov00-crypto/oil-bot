@@ -17,6 +17,72 @@ else:
 
 class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_portfolio_view_for_historical_day_ignores_current_live_positions(self) -> None:
+        portfolio = {
+            "bot_actual_varmargin_rub": 50.0,
+            "bot_actual_fee_rub": 5.0,
+            "bot_actual_cash_effect_rub": 45.0,
+            "bot_estimated_variation_margin_rub": 220.0,
+            "open_positions_count": 2,
+            "broker_open_positions": [
+                {"symbol": "BRK6", "expected_yield_rub": 120.0, "variation_margin_rub": 120.0},
+                {"symbol": "NGJ6", "expected_yield_rub": -20.0, "variation_margin_rub": -20.0},
+            ],
+        }
+        rows = [
+            {
+                "_dt": datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc),
+                "time": "2026-04-24T13:00:00+03:00",
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "gross_pnl_rub": 100.0,
+                "commission_rub": 10.0,
+                "net_pnl_rub": 90.0,
+                "pnl_rub": 90.0,
+            }
+        ]
+
+        with patch.object(dashboard, "load_trade_rows_for_day", return_value=rows):
+            view = dashboard.build_portfolio_view_for_day(portfolio, date(2026, 4, 24), {})
+
+        self.assertFalse(view["selected_is_today"])
+        self.assertEqual(view["bot_broker_day_pnl_rub"], 0.0)
+        self.assertEqual(view["bot_open_positions_live_pnl_rub"], 0.0)
+        self.assertEqual(view["open_positions_count"], 0)
+        self.assertEqual(view["bot_total_varmargin_rub"], 100.0)
+        self.assertEqual(view["bot_total_pnl_rub"], 100.0)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_ai_review_does_not_fallback_to_latest_for_historical_day(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            review_dir = dashboard.Path(temp_dir)
+            (review_dir / "latest_review.md").write_text("# latest", encoding="utf-8")
+
+            with patch.object(dashboard, "AI_REVIEW_DIR", review_dir):
+                payload = dashboard.load_ai_review(date(2026, 4, 24))
+
+        self.assertFalse(payload["available"])
+        self.assertEqual(payload["status"], "missing")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_ai_review_uses_latest_for_today_when_dated_missing(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            review_dir = dashboard.Path(temp_dir)
+            (review_dir / "latest_review.md").write_text("# latest", encoding="utf-8")
+
+            with patch.object(dashboard, "AI_REVIEW_DIR", review_dir), patch.object(
+                dashboard, "datetime"
+            ) as fake_datetime:
+                fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+                fake_datetime.fromtimestamp.side_effect = datetime.fromtimestamp
+                payload = dashboard.load_ai_review(date(2026, 4, 24))
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["source"], "latest_review.md")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
         catalog = dashboard.build_instrument_catalog()
 

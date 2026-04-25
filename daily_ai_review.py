@@ -144,6 +144,10 @@ def get_portfolio_snapshot_path(base_dir: Path) -> Path:
     return get_state_dir(base_dir) / "_portfolio_snapshot.json"
 
 
+def get_accounting_history_path(base_dir: Path) -> Path:
+    return get_state_dir(base_dir) / "_accounting_history.json"
+
+
 def get_news_snapshot_path(base_dir: Path) -> Path:
     return get_state_dir(base_dir) / "_news_snapshot.json"
 
@@ -585,6 +589,23 @@ def build_market_observations(trades: list[ClosedTrade], states: dict[str, dict[
     return notes[:12]
 
 
+def build_historical_portfolio_context(
+    base_dir: Path,
+    target_day: date,
+    closed_trades: list[ClosedTrade],
+) -> dict[str, Any]:
+    history = load_json(get_accounting_history_path(base_dir))
+    entry = history.get(target_day.isoformat()) if isinstance(history, dict) else {}
+    total_closed = round(sum(float(trade.pnl_rub or 0.0) for trade in closed_trades), 2)
+    return {
+        "bot_realized_pnl_rub": total_closed,
+        "bot_estimated_variation_margin_rub": 0.0,
+        "bot_total_pnl_rub": entry.get("total_pnl_rub"),
+        "open_positions_count": 0,
+        "total_portfolio_rub": None,
+    }
+
+
 def build_prompt(
     target_day: date,
     portfolio: dict[str, Any],
@@ -641,6 +662,8 @@ def build_prompt(
             f"старший_тф={state.get('last_higher_tf_bias','-')}, новости={state.get('last_news_bias','NEUTRAL')}, "
             f"блокер={first_summary_line(state)}"
         )
+    if not signal_lines:
+        signal_lines.append("- Нет сохранённого сигнального среза для выбранной даты.")
 
     news_lines = []
     for item in active_news[:10]:
@@ -907,11 +930,17 @@ def save_review(output_path: Path, target_day: date, model: str, review_text: st
 
 
 def build_review_prompt(base_dir: Path, target_day: date) -> str:
-    portfolio = load_json(get_portfolio_snapshot_path(base_dir))
-    news = load_json(get_news_snapshot_path(base_dir))
-    states = load_states(base_dir)
     trade_rows = load_trade_rows(base_dir, target_day)
     closed_trades = pair_closed_trades(trade_rows)
+    today = datetime.now(MOSCOW_TZ).date()
+    if target_day == today:
+        portfolio = load_json(get_portfolio_snapshot_path(base_dir))
+        news = load_json(get_news_snapshot_path(base_dir))
+        states = load_states(base_dir)
+    else:
+        portfolio = build_historical_portfolio_context(base_dir, target_day, closed_trades)
+        news = {"active_biases": []}
+        states = {}
     recent_rows: list[dict[str, Any]] = []
     for offset in range(3):
         recent_rows.extend(load_trade_rows(base_dir, target_day - timedelta(days=offset)))
