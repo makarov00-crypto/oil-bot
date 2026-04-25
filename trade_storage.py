@@ -269,6 +269,37 @@ def update_signal_observation_outcome(
         )
 
 
+def update_signal_observation_context(
+    db_path: Path,
+    observation_uid: str,
+    context_updates: dict[str, Any],
+) -> None:
+    ensure_trade_db(db_path)
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT context_json FROM signal_observations WHERE observation_uid = ?",
+            (observation_uid,),
+        ).fetchone()
+        if row is None:
+            return
+        context_json = str(row["context_json"] or "")
+        context: dict[str, Any] = {}
+        if context_json:
+            try:
+                context = json.loads(context_json)
+            except Exception:
+                context = {}
+        for key, value in (context_updates or {}).items():
+            if value in ("", None):
+                context.pop(key, None)
+            else:
+                context[key] = value
+        connection.execute(
+            "UPDATE signal_observations SET context_json = ? WHERE observation_uid = ?",
+            (json.dumps(context, ensure_ascii=False, sort_keys=True), observation_uid),
+        )
+
+
 def _row_to_db_tuple(row: dict[str, Any], storage_order: int) -> tuple[Any, ...]:
     context = row.get("context")
     if not isinstance(context, dict):

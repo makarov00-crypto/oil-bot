@@ -134,6 +134,7 @@ class DailyAiReviewTests(unittest.TestCase):
                     "entry_edge_label": "high",
                     "learning_adjustment": -0.08,
                     "learning_reason": "обучение связки: штраф -0.08, 0% подтверждений, 10 наблюд.",
+                    "execution_status": "confirmed_open",
                 },
             },
             {
@@ -246,6 +247,46 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("Операционные выводы по learning-наблюдениям:", prompt)
         self.assertIn("Явных операционных действий по learning-данным пока нет", prompt)
         self.assertNotIn("Снижать приоритет связки", prompt)
+
+    def test_build_prompt_ignores_unexecuted_selected_losses(self) -> None:
+        signal_rows = [
+            {
+                "observed_at": "2026-04-24T10:15:00+03:00",
+                "evaluated_at": "2026-04-24T10:30:00+03:00",
+                "symbol": "UCM6",
+                "signal": "SHORT",
+                "strategy": "opening_range_breakout",
+                "decision": "selected",
+                "market_regime": "range_chop",
+                "setup_quality": "fragile",
+                "favorable": False,
+                "move_pct": -0.7,
+                "context": {
+                    "entry_edge_label": "fragile",
+                    "execution_status": "rejected",
+                    "execution_note": "заявка отклонена",
+                },
+            },
+        ]
+
+        prompt = review.build_prompt(
+            target_day=date(2026, 4, 24),
+            portfolio={
+                "bot_realized_pnl_rub": 0.0,
+                "bot_estimated_variation_margin_rub": 0.0,
+                "bot_total_pnl_rub": 0.0,
+                "open_positions_count": 0,
+                "total_portfolio_rub": 50000.0,
+            },
+            news={"active_biases": []},
+            states={},
+            closed_trades=[],
+            recent_closed_trades=[],
+            signal_observations=signal_rows,
+            recent_signal_observations=signal_rows,
+        )
+
+        self.assertIn("- выбранные, которые не подтвердились: 0", prompt)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ from trade_storage import (
     load_signal_observations,
     load_trade_rows as load_trade_rows_from_storage,
     sync_journal_to_db,
+    update_signal_observation_context,
     update_signal_observation_outcome,
 )
 from tinkoff.invest import (
@@ -200,6 +201,7 @@ class InstrumentState:
     pending_submitted_at: str = ""
     pending_entry_reason: str = ""
     pending_exit_reason: str = ""
+    pending_observation_uid: str = ""
     delayed_close_recovery_needed: bool = False
     delayed_close_side: str = ""
     delayed_close_qty: int = 0
@@ -380,6 +382,7 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_submitted_at = ""
     state.pending_entry_reason = ""
     state.pending_exit_reason = ""
+    state.pending_observation_uid = ""
 
 
 def clear_delayed_close_recovery(state: InstrumentState) -> None:
@@ -670,6 +673,8 @@ def append_signal_observation_decision(
         "allocatable_margin_rub": float(candidate.get("allocatable_margin_rub") or 0.0),
         "requested_margin_rub": float(candidate.get("requested_margin_rub") or 0.0),
         "candle_time": str(candidate.get("candle_time") or ""),
+        "execution_status": str(candidate.get("execution_status") or ""),
+        "execution_note": str(candidate.get("execution_note") or ""),
     }
     observation_key = str(
         candidate.get("observation_key")
@@ -697,6 +702,37 @@ def append_signal_observation_decision(
         "context": {key: value for key, value in context.items() if value not in ("", None, 0.0)},
     }
     return append_signal_observation(TRADE_DB_PATH, row)
+
+
+def selected_signal_execution_status(state: InstrumentState) -> tuple[str, str]:
+    if has_pending_order(state) and state.pending_order_action == "OPEN":
+        return "submitted_open", f"заявка отправлена брокеру: {state.pending_order_id or '-'}"
+    if state.position_side != "FLAT" and state.position_qty > 0:
+        if state.execution_status == "recovered_open":
+            return "recovered_open", compact_reason(state.entry_reason or "позиция восстановлена по брокерскому портфелю")
+        return "confirmed_open", compact_reason(state.entry_reason or "позиция подтверждена")
+    if state.execution_status == "rejected":
+        return "rejected", compact_reason(state.last_error or "заявка отклонена")
+    return "selection_not_executed", compact_reason(state.last_error or "сигнал не дошёл до открытия позиции")
+
+
+def update_pending_signal_observation_execution(
+    state: InstrumentState,
+    *,
+    execution_status: str,
+    execution_note: str = "",
+) -> None:
+    observation_uid = str(state.pending_observation_uid or "").strip()
+    if not observation_uid:
+        return
+    update_signal_observation_context(
+        TRADE_DB_PATH,
+        observation_uid,
+        {
+            "execution_status": execution_status,
+            "execution_note": compact_reason(execution_note) if execution_note else "",
+        },
+    )
 
 
 def get_price_near_observation_horizon(
@@ -1347,6 +1383,11 @@ def confirm_pending_open_from_broker(
             commission_rub=entry_fee_rub,
             net_pnl_rub=-entry_fee_rub,
         )
+    update_pending_signal_observation_execution(
+        state,
+        execution_status="confirmed_open",
+        execution_note=state.entry_reason or "открытие подтверждено по брокерскому портфелю",
+    )
     state.execution_status = "confirmed_open"
     state.last_error = ""
     clear_pending_order(state)
@@ -5862,6 +5903,11 @@ def sync_pending_order(
                 state,
                 not_before=pending_submitted_at,
             ):
+                update_pending_signal_observation_execution(
+                    state,
+                    execution_status="recovered_open",
+                    execution_note="позиция синхронизирована по портфелю",
+                )
                 state.execution_status = "recovered_open"
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
@@ -5869,12 +5915,25 @@ def sync_pending_order(
                 )
             elif synced_qty != 0 and state.entry_price is not None:
                 refresh_position_snapshot(state, instrument, get_last_price(client, instrument))
+                update_pending_signal_observation_execution(
+                    state,
+                    execution_status="recovered_open",
+                    execution_note="позиция синхронизирована по портфелю",
+                )
                 state.execution_status = "recovered_open"
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера, "
                     "позиция синхронизирована по портфелю."
                 )
             else:
+                update_pending_signal_observation_execution(
+                    state,
+                    execution_status="rejected",
+                    execution_note=(
+                        f"Статус заявки {state.pending_order_id} не найден у брокера. "
+                        "Подвисшая заявка очищена, открытой позиции нет."
+                    ),
+                )
                 state.execution_status = "rejected"
                 state.last_error = (
                     f"Статус заявки {state.pending_order_id} не найден у брокера. "
@@ -5900,6 +5959,14 @@ def sync_pending_order(
                     pending_submitted_at=pending_submitted_at,
                     grace_seconds=None,
                 )
+            update_pending_signal_observation_execution(
+                state,
+                execution_status="rejected",
+                execution_note=(
+                    f"Статус заявки {state.pending_order_id} не найден у брокера. "
+                    "Заявка очищена без подтверждения позиции."
+                ),
+            )
             state.execution_status = "rejected"
             state.last_error = (
                 f"Статус заявки {state.pending_order_id} не найден у брокера. "
@@ -5952,6 +6019,11 @@ def sync_pending_order(
                 strategy=state.entry_strategy,
                 dry_run=False,
                 state=state,
+            )
+            update_pending_signal_observation_execution(
+                state,
+                execution_status="confirmed_open",
+                execution_note=state.entry_reason or "сделка исполнена по заявке",
             )
         elif state.pending_order_action == "CLOSE":
             gross_pnl = 0.0
@@ -6016,6 +6088,11 @@ def sync_pending_order(
         OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED,
     }:
         rejection_reason = summarize_pending_order_rejection(client, config, instrument, state)
+        update_pending_signal_observation_execution(
+            state,
+            execution_status="rejected",
+            execution_note=rejection_reason,
+        )
         state.execution_status = "rejected"
         state.last_error = rejection_reason
         state.last_signal_summary = [rejection_reason, *state.last_signal_summary[:2]]
@@ -6913,6 +6990,7 @@ def run_bot() -> int:
                             watchlist_refresh_at,
                         )
                         maybe_refresh_news_snapshot()
+                        watchlist_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
                         cycle_candidates: list[dict[str, Any]] = []
                         for instrument in watchlist:
                             candidate = process_instrument(
@@ -6924,12 +7002,6 @@ def run_bot() -> int:
                             if candidate:
                                 cycle_candidates.append(candidate)
                         selected_candidates, deferred_candidates = rank_cycle_entry_candidates(cycle_candidates)
-                        for item in selected_candidates:
-                            append_signal_observation_decision(
-                                item,
-                                decision="selected",
-                                decision_reason="кандидат выбран аллокатором для входа в этом цикле",
-                            )
                         for item in deferred_candidates:
                             append_signal_observation_decision(
                                 item,
@@ -6940,7 +7012,28 @@ def run_bot() -> int:
                         rotation_plan = select_capital_rotation_plan(watchlist, cycle_candidates)
                         if rotation_plan:
                             rotation_target_symbol = execute_capital_rotation_plan(client, config, rotation_plan)
-                        selected_symbols = {str(item.get("symbol") or "").upper() for item in selected_candidates}
+                        selected_symbols: set[str] = set()
+                        for item in selected_candidates:
+                            symbol = str(item.get("symbol") or "").upper()
+                            instrument = watchlist_by_symbol.get(symbol)
+                            if instrument is None:
+                                continue
+                            process_instrument(client, config, instrument)
+                            state = load_state(symbol)
+                            execution_status, execution_note = selected_signal_execution_status(state)
+                            observation_uid = append_signal_observation_decision(
+                                {
+                                    **item,
+                                    "execution_status": execution_status,
+                                    "execution_note": execution_note,
+                                },
+                                decision="selected",
+                                decision_reason="кандидат выбран аллокатором для входа в этом цикле",
+                            )
+                            if execution_status == "submitted_open":
+                                state.pending_observation_uid = observation_uid
+                                save_state(symbol, state)
+                            selected_symbols.add(symbol)
                         if rotation_target_symbol:
                             selected_symbols.discard(rotation_target_symbol)
                         for item in deferred_candidates:
@@ -6962,9 +7055,6 @@ def run_bot() -> int:
                                 )
                             mark_cycle_deferred_candidate(item, defer_reason)
                             logging.info("symbol=%s status=entry_deferred_cycle_rank reason=%s", symbol, defer_reason)
-                        for instrument in watchlist:
-                            if instrument.symbol.upper() in selected_symbols:
-                                process_instrument(client, config, instrument)
                         recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)
                         if recovered_closes:
                             logging.warning("journal_auto_recovery_applied recovered_closes=%s", recovered_closes)

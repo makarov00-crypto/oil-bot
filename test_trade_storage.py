@@ -11,6 +11,7 @@ from trade_storage import (
     ensure_trade_db,
     load_signal_observations,
     load_trade_rows,
+    update_signal_observation_context,
     update_signal_observation_outcome,
 )
 
@@ -319,6 +320,36 @@ class TradeStorageTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["decision_reason"], "повторный проход цикла")
         self.assertEqual(rows[0]["observed_price"], 80.2)
+
+    def test_update_signal_observation_context_merges_execution_status(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "trade_analytics.sqlite3"
+            uid = append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T10:00:05+03:00",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "strategy": "range_break_continuation",
+                    "decision": "selected",
+                    "decision_reason": "первый проход цикла",
+                    "observed_price": 80.0,
+                    "context": {"candle_time": "2026-04-24 10:00", "entry_edge_label": "high"},
+                },
+            )
+            update_signal_observation_context(
+                db_path,
+                uid,
+                {
+                    "execution_status": "confirmed_open",
+                    "execution_note": "позиция открыта",
+                },
+            )
+            rows = load_signal_observations(db_path)
+
+        self.assertEqual(rows[0]["context"]["entry_edge_label"], "high")
+        self.assertEqual(rows[0]["context"]["execution_status"], "confirmed_open")
+        self.assertEqual(rows[0]["context"]["execution_note"], "позиция открыта")
 
 
 if __name__ == "__main__":

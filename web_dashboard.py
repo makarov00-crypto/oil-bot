@@ -1334,6 +1334,14 @@ def _signal_observation_context_float(row: dict[str, Any], key: str, default: fl
         return default
 
 
+def _signal_observation_execution_status(row: dict[str, Any]) -> str:
+    return _signal_observation_context_value(row, "execution_status", "").strip().lower()
+
+
+def _signal_observation_was_executed(row: dict[str, Any]) -> bool:
+    return _signal_observation_execution_status(row) in {"confirmed_open", "recovered_open"}
+
+
 def _signal_observation_combo_label(row: dict[str, Any]) -> str:
     symbol = str(row.get("symbol") or "-")
     signal = str(row.get("signal") or "-").upper()
@@ -1529,7 +1537,11 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
     deferred = [item for item in rows if str(item.get("decision") or "") == "deferred"]
     selected = [item for item in rows if str(item.get("decision") or "") == "selected"]
     deferred_favorable = [item for item in deferred if item.get("favorable") is True]
-    selected_unfavorable = [item for item in selected if item.get("evaluated_at") and item.get("favorable") is False]
+    selected_unfavorable = [
+        item
+        for item in selected
+        if _signal_observation_was_executed(item) and item.get("evaluated_at") and item.get("favorable") is False
+    ]
     pending = [item for item in rows if not item.get("evaluated_at")]
     learning_bonus_rows = [
         item for item in rows if (_signal_observation_context_float(item, "learning_adjustment") >= 0.005)

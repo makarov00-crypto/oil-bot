@@ -352,6 +352,14 @@ def signal_observation_context_float(row: dict[str, Any], key: str, default: flo
         return default
 
 
+def signal_observation_execution_status(row: dict[str, Any]) -> str:
+    return signal_observation_context_value(row, "execution_status", "").strip().lower()
+
+
+def signal_observation_was_executed(row: dict[str, Any]) -> bool:
+    return signal_observation_execution_status(row) in {"confirmed_open", "recovered_open"}
+
+
 def signal_observation_combo_label(row: dict[str, Any]) -> str:
     symbol = str(row.get("symbol") or "-")
     signal = str(row.get("signal") or "-").upper()
@@ -377,7 +385,9 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
     deferred = [row for row in rows if str(row.get("decision") or "") == "deferred"]
     deferred_favorable = [row for row in deferred if row.get("favorable") is True]
     selected_unfavorable = [
-        row for row in selected if row.get("evaluated_at") and row.get("favorable") is False
+        row
+        for row in selected
+        if signal_observation_was_executed(row) and row.get("evaluated_at") and row.get("favorable") is False
     ]
     learning_bonus_rows = [
         row for row in rows if signal_observation_context_float(row, "learning_adjustment") >= 0.005

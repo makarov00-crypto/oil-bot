@@ -297,6 +297,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                         "entry_edge_label": "fragile",
                         "learning_adjustment": -0.07,
                         "learning_reason": "обучение связки: штраф -0.07, 20% подтверждений, 5 наблюд.",
+                        "execution_status": "confirmed_open",
                     },
                 },
             )
@@ -345,6 +346,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                         "entry_edge_label": "fragile",
                         "learning_adjustment": -0.08,
                         "learning_reason": "обучение связки: штраф -0.08, 18% подтверждений, 6 наблюд.",
+                        "execution_status": "confirmed_open",
                     },
                 },
             )
@@ -374,6 +376,41 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(summary["combos"]["weakest"][0]["symbol"], "UCM6")
         self.assertEqual(summary["combos"]["weakest"][0]["confirmation_rate"], 0.0)
         self.assertTrue(summary["combos"]["weakest"][0]["sample_warning"])
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_signal_observation_summary_ignores_unexecuted_selected_losses(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T11:15:00+03:00",
+                    "evaluated_at": "2026-04-24T11:30:00+03:00",
+                    "symbol": "UCM6",
+                    "signal": "SHORT",
+                    "strategy": "opening_range_breakout",
+                    "decision": "selected",
+                    "decision_reason": "вошёл по приоритету",
+                    "priority_score": 0.82,
+                    "market_regime": "range_chop",
+                    "setup_quality": "fragile",
+                    "observed_price": 7.20,
+                    "current_price": 7.25,
+                    "move_pct": -0.69,
+                    "favorable": False,
+                    "context": {
+                        "entry_edge_label": "fragile",
+                        "execution_status": "rejected",
+                        "execution_note": "заявка отклонена",
+                    },
+                },
+            )
+
+            with patch.object(dashboard, "TRADE_DB_PATH", db_path):
+                summary = dashboard.load_signal_observation_summary_for_day(date(2026, 4, 24))
+
+        self.assertEqual(summary["selected"], 1)
+        self.assertEqual(summary["selected_unfavorable"], 0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_signal_observation_summary_ignores_pending_learning_for_actions(self) -> None:
