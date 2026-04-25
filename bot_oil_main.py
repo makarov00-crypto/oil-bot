@@ -1779,13 +1779,23 @@ def infer_open_fee_for_recovery(
 
 def infer_close_reason_for_recovery(symbol: str, side: str, qty: int, close_dt: datetime) -> str:
     state = load_state(symbol)
-    delayed_reason = compact_reason(str(state.delayed_close_reason or ""))
-    delayed_side = str(state.delayed_close_side or "").upper()
-    delayed_qty = int(state.delayed_close_qty or 0)
-    delayed_at = parse_state_datetime(state.delayed_close_submitted_at)
-    if delayed_reason and delayed_side == side and delayed_qty == qty and delayed_at is not None:
-        if abs((close_dt - delayed_at).total_seconds()) <= 12 * 60 * 60:
-            return delayed_reason
+    best_delayed_reason = ""
+    best_delayed_delta: float | None = None
+    for item in ensure_delayed_close_queue(state):
+        delayed_reason = compact_reason(str(item.get("reason") or ""))
+        delayed_side = str(item.get("side") or "").upper()
+        delayed_qty = int(item.get("qty") or 0)
+        delayed_at = parse_state_datetime(str(item.get("submitted_at") or ""))
+        if not delayed_reason or delayed_side != side or delayed_qty != qty or delayed_at is None:
+            continue
+        delayed_delta = abs((close_dt - delayed_at).total_seconds())
+        if delayed_delta > 12 * 60 * 60:
+            continue
+        if best_delayed_delta is None or delayed_delta < best_delayed_delta:
+            best_delayed_reason = delayed_reason
+            best_delayed_delta = delayed_delta
+    if best_delayed_reason:
+        return best_delayed_reason
 
     last_reason = compact_reason(str(state.last_exit_reason or ""))
     last_side = str(state.last_exit_side or "").upper()

@@ -376,6 +376,43 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertTrue(all(row["commission_rub"] == 11.0 for row in closes))
         self.assertEqual([row["broker_op_unit"] for row in closes], [0, 1])
 
+    def test_infer_close_reason_for_recovery_matches_closest_delayed_queue_item(self) -> None:
+        state = mod.InstrumentState(
+            delayed_close_queue=[
+                {
+                    "side": "SHORT",
+                    "qty": 1,
+                    "entry_price": 101.0,
+                    "entry_commission_rub": 5.0,
+                    "strategy": "s1",
+                    "reason": "Старый reason",
+                    "entry_time": datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc).isoformat(),
+                    "submitted_at": datetime(2026, 4, 10, 10, 0, tzinfo=timezone.utc).isoformat(),
+                },
+                {
+                    "side": "SHORT",
+                    "qty": 1,
+                    "entry_price": 99.0,
+                    "entry_commission_rub": 5.0,
+                    "strategy": "s2",
+                    "reason": "Нужный reason",
+                    "entry_time": datetime(2026, 4, 10, 11, 0, tzinfo=timezone.utc).isoformat(),
+                    "submitted_at": datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc).isoformat(),
+                },
+            ]
+        )
+        mod.sync_legacy_delayed_close_fields(state)
+
+        with patch.object(mod, "load_state", return_value=state):
+            reason = mod.infer_close_reason_for_recovery(
+                "TEST",
+                "SHORT",
+                1,
+                datetime(2026, 4, 10, 12, 3, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(reason, "Нужный reason")
+
     def test_append_trade_journal_skips_semantic_duplicate_open_from_recovery(self) -> None:
         instrument = mod.InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
         with TemporaryDirectory() as tmpdir:
