@@ -21,6 +21,7 @@ from bot_oil_main import TRADE_JOURNAL_PATH, is_duplicate_carry_open, parse_stat
 class AuditResult:
     bogus_rebuild_opens: list[dict[str, Any]]
     duplicate_portfolio_recovery_opens: list[dict[str, Any]]
+    duplicate_orphan_closes: list[dict[str, Any]]
     orphan_closes: list[dict[str, Any]]
     stale_unmatched_open_counts: dict[str, int]
     live_unmatched_open_counts: dict[str, int]
@@ -107,7 +108,9 @@ def classify_journal(rows: list[dict[str, Any]]) -> AuditResult:
     duplicate_portfolio_recovery_opens = find_duplicate_portfolio_recovery_opens(rows)
 
     queues: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    close_history: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     orphan_closes: list[dict[str, Any]] = []
+    duplicate_orphan_closes: list[dict[str, Any]] = []
     for row in rows:
         symbol = str(row.get("symbol") or "").upper()
         side = str(row.get("side") or "").upper()
@@ -126,8 +129,27 @@ def classify_journal(rows: list[dict[str, Any]]) -> AuditResult:
             continue
         if queues[key]:
             queues[key].pop()
+            close_history[key].append(row)
         else:
-            orphan_closes.append(row)
+            previous_close = close_history[key][-1] if close_history[key] else None
+            is_duplicate = False
+            if previous_close is not None:
+                previous_dt = previous_close.get("_dt")
+                current_dt = row.get("_dt")
+                if previous_dt is not None and current_dt is not None:
+                    delta_seconds = (current_dt - previous_dt).total_seconds()
+                    if 0 <= delta_seconds <= 3 * 60 * 60:
+                        is_duplicate = True
+                if (
+                    str(previous_close.get("strategy") or "") == str(row.get("strategy") or "")
+                    and str(previous_close.get("reason") or "") == str(row.get("reason") or "")
+                ):
+                    is_duplicate = True
+            if is_duplicate:
+                duplicate_orphan_closes.append(row)
+            else:
+                orphan_closes.append(row)
+            close_history[key].append(row)
 
     live_positions = load_live_position_map()
     stale_unmatched_open_counts: dict[str, int] = {}
@@ -146,6 +168,7 @@ def classify_journal(rows: list[dict[str, Any]]) -> AuditResult:
     return AuditResult(
         bogus_rebuild_opens=bogus_rebuild_opens,
         duplicate_portfolio_recovery_opens=duplicate_portfolio_recovery_opens,
+        duplicate_orphan_closes=duplicate_orphan_closes,
         orphan_closes=orphan_closes,
         stale_unmatched_open_counts=dict(sorted(stale_unmatched_open_counts.items())),
         live_unmatched_open_counts=dict(sorted(live_unmatched_open_counts.items())),
@@ -169,7 +192,11 @@ def make_row_key(row: dict[str, Any]) -> tuple[Any, ...]:
 def cleanup_safe_rows(rows: list[dict[str, Any]], audit: AuditResult) -> tuple[list[dict[str, Any]], int]:
     removable_keys = {
         make_row_key(row)
-        for row in [*audit.bogus_rebuild_opens, *audit.duplicate_portfolio_recovery_opens]
+        for row in [
+            *audit.bogus_rebuild_opens,
+            *audit.duplicate_portfolio_recovery_opens,
+            *audit.duplicate_orphan_closes,
+        ]
     }
     kept: list[dict[str, Any]] = []
     removed = 0
@@ -188,6 +215,7 @@ def payload_from_audit(audit: AuditResult) -> dict[str, Any]:
         "ok": True,
         "bogus_rebuild_open_count": len(audit.bogus_rebuild_opens),
         "duplicate_portfolio_recovery_open_count": len(audit.duplicate_portfolio_recovery_opens),
+        "duplicate_orphan_close_count": len(audit.duplicate_orphan_closes),
         "orphan_close_count": len(audit.orphan_closes),
         "stale_unmatched_open_counts": audit.stale_unmatched_open_counts,
         "live_unmatched_open_counts": audit.live_unmatched_open_counts,
@@ -198,6 +226,10 @@ def payload_from_audit(audit: AuditResult) -> dict[str, Any]:
         "duplicate_portfolio_recovery_opens": [
             {key: row.get(key) for key in ("time", "symbol", "side", "price", "strategy", "reason")}
             for row in audit.duplicate_portfolio_recovery_opens
+        ],
+        "duplicate_orphan_closes": [
+            {key: row.get(key) for key in ("time", "symbol", "side", "price", "strategy", "source", "reason")}
+            for row in audit.duplicate_orphan_closes
         ],
         "orphan_closes": [
             {key: row.get(key) for key in ("time", "symbol", "side", "price", "strategy", "source", "reason")}
@@ -226,6 +258,7 @@ def main() -> int:
     else:
         print(f"Ложных rebuild OPEN: {payload['bogus_rebuild_open_count']}")
         print(f"Дублей portfolio_recovery OPEN: {payload['duplicate_portfolio_recovery_open_count']}")
+        print(f"Дублей orphan CLOSE: {payload['duplicate_orphan_close_count']}")
         print(f"Orphan CLOSE: {payload['orphan_close_count']}")
         print(f"Stale unmatched OPEN по символам: {payload['stale_unmatched_open_counts']}")
         print(f"Live unmatched OPEN по символам: {payload['live_unmatched_open_counts']}")

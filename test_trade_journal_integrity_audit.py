@@ -51,6 +51,17 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
                 "source": "delayed_broker_ops_recovery",
                 "reason": "orphan",
             },
+            {
+                "time": "2026-04-20T10:01:00+03:00",
+                "symbol": "TEST",
+                "event": "CLOSE",
+                "side": "SHORT",
+                "price": 11.102,
+                "qty_lots": 1,
+                "strategy": "range_break_continuation",
+                "source": "delayed_broker_ops_recovery",
+                "reason": "orphan",
+            },
         ]
 
         with patch.object(audit_mod, "load_rows", return_value=[dict(row) for row in rows]), patch.object(
@@ -61,6 +72,7 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
         self.assertEqual(len(audit.bogus_rebuild_opens), 1)
         self.assertEqual(len(audit.duplicate_portfolio_recovery_opens), 1)
         self.assertEqual(len(audit.orphan_closes), 1)
+        self.assertEqual(len(audit.duplicate_orphan_closes), 1)
 
     def test_cleanup_safe_rows_removes_only_safe_categories(self) -> None:
         rows = [
@@ -108,6 +120,17 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
                 "source": "delayed_broker_ops_recovery",
                 "reason": "orphan",
             },
+            {
+                "time": "2026-04-20T10:01:00+03:00",
+                "symbol": "TEST",
+                "event": "CLOSE",
+                "side": "SHORT",
+                "price": 11.102,
+                "qty_lots": 1,
+                "strategy": "range_break_continuation",
+                "source": "delayed_broker_ops_recovery",
+                "reason": "orphan",
+            },
         ]
         enriched = []
         for row in rows:
@@ -118,7 +141,7 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
 
         cleaned_rows, removed = audit_mod.cleanup_safe_rows(enriched, audit)
 
-        self.assertEqual(removed, 2)
+        self.assertEqual(removed, 3)
         self.assertEqual(len(cleaned_rows), 2)
         self.assertEqual(cleaned_rows[0]["source"], "portfolio_confirmation")
         self.assertEqual(cleaned_rows[1]["source"], "delayed_broker_ops_recovery")
