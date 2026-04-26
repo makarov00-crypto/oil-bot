@@ -1881,11 +1881,12 @@ def load_all_trade_rows() -> list[dict]:
     return normalized_rows
 
 
-def load_trade_rows_for_day(target_day: date, limit: int = 200) -> list[dict]:
+def load_trade_rows_for_day(target_day: date, limit: int | None = 200) -> list[dict]:
     rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()]
     rows.sort(key=lambda row: row.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ))
     normalized: list[dict] = []
-    for row in rows[-limit:]:
+    visible_rows = rows if limit is None or limit <= 0 else rows[-limit:]
+    for row in visible_rows:
         item = dict(row)
         dt = item.pop("_dt", None)
         item.pop("_date", None)
@@ -2367,8 +2368,12 @@ def build_strategy_regime_summary(
 
 
 def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) -> dict:
-    rows = load_all_trade_rows()[-limit:]
-    return build_trade_review(rows, states)
+    review = build_trade_review(load_all_trade_rows(), states)
+    full_closed_reviews = list(review.get("closed_reviews_full") or review.get("closed_reviews") or [])
+    review.pop("closed_reviews_full", None)
+    review["closed_reviews"] = full_closed_reviews[:limit]
+    review["current_open"] = list(review.get("current_open") or [])[:limit]
+    return review
 
 
 def load_trade_review_for_day(
@@ -5294,7 +5299,7 @@ def api_dashboard(date: str | None = None) -> dict:
         except ValueError:
             pass
     portfolio_view = build_portfolio_view_for_day(portfolio, target_day, accounting_history)
-    trades = annotate_trade_rows(load_trade_rows_for_day(target_day, 200), display_states, broker_positions)
+    trades = annotate_trade_rows(load_trade_rows_for_day(target_day, None), display_states, broker_positions)
     instrument_catalog = build_instrument_catalog(portfolio, trades)
     return {
         "service": get_bot_service_status(),

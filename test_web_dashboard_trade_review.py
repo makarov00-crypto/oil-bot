@@ -120,6 +120,66 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(len(review["closed_reviews"]), 20)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_trade_review_keeps_pairing_when_global_rows_exceed_limit(self) -> None:
+        rows = []
+        base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)
+        rows.append(
+            {
+                "_dt": base_dt,
+                "_date": "2026-04-24",
+                "time": "2026-04-24T12:00:00+03:00",
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 80.0,
+                "strategy": "trend_rollover",
+                "reason": "open brk6",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            }
+        )
+        for idx in range(205):
+            dt = base_dt.replace(minute=0) + dashboard.timedelta(minutes=idx + 1)
+            rows.append(
+                {
+                    "_dt": dt,
+                    "_date": "2026-04-24",
+                    "time": dt.astimezone(timezone.utc).isoformat(),
+                    "symbol": "TMP",
+                    "side": "LONG",
+                    "event": "OPEN" if idx % 2 == 0 else "CLOSE",
+                    "qty_lots": 1,
+                    "price": 100.0 + idx,
+                    "strategy": "tmp",
+                    "reason": "tmp",
+                }
+            )
+        rows.append(
+            {
+                "_dt": base_dt + dashboard.timedelta(hours=5),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T17:00:00+03:00",
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 81.0,
+                "pnl_rub": 100.0,
+                "net_pnl_rub": 100.0,
+                "strategy": "trend_rollover",
+                "reason": "close brk6",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            }
+        )
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
+            review = dashboard.load_trade_review(limit=20)
+
+        brk6 = next(item for item in review["closed_reviews"] if item["symbol"] == "BRK6")
+        self.assertEqual(brk6["entry_time"], "24.04 12:00:00")
+        self.assertEqual(len(review["closed_reviews"]), 20)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_daily_performance_omits_historical_pct_without_day_portfolio(self) -> None:
         rows = [
             {"_date": "2026-04-23", "event": "CLOSE", "pnl_rub": 100.0},
@@ -232,6 +292,34 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertTrue(payload["available"])
         self.assertEqual(payload["source"], "latest_review.md")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_api_dashboard_loads_full_day_trades_before_annotation(self) -> None:
+        with patch.object(dashboard, "load_states", return_value={}), patch.object(
+            dashboard, "load_portfolio_snapshot", return_value={}
+        ), patch.object(dashboard, "load_accounting_history", return_value={}), patch.object(
+            dashboard, "load_runtime_status", return_value={}
+        ), patch.object(dashboard, "build_portfolio_view_for_day", return_value={}), patch.object(
+            dashboard, "annotate_trade_rows", return_value=[]
+        ) as annotate_mock, patch.object(dashboard, "load_trade_rows_for_day", return_value=[]) as rows_mock, patch.object(
+            dashboard, "build_instrument_catalog", return_value={}
+        ), patch.object(dashboard, "get_bot_service_status", return_value={}), patch.object(
+            dashboard, "build_health_payload", return_value={}
+        ), patch.object(dashboard, "build_capital_alert", return_value={}), patch.object(
+            dashboard, "load_news_snapshot", return_value={}
+        ), patch.object(dashboard, "load_trade_review_for_day", return_value={}), patch.object(
+            dashboard, "load_allocator_decisions_for_day", return_value=[]
+        ), patch.object(dashboard, "load_signal_observation_summary_for_day", return_value={}), patch.object(
+            dashboard, "summarize_states", return_value={}
+        ), patch.object(dashboard, "load_meta", return_value={}), patch.object(
+            dashboard, "build_manual_instruments_payload", return_value=[]
+        ), patch.object(dashboard, "build_daily_performance", return_value={}), patch.object(
+            dashboard, "load_ai_review", return_value={}
+        ):
+            dashboard.api_dashboard("2026-04-24")
+
+        rows_mock.assert_called_once_with(date(2026, 4, 24), None)
+        annotate_mock.assert_called_once()
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
