@@ -841,6 +841,89 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertIn("TEST:SHORT:ts:1776082522:0", close_signatures)
         self.assertIn("TEST:SHORT:ts:1776082522:1", close_signatures)
 
+    def test_trade_journal_queue_ignores_duplicate_carry_open_and_matches_latest_open(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-16T23:14:10+03:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 100.0,
+                "strategy": "momentum_breakout",
+                "source": "portfolio_confirmation",
+            },
+            {
+                "time": "2026-04-17T08:50:19+03:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 100.0,
+                "strategy": "momentum_breakout",
+                "source": "portfolio_confirmation",
+            },
+            {
+                "time": "2026-04-17T09:00:31+03:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 99.5,
+                "source": "broker_ops_auto_recovery",
+            },
+        ]
+
+        unmatched, _close_signatures = mod.build_trade_journal_queues_for_day(
+            rows,
+            datetime(2026, 4, 17, tzinfo=timezone.utc).date(),
+        )
+
+        self.assertEqual(unmatched, [])
+
+    def test_pair_trade_journal_rows_ignores_duplicate_carry_open(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-16T23:14:10+03:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 100.0,
+                "reason": "carry open",
+                "strategy": "momentum_breakout",
+                "source": "portfolio_confirmation",
+            },
+            {
+                "time": "2026-04-17T08:50:19+03:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 100.0,
+                "reason": "duplicate carry open",
+                "strategy": "momentum_breakout",
+                "source": "portfolio_confirmation",
+            },
+            {
+                "time": "2026-04-17T09:00:31+03:00",
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 99.5,
+                "reason": "close",
+                "strategy": "momentum_breakout",
+                "source": "broker_ops_auto_recovery",
+            },
+        ]
+
+        closed_reviews, current_open = mod.pair_trade_journal_rows(rows)
+
+        self.assertEqual(len(closed_reviews), 1)
+        self.assertEqual(closed_reviews[0]["entry_time"], "2026-04-16T23:14:10+03:00")
+        self.assertEqual(current_open, {})
+
 
 if __name__ == "__main__":
     unittest.main()

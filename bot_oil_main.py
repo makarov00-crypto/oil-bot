@@ -860,6 +860,34 @@ def save_trade_journal(rows: list[dict[str, Any]]) -> None:
     sync_journal_to_db(TRADE_JOURNAL_PATH, TRADE_DB_PATH)
 
 
+def is_duplicate_carry_open(existing_open: dict[str, Any], candidate_open: dict[str, Any]) -> bool:
+    existing_source = str(existing_open.get("source") or "").strip()
+    candidate_source = str(candidate_open.get("source") or "").strip()
+    if candidate_source not in {"portfolio_confirmation", "portfolio_recovery"}:
+        return False
+    if existing_source not in {"portfolio_confirmation", "portfolio_recovery"}:
+        return False
+    if str(existing_open.get("symbol") or "").upper() != str(candidate_open.get("symbol") or "").upper():
+        return False
+    if str(existing_open.get("side") or "").upper() != str(candidate_open.get("side") or "").upper():
+        return False
+    if str(existing_open.get("strategy") or "") != str(candidate_open.get("strategy") or ""):
+        return False
+    try:
+        existing_price = round(float(existing_open.get("price") or 0.0), 6)
+        candidate_price = round(float(candidate_open.get("price") or 0.0), 6)
+    except Exception:
+        return False
+    if existing_price <= 0 or candidate_price <= 0 or existing_price != candidate_price:
+        return False
+    existing_time = parse_state_datetime(str(existing_open.get("time") or ""))
+    candidate_time = parse_state_datetime(str(candidate_open.get("time") or ""))
+    if existing_time is None or candidate_time is None or candidate_time <= existing_time:
+        return False
+    delta_seconds = (candidate_time - existing_time).total_seconds()
+    return delta_seconds <= 24 * 60 * 60
+
+
 def update_latest_unclosed_open_journal_entry(
     symbol: str,
     side: str,
@@ -1073,12 +1101,14 @@ def reconcile_state_accounting(symbol: str, state: InstrumentState) -> None:
             continue
         event = str(row.get("event", "")).upper()
         if event == "OPEN":
+            if unmatched_open_rows and is_duplicate_carry_open(unmatched_open_rows[-1], row):
+                continue
             unmatched_open_rows.append(row)
             continue
         if event != "CLOSE":
             continue
         if unmatched_open_rows:
-            unmatched_open_rows.pop(0)
+            unmatched_open_rows.pop()
         try:
             gross += float(row.get("gross_pnl_rub") or 0.0)
         except Exception:
@@ -1718,6 +1748,8 @@ def build_trade_journal_queues_for_day(
                         split_row[money_key] = round(float(split_row[money_key]) / qty, 2)
                     except Exception:
                         pass
+                if queues[(symbol, side)] and is_duplicate_carry_open(queues[(symbol, side)][-1], split_row):
+                    continue
                 queues[(symbol, side)].append(split_row)
             continue
         if event != "CLOSE":
@@ -1737,7 +1769,7 @@ def build_trade_journal_queues_for_day(
         queue = queues[(symbol, side)]
         remaining = close_qty
         while queue and remaining > 0:
-            queue.pop(0)
+            queue.pop()
             remaining -= 1
 
     unmatched = [row for queue in queues.values() for row in queue]
@@ -1991,13 +2023,16 @@ def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, 
             continue
         key = (symbol, side)
         if event == "OPEN":
-            open_by_key.setdefault(key, []).append(row)
+            queue = open_by_key.setdefault(key, [])
+            if queue and is_duplicate_carry_open(queue[-1], row):
+                continue
+            queue.append(row)
             continue
         if event != "CLOSE":
             continue
         open_row = None
         if open_by_key.get(key):
-            open_row = open_by_key[key].pop(0)
+            open_row = open_by_key[key].pop()
         closed_reviews.append(
             {
                 "symbol": symbol,
