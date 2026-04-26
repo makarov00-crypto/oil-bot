@@ -885,7 +885,8 @@ def is_duplicate_carry_open(existing_open: dict[str, Any], candidate_open: dict[
     if existing_time is None or candidate_time is None or candidate_time <= existing_time:
         return False
     delta_seconds = (candidate_time - existing_time).total_seconds()
-    return delta_seconds <= 24 * 60 * 60
+    max_gap_seconds = 72 * 60 * 60 if candidate_source == "portfolio_recovery" else 24 * 60 * 60
+    return delta_seconds <= max_gap_seconds
 
 
 def update_latest_unclosed_open_journal_entry(

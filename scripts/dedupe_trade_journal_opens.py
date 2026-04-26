@@ -13,6 +13,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from bot_oil_main import TRADE_JOURNAL_PATH, parse_state_datetime, save_trade_journal
+from bot_oil_main import is_duplicate_carry_open
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,10 +49,6 @@ def find_duplicates(rows: list[dict], day_key: str, window_seconds: int) -> tupl
         row_dt = parse_state_datetime(row_time_raw)
         key = (symbol, side)
 
-        if not row_time_raw.startswith(day_key):
-            kept.append(row)
-            continue
-
         if event == "CLOSE":
             last_open.pop(key, None)
             kept.append(row)
@@ -62,8 +59,11 @@ def find_duplicates(rows: list[dict], day_key: str, window_seconds: int) -> tupl
             continue
 
         previous = last_open.get(key)
-        if previous is not None and row_dt is not None:
+        if row_time_raw.startswith(day_key) and previous is not None and row_dt is not None:
             previous_row, previous_dt = previous
+            if is_duplicate_carry_open(previous_row, row):
+                removed.append(row)
+                continue
             same_strategy = str(previous_row.get("strategy") or "") == str(row.get("strategy") or "")
             same_source = str(previous_row.get("source") or "") == str(row.get("source") or "")
             same_reason = str(previous_row.get("reason") or "") == str(row.get("reason") or "")

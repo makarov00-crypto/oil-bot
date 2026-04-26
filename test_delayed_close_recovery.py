@@ -924,6 +924,28 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(closed_reviews[0]["entry_time"], "2026-04-16T23:14:10+03:00")
         self.assertEqual(current_open, {})
 
+    def test_duplicate_carry_open_allows_weekend_portfolio_recovery_dedupe(self) -> None:
+        previous = {
+            "time": "2026-04-17T22:20:06+03:00",
+            "symbol": "TEST",
+            "side": "LONG",
+            "event": "OPEN",
+            "price": 11.136,
+            "strategy": "range_break_continuation",
+            "source": "portfolio_confirmation",
+        }
+        candidate = {
+            "time": "2026-04-19T16:40:12+03:00",
+            "symbol": "TEST",
+            "side": "LONG",
+            "event": "OPEN",
+            "price": 11.136,
+            "strategy": "range_break_continuation",
+            "source": "portfolio_recovery",
+        }
+
+        self.assertTrue(mod.is_duplicate_carry_open(previous, candidate))
+
 
 if __name__ == "__main__":
     unittest.main()

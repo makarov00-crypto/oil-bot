@@ -22,6 +22,7 @@ from bot_oil_main import (
     FEE_OPERATION_TYPES,
     MOSCOW_TZ,
     UTC,
+    build_trade_journal_queues_for_day,
     calculate_futures_pnl_rub,
     compact_reason,
     load_config,
@@ -172,40 +173,6 @@ def fetch_operations(
 
     trade_ops.sort(key=lambda item: item.dt)
     return trade_ops, dict(fee_by_parent)
-
-
-def build_journal_queues(rows: list[dict[str, Any]], target_day: date) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
-    day_prefix = target_day.isoformat()
-    target_rows = [row for row in rows if str(row.get("time", "")).startswith(day_prefix)]
-    queues: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    existing_close_signatures: set[str] = set()
-
-    sorted_rows = sorted(
-        target_rows,
-        key=lambda row: parse_row_dt(row.get("time")) or datetime.min.replace(tzinfo=UTC),
-    )
-
-    for row in sorted_rows:
-        symbol = str(row.get("symbol") or "").upper()
-        side = str(row.get("side") or "").upper()
-        event = str(row.get("event") or "").upper()
-        if not symbol or not side:
-            continue
-        if event == "OPEN":
-            queues[(symbol, side)].append(row)
-            continue
-        if event != "CLOSE":
-            continue
-        close_dt = parse_row_dt(row.get("time"))
-        if close_dt is not None:
-            existing_close_signatures.add(f"{symbol}:{side}:{int(close_dt.timestamp())}")
-        queue = queues[(symbol, side)]
-        if queue:
-            queue.pop(0)
-
-    unmatched = [row for queue in queues.values() for row in queue]
-    unmatched.sort(key=lambda row: parse_row_dt(row.get("time")) or datetime.min.replace(tzinfo=UTC))
-    return target_rows, unmatched, existing_close_signatures
 
 
 def infer_open_fee(
@@ -396,7 +363,7 @@ def main() -> int:
         )
 
     rows = load_trade_journal()
-    _, unmatched_opens, existing_close_signatures = build_journal_queues(rows, target_day)
+    unmatched_opens, existing_close_signatures = build_trade_journal_queues_for_day(rows, target_day)
     matches = find_missing_close_matches(
         unmatched_opens,
         trade_ops,
