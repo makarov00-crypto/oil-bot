@@ -1835,6 +1835,35 @@ def parse_trade_time(raw_value: str | None) -> datetime | None:
     return dt.astimezone(MOSCOW_TZ)
 
 
+def is_duplicate_carry_open(existing_open: dict[str, Any], candidate_open: dict[str, Any]) -> bool:
+    existing_source = str(existing_open.get("source") or "").strip()
+    candidate_source = str(candidate_open.get("source") or "").strip()
+    if candidate_source not in {"portfolio_confirmation", "portfolio_recovery"}:
+        return False
+    if existing_source not in {"portfolio_confirmation", "portfolio_recovery"}:
+        return False
+    if str(existing_open.get("symbol") or "").upper() != str(candidate_open.get("symbol") or "").upper():
+        return False
+    if str(existing_open.get("side") or "").upper() != str(candidate_open.get("side") or "").upper():
+        return False
+    if str(existing_open.get("strategy") or "") != str(candidate_open.get("strategy") or ""):
+        return False
+    try:
+        existing_price = round(float(existing_open.get("price") or 0.0), 6)
+        candidate_price = round(float(candidate_open.get("price") or 0.0), 6)
+    except Exception:
+        return False
+    if existing_price <= 0 or candidate_price <= 0 or existing_price != candidate_price:
+        return False
+    existing_time = parse_trade_time(str(existing_open.get("time") or ""))
+    candidate_time = parse_trade_time(str(candidate_open.get("time") or ""))
+    if existing_time is None or candidate_time is None or candidate_time <= existing_time:
+        return False
+    delta_seconds = (candidate_time - existing_time).total_seconds()
+    max_gap_seconds = 72 * 60 * 60 if candidate_source == "portfolio_recovery" else 24 * 60 * 60
+    return delta_seconds <= max_gap_seconds
+
+
 def load_all_trade_rows() -> list[dict]:
     try:
         rows = load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH)
@@ -1919,11 +1948,14 @@ def annotate_trade_rows(
         key = (symbol, side)
 
         if event == "OPEN":
-            open_by_key.setdefault(key, []).append(item)
+            queue = open_by_key.setdefault(key, [])
+            if queue and is_duplicate_carry_open(queue[-1], item):
+                continue
+            queue.append(item)
         elif event == "CLOSE":
             item["event_status"] = "closed"
             if open_by_key.get(key):
-                open_item = open_by_key[key].pop(0)
+                open_item = open_by_key[key].pop()
                 open_item["event_status"] = "closed"
 
     active_open_ids: set[int] = set()
@@ -2441,7 +2473,7 @@ def build_portfolio_view_for_day(
     view = dict(portfolio or {})
     day_key = target_day.isoformat()
     history_entry = dict((accounting_history or {}).get(day_key) or {})
-    rows = load_trade_rows_for_day(target_day, 300)
+    rows = [row for row in load_all_trade_rows() if row.get("_date") == day_key]
     closed_totals = {
         "gross_pnl_rub": 0.0,
         "commission_rub": 0.0,

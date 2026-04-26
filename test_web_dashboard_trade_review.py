@@ -154,6 +154,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         rows = [
             {
                 "_dt": datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
                 "time": "2026-04-24T13:00:00+03:00",
                 "symbol": "BRK6",
                 "side": "LONG",
@@ -166,7 +167,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
             }
         ]
 
-        with patch.object(dashboard, "load_trade_rows_for_day", return_value=rows):
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
             view = dashboard.build_portfolio_view_for_day(portfolio, date(2026, 4, 24), {})
 
         self.assertFalse(view["selected_is_today"])
@@ -175,6 +176,34 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(view["open_positions_count"], 0)
         self.assertEqual(view["bot_total_varmargin_rub"], 100.0)
         self.assertEqual(view["bot_total_pnl_rub"], 100.0)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_portfolio_view_for_day_uses_full_day_rows_for_closed_totals(self) -> None:
+        rows = []
+        base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)
+        for idx in range(305):
+            rows.append(
+                {
+                    "_dt": base_dt + dashboard.timedelta(minutes=idx),
+                    "_date": "2026-04-24",
+                    "time": (base_dt + dashboard.timedelta(minutes=idx)).isoformat(),
+                    "symbol": f"S{idx}",
+                    "side": "LONG",
+                    "event": "CLOSE",
+                    "qty_lots": 1,
+                    "gross_pnl_rub": 10.0,
+                    "commission_rub": 1.0,
+                    "net_pnl_rub": 9.0,
+                    "pnl_rub": 9.0,
+                }
+            )
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
+            view = dashboard.build_portfolio_view_for_day({}, date(2026, 4, 24), {})
+
+        self.assertEqual(view["bot_realized_gross_pnl_rub"], 3050.0)
+        self.assertEqual(view["bot_realized_commission_rub"], 305.0)
+        self.assertEqual(view["bot_realized_pnl_rub"], 2745.0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_ai_review_does_not_fallback_to_latest_for_historical_day(self) -> None:
@@ -401,6 +430,59 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("Сигнал SHORT (range_break_continuation):", review["closed_reviews"][0]["exit_reason"])
         self.assertIn("пробой вниз диапазона 11.0130: да", review["closed_reviews"][0]["exit_reason"])
         self.assertTrue(review["closed_reviews"][0]["exit_reason"].endswith("..."))
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_annotate_trade_rows_uses_latest_open_and_skips_duplicate_carry(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-24T16:05:21+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+                "price": 11.011,
+                "source": "portfolio_confirmation",
+                "strategy": "range_break_continuation",
+            },
+            {
+                "time": "2026-04-24T16:06:00+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+                "price": 11.011,
+                "source": "portfolio_recovery",
+                "strategy": "range_break_continuation",
+            },
+            {
+                "time": "2026-04-24T17:00:00+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 11.005,
+                "source": "portfolio_confirmation",
+                "strategy": "range_break_continuation",
+            },
+            {
+                "time": "2026-04-24T18:00:00+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 10.995,
+                "source": "broker_ops_auto_recovery",
+                "strategy": "range_break_continuation",
+            },
+        ]
+
+        annotated = dashboard.annotate_trade_rows(
+            rows,
+            states={"CNYRUBF": {"position_side": "SHORT", "position_qty": 3}},
+        )
+
+        statuses = [item["event_status"] for item in annotated]
+        self.assertEqual(statuses, ["active", "history", "closed", "closed"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_allocator_decisions_for_day_filters_and_labels_rows(self) -> None:
