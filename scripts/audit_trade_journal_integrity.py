@@ -22,7 +22,8 @@ class AuditResult:
     bogus_rebuild_opens: list[dict[str, Any]]
     duplicate_portfolio_recovery_opens: list[dict[str, Any]]
     orphan_closes: list[dict[str, Any]]
-    unmatched_open_counts: dict[str, int]
+    stale_unmatched_open_counts: dict[str, int]
+    live_unmatched_open_counts: dict[str, int]
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +49,24 @@ def load_rows() -> list[dict[str, Any]]:
         rows.append(row)
     rows.sort(key=lambda row: row["_dt"])
     return rows
+
+
+def load_live_position_map() -> dict[tuple[str, str], int]:
+    path = BASE_DIR / "bot_state" / "_portfolio_snapshot.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    result: dict[tuple[str, str], int] = {}
+    for item in payload.get("broker_open_positions") or []:
+        symbol = str(item.get("symbol") or "").upper()
+        side = str(item.get("side") or "").upper()
+        qty = int(item.get("qty") or 0)
+        if symbol and side and qty > 0:
+            result[(symbol, side)] = qty
+    return result
 
 
 def is_bogus_rebuild_open(row: dict[str, Any]) -> bool:
@@ -110,16 +129,26 @@ def classify_journal(rows: list[dict[str, Any]]) -> AuditResult:
         else:
             orphan_closes.append(row)
 
-    unmatched_open_counts: dict[str, int] = {}
+    live_positions = load_live_position_map()
+    stale_unmatched_open_counts: dict[str, int] = {}
+    live_unmatched_open_counts: dict[str, int] = {}
     for (symbol, _side), items in queues.items():
         if items:
-            unmatched_open_counts[symbol] = unmatched_open_counts.get(symbol, 0) + len(items)
+            live_qty = int(live_positions.get((symbol, _side), 0) or 0)
+            unmatched_qty = len(items)
+            live_matched = min(live_qty, unmatched_qty)
+            stale_qty = max(0, unmatched_qty - live_matched)
+            if live_matched:
+                live_unmatched_open_counts[symbol] = live_unmatched_open_counts.get(symbol, 0) + live_matched
+            if stale_qty:
+                stale_unmatched_open_counts[symbol] = stale_unmatched_open_counts.get(symbol, 0) + stale_qty
 
     return AuditResult(
         bogus_rebuild_opens=bogus_rebuild_opens,
         duplicate_portfolio_recovery_opens=duplicate_portfolio_recovery_opens,
         orphan_closes=orphan_closes,
-        unmatched_open_counts=dict(sorted(unmatched_open_counts.items())),
+        stale_unmatched_open_counts=dict(sorted(stale_unmatched_open_counts.items())),
+        live_unmatched_open_counts=dict(sorted(live_unmatched_open_counts.items())),
     )
 
 
@@ -160,7 +189,8 @@ def payload_from_audit(audit: AuditResult) -> dict[str, Any]:
         "bogus_rebuild_open_count": len(audit.bogus_rebuild_opens),
         "duplicate_portfolio_recovery_open_count": len(audit.duplicate_portfolio_recovery_opens),
         "orphan_close_count": len(audit.orphan_closes),
-        "unmatched_open_counts": audit.unmatched_open_counts,
+        "stale_unmatched_open_counts": audit.stale_unmatched_open_counts,
+        "live_unmatched_open_counts": audit.live_unmatched_open_counts,
         "bogus_rebuild_opens": [
             {key: row.get(key) for key in ("time", "symbol", "side", "price", "strategy", "reason")}
             for row in audit.bogus_rebuild_opens
@@ -197,7 +227,8 @@ def main() -> int:
         print(f"Ложных rebuild OPEN: {payload['bogus_rebuild_open_count']}")
         print(f"Дублей portfolio_recovery OPEN: {payload['duplicate_portfolio_recovery_open_count']}")
         print(f"Orphan CLOSE: {payload['orphan_close_count']}")
-        print(f"Unmatched OPEN по символам: {payload['unmatched_open_counts']}")
+        print(f"Stale unmatched OPEN по символам: {payload['stale_unmatched_open_counts']}")
+        print(f"Live unmatched OPEN по символам: {payload['live_unmatched_open_counts']}")
         if args.cleanup_safe:
             print(f"Удалено безопасных legacy-строк: {removed}")
     return 0
