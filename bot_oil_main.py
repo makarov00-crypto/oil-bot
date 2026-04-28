@@ -1870,7 +1870,9 @@ def reconcile_missing_trade_closes_from_broker(
     matches: list[dict[str, Any]] = []
     used_op_qty: dict[str, int] = defaultdict(int)
 
-    for open_row in unmatched_opens:
+    # Match broker closes against the newest unmatched leg first so recovery stays
+    # consistent with the journal's LIFO pairing and recent-entry UX expectations.
+    for open_row in reversed(unmatched_opens):
         symbol = str(open_row.get("symbol") or "").upper()
         side = str(open_row.get("side") or "").upper()
         qty = int(open_row.get("qty_lots") or 0)
