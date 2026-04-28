@@ -133,6 +133,13 @@ def journal_action(row: dict[str, Any]) -> str:
     return ""
 
 
+def canonical_price(price: float, tick: float | None) -> float:
+    if tick is None or tick <= 0:
+        return round(price, 4)
+    steps = round(price / tick)
+    return round(steps * tick, 6)
+
+
 def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     client_cls, load_config_fn, fetch_operations_fn = get_broker_audit_dependencies()
     config = load_config_fn()
@@ -142,6 +149,7 @@ def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -
         instruments = resolve_instruments_for_audit(client, config)
         figi_to_symbol = {item["figi"]: item["symbol"] for item in instruments}
         symbol_to_name = {item["symbol"]: item["display_name"] for item in instruments}
+        tick_by_symbol = {item["symbol"]: item.get("min_price_increment") for item in instruments}
         broker_ops, _fee_by_parent = fetch_operations_fn(client, config.account_id, target_day, figi_to_symbol, symbol_to_name)
 
     broker_by_symbol: dict[str, list[Any]] = defaultdict(list)
@@ -162,7 +170,8 @@ def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -
         broker_signature_counts: dict[tuple[str, int, float], int] = defaultdict(int)
         for op in broker_symbol_ops:
             action = "BUY" if str(op.side).upper() == "LONG" else "SELL"
-            broker_signature_counts[(action, int(op.qty), round(float(op.price), 4))] += 1
+            price_key = canonical_price(float(op.price), tick_by_symbol.get(symbol))
+            broker_signature_counts[(action, int(op.qty), price_key)] += 1
 
         journal_signature_counts: dict[tuple[str, int, float], int] = defaultdict(int)
         queues: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -172,10 +181,13 @@ def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -
                 continue
             action = journal_action(row)
             qty = int(row.get("qty_lots") or 0)
-            price = round(float(row.get("price") or 0.0), 4)
+            price = float(row.get("price") or 0.0)
+            price_key = canonical_price(price, tick_by_symbol.get(symbol))
             if not action or qty <= 0:
                 continue
-            journal_signature_counts[(action, qty, price)] += 1
+            source = str(row.get("source") or "")
+            if not (event == "OPEN" and source == "portfolio_recovery"):
+                journal_signature_counts[(action, qty, price_key)] += 1
 
             broker_op_id = str(row.get("broker_op_id") or "").strip()
             if broker_op_id:
@@ -196,8 +208,9 @@ def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -
                 else:
                     broker_action = "BUY" if str(broker_op.side).upper() == "LONG" else "SELL"
                     broker_qty = int(broker_op.qty)
-                    broker_price = round(float(broker_op.price), 4)
-                    if action != broker_action or qty != broker_qty or abs(price - broker_price) > 1e-4:
+                    broker_price = float(broker_op.price)
+                    broker_price_key = canonical_price(broker_price, tick_by_symbol.get(symbol))
+                    if action != broker_action or qty != broker_qty or abs(price_key - broker_price_key) > 1e-6:
                         issues.append(
                             {
                                 "type": "broker_op_mismatch",
@@ -208,8 +221,8 @@ def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -
                                 "broker_action": broker_action,
                                 "journal_qty": qty,
                                 "broker_qty": broker_qty,
-                                "journal_price": price,
-                                "broker_price": broker_price,
+                                "journal_price": round(price, 6),
+                                "broker_price": round(broker_price, 6),
                             }
                         )
 
@@ -262,10 +275,10 @@ def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -
                         {
                             "action": action,
                             "qty": qty,
-                            "price": price,
-                            "broker_count": broker_count,
-                            "journal_count": journal_count,
-                        }
+                                "price": price_key,
+                                "broker_count": broker_count,
+                                "journal_count": journal_count,
+                            }
                     )
             issues.append(
                 {
@@ -287,6 +300,7 @@ def resolve_instruments_for_audit(client: Any, config: Any) -> list[dict[str, st
             "symbol": instrument.symbol,
             "figi": instrument.figi,
             "display_name": instrument.display_name,
+            "min_price_increment": float(getattr(instrument, "min_price_increment", 0.0) or 0.0),
         }
         for instrument in resolve_instruments(client, config)
     ]

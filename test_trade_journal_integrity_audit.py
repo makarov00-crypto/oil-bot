@@ -266,6 +266,62 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
         self.assertIn("same_day_pairing_sign_mismatch", issue_types)
         self.assertIn("broker_signature_mismatch", issue_types)
 
+    def test_load_broker_alignment_issues_ignores_portfolio_recovery_open_and_normalizes_tick(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-27T08:50:18+03:00",
+                "symbol": "CNYRUBF",
+                "event": "OPEN",
+                "side": "SHORT",
+                "price": 11.011,
+                "qty_lots": 3,
+                "strategy": "range_break_continuation",
+                "source": "portfolio_recovery",
+                "_dt": audit_mod.parse_state_datetime("2026-04-27T08:50:18+03:00"),
+            },
+            {
+                "time": "2026-04-27T18:55:39+03:00",
+                "symbol": "GNM6",
+                "event": "OPEN",
+                "side": "SHORT",
+                "price": 4676.8,
+                "qty_lots": 2,
+                "strategy": "momentum_breakout",
+                "source": "portfolio_confirmation",
+                "_dt": audit_mod.parse_state_datetime("2026-04-27T18:55:39+03:00"),
+            },
+        ]
+
+        broker_ops = [
+            SimpleNamespace(
+                symbol="GNM6",
+                op_id="sell-1",
+                side="SHORT",
+                qty=2,
+                price=4676.75,
+                dt=datetime(2026, 4, 27, 15, 55, 20, tzinfo=timezone.utc),
+            )
+        ]
+
+        fake_config = SimpleNamespace(account_id="acc", token="token")
+        fake_client = object()
+        client_cls = MagicMock()
+        client_cls.return_value.__enter__.return_value = fake_client
+        client_cls.return_value.__exit__.return_value = False
+        with patch.object(audit_mod, "get_broker_audit_dependencies") as deps_mock, patch.object(
+            audit_mod, "resolve_instruments_for_audit",
+            return_value=[
+                {"symbol": "CNYRUBF", "figi": "FIGI1", "display_name": "CNY", "min_price_increment": 0.001},
+                {"symbol": "GNM6", "figi": "FIGI2", "display_name": "Gold", "min_price_increment": 0.1},
+            ],
+        ):
+            deps_mock.return_value = (client_cls, lambda: fake_config, lambda *args: (broker_ops, {}))
+            issues = audit_mod.load_broker_alignment_issues(date(2026, 4, 27), rows)
+
+        self.assertEqual([item for item in issues if item["symbol"] == "GNM6"], [])
+        cny_signature_issues = [item for item in issues if item["symbol"] == "CNYRUBF" and item["type"] == "broker_signature_mismatch"]
+        self.assertEqual(cny_signature_issues, [])
+
 
 if __name__ == "__main__":
     unittest.main()
