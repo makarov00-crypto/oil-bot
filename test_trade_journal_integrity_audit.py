@@ -1,5 +1,7 @@
 import unittest
-from unittest.mock import patch
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import scripts.audit_trade_journal_integrity as audit_mod
 
@@ -182,6 +184,87 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
 
         self.assertEqual(audit.live_unmatched_open_counts, {"CNYRUBF": 1})
         self.assertEqual(audit.stale_unmatched_open_counts, {"SRM6": 1})
+
+    def test_classify_journal_includes_broker_alignment_issues_when_day_requested(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-28T14:30:57+03:00",
+                "symbol": "VBM6",
+                "event": "OPEN",
+                "side": "SHORT",
+                "price": 9488.0,
+                "qty_lots": 3,
+                "strategy": "range_break_continuation",
+                "_dt": audit_mod.parse_state_datetime("2026-04-28T14:30:57+03:00"),
+            }
+        ]
+
+        with patch.object(audit_mod, "load_broker_alignment_issues", return_value=[{"type": "broker_signature_mismatch"}]):
+            audit = audit_mod.classify_journal(rows, broker_day=date(2026, 4, 28))
+
+        self.assertEqual(audit.broker_alignment_issues, [{"type": "broker_signature_mismatch"}])
+
+    def test_load_broker_alignment_issues_flags_broker_op_and_pairing_mismatch(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-28T14:30:57+03:00",
+                "symbol": "VBM6",
+                "event": "OPEN",
+                "side": "SHORT",
+                "price": 9488.0,
+                "qty_lots": 3,
+                "strategy": "range_break_continuation",
+                "_dt": audit_mod.parse_state_datetime("2026-04-28T14:30:57+03:00"),
+            },
+            {
+                "time": "2026-04-28T14:37:59+03:00",
+                "symbol": "VBM6",
+                "event": "CLOSE",
+                "side": "SHORT",
+                "price": 9493.0,
+                "qty_lots": 1,
+                "gross_pnl_rub": 77.0,
+                "strategy": "range_break_continuation",
+                "broker_op_id": "close-1",
+                "_dt": audit_mod.parse_state_datetime("2026-04-28T14:37:59+03:00"),
+            },
+        ]
+
+        broker_ops = [
+            SimpleNamespace(
+                symbol="VBM6",
+                op_id="sell-1",
+                side="SHORT",
+                qty=3,
+                price=9488.0,
+                dt=datetime(2026, 4, 28, 11, 30, 57, tzinfo=timezone.utc),
+            ),
+            SimpleNamespace(
+                symbol="VBM6",
+                op_id="close-1",
+                side="LONG",
+                qty=3,
+                price=9493.0,
+                dt=datetime(2026, 4, 28, 11, 37, 59, tzinfo=timezone.utc),
+            ),
+        ]
+
+        fake_config = SimpleNamespace(account_id="acc", token="token")
+        fake_client = object()
+        client_cls = MagicMock()
+        client_cls.return_value.__enter__.return_value = fake_client
+        client_cls.return_value.__exit__.return_value = False
+        with patch.object(audit_mod, "get_broker_audit_dependencies") as deps_mock, patch.object(
+            audit_mod, "resolve_instruments_for_audit",
+            return_value=[{"symbol": "VBM6", "figi": "FIGI", "display_name": "VTB"}],
+        ):
+            deps_mock.return_value = (client_cls, lambda: fake_config, lambda *args: (broker_ops, {}))
+            issues = audit_mod.load_broker_alignment_issues(date(2026, 4, 28), rows)
+
+        issue_types = {item["type"] for item in issues}
+        self.assertIn("broker_op_mismatch", issue_types)
+        self.assertIn("same_day_pairing_sign_mismatch", issue_types)
+        self.assertIn("broker_signature_mismatch", issue_types)
 
 
 if __name__ == "__main__":

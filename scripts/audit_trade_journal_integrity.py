@@ -6,7 +6,7 @@ import json
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,12 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from bot_oil_main import TRADE_JOURNAL_PATH, is_duplicate_carry_open, parse_state_datetime, save_trade_journal
+from bot_oil_main import (
+    TRADE_JOURNAL_PATH,
+    is_duplicate_carry_open,
+    parse_state_datetime,
+    save_trade_journal,
+)
 
 
 @dataclass
@@ -25,6 +30,7 @@ class AuditResult:
     orphan_closes: list[dict[str, Any]]
     stale_unmatched_open_counts: dict[str, int]
     live_unmatched_open_counts: dict[str, int]
+    broker_alignment_issues: list[dict[str, Any]]
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--cleanup-safe", action="store_true", help="Удалить только безопасные legacy-дубли.")
     parser.add_argument("--write", action="store_true", help="Применить cleanup к журналу.")
+    parser.add_argument("--date", help="Проверить дополнительно сверку журнала с брокером за YYYY-MM-DD.")
     return parser.parse_args()
 
 
@@ -103,7 +110,198 @@ def find_duplicate_portfolio_recovery_opens(rows: list[dict[str, Any]]) -> list[
     return duplicates
 
 
-def classify_journal(rows: list[dict[str, Any]]) -> AuditResult:
+def parse_target_day(raw_value: str | None) -> date | None:
+    if not raw_value:
+        return None
+    return datetime.strptime(raw_value, "%Y-%m-%d").date()
+
+
+def journal_trade_date(row: dict[str, Any]) -> date | None:
+    row_dt = row.get("_dt")
+    if isinstance(row_dt, datetime):
+        return row_dt.date()
+    return None
+
+
+def journal_action(row: dict[str, Any]) -> str:
+    event = str(row.get("event") or "").upper()
+    side = str(row.get("side") or "").upper()
+    if event == "OPEN":
+        return "BUY" if side == "LONG" else "SELL"
+    if event == "CLOSE":
+        return "SELL" if side == "LONG" else "BUY"
+    return ""
+
+
+def load_broker_alignment_issues(target_day: date, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    client_cls, load_config_fn, fetch_operations_fn = get_broker_audit_dependencies()
+    config = load_config_fn()
+    issues: list[dict[str, Any]] = []
+
+    with client_cls(config.token) as client:
+        instruments = resolve_instruments_for_audit(client, config)
+        figi_to_symbol = {item["figi"]: item["symbol"] for item in instruments}
+        symbol_to_name = {item["symbol"]: item["display_name"] for item in instruments}
+        broker_ops, _fee_by_parent = fetch_operations_fn(client, config.account_id, target_day, figi_to_symbol, symbol_to_name)
+
+    broker_by_symbol: dict[str, list[Any]] = defaultdict(list)
+    broker_by_id: dict[str, Any] = {}
+    for op in broker_ops:
+        broker_by_symbol[op.symbol].append(op)
+        broker_by_id[op.op_id] = op
+
+    day_rows = [row for row in rows if journal_trade_date(row) == target_day]
+    symbol_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in day_rows:
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol:
+            symbol_rows[symbol].append(row)
+
+    for symbol, symbol_day_rows in symbol_rows.items():
+        broker_symbol_ops = broker_by_symbol.get(symbol, [])
+        broker_signature_counts: dict[tuple[str, int, float], int] = defaultdict(int)
+        for op in broker_symbol_ops:
+            action = "BUY" if str(op.side).upper() == "LONG" else "SELL"
+            broker_signature_counts[(action, int(op.qty), round(float(op.price), 4))] += 1
+
+        journal_signature_counts: dict[tuple[str, int, float], int] = defaultdict(int)
+        queues: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in sorted(symbol_day_rows, key=lambda item: item["_dt"]):
+            event = str(row.get("event") or "").upper()
+            if event not in {"OPEN", "CLOSE"}:
+                continue
+            action = journal_action(row)
+            qty = int(row.get("qty_lots") or 0)
+            price = round(float(row.get("price") or 0.0), 4)
+            if not action or qty <= 0:
+                continue
+            journal_signature_counts[(action, qty, price)] += 1
+
+            broker_op_id = str(row.get("broker_op_id") or "").strip()
+            if broker_op_id:
+                broker_op = broker_by_id.get(broker_op_id)
+                if broker_op is None:
+                    issues.append(
+                        {
+                            "type": "unknown_broker_op_id",
+                            "symbol": symbol,
+                            "time": row.get("time"),
+                            "broker_op_id": broker_op_id,
+                            "event": event,
+                            "side": str(row.get("side") or "").upper(),
+                            "qty_lots": qty,
+                            "price": price,
+                        }
+                    )
+                else:
+                    broker_action = "BUY" if str(broker_op.side).upper() == "LONG" else "SELL"
+                    broker_qty = int(broker_op.qty)
+                    broker_price = round(float(broker_op.price), 4)
+                    if action != broker_action or qty != broker_qty or abs(price - broker_price) > 1e-4:
+                        issues.append(
+                            {
+                                "type": "broker_op_mismatch",
+                                "symbol": symbol,
+                                "time": row.get("time"),
+                                "broker_op_id": broker_op_id,
+                                "journal_action": action,
+                                "broker_action": broker_action,
+                                "journal_qty": qty,
+                                "broker_qty": broker_qty,
+                                "journal_price": price,
+                                "broker_price": broker_price,
+                            }
+                        )
+
+            side = str(row.get("side") or "").upper()
+            if event == "OPEN":
+                queues[side].append({"price": float(row.get("price") or 0.0), "qty": qty, "row": row})
+                continue
+
+            if not queues[side]:
+                continue
+
+            remaining_qty = qty
+            exit_price = float(row.get("price") or 0.0)
+            actual_gross = row.get("gross_pnl_rub")
+            while remaining_qty > 0 and queues[side]:
+                open_leg = queues[side][-1]
+                matched_qty = min(remaining_qty, int(open_leg["qty"]))
+                entry_price = float(open_leg["price"])
+                expected_diff = (exit_price - entry_price) if side == "LONG" else (entry_price - exit_price)
+                if matched_qty > 0 and actual_gross not in (None, ""):
+                    actual_value = float(actual_gross)
+                    if abs(expected_diff) > 1e-9 and abs(actual_value) > 1e-9 and expected_diff * actual_value < 0:
+                        issues.append(
+                            {
+                                "type": "same_day_pairing_sign_mismatch",
+                                "symbol": symbol,
+                                "time": row.get("time"),
+                                "side": side,
+                                "entry_time": open_leg["row"].get("time"),
+                                "entry_price": round(entry_price, 4),
+                                "exit_price": round(exit_price, 4),
+                                "expected_price_diff_sign": "profit" if expected_diff > 0 else "loss",
+                                "actual_gross_pnl_rub": round(actual_value, 2),
+                            }
+                        )
+                        break
+                open_leg["qty"] -= matched_qty
+                remaining_qty -= matched_qty
+                if open_leg["qty"] <= 0:
+                    queues[side].pop()
+
+        if broker_signature_counts != journal_signature_counts:
+            signature_deltas: list[dict[str, Any]] = []
+            signature_keys = set(broker_signature_counts) | set(journal_signature_counts)
+            for action, qty, price in sorted(signature_keys):
+                broker_count = broker_signature_counts.get((action, qty, price), 0)
+                journal_count = journal_signature_counts.get((action, qty, price), 0)
+                if broker_count != journal_count:
+                    signature_deltas.append(
+                        {
+                            "action": action,
+                            "qty": qty,
+                            "price": price,
+                            "broker_count": broker_count,
+                            "journal_count": journal_count,
+                        }
+                    )
+            issues.append(
+                {
+                    "type": "broker_signature_mismatch",
+                    "symbol": symbol,
+                    "date": target_day.isoformat(),
+                    "signature_deltas": signature_deltas,
+                }
+            )
+
+    return issues
+
+
+def resolve_instruments_for_audit(client: Any, config: Any) -> list[dict[str, str]]:
+    from bot_oil_main import resolve_instruments
+
+    return [
+        {
+            "symbol": instrument.symbol,
+            "figi": instrument.figi,
+            "display_name": instrument.display_name,
+        }
+        for instrument in resolve_instruments(client, config)
+    ]
+
+
+def get_broker_audit_dependencies() -> tuple[Any, Any, Any]:
+    from tinkoff.invest import Client
+
+    from bot_oil_main import load_config
+    from scripts.recover_trade_operations import fetch_operations
+
+    return Client, load_config, fetch_operations
+
+
+def classify_journal(rows: list[dict[str, Any]], *, broker_day: date | None = None) -> AuditResult:
     bogus_rebuild_opens = [row for row in rows if is_bogus_rebuild_open(row)]
     duplicate_portfolio_recovery_opens = find_duplicate_portfolio_recovery_opens(rows)
 
@@ -165,6 +363,8 @@ def classify_journal(rows: list[dict[str, Any]]) -> AuditResult:
             if stale_qty:
                 stale_unmatched_open_counts[symbol] = stale_unmatched_open_counts.get(symbol, 0) + stale_qty
 
+    broker_alignment_issues = load_broker_alignment_issues(broker_day, rows) if broker_day is not None else []
+
     return AuditResult(
         bogus_rebuild_opens=bogus_rebuild_opens,
         duplicate_portfolio_recovery_opens=duplicate_portfolio_recovery_opens,
@@ -172,6 +372,7 @@ def classify_journal(rows: list[dict[str, Any]]) -> AuditResult:
         orphan_closes=orphan_closes,
         stale_unmatched_open_counts=dict(sorted(stale_unmatched_open_counts.items())),
         live_unmatched_open_counts=dict(sorted(live_unmatched_open_counts.items())),
+        broker_alignment_issues=broker_alignment_issues,
     )
 
 
@@ -235,20 +436,23 @@ def payload_from_audit(audit: AuditResult) -> dict[str, Any]:
             {key: row.get(key) for key in ("time", "symbol", "side", "price", "strategy", "source", "reason")}
             for row in audit.orphan_closes
         ],
+        "broker_alignment_issue_count": len(audit.broker_alignment_issues),
+        "broker_alignment_issues": audit.broker_alignment_issues,
     }
 
 
 def main() -> int:
     args = parse_args()
     rows = load_rows()
-    audit = classify_journal(rows)
+    broker_day = parse_target_day(args.date)
+    audit = classify_journal(rows, broker_day=broker_day)
     removed = 0
     if args.cleanup_safe:
         cleaned_rows, removed = cleanup_safe_rows(rows, audit)
         if args.write and removed:
             save_trade_journal(cleaned_rows)
             rows = load_rows()
-            audit = classify_journal(rows)
+            audit = classify_journal(rows, broker_day=broker_day)
 
     payload = payload_from_audit(audit)
     payload["safe_cleanup_removed"] = removed
@@ -262,6 +466,7 @@ def main() -> int:
         print(f"Orphan CLOSE: {payload['orphan_close_count']}")
         print(f"Stale unmatched OPEN по символам: {payload['stale_unmatched_open_counts']}")
         print(f"Live unmatched OPEN по символам: {payload['live_unmatched_open_counts']}")
+        print(f"Расхождений журнал/брокер: {payload['broker_alignment_issue_count']}")
         if args.cleanup_safe:
             print(f"Удалено безопасных legacy-строк: {removed}")
     return 0
