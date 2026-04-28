@@ -616,10 +616,15 @@ def build_prompt(
     signal_observations: list[dict[str, Any]] | None = None,
     recent_signal_observations: list[dict[str, Any]] | None = None,
 ) -> str:
+    recent_closed_trades_data = closed_trades if recent_closed_trades is None else recent_closed_trades
+    signal_observations_data = signal_observations or []
+    recent_signal_observations_data = (
+        signal_observations_data if recent_signal_observations is None else recent_signal_observations
+    )
     summary = summarize_closed_trades(closed_trades)
-    recent_summary = summarize_closed_trades(recent_closed_trades or closed_trades)
-    signal_summary = summarize_signal_observations(signal_observations or [])
-    recent_signal_summary = summarize_signal_observations(recent_signal_observations or signal_observations or [])
+    recent_summary = summarize_closed_trades(recent_closed_trades_data)
+    signal_summary = summarize_signal_observations(signal_observations_data)
+    recent_signal_summary = summarize_signal_observations(recent_signal_observations_data)
     active_news = list(news.get("active_biases") or [])
     market_notes = build_market_observations(closed_trades, states)
 

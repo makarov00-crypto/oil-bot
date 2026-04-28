@@ -285,6 +285,71 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("Явных операционных действий по learning-данным пока нет", prompt)
         self.assertNotIn("Снижать приоритет связки", prompt)
 
+    def test_build_prompt_respects_empty_recent_period_instead_of_falling_back(self) -> None:
+        trades = [
+            review.ClosedTrade(
+                symbol="NGJ6",
+                side="LONG",
+                strategy="trend_pullback",
+                entry_time="22.04 10:00:00",
+                exit_time="22.04 10:30:00",
+                entry_price=2.1,
+                exit_price=2.2,
+                pnl_rub=150.0,
+                entry_reason="open",
+                exit_reason="close",
+                market_regime="trend_expansion",
+                setup_quality_label="strong",
+                entry_edge_label="high",
+            )
+        ]
+        signal_rows = [
+            {
+                "observed_at": "2026-04-24T10:15:00+03:00",
+                "evaluated_at": "2026-04-24T10:30:00+03:00",
+                "symbol": "BRK6",
+                "signal": "LONG",
+                "strategy": "trend_rollover",
+                "decision": "selected",
+                "market_regime": "trend_expansion",
+                "setup_quality": "strong",
+                "move_pct": 0.8,
+                "favorable": True,
+                "context": {
+                    "entry_edge_label": "high",
+                    "learning_adjustment": 0.05,
+                    "learning_reason": "обучение связки: бонус +0.05",
+                    "execution_status": "confirmed_open",
+                },
+            }
+        ]
+
+        prompt = review.build_prompt(
+            target_day=date(2026, 4, 24),
+            portfolio={
+                "bot_realized_pnl_rub": 150.0,
+                "bot_estimated_variation_margin_rub": 0.0,
+                "bot_total_pnl_rub": 150.0,
+                "open_positions_count": 0,
+                "total_portfolio_rub": 50000.0,
+            },
+            news={"active_biases": []},
+            states={},
+            closed_trades=trades,
+            recent_closed_trades=[],
+            signal_observations=signal_rows,
+            recent_signal_observations=[],
+        )
+
+        self.assertIn("Сильные сочетания за последние 3 дня:", prompt)
+        self.assertIn("- Нет устойчиво сильных сочетаний за период.", prompt)
+        self.assertIn("Токсичные сочетания за последние 3 дня:", prompt)
+        self.assertIn("- Нет устойчиво токсичных сочетаний за период.", prompt)
+        self.assertIn("Лучшие связки сигналов за последние 3 дня:", prompt)
+        self.assertIn("- Недостаточно проверенных наблюдений.", prompt)
+        self.assertIn("Какие связки обучение чаще усиливает за последние 3 дня:", prompt)
+        self.assertIn("- Недостаточно learning-наблюдений.", prompt)
+
     def test_build_prompt_ignores_unexecuted_selected_losses(self) -> None:
         signal_rows = [
             {
