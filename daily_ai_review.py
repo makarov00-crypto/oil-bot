@@ -202,6 +202,14 @@ def load_signal_observation_rows(base_dir: Path, target_day: date) -> list[dict[
     return [dict(row) for row in rows]
 
 
+def trade_context_value(row: dict[str, Any] | None, key: str, default: str = "-") -> str:
+    context = (row or {}).get("context")
+    if not isinstance(context, dict):
+        return default
+    value = str(context.get(key) or "").strip()
+    return value or default
+
+
 def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
     open_rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     closed: list[ClosedTrade] = []
@@ -217,7 +225,7 @@ def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
             continue
         if event != "CLOSE":
             continue
-        open_row = open_rows[key].pop(0) if open_rows.get(key) else None
+        open_row = open_rows[key].pop() if open_rows.get(key) else None
         try:
             pnl_rub = float(row.get("pnl_rub") or 0.0)
         except Exception:
@@ -234,9 +242,17 @@ def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
                 pnl_rub=pnl_rub,
                 entry_reason=str((open_row or {}).get("reason") or "-"),
                 exit_reason=str(row.get("reason") or "-"),
-                market_regime=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("market_regime") or "-"),
-                setup_quality_label=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("setup_quality_label") or "-"),
-                entry_edge_label=str(((row.get("context") or {}) if isinstance(row.get("context"), dict) else {}).get("entry_edge_label") or "-"),
+                market_regime=trade_context_value(open_row, "market_regime", trade_context_value(row, "market_regime")),
+                setup_quality_label=trade_context_value(
+                    open_row,
+                    "setup_quality_label",
+                    trade_context_value(row, "setup_quality_label"),
+                ),
+                entry_edge_label=trade_context_value(
+                    open_row,
+                    "entry_edge_label",
+                    trade_context_value(row, "entry_edge_label"),
+                ),
             )
         )
     return closed

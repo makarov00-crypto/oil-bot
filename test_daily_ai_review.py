@@ -97,6 +97,56 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertEqual(summary["top_positive_strategy_regimes"][0]["name"], "trend_pullback @ trend_expansion")
         self.assertEqual(summary["top_negative_strategy_regimes"][0]["name"], "trend_pullback @ chop")
 
+    def test_pair_closed_trades_uses_latest_open_and_entry_context(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-24T10:00:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:00:00+03:00"),
+                "symbol": "GNM6",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 105.0,
+                "strategy": "momentum_breakout",
+                "reason": "older open",
+                "context": {"market_regime": "old_regime", "setup_quality_label": "weak", "entry_edge_label": "fragile"},
+            },
+            {
+                "time": "2026-04-24T10:05:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:05:00+03:00"),
+                "symbol": "GNM6",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 100.0,
+                "strategy": "trend_pullback",
+                "reason": "newer open",
+                "context": {"market_regime": "entry_regime", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "time": "2026-04-24T10:10:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:10:00+03:00"),
+                "symbol": "GNM6",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 99.0,
+                "pnl_rub": 10.0,
+                "strategy": "trend_pullback",
+                "reason": "close",
+                "context": {"market_regime": "exit_regime", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
+            },
+        ]
+
+        trades = review.pair_closed_trades(rows)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0].entry_time, "24.04 10:05:00")
+        self.assertEqual(trades[0].strategy, "trend_pullback")
+        self.assertEqual(trades[0].market_regime, "entry_regime")
+        self.assertEqual(trades[0].setup_quality_label, "strong")
+        self.assertEqual(trades[0].entry_edge_label, "high")
+
     def test_build_prompt_includes_regime_focus_and_setup_quality_sections(self) -> None:
         trades = [
             review.ClosedTrade(

@@ -2033,6 +2033,9 @@ def format_trade_review_row(
     entry_time = format_review_time_value(entry_dt or ((open_row or {}).get("time") if open_row else ""))
     exit_time = format_review_time_value(exit_dt or close_row.get("time"))
     resolved_context_display = resolve_trade_context_display(close_row, open_row)
+    entry_context_display = trade_context_display(open_row or {})
+    if entry_context_display == "-":
+        entry_context_display = resolved_context_display
     return {
         "symbol": str(close_row.get("symbol", "")),
         "side": close_row.get("side") or (open_row.get("side") if open_row else ""),
@@ -2050,7 +2053,7 @@ def format_trade_review_row(
         "net_pnl_rub": stringify_money(close_row.get("net_pnl_rub"), stringify_money(close_row.get("pnl_rub"))),
         "entry_reason": summarize_trade_reason_text(open_row.get("reason") if open_row else "-"),
         "exit_reason": summarize_trade_reason_text(close_row.get("reason") or "-"),
-        "entry_context_display": trade_context_display(open_row or {}),
+        "entry_context_display": entry_context_display,
         "exit_context_display": resolved_context_display,
         "edge_label": resolve_trade_context_value(close_row, open_row, "entry_edge_label"),
         "verdict": verdict,
@@ -2141,7 +2144,7 @@ def build_trade_review(
 
         open_row = None
         if open_by_key.get(key):
-            open_row = open_by_key[key].pop(0)
+            open_row = open_by_key[key].pop()
         elif is_probable_duplicate_orphan(row, key) or is_probable_duplicate_close(row, key):
             continue
 
@@ -2201,7 +2204,7 @@ def build_trade_review(
         by_symbol[item["symbol"]] = by_symbol.get(item["symbol"], 0.0) + pnl
         strategy = item.get("strategy") or "-"
         by_strategy[strategy] = by_strategy.get(strategy, 0.0) + pnl
-        regime = item.get("exit_context_display") or "-"
+        regime = item.get("entry_context_display") or item.get("exit_context_display") or "-"
         by_regime[regime] = by_regime.get(regime, 0.0) + pnl
         edge = item.get("edge_label") or "-"
         by_edge[edge] = by_edge.get(edge, 0.0) + pnl
@@ -2276,7 +2279,7 @@ def summarize_strategy_regime_focus_from_reviews(
     counts: dict[str, int] = {}
     for item in closed_reviews:
         strategy = str(item.get("strategy") or "-")
-        regime = str(item.get("exit_context_display") or "-")
+        regime = str(item.get("entry_context_display") or item.get("exit_context_display") or "-")
         label = f"{strategy} @ {regime}"
         try:
             pnl = float(item.get("pnl_rub") or 0.0)

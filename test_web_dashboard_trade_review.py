@@ -120,6 +120,60 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(len(review["closed_reviews"]), 20)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_trade_review_uses_latest_open_and_entry_context_for_summary(self) -> None:
+        rows = [
+            {
+                "_dt": datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T12:00:00+03:00",
+                "symbol": "GNM6",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 105.0,
+                "strategy": "momentum_breakout",
+                "reason": "older open",
+                "context": {"market_regime": "old_regime", "setup_quality_label": "weak", "entry_edge_label": "fragile"},
+            },
+            {
+                "_dt": datetime(2026, 4, 24, 9, 5, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T12:05:00+03:00",
+                "symbol": "GNM6",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 100.0,
+                "strategy": "trend_pullback",
+                "reason": "newer open",
+                "context": {"market_regime": "entry_regime", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "_dt": datetime(2026, 4, 24, 9, 10, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T12:10:00+03:00",
+                "symbol": "GNM6",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 99.0,
+                "pnl_rub": 10.0,
+                "net_pnl_rub": 10.0,
+                "strategy": "trend_pullback",
+                "reason": "close",
+                "context": {"market_regime": "exit_regime", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
+            },
+        ]
+
+        review = dashboard.build_trade_review(rows)
+
+        trade = review["closed_reviews"][0]
+        self.assertEqual(trade["entry_time"], "24.04 12:05:00")
+        self.assertEqual(trade["entry_context_display"], "режим entry_regime | сетап strong | качество входа высокое")
+        self.assertEqual(review["best_regime"]["regime"], "режим entry_regime | сетап strong | качество входа высокое")
+        self.assertEqual(review["best_strategy_regime"]["label"], "trend_pullback @ режим entry_regime | сетап strong | качество входа высокое")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_keeps_pairing_when_global_rows_exceed_limit(self) -> None:
         rows = []
         base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)
