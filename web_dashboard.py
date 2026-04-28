@@ -2409,6 +2409,7 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
     rows = load_all_trade_rows()
     by_day: dict[str, dict[str, float]] = {}
     cumulative = 0.0
+    cumulative_base: float | None = None
     today_key = datetime.now(MOSCOW_TZ).date().isoformat()
 
     days = sorted({row["_date"] for row in rows} | set((accounting_history or {}).keys()))
@@ -2439,8 +2440,10 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
             portfolio_base_float = float(portfolio_base) if portfolio_base not in (None, "") else 0.0
         except Exception:
             portfolio_base_float = 0.0
+        if portfolio_base_float and cumulative_base is None:
+            cumulative_base = portfolio_base_float
         pct = (pnl / portfolio_base_float * 100.0) if portfolio_base_float else None
-        cumulative_pct = (cumulative / portfolio_base_float * 100.0) if portfolio_base_float else None
+        cumulative_pct = (cumulative / cumulative_base * 100.0) if cumulative_base else None
         by_day[day_key] = {
             "date": day_key,
             "closed_count": len(day_rows),

@@ -253,6 +253,29 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 15.0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_daily_performance_uses_stable_base_for_cumulative_pct(self) -> None:
+        rows = [
+            {"_date": "2026-04-23", "event": "CLOSE", "pnl_rub": 100.0},
+            {"_date": "2026-04-24", "event": "CLOSE", "pnl_rub": 50.0},
+        ]
+        accounting_history = {
+            "2026-04-23": {"total_portfolio_rub": 1000.0},
+            "2026-04-24": {"total_portfolio_rub": 2000.0},
+        }
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows), patch.object(
+            dashboard, "datetime"
+        ) as fake_datetime:
+            fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+            result = dashboard.build_daily_performance({"total_portfolio_rub": 2000.0}, date(2026, 4, 24), accounting_history)
+
+        by_date = {item["date"]: item for item in result["series"]}
+        self.assertEqual(by_date["2026-04-23"]["pnl_pct"], 10.0)
+        self.assertEqual(by_date["2026-04-23"]["cumulative_pnl_pct"], 10.0)
+        self.assertEqual(by_date["2026-04-24"]["pnl_pct"], 2.5)
+        self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 15.0)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_portfolio_view_for_historical_day_ignores_current_live_positions(self) -> None:
         portfolio = {
             "bot_actual_varmargin_rub": 50.0,
