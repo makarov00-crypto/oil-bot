@@ -2399,8 +2399,8 @@ def load_trade_review_for_day(
     review["edge_focus_3d"] = summarize_edge_focus_from_reviews(full_recent_closed_reviews)
     review["release1_summary"] = build_strategy_regime_summary(review["focus_today"], review["focus_3d"])
     review.pop("closed_reviews_full", None)
-    review["closed_reviews"] = full_closed_reviews[:20]
-    review["current_open"] = list(review.get("current_open") or [])[:20]
+    review["closed_reviews"] = full_closed_reviews[:limit]
+    review["current_open"] = list(review.get("current_open") or [])[:limit]
     return review
 
 

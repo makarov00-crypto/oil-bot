@@ -114,10 +114,10 @@ class DashboardTradeReviewTests(unittest.TestCase):
             )
 
         with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
-            review = dashboard.load_trade_review_for_day(date(2026, 4, 24), limit=20)
+            review = dashboard.load_trade_review_for_day(date(2026, 4, 24), limit=5)
 
         self.assertEqual(review["focus_3d"]["strongest"][0]["count"], 25)
-        self.assertEqual(len(review["closed_reviews"]), 20)
+        self.assertEqual(len(review["closed_reviews"]), 5)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_uses_latest_open_and_entry_context_for_summary(self) -> None:
