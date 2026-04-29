@@ -3740,7 +3740,7 @@ def build_dashboard_html() -> str:
         <div class="generated" id="portfolioGeneratedAt">Срез портфеля: -</div>
       </div>
       <div class="muted" style="margin-bottom:12px;" id="portfolioMeaning">
-        Показатели разделены по смыслу: деньги на счёте, результат бота и сверка с брокерскими движениями. Наведи мышкой на значок “?” у цифры, чтобы увидеть формулу.
+        Сначала смотри на итог бота и свободные деньги. Ниже уже идут детали: что зафиксировано, что ещё плавает и как это сходится с движениями у брокера.
       </div>
       <div class="portfolio-layout">
         <div class="portfolio-group">
@@ -3769,7 +3769,7 @@ def build_dashboard_html() -> str:
           <h3>Результат бота</h3>
           <p>Главная оценка торговли: что уже закрыто и что сейчас плавает в открытых позициях.</p>
           <div class="portfolio-metrics">
-            <div class="portfolio-metric" data-help="Главная цифра для оценки бота: закрытые сделки NET плюс текущий live-результат открытых позиций." tabindex="0">
+            <div class="portfolio-metric" data-help="Главная цифра дня: закрытые сделки NET плюс текущий плавающий результат открытых позиций." tabindex="0">
               <div class="portfolio-label">Итог бота <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioTotalPnl">-</div>
             </div>
@@ -3778,11 +3778,11 @@ def build_dashboard_html() -> str:
               <div class="metric" id="portfolioRealized">-</div>
             </div>
             <div class="portfolio-metric" data-help="Плавающий результат открытых позиций прямо сейчас. Он ещё может измениться до закрытия сделки." tabindex="0">
-              <div class="portfolio-label">Открытые позиции <span class="portfolio-help-icon">?</span></div>
+              <div class="portfolio-label">Плавающий результат <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioOpenLive">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Грубая сверка: результат закрытых сделок до части корректировок плюс live-результат открытых позиций." tabindex="0">
-              <div class="portfolio-label">Gross закрытые + live <span class="portfolio-help-icon">?</span></div>
+            <div class="portfolio-metric" data-help="Быстрая сверка: результат закрытых сделок до части корректировок плюс плавающий результат открытых позиций." tabindex="0">
+              <div class="portfolio-label">Быстрая сверка <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioTotalVm">-</div>
             </div>
           </div>
@@ -4966,7 +4966,7 @@ def build_dashboard_html() -> str:
       };
       const observationSummaryRows = [
         buildReviewRow(
-          'Проверено',
+          'Проверено сигналов',
           `${signalObservations.evaluated || 0} из ${signalObservations.total || 0}`,
           `подтвердились ${signalObservations.favorable || 0} · точность ${Number(signalObservations.favorable_rate || 0).toFixed(1)}% · ждут проверки ${signalObservations.pending || 0}`
         ),
@@ -4981,9 +4981,9 @@ def build_dashboard_html() -> str:
           'выбранные сигналы, которые через горизонт не подтвердились'
         ),
         buildReviewRow(
-          'Коррекция обучения',
+          'Поправки обучения',
           `бонусов ${signalObservations.learning_bonus_count || 0} · штрафов ${signalObservations.learning_penalty_count || 0}`,
-          'сколько наблюдений уже входили с повышением или понижением приоритета'
+          'сколько наблюдений уже шли с повышением или понижением приоритета'
         ),
         buildReviewRow(
           'Чаще усиливаем',
@@ -4996,7 +4996,7 @@ def build_dashboard_html() -> str:
           weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых learning-штрафов'
         ),
         buildReviewRow(
-          'Что делать сейчас',
+          'Что менять первым',
           observationActions.length ? observationActions[0] : 'действий пока нет',
           observationActions.length > 1 ? observationActions.slice(1, 3).join(' | ') : 'нужно накопить ещё learning-наблюдения'
         ),
