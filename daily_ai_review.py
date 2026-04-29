@@ -328,6 +328,75 @@ def format_rub(value: Any) -> str:
         return "-"
 
 
+def humanize_strategy_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "неизвестная стратегия"
+    mapping = {
+        "opening_range_breakout": "пробой утреннего диапазона",
+        "range_break_continuation": "продолжение пробоя диапазона",
+        "trend_pullback": "откат по тренду",
+        "trend_rollover": "разворот тренда",
+        "momentum_breakout": "импульсный пробой",
+        "failed_breakout": "ложный пробой",
+        "breakdown_continuation": "продолжение движения вниз",
+        "recovered_position": "восстановленная позиция",
+        "williams": "подтверждение по Williams %R",
+    }
+    return mapping.get(raw, raw.replace("_", " "))
+
+
+def humanize_regime_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "режим не определён"
+    mapping = {
+        "trend_expansion": "расширение тренда",
+        "trend_pullback": "откат в тренде",
+        "impulse": "импульс",
+        "compression": "сжатие",
+        "chop": "пила",
+        "mixed": "смешанный режим",
+    }
+    return mapping.get(raw, raw.replace("_", " "))
+
+
+def humanize_setup_quality(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "сценарий не определён"
+    mapping = {
+        "strong": "сильный",
+        "medium": "средний",
+        "weak": "слабый",
+    }
+    return mapping.get(raw, raw.replace("_", " "))
+
+
+def humanize_edge_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "качество входа не определено"
+    mapping = {
+        "high": "высокое",
+        "confirmed": "подтверждённое",
+        "moderate": "умеренное",
+        "fragile": "слабое",
+    }
+    return mapping.get(raw, raw.replace("_", " "))
+
+
+def humanize_side_name(value: Any) -> str:
+    raw = str(value or "").strip().upper()
+    mapping = {
+        "LONG": "лонг",
+        "SHORT": "шорт",
+        "BUY": "покупка",
+        "SELL": "продажа",
+    }
+    return mapping.get(raw, raw or "-")
+
+
 def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
     wins = sum(1 for trade in trades if trade.pnl_rub > 0)
     losses = sum(1 for trade in trades if trade.pnl_rub < 0)
@@ -426,18 +495,18 @@ def signal_observation_was_executed(row: dict[str, Any]) -> bool:
 
 def signal_observation_combo_label(row: dict[str, Any]) -> str:
     symbol = str(row.get("symbol") or "-")
-    signal = str(row.get("signal") or "-").upper()
-    strategy = str(row.get("strategy") or "-")
+    signal = humanize_side_name(row.get("signal") or "-")
+    strategy = humanize_strategy_name(row.get("strategy") or "-")
     regime = str(row.get("market_regime") or "").strip() or signal_observation_context_value(row, "market_regime")
     setup = str(row.get("setup_quality") or "").strip() or signal_observation_context_value(row, "setup_quality_label")
     edge = signal_observation_context_value(row, "entry_edge_label", "")
     parts = [symbol, signal, strategy]
     if regime and regime != "-":
-        parts.append(f"режим {regime}")
+        parts.append(f"режим {humanize_regime_name(regime)}")
     if setup and setup != "-":
-        parts.append(f"сетап {setup}")
+        parts.append(f"сценарий {humanize_setup_quality(setup)}")
     if edge:
-        parts.append(f"edge {edge}")
+        parts.append(f"качество входа {humanize_edge_name(edge)}")
     return " | ".join(parts)
 
 
@@ -566,8 +635,8 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
             adjustment = signal_observation_context_float(item, "learning_adjustment")
             reason = signal_observation_context_value(item, "learning_reason", "")
             symbol = str(item.get("symbol") or "-")
-            signal = str(item.get("signal") or "-").upper()
-            strategy = str(item.get("strategy") or "-")
+            signal = humanize_side_name(item.get("signal") or "-")
+            strategy = humanize_strategy_name(item.get("strategy") or "-")
             if not reason:
                 continue
             rows_local.append((adjustment, f"{symbol} {signal} | {strategy}: {reason}"))
@@ -699,9 +768,9 @@ def build_prompt(
     trades_lines = []
     for trade in closed_trades[-20:]:
         trades_lines.append(
-            f"- {trade.symbol} {trade.side} | {trade.strategy} | вход {trade.entry_time} @{format_price(trade.entry_price)} | "
+            f"- {trade.symbol} {humanize_side_name(trade.side)} | {humanize_strategy_name(trade.strategy)} | вход {trade.entry_time} @{format_price(trade.entry_price)} | "
             f"выход {trade.exit_time} @{format_price(trade.exit_price)} | {trade.pnl_rub:.2f} RUB | "
-            f"режим {trade.market_regime} | сетап {trade.setup_quality_label} | edge {trade.entry_edge_label} | "
+            f"режим {humanize_regime_name(trade.market_regime)} | сценарий {humanize_setup_quality(trade.setup_quality_label)} | качество входа {humanize_edge_name(trade.entry_edge_label)} | "
             f"вход: {trade.entry_reason} | выход: {trade.exit_reason}"
         )
     if not trades_lines:
@@ -715,7 +784,7 @@ def build_prompt(
                 f"вход {format_price(safe_float(state.get('entry_price')))} | "
                 f"текущая {format_price(safe_float(state.get('last_market_price')))} | "
                 f"вар. маржа {format_rub(state.get('position_variation_margin_rub'))} | "
-                f"стратегия {state.get('entry_strategy') or state.get('last_strategy_name') or '-'}"
+                f"стратегия {humanize_strategy_name(state.get('entry_strategy') or state.get('last_strategy_name') or '-')}"
             )
     if not open_positions_lines:
         open_positions_lines.append("- Открытых позиций нет.")
@@ -723,8 +792,8 @@ def build_prompt(
     signal_lines = []
     for symbol, state in sorted(states.items()):
         signal_lines.append(
-            f"- {symbol}: сигнал={state.get('last_signal','-')}, стратегия={state.get('last_strategy_name') or state.get('entry_strategy') or '-'}, "
-            f"старший_тф={state.get('last_higher_tf_bias','-')}, новости={state.get('last_news_bias','NEUTRAL')}, "
+            f"- {symbol}: сигнал={humanize_side_name(state.get('last_signal','-'))}, стратегия={humanize_strategy_name(state.get('last_strategy_name') or state.get('entry_strategy') or '-')}, "
+            f"старший ТФ={humanize_side_name(state.get('last_higher_tf_bias','-'))}, новости={state.get('last_news_bias','NEUTRAL')}, "
             f"блокер={first_summary_line(state)}"
         )
     if not signal_lines:
@@ -737,35 +806,57 @@ def build_prompt(
             f"{item.get('source','-')} | {item.get('reason','-')}"
         )
     if not news_lines:
-        news_lines.append("- Активных news bias сейчас нет.")
+        news_lines.append("- Активных новостных сигналов сейчас нет.")
 
     by_symbol_lines = [f"- {symbol}: {pnl:.2f} RUB" for symbol, pnl in summary["by_symbol"].items()]
     if not by_symbol_lines:
         by_symbol_lines = ["- Нет закрытых сделок."]
 
-    by_strategy_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_strategy"].items()]
+    by_strategy_lines = [f"- {humanize_strategy_name(name)}: {pnl:.2f} RUB" for name, pnl in summary["by_strategy"].items()]
     if not by_strategy_lines:
         by_strategy_lines = ["- Нет данных по стратегиям."]
-    by_regime_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_regime"].items()]
+    by_regime_lines = [f"- {humanize_regime_name(name)}: {pnl:.2f} RUB" for name, pnl in summary["by_regime"].items()]
     if not by_regime_lines:
         by_regime_lines = ["- Нет данных по режимам рынка."]
-    by_setup_quality_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_setup_quality"].items()]
+    by_setup_quality_lines = [f"- {humanize_setup_quality(name)}: {pnl:.2f} RUB" for name, pnl in summary["by_setup_quality"].items()]
     if not by_setup_quality_lines:
-        by_setup_quality_lines = ["- Нет данных по качеству сетапов."]
-    by_edge_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_edge"].items()]
+        by_setup_quality_lines = ["- Нет данных по качеству сценариев."]
+    by_edge_lines = [f"- {humanize_edge_name(name)}: {pnl:.2f} RUB" for name, pnl in summary["by_edge"].items()]
     if not by_edge_lines:
-        by_edge_lines = ["- Нет данных по edge."]
-    by_strategy_regime_lines = [f"- {name}: {pnl:.2f} RUB" for name, pnl in summary["by_strategy_regime"].items()]
+        by_edge_lines = ["- Нет данных по качеству входа."]
+    by_strategy_regime_lines = []
+    for name, pnl in summary["by_strategy_regime"].items():
+        if " @ " in name:
+            strategy_name, regime_name = name.split(" @ ", 1)
+            by_strategy_regime_lines.append(
+                f"- {humanize_strategy_name(strategy_name)} @ {humanize_regime_name(regime_name)}: {pnl:.2f} RUB"
+            )
+        else:
+            by_strategy_regime_lines.append(f"- {humanize_strategy_name(name)}: {pnl:.2f} RUB")
     if not by_strategy_regime_lines:
         by_strategy_regime_lines = ["- Нет данных по сочетаниям стратегия/режим."]
-    recent_positive_lines = [
-        f"- {item['name']}: {item['pnl_rub']:.2f} RUB" for item in recent_summary["top_positive_strategy_regimes"]
-    ]
+    recent_positive_lines = []
+    for item in recent_summary["top_positive_strategy_regimes"]:
+        name = str(item["name"])
+        if " @ " in name:
+            strategy_name, regime_name = name.split(" @ ", 1)
+            recent_positive_lines.append(
+                f"- {humanize_strategy_name(strategy_name)} @ {humanize_regime_name(regime_name)}: {item['pnl_rub']:.2f} RUB"
+            )
+        else:
+            recent_positive_lines.append(f"- {humanize_strategy_name(name)}: {item['pnl_rub']:.2f} RUB")
     if not recent_positive_lines:
         recent_positive_lines = ["- Нет устойчиво сильных сочетаний за период."]
-    recent_negative_lines = [
-        f"- {item['name']}: {item['pnl_rub']:.2f} RUB" for item in recent_summary["top_negative_strategy_regimes"]
-    ]
+    recent_negative_lines = []
+    for item in recent_summary["top_negative_strategy_regimes"]:
+        name = str(item["name"])
+        if " @ " in name:
+            strategy_name, regime_name = name.split(" @ ", 1)
+            recent_negative_lines.append(
+                f"- {humanize_strategy_name(strategy_name)} @ {humanize_regime_name(regime_name)}: {item['pnl_rub']:.2f} RUB"
+            )
+        else:
+            recent_negative_lines.append(f"- {humanize_strategy_name(name)}: {item['pnl_rub']:.2f} RUB")
     if not recent_negative_lines:
         recent_negative_lines = ["- Нет устойчиво токсичных сочетаний за период."]
 
@@ -776,7 +867,7 @@ def build_prompt(
         f"- выбранных сигналов: {signal_summary['selected']}, отложенных сигналов: {signal_summary['deferred']}",
         f"- отложенные, которые подтвердились: {signal_summary['deferred_favorable']}",
         f"- выбранные, которые не подтвердились: {signal_summary['selected_unfavorable']}",
-        f"- learning-бонусов: {signal_summary['learning_bonus_count']}, learning-штрафов: {signal_summary['learning_penalty_count']}",
+        f"- бонусов обучения: {signal_summary['learning_bonus_count']}, штрафов обучения: {signal_summary['learning_penalty_count']}",
     ]
 
     def combo_lines(items: list[dict[str, Any]]) -> list[str]:
@@ -801,7 +892,7 @@ def build_prompt(
                 f"средняя поправка {float(item['avg_adjustment']):+.2f}, "
                 f"подтверждение {float(item['confirmation_rate']):.1f}%"
             )
-        return lines or ["- Недостаточно learning-наблюдений."]
+        return lines or ["- Недостаточно наблюдений для обучения."]
 
     daily_strong_signal_lines = combo_lines(signal_summary["strongest"])
     daily_weak_signal_lines = combo_lines(signal_summary["weakest"])
@@ -823,29 +914,49 @@ def build_prompt(
     best_strategy_regime = summary.get("best_strategy_regime")
     worst_strategy_regime = summary.get("worst_strategy_regime")
     if best_regime:
-        focal_points_lines.append(f"- лучший режим: {best_regime['name']} ({best_regime['pnl_rub']:.2f} RUB)")
+        focal_points_lines.append(
+            f"- лучший режим: {humanize_regime_name(best_regime['name'])} ({best_regime['pnl_rub']:.2f} RUB)"
+        )
     if worst_regime:
-        focal_points_lines.append(f"- худший режим: {worst_regime['name']} ({worst_regime['pnl_rub']:.2f} RUB)")
+        focal_points_lines.append(
+            f"- худший режим: {humanize_regime_name(worst_regime['name'])} ({worst_regime['pnl_rub']:.2f} RUB)"
+        )
     if best_setup_quality:
         focal_points_lines.append(
-            f"- лучшее качество сетапа: {best_setup_quality['name']} ({best_setup_quality['pnl_rub']:.2f} RUB)"
+            f"- лучший сценарий: {humanize_setup_quality(best_setup_quality['name'])} ({best_setup_quality['pnl_rub']:.2f} RUB)"
         )
     if worst_setup_quality:
         focal_points_lines.append(
-            f"- худшее качество сетапа: {worst_setup_quality['name']} ({worst_setup_quality['pnl_rub']:.2f} RUB)"
+            f"- худший сценарий: {humanize_setup_quality(worst_setup_quality['name'])} ({worst_setup_quality['pnl_rub']:.2f} RUB)"
         )
     if best_edge:
-        focal_points_lines.append(f"- лучший edge: {best_edge['name']} ({best_edge['pnl_rub']:.2f} RUB)")
+        focal_points_lines.append(
+            f"- лучшее качество входа: {humanize_edge_name(best_edge['name'])} ({best_edge['pnl_rub']:.2f} RUB)"
+        )
     if worst_edge:
-        focal_points_lines.append(f"- худший edge: {worst_edge['name']} ({worst_edge['pnl_rub']:.2f} RUB)")
+        focal_points_lines.append(
+            f"- худшее качество входа: {humanize_edge_name(worst_edge['name'])} ({worst_edge['pnl_rub']:.2f} RUB)"
+        )
     if best_strategy_regime:
-        focal_points_lines.append(
-            f"- лучшая связка стратегия/режим: {best_strategy_regime['name']} ({best_strategy_regime['pnl_rub']:.2f} RUB)"
-        )
+        if " @ " in str(best_strategy_regime["name"]):
+            strategy_name, regime_name = str(best_strategy_regime["name"]).split(" @ ", 1)
+            focal_points_lines.append(
+                f"- лучшая связка стратегия/режим: {humanize_strategy_name(strategy_name)} @ {humanize_regime_name(regime_name)} ({best_strategy_regime['pnl_rub']:.2f} RUB)"
+            )
+        else:
+            focal_points_lines.append(
+                f"- лучшая связка стратегия/режим: {humanize_strategy_name(best_strategy_regime['name'])} ({best_strategy_regime['pnl_rub']:.2f} RUB)"
+            )
     if worst_strategy_regime:
-        focal_points_lines.append(
-            f"- худшая связка стратегия/режим: {worst_strategy_regime['name']} ({worst_strategy_regime['pnl_rub']:.2f} RUB)"
-        )
+        if " @ " in str(worst_strategy_regime["name"]):
+            strategy_name, regime_name = str(worst_strategy_regime["name"]).split(" @ ", 1)
+            focal_points_lines.append(
+                f"- худшая связка стратегия/режим: {humanize_strategy_name(strategy_name)} @ {humanize_regime_name(regime_name)} ({worst_strategy_regime['pnl_rub']:.2f} RUB)"
+            )
+        else:
+            focal_points_lines.append(
+                f"- худшая связка стратегия/режим: {humanize_strategy_name(worst_strategy_regime['name'])} ({worst_strategy_regime['pnl_rub']:.2f} RUB)"
+            )
     if not focal_points_lines:
         focal_points_lines = ["- Недостаточно закрытых сделок для режимной сводки."]
 
@@ -872,10 +983,10 @@ def build_prompt(
         "Итог по режимам рынка:",
         *by_regime_lines,
         "",
-        "Итог по качеству сетапов:",
+        "Итог по качеству сценариев:",
         *by_setup_quality_lines,
         "",
-        "Итог по edge:",
+        "Итог по качеству входа:",
         *by_edge_lines,
         "",
         "Итог по сочетаниям стратегия/режим:",

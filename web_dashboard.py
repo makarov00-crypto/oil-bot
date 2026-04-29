@@ -1344,7 +1344,13 @@ def _signal_observation_was_executed(row: dict[str, Any]) -> bool:
 
 def _signal_observation_combo_label(row: dict[str, Any]) -> str:
     symbol = str(row.get("symbol") or "-")
-    signal = str(row.get("signal") or "-").upper()
+    signal_raw = str(row.get("signal") or "-").upper()
+    signal = {
+        "LONG": "лонг",
+        "SHORT": "шорт",
+        "BUY": "покупка",
+        "SELL": "продажа",
+    }.get(signal_raw, signal_raw.lower() if signal_raw else "-")
     strategy = humanize_strategy_name(str(row.get("strategy") or ""))
     regime = str(row.get("market_regime") or "").strip() or _signal_observation_context_value(row, "market_regime")
     setup = str(row.get("setup_quality") or "").strip() or _signal_observation_context_value(row, "setup_quality_label")
@@ -1355,11 +1361,17 @@ def _signal_observation_combo_label(row: dict[str, Any]) -> str:
         strategy,
     ]
     if regime and regime != "-":
-        parts.append(f"режим {regime}")
+        parts.append(f"режим {humanize_market_regime_label(regime)}")
     if setup and setup != "-":
-        parts.append(f"сетап {setup}")
+        parts.append(f"сценарий {humanize_setup_quality_label(setup)}")
     if edge:
-        parts.append(f"качество входа {edge}")
+        edge_map = {
+            "high": "высокое",
+            "confirmed": "подтверждённое",
+            "moderate": "умеренное",
+            "fragile": "слабое",
+        }
+        parts.append(f"качество входа {edge_map.get(edge, edge.replace('_', ' '))}")
     return " · ".join(parts)
 
 
@@ -1606,6 +1618,21 @@ def humanize_setup_quality_label(value: Any) -> str:
         "strong": "сильный",
         "medium": "средний",
         "weak": "слабый",
+    }
+    return mapping.get(raw, raw.replace("_", " "))
+
+
+def humanize_market_regime_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "-"
+    mapping = {
+        "trend_expansion": "расширение тренда",
+        "trend_pullback": "откат в тренде",
+        "impulse": "импульс",
+        "compression": "сжатие",
+        "chop": "пила",
+        "mixed": "смешанный режим",
     }
     return mapping.get(raw, raw.replace("_", " "))
 
@@ -4265,7 +4292,7 @@ def build_dashboard_html() -> str:
       const map = {
         momentum_breakout: 'Импульсный пробой',
         trend_pullback: 'Откат по тренду',
-        trend_rollover: 'Перезапуск тренда',
+        trend_rollover: 'Разворот тренда',
         range_break_continuation: 'Продолжение пробоя диапазона',
         failed_breakout: 'Ложный пробой',
         opening_range_breakout: 'Пробой утреннего диапазона',

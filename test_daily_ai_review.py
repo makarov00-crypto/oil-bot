@@ -39,7 +39,7 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("- итог: 150.00 RUB", prompt)
         self.assertIn("- Открытых позиций нет.", prompt)
         self.assertIn("- Нет сохранённого сигнального среза для выбранной даты.", prompt)
-        self.assertIn("- Активных news bias сейчас нет.", prompt)
+        self.assertIn("- Активных новостных сигналов сейчас нет.", prompt)
         self.assertNotIn("LIVEONLY", prompt)
 
     def test_summarize_closed_trades_tracks_regimes_and_setup_quality(self) -> None:
@@ -308,16 +308,16 @@ class DailyAiReviewTests(unittest.TestCase):
         )
 
         self.assertIn("Фокусные точки результата:", prompt)
-        self.assertIn("- лучший режим: trend_expansion (120.00 RUB)", prompt)
-        self.assertIn("- лучшее качество сетапа: strong (120.00 RUB)", prompt)
-        self.assertIn("- лучший edge: high (120.00 RUB)", prompt)
-        self.assertIn("- лучшая связка стратегия/режим: opening_range_breakout @ trend_expansion (120.00 RUB)", prompt)
-        self.assertIn("Итог по качеству сетапов:", prompt)
-        self.assertIn("- strong: 120.00 RUB", prompt)
-        self.assertIn("Итог по edge:", prompt)
-        self.assertIn("- high: 120.00 RUB", prompt)
+        self.assertIn("- лучший режим: расширение тренда (120.00 RUB)", prompt)
+        self.assertIn("- лучший сценарий: сильный (120.00 RUB)", prompt)
+        self.assertIn("- лучшее качество входа: высокое (120.00 RUB)", prompt)
+        self.assertIn("- лучшая связка стратегия/режим: пробой утреннего диапазона @ расширение тренда (120.00 RUB)", prompt)
+        self.assertIn("Итог по качеству сценариев:", prompt)
+        self.assertIn("- сильный: 120.00 RUB", prompt)
+        self.assertIn("Итог по качеству входа:", prompt)
+        self.assertIn("- высокое: 120.00 RUB", prompt)
         self.assertIn("Итог по сочетаниям стратегия/режим:", prompt)
-        self.assertIn("- opening_range_breakout @ trend_expansion: 120.00 RUB", prompt)
+        self.assertIn("- пробой утреннего диапазона @ расширение тренда: 120.00 RUB", prompt)
         self.assertIn("Сильные сочетания за последние 3 дня:", prompt)
         self.assertIn("Токсичные сочетания за последние 3 дня:", prompt)
 
@@ -382,11 +382,11 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("- подтвердились: 1 (50.0%)", prompt)
         self.assertIn("- отложенные, которые подтвердились: 1", prompt)
         self.assertIn("- выбранные, которые не подтвердились: 1", prompt)
-        self.assertIn("- learning-бонусов: 1, learning-штрафов: 1", prompt)
+        self.assertIn("- бонусов обучения: 1, штрафов обучения: 1", prompt)
         self.assertIn("Лучшие связки сигналов за день:", prompt)
-        self.assertIn("UCM6 | SHORT | opening_range_breakout", prompt)
+        self.assertIn("UCM6 | шорт | пробой утреннего диапазона", prompt)
         self.assertIn("Слабые связки сигналов за день:", prompt)
-        self.assertIn("BRK6 | LONG | trend_rollover", prompt)
+        self.assertIn("BRK6 | лонг | разворот тренда", prompt)
         self.assertIn("Где обучение повышало приоритет за день:", prompt)
         self.assertIn("бонус +0.05", prompt)
         self.assertIn("Где обучение понижало приоритет за день:", prompt)
@@ -515,7 +515,7 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("Лучшие связки сигналов за последние 3 дня:", prompt)
         self.assertIn("- Недостаточно проверенных наблюдений.", prompt)
         self.assertIn("Какие связки обучение чаще усиливает за последние 3 дня:", prompt)
-        self.assertIn("- Недостаточно learning-наблюдений.", prompt)
+        self.assertIn("- Недостаточно наблюдений для обучения.", prompt)
 
     def test_build_prompt_ignores_unexecuted_selected_losses(self) -> None:
         signal_rows = [
