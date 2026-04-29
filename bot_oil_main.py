@@ -1850,6 +1850,39 @@ def infer_close_reason_for_recovery(symbol: str, side: str, qty: int, close_dt: 
     return "Торговая причина выхода не сохранилась, закрытие подтверждено брокерскими операциями."
 
 
+def _normalize_recovery_price(price: float, instrument: InstrumentConfig | None) -> float:
+    step = float(getattr(instrument, "min_price_increment", 0.0) or 0.0) if instrument is not None else 0.0
+    if step > 0:
+        return round(round(float(price) / step) * step, 6)
+    return round(float(price), 6)
+
+
+def build_open_broker_claim_qty_by_signature(
+    rows: list[dict[str, Any]],
+    target_day: date,
+    instruments_by_symbol: dict[str, InstrumentConfig],
+) -> dict[tuple[str, str, int, float], int]:
+    claims: dict[tuple[str, str, int, float], int] = defaultdict(int)
+    for row in rows:
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if row_dt is None or row_dt.astimezone(MOSCOW_TZ).date() != target_day:
+            continue
+        if str(row.get("event") or "").upper() != "OPEN":
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        side = str(row.get("side") or "").upper()
+        if not symbol or side not in {"LONG", "SHORT"}:
+            continue
+        action = "BUY" if side == "LONG" else "SELL"
+        instrument = instruments_by_symbol.get(symbol)
+        price = _normalize_recovery_price(float(row.get("price") or 0.0), instrument)
+        if price <= 0:
+            continue
+        qty = max(1, int(row.get("qty_lots") or 0))
+        claims[(symbol, action, int(row_dt.timestamp()), price)] += qty
+    return claims
+
+
 def reconcile_missing_trade_closes_from_broker(
     client: Client,
     config: BotConfig,
@@ -1867,6 +1900,7 @@ def reconcile_missing_trade_closes_from_broker(
     rows = load_trade_journal()
     unmatched_opens, existing_close_signatures = build_trade_journal_queues_for_day(rows, target_day)
     instruments_by_symbol = {item.symbol: item for item in watchlist}
+    open_claim_qty_by_signature = build_open_broker_claim_qty_by_signature(rows, target_day, instruments_by_symbol)
     matches: list[dict[str, Any]] = []
     used_op_qty: dict[str, int] = defaultdict(int)
 
@@ -1891,7 +1925,15 @@ def reconcile_missing_trade_closes_from_broker(
                 continue
             op_total_qty = max(1, int(op.qty or 0))
             op_used_qty = used_op_qty.get(op.op_id, 0)
-            op_remaining_qty = max(0, op_total_qty - op_used_qty)
+            broker_action = "SELL" if op.op_type == OperationType.OPERATION_TYPE_SELL else "BUY"
+            claim_signature = (
+                symbol,
+                broker_action,
+                int(op.dt.timestamp()),
+                _normalize_recovery_price(op.price, instrument),
+            )
+            claimed_open_qty = open_claim_qty_by_signature.get(claim_signature, 0)
+            op_remaining_qty = max(0, op_total_qty - op_used_qty - claimed_open_qty)
             if op_remaining_qty < qty:
                 continue
             signature = f"{symbol}:{side}:op:{op.op_id}:{op_used_qty}"

@@ -507,6 +507,97 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(closes[0]["gross_pnl_rub"], 1.0)
         self.assertEqual(closes[0]["net_pnl_rub"], -10.0)
 
+    def test_auto_recovery_does_not_consume_broker_open_claim_from_same_day(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-23T15:55:34+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "lot_size": 1,
+                "price": 110.0,
+                "commission_rub": 5.0,
+                "strategy": "range_break_continuation",
+                "source": "portfolio_confirmation",
+                "mode": "LIVE",
+                "session": "DAY",
+            },
+            {
+                "time": "2026-04-29T10:20:32+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 2,
+                "lot_size": 1,
+                "price": 100.0,
+                "commission_rub": 10.0,
+                "strategy": "range_break_continuation",
+                "source": "portfolio_confirmation",
+                "mode": "LIVE",
+                "session": "DAY",
+            },
+        ]
+        saved = {}
+        config = SimpleNamespace(account_id="acc", dry_run=False)
+        fee_by_parent = {"sell-op": 6.0, "buy-op": 6.0}
+        trade_ops = [
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="sell-op",
+                parent_id="parent",
+                op_type=mod.OperationType.OPERATION_TYPE_SELL,
+                side="SHORT",
+                qty=2,
+                price=100.0,
+                dt=datetime(2026, 4, 29, 7, 20, 32, tzinfo=timezone.utc),
+            ),
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="buy-op",
+                parent_id="parent",
+                op_type=mod.OperationType.OPERATION_TYPE_BUY,
+                side="LONG",
+                qty=2,
+                price=101.0,
+                dt=datetime(2026, 4, 29, 7, 45, 38, tzinfo=timezone.utc),
+            ),
+        ]
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", return_value=list(rows)), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ), patch.object(
+            mod, "fetch_trade_operations_for_day", return_value=(trade_ops, fee_by_parent)
+        ), patch.object(
+            mod, "infer_close_reason_for_recovery", return_value="test reason"
+        ), patch.object(
+            mod,
+            "calculate_futures_pnl_rub",
+            side_effect=lambda instrument, entry_price, exit_price, qty, side: round((entry_price - exit_price) * qty, 2)
+            if side == "SHORT"
+            else round((exit_price - entry_price) * qty, 2),
+        ):
+            recovered = mod.reconcile_missing_trade_closes_from_broker(
+                None,
+                config,
+                [self.instrument],
+                target_day=datetime(2026, 4, 29, tzinfo=timezone.utc).date(),
+            )
+
+        self.assertEqual(recovered, 2)
+        closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
+        self.assertEqual(len(closes), 2)
+        self.assertTrue(all(row["side"] == "SHORT" for row in closes))
+
     def test_infer_close_reason_for_recovery_matches_closest_delayed_queue_item(self) -> None:
         state = mod.InstrumentState(
             delayed_close_queue=[
