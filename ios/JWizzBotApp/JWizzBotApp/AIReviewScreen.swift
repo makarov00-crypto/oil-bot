@@ -96,7 +96,7 @@ struct AIReviewScreen: View {
                                             ProgressView()
                                                 .controlSize(.small)
                                         } else {
-                                            Label("Задать доп. вопрос", systemImage: "text.bubble")
+                                            Label("Задать дополнительный вопрос", systemImage: "text.bubble")
                                         }
                                     }
                                     .buttonStyle(.borderedProminent)
@@ -131,7 +131,7 @@ struct AIReviewScreen: View {
                     } else {
                         EmptyGlassState(
                             title: "AI-разбор пока не найден",
-                            subtitle: "Сначала запусти локально remote_ai_review.py и опубликуй результат на сервер.",
+                            subtitle: "Разбор за эту дату пока не опубликован на сервере.",
                             systemImage: "brain.head.profile"
                         )
                     }

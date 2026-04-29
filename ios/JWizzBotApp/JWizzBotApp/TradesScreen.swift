@@ -132,9 +132,9 @@ struct TradesScreen: View {
                                 compactInfo("Сторона", displaySignal(trade.side))
                                 compactInfo("Лоты", formatInt(trade.qtyLots))
                                 compactInfo("Цена", trade.price ?? "-")
-                                compactInfo("Gross", isOpenEvent ? "не применяется" : formatTradePnl(trade.grossPnlRub))
+                                compactInfo("До комиссии", isOpenEvent ? "не применяется" : formatTradePnl(trade.grossPnlRub))
                                 compactInfo("Комиссия", isOpenEvent ? entryCommissionText(trade.commissionRub) : formatTradePnl(trade.commissionRub), tone: isOpenEvent ? .white : statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
-                                compactInfo("Net", isOpenEvent ? "не применяется" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
+                                compactInfo("Итог", isOpenEvent ? "не применяется" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                                 compactInfo("Стратегия", trade.strategy ?? "-")
                                 compactInfo("Причина", trade.reasonDisplay ?? trade.reason ?? "-")
                             }
@@ -264,9 +264,9 @@ struct TradesScreen: View {
                                 compactInfo("Цена выхода", trade.exitPrice ?? "-")
                                 compactInfo("Лоты", formatInt(trade.qtyLots))
                                 compactInfo("Сессия", displaySession(trade.session))
-                                compactInfo("Gross", formatTradePnl(trade.grossPnlRub))
+                                compactInfo("До комиссии", formatTradePnl(trade.grossPnlRub))
                                 compactInfo("Комиссия", formatTradePnl(trade.commissionRub), tone: statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
-                                compactInfo("Net", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
+                                compactInfo("Итог", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                             }
 
                             Divider().overlay(Color.white.opacity(0.08))
@@ -615,10 +615,10 @@ struct TradesScreen: View {
             parts.append("вытеснил \(displayName(for: replaced))")
         }
         if let learningReason = decision.learningReason, !learningReason.isEmpty {
-            parts.append(learningReason)
+            parts.append(humanizeAllocatorText(learningReason))
         }
         if let reason = decision.reason, !reason.isEmpty {
-            parts.append(reason)
+            parts.append(humanizeAllocatorText(reason))
         }
         return parts.isEmpty ? "подробности появятся после следующего цикла" : parts.joined(separator: " · ")
     }
@@ -649,10 +649,10 @@ struct TradesScreen: View {
             parts.append("качество входа \(String(format: "%.2f", edge))")
         }
         if let learningReason = item.learningReason, !learningReason.isEmpty {
-            parts.append(learningReason)
+            parts.append(humanizeAllocatorText(learningReason))
         }
         if let reason = item.decisionReason, !reason.isEmpty {
-            parts.append(reason)
+            parts.append(humanizeAllocatorText(reason))
         }
         return parts.isEmpty ? "подробности появятся после проверки сигнала" : parts.joined(separator: " · ")
     }

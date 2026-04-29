@@ -89,6 +89,23 @@ func displayRuntimeState(_ raw: String?) -> String {
     }
 }
 
+func humanizeAllocatorText(_ raw: String?) -> String {
+    guard let raw, !raw.isEmpty else { return "-" }
+    return raw
+        .replacingOccurrences(of: "health ", with: "форма связки ")
+        .replacingOccurrences(of: "edge high", with: "качество входа высокое")
+        .replacingOccurrences(of: "edge confirmed", with: "качество входа подтверждённое")
+        .replacingOccurrences(of: "edge moderate", with: "качество входа умеренное")
+        .replacingOccurrences(of: "edge fragile", with: "качество входа слабое")
+        .replacingOccurrences(of: "recovery mode", with: "режим восстановления")
+        .replacingOccurrences(of: "trend_expansion", with: "расширение тренда")
+        .replacingOccurrences(of: "trend_pullback", with: "откат в тренде")
+        .replacingOccurrences(of: "compression", with: "сжатие")
+        .replacingOccurrences(of: "chop", with: "пила")
+        .replacingOccurrences(of: "mixed", with: "смешанный режим")
+        .replacingOccurrences(of: "impulse", with: "импульс")
+}
+
 func badgeColor(for raw: String?) -> Color {
     switch (raw ?? "").uppercased() {
     case "LONG", "ACTIVE":

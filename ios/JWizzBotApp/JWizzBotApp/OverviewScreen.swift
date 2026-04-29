@@ -118,7 +118,7 @@ struct OverviewScreen: View {
                         PortfolioMetric("Итог бота", formatRub(payload.portfolio.botAnalyticalTotalPnlRub), statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), portfolioHelp("analytical")),
                         PortfolioMetric("Закрытые сделки", formatRub(payload.portfolio.botClosedNetPnlRub), statusTone(for: payload.portfolio.botClosedNetPnlRub), portfolioHelp("closed")),
                         PortfolioMetric("Открытые позиции", formatRub(payload.portfolio.botOpenPositionsLivePnlRub), statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub), portfolioHelp("open_live")),
-                        PortfolioMetric("Gross закрытые + live", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
+                        PortfolioMetric("До комиссии + открытые", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
                     ]
                 )
 
@@ -207,7 +207,7 @@ struct OverviewScreen: View {
 
                 LazyVGrid(columns: twoColumns, spacing: 12) {
                     MetricGlassTile(title: "Закрыто сделок", value: "\(day.closedCount)")
-                    MetricGlassTile(title: "Win rate", value: winRateText(wins: day.wins, closed: day.closedCount))
+                    MetricGlassTile(title: "Доля прибыльных", value: winRateText(wins: day.wins, closed: day.closedCount))
                     MetricGlassTile(title: "Итог за день", value: formatRub(day.pnlRub), tone: statusTone(for: day.pnlRub))
                     MetricGlassTile(title: "Итог за день, %", value: formatPct(day.pnlPct), tone: statusTone(for: day.pnlPct))
                     MetricGlassTile(title: "Накоплено, RUB", value: formatRub(day.cumulativePnlRub), tone: statusTone(for: day.cumulativePnlRub))
@@ -247,7 +247,7 @@ struct OverviewScreen: View {
     private func runtimeCard(payload: DashboardPayload) -> some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 12) {
-                SectionHeader(title: "Мониторинг сервиса", subtitle: payload.runtime.updatedAtMoscow.map { "Статус runtime: \($0)" })
+                SectionHeader(title: "Мониторинг сервиса", subtitle: payload.runtime.updatedAtMoscow.map { "Срез состояния: \($0)" })
 
                 InfoRow(title: "Состояние", value: displayRuntimeState(payload.runtime.state))
                 InfoRow(title: "Сессия", value: displaySession(payload.runtime.session))
@@ -255,9 +255,9 @@ struct OverviewScreen: View {
                 InfoRow(title: "Циклов прошло", value: formatInt(payload.runtime.cycleCount))
                 InfoRow(title: "Ошибок подряд", value: formatInt(payload.runtime.consecutiveErrors))
                 InfoRow(title: "Старт сервиса", value: payload.runtime.startedAtMoscow ?? "-")
-                InfoRow(title: "Health", value: payload.health?.ok == true ? "OK" : "ПРОВЕРИТЬ", accent: payload.health?.ok == true ? .green : .orange)
-                InfoRow(title: "Oil Bot", value: payload.health?.botService?.active ?? "-")
-                InfoRow(title: "Dashboard", value: payload.health?.dashboardService?.active ?? "-")
+                InfoRow(title: "Проверка", value: payload.health?.ok == true ? "НОРМА" : "ПРОВЕРИТЬ", accent: payload.health?.ok == true ? .green : .orange)
+                InfoRow(title: "Бот", value: payload.health?.botService?.active ?? "-")
+                InfoRow(title: "Панель", value: payload.health?.dashboardService?.active ?? "-")
                 InfoRow(title: "AI-разбор", value: payload.aiReview.available ? "ГОТОВ" : "НЕТ", accent: payload.aiReview.available ? .green : .orange)
                 if let updated = payload.aiReview.updatedAtMoscow, !updated.isEmpty {
                     InfoRow(title: "AI обновлен", value: updated)
