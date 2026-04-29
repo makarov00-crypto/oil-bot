@@ -1359,7 +1359,7 @@ def _signal_observation_combo_label(row: dict[str, Any]) -> str:
     if setup and setup != "-":
         parts.append(f"сетап {setup}")
     if edge:
-        parts.append(f"edge {edge}")
+        parts.append(f"качество входа {edge}")
     return " · ".join(parts)
 
 
@@ -3964,7 +3964,7 @@ def build_dashboard_html() -> str:
         <table id="tradesTable">
           <thead>
             <tr>
-              <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">Gross</th><th class="right">Комиссия</th><th class="right">Net</th><th>Стратегия</th><th>Причина</th>
+              <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">До комиссии</th><th class="right">Комиссия</th><th class="right">Итог</th><th>Стратегия</th><th>Причина</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4038,7 +4038,7 @@ def build_dashboard_html() -> str:
         <table id="reviewTable" style="margin-top:16px;">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">Gross</th><th class="right">Комиссия</th><th class="right">Net</th><th>Причина и контекст</th><th>Вердикт</th>
+              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">До комиссии</th><th class="right">Комиссия</th><th class="right">Итог</th><th>Причина и контекст</th><th>Вердикт</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4049,11 +4049,11 @@ def build_dashboard_html() -> str:
     <section class="panel" style="margin-top:16px;">
       <div class="section-title">
         <h2>Мониторинг сервиса</h2>
-        <div class="generated" id="runtimeUpdatedAt">Runtime: -</div>
+        <div class="generated" id="runtimeUpdatedAt">Состояние бота: -</div>
       </div>
       <div class="grid">
         <div>
-          <div class="muted">Состояние runtime</div>
+          <div class="muted">Состояние цикла</div>
           <div class="metric metric-wide" id="runtimeState">-</div>
         </div>
         <div>
@@ -4079,7 +4079,7 @@ def build_dashboard_html() -> str:
         <h2>AI-разбор дня</h2>
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
           <button id="aiReviewRefreshBtn" class="btn-secondary" type="button">Обновить AI-разбор</button>
-          <div class="generated" id="aiReviewMeta">AI review: -</div>
+          <div class="generated" id="aiReviewMeta">AI-разбор: -</div>
         </div>
       </div>
       <div class="muted" id="aiReviewStatus" style="margin-bottom:12px;">Ручной запуск не выполнялся.</div>
@@ -4573,7 +4573,7 @@ def build_dashboard_html() -> str:
       renderPnlChart(daily.series || [], daily.selected_date || '');
 
       const runtime = data.runtime || {};
-      document.getElementById('runtimeUpdatedAt').textContent = `Runtime: ${runtime.updated_at_moscow || '-'}`;
+      document.getElementById('runtimeUpdatedAt').textContent = `Состояние бота: ${runtime.updated_at_moscow || '-'}`;
       document.getElementById('runtimeState').textContent = formatRuntimeState(runtime.state || '-');
       document.getElementById('runtimeSession').textContent = formatSessionLabel(runtime.session || '-');
       document.getElementById('runtimeCycles').textContent = runtime.cycle_count ?? '-';
@@ -4583,8 +4583,8 @@ def build_dashboard_html() -> str:
       runtimeBody.innerHTML = `
         <tr><td>Бот</td><td>${signalBadge(data.health.bot_service.active || '-')}</td></tr>
         <tr><td>Панель</td><td>${signalBadge(data.health.dashboard_service.active || '-')}</td></tr>
-        <tr><td>Health</td><td>${data.health.ok ? '<span class="good mono">OK</span>' : '<span class="bad mono">FAIL</span>'}</td></tr>
-        <tr><td>Runtime stale</td><td>${data.health.runtime_stale ? '<span class="bad mono">ДА</span>' : '<span class="good mono">НЕТ</span>'}</td></tr>
+        <tr><td>Проверка</td><td>${data.health.ok ? '<span class="good mono">OK</span>' : '<span class="bad mono">FAIL</span>'}</td></tr>
+        <tr><td>Состояние устарело</td><td>${data.health.runtime_stale ? '<span class="bad mono">ДА</span>' : '<span class="good mono">НЕТ</span>'}</td></tr>
         <tr><td>Возраст цикла</td><td class="mono">${data.health.runtime_heartbeat_age_seconds ?? '-'} сек</td></tr>
         <tr><td>Инструментов</td><td class="mono">${data.health.symbols_count}</td></tr>
         <tr><td>Срез health</td><td class="mono">${escapeHtml(data.health.generated_at_moscow || '-')}</td></tr>
@@ -4870,12 +4870,12 @@ def build_dashboard_html() -> str:
           review.worst_setup_quality ? formatSignedRub(review.worst_setup_quality.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Лучший edge',
+          'Лучшее качество входа',
           review.best_edge ? formatEdgeLabel(review.best_edge.label) : 'нет данных',
           review.best_edge ? formatSignedRub(review.best_edge.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Худший edge',
+          'Худшее качество входа',
           review.worst_edge ? formatEdgeLabel(review.worst_edge.label) : 'нет данных',
           review.worst_edge ? formatSignedRub(review.worst_edge.pnl_rub) : ''
         ),
@@ -4903,12 +4903,12 @@ def build_dashboard_html() -> str:
           review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Лучший edge за 3 дня',
+          'Лучшее качество входа за 3 дня',
           review.edge_focus_3d?.strongest?.length ? formatEdgeLabel(review.edge_focus_3d.strongest[0].label) : 'нет данных',
           review.edge_focus_3d?.strongest?.length ? [formatSignedRub(review.edge_focus_3d.strongest[0].pnl_rub), `${review.edge_focus_3d.strongest[0].count || 0} сдел.`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Слабый edge за 3 дня',
+          'Слабое качество входа за 3 дня',
           review.edge_focus_3d?.toxic?.length ? formatEdgeLabel(review.edge_focus_3d.toxic[0].label) : 'нет данных',
           review.edge_focus_3d?.toxic?.length ? [formatSignedRub(review.edge_focus_3d.toxic[0].pnl_rub), `${review.edge_focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
         ),
@@ -4928,7 +4928,7 @@ def build_dashboard_html() -> str:
             const scoreText = score > 0 ? `приоритет ${score.toFixed(2)}` : '';
             const learning = Number(item.learning_adjustment || 0);
             const learningText = Number.isFinite(learning) && Math.abs(learning) >= 0.005
-              ? `обучение ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
+              ? `поправка обучения ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
               : '';
             const margin = Number(item.requested_margin_rub || 0);
             const marginText = margin > 0 ? `ГО ${formatRub(margin)}` : '';
@@ -4939,7 +4939,7 @@ def build_dashboard_html() -> str:
               [meta, item.learning_reason || '', item.reason || ''].filter(Boolean).join(' · ')
             );
           }).join('')
-        : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не вытеснял сигналы');
+        : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не перераспределял сигналы');
 
       const signalObservationsBody = document.getElementById('signalObservationsBody');
       const signalObservations = data.signal_observations || {};
@@ -4988,17 +4988,17 @@ def build_dashboard_html() -> str:
         buildReviewRow(
           'Чаще усиливаем',
           strongestLearningCombos.length ? strongestLearningCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
-          strongestLearningCombos.length ? strongestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых learning-бонусов'
+          strongestLearningCombos.length ? strongestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых бонусов обучения'
         ),
         buildReviewRow(
           'Чаще режем',
           weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
-          weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых learning-штрафов'
+          weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых штрафов обучения'
         ),
         buildReviewRow(
           'Что менять первым',
           observationActions.length ? observationActions[0] : 'действий пока нет',
-          observationActions.length > 1 ? observationActions.slice(1, 3).join(' | ') : 'нужно накопить ещё learning-наблюдения'
+          observationActions.length > 1 ? observationActions.slice(1, 3).join(' | ') : 'нужно накопить ещё наблюдения для обучения'
         ),
         buildReviewRow(
           'Лучшие связки',
@@ -5021,7 +5021,7 @@ def build_dashboard_html() -> str:
             const priorityText = Number.isFinite(priority) && priority > 0 ? `приоритет ${priority.toFixed(2)}` : '';
             const learning = Number(item.learning_adjustment || 0);
             const learningText = Number.isFinite(learning) && Math.abs(learning) >= 0.005
-              ? `обучение ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
+              ? `поправка обучения ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
               : '';
             const meta = [item.outcome_display || '', moveText, priorityText, learningText].filter(Boolean).join(' · ');
             return buildReviewRow(
@@ -5116,8 +5116,8 @@ def build_dashboard_html() -> str:
 
 const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available
-        ? `AI review: ${aiReview.source || '-'} • обновлено ${aiReview.updated_at_moscow || '-'}`
-        : `AI review: пока нет${aiReview.updated_at_moscow ? ` • последняя попытка ${aiReview.updated_at_moscow}` : ''}`;
+        ? `AI-разбор: ${aiReview.source || '-'} • обновлено ${aiReview.updated_at_moscow || '-'}`
+        : `AI-разбор: пока нет${aiReview.updated_at_moscow ? ` • последняя попытка ${aiReview.updated_at_moscow}` : ''}`;
       document.getElementById('aiReviewContent').innerHTML = markdownToHtml(aiReview.content || '');
       const aiFollowupsEl = document.getElementById('aiReviewFollowups');
       if (aiFollowupsEl) {
