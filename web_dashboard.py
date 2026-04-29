@@ -4083,7 +4083,7 @@ def build_dashboard_html() -> str:
         </div>
       </div>
       <div class="muted" id="aiReviewStatus" style="margin-bottom:12px;">Ручной запуск не выполнялся.</div>
-      <div id="aiReviewContent" class="prose-review muted">AI-review пока не загружен.</div>
+      <div id="aiReviewContent" class="prose-review muted">AI-разбор пока не загружен.</div>
       <div style="margin-top:16px; display:grid; gap:10px;">
         <label for="aiReviewFollowupInput" class="muted">Дополнительный вопрос к AI-разбору</label>
         <textarea id="aiReviewFollowupInput" rows="4" placeholder="Например: почему бот слабо использовал движение по нефти после 18:00?" style="width:100%; resize:vertical; background:rgba(8,16,32,.75); color:#e8f0ff; border:1px solid rgba(138,163,255,.16); border-radius:14px; padding:12px;"></textarea>
@@ -5060,9 +5060,9 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub ?? '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">До комиссии</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub ?? '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Итог</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Вход</span><div class="mobile-card-value mono">${escapeHtml(row.entry_time || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Выход</span><div class="mobile-card-value mono">${escapeHtml(row.exit_time || '-')}</div></div>
           </div>
