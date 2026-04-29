@@ -22,7 +22,7 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
             allow_short=True,
         )
 
-    if symbol == "NGJ6":
+    if symbol in NATURAL_GAS_SYMBOLS:
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
             near_ema20_pct=0.0062,
@@ -163,7 +163,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     macd_turn_down = profile.allow_short and macd < macd_signal and macd <= prev_macd
     if instrument.symbol == "UCM6":
         macd_turn_up = macd > macd_signal and macd > prev_macd
-    if instrument.symbol == "NGJ6":
+    if instrument.symbol in NATURAL_GAS_SYMBOLS:
         macd_turn_down = macd_turn_down and prev_macd >= prev_prev_macd
     trend_long = close > ema50 and ema50_slope > profile.ema_slope_threshold
     trend_short = close < ema50 and ema50_slope < -profile.ema_slope_threshold
@@ -307,7 +307,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
             and volatility_ok
             and not_overbought
         )
-    if instrument.symbol == "NGJ6":
+    if instrument.symbol in NATURAL_GAS_SYMBOLS:
         # Газу нужен чуть более живой pullback, иначе он почти не торгуется.
         short_ok = short_ok and near_ema20
 
@@ -327,3 +327,4 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
         + "; ".join(short_blockers[:3])
         + ".",
     )
+NATURAL_GAS_SYMBOLS = {"NGJ6", "NJK6"}

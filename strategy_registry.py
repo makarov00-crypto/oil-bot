@@ -6,6 +6,7 @@ PRIMARY_STRATEGIES_BY_SYMBOL = {
     "GNM6": ["trend_pullback", "momentum_breakout", "trend_rollover"],
     "IMOEXF": ["range_break_continuation", "failed_breakout", "trend_pullback"],
     "NGJ6": ["trend_pullback", "momentum_breakout"],
+    "NJK6": ["trend_pullback", "momentum_breakout"],
     "RBM6": ["failed_breakout", "range_break_continuation", "trend_pullback"],
     "SRM6": ["range_break_continuation", "failed_breakout", "trend_pullback"],
     "UCM6": ["trend_pullback", "range_break_continuation", "opening_range_breakout"],

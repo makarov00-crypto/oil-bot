@@ -61,7 +61,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         higher_tf_long_ok = higher_tf_bias == "LONG"
         higher_tf_short_ok = higher_tf_bias == "SHORT"
 
-    if instrument.symbol == "NGJ6":
+    if instrument.symbol in NATURAL_GAS_SYMBOLS:
         recent_above_ema20 = sum(1 for _, row in df.iloc[-6:-1].iterrows() if float(row["close"]) > float(row["ema20"]))
         recent_below_ema20 = sum(1 for _, row in df.iloc[-6:-1].iterrows() if float(row["close"]) < float(row["ema20"]))
         macd_hist = macd - macd_signal
@@ -119,7 +119,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     soft_breakout_quality_up = True
     soft_breakout_quality_down = True
-    if instrument.symbol in {"BRK6", "NGJ6"}:
+    if instrument.symbol == "BRK6" or instrument.symbol in NATURAL_GAS_SYMBOLS:
         soft_volume_factor = 1.05 if instrument.symbol == "BRK6" else 1.15
         soft_impulse_factor = 0.85 if instrument.symbol == "BRK6" else 1.05
         soft_breakout_quality_up = (
@@ -179,9 +179,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if not rsi_long_ok:
         long_blockers.append(f"RSI {rsi:.2f} вне рабочей зоны 46-78")
     if ngj6_late_long_chase:
-        long_blockers.append("NGJ6: поздний breakout у верхней Bollinger после зрелого роста")
-    if instrument.symbol == "NGJ6" and higher_tf_bias != "LONG" and not ngj6_pullback_reclaim_long:
-        long_blockers.append("NGJ6: нет подтверждённого reclaim выше EMA20/BB-mid после пролива")
+        long_blockers.append(f"{instrument.symbol}: поздний breakout у верхней Bollinger после зрелого роста")
+    if instrument.symbol in NATURAL_GAS_SYMBOLS and higher_tf_bias != "LONG" and not ngj6_pullback_reclaim_long:
+        long_blockers.append(f"{instrument.symbol}: нет подтверждённого reclaim выше EMA20/BB-mid после пролива")
     if not macd_up:
         long_blockers.append("MACD не подтверждает рост")
     if not impulse_ok:
@@ -193,8 +193,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     if not higher_tf_short_ok:
         short_blockers.append(f"старший ТФ не SHORT, а {higher_tf_bias}")
-    if instrument.symbol == "NGJ6" and close >= bb_mid and not ngj6_volume_reversal_short:
-        short_blockers.append("NGJ6: цена не закрепилась ниже средней Bollinger для шорта")
+    if instrument.symbol in NATURAL_GAS_SYMBOLS and close >= bb_mid and not ngj6_volume_reversal_short:
+        short_blockers.append(f"{instrument.symbol}: цена не закрепилась ниже средней Bollinger для шорта")
     if not breakout_down and not soft_breakout_down:
         short_blockers.append("нет подтверждённого breakout вниз")
     elif not soft_breakout_quality_down:
@@ -288,7 +288,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and short_score >= 5
         )
 
-    if instrument.symbol == "NGJ6":
+    if instrument.symbol in NATURAL_GAS_SYMBOLS:
         long_ok = (
             higher_tf_long_ok
             and (close_above_trend or ngj6_pullback_reclaim_long)
@@ -329,3 +329,4 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         + "; ".join(short_blockers[:3])
         + ".",
     )
+NATURAL_GAS_SYMBOLS = {"NGJ6", "NJK6"}
