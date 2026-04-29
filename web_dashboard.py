@@ -4408,7 +4408,7 @@ def build_dashboard_html() -> str:
         .replace(/^```(?:markdown|md)?\\s*$/gim, '')
         .replace(/^```\\s*$/gm, '')
         .trim();
-      if (!text) return '<span class="muted">AI-review для выбранной даты пока не найден.</span>';
+      if (!text) return '<span class="muted">AI-разбор для выбранной даты пока не найден.</span>';
       const inlineMarkdown = (raw) => escapeHtml(raw)
         .replace(/\\*\\*([^*\\n]+?)\\*\\*/g, '<strong>$1</strong>')
         .replace(/`([^`\\n]+?)`/g, '<code>$1</code>');
@@ -4669,8 +4669,8 @@ def build_dashboard_html() -> str:
         </article>`);
       }
       if (!activeBiases.length) {
-        newsBody.insertAdjacentHTML('beforeend', '<tr><td colspan="6" class="muted">Активных news bias сейчас нет.</td></tr>');
-        newsCards.insertAdjacentHTML('beforeend', '<div class="muted">Активных news bias сейчас нет.</div>');
+        newsBody.insertAdjacentHTML('beforeend', '<tr><td colspan="6" class="muted">Активных новостных сигналов сейчас нет.</td></tr>');
+        newsCards.insertAdjacentHTML('beforeend', '<div class="muted">Активных новостных сигналов сейчас нет.</div>');
       }
 
       const posBody = document.querySelector('#positionsTable tbody');
@@ -4823,9 +4823,9 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">Сторона</span><div class="mobile-card-value">${signalBadge(row.side || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(row.qty_lots || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Цена</span><div class="mobile-card-value mono">${escapeHtml(row.price ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Gross</span><div class="mobile-card-value mono">${escapeHtml(grossText)}</div></div>
+            <div class="mobile-card-item"><span class="muted">До комиссии</span><div class="mobile-card-value mono">${escapeHtml(grossText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(commissionText)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Net</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(netText)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Итог</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(netText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
           </div>
           <div class="mobile-card-footer">
