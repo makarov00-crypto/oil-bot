@@ -598,6 +598,21 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(len(closes), 2)
         self.assertTrue(all(row["side"] == "SHORT" for row in closes))
 
+    def test_build_today_journal_integrity_alert_reports_broker_issue(self) -> None:
+        fake_audit = SimpleNamespace(
+            broker_alignment_issues=[{"symbol": "IMOEXF", "type": "broker_op_mismatch"}],
+            orphan_closes=[],
+        )
+
+        with patch("scripts.audit_trade_journal_integrity.classify_journal", return_value=fake_audit), patch.object(
+            mod, "load_trade_journal", return_value=[]
+        ), patch.object(mod, "current_moscow_time", return_value=datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc)):
+            alert = mod.build_today_journal_integrity_alert()
+
+        self.assertIn("journal integrity alert", alert)
+        self.assertIn("IMOEXF", alert)
+        self.assertIn("broker_op_mismatch", alert)
+
     def test_infer_close_reason_for_recovery_matches_closest_delayed_queue_item(self) -> None:
         state = mod.InstrumentState(
             delayed_close_queue=[

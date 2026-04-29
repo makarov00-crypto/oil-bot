@@ -2020,6 +2020,41 @@ def reconcile_missing_trade_closes_from_broker(
     return len(matches)
 
 
+def build_today_journal_integrity_alert() -> str:
+    try:
+        from scripts.audit_trade_journal_integrity import classify_journal
+    except Exception as error:
+        logging.warning("journal_integrity_alert_import_failed: %s", error)
+        return ""
+
+    try:
+        audit = classify_journal(load_trade_journal(), broker_day=current_moscow_time().date())
+    except Exception as error:
+        logging.warning("journal_integrity_alert_failed: %s", error)
+        return ""
+
+    broker_issue_count = len(audit.broker_alignment_issues)
+    orphan_count = len(audit.orphan_closes)
+    if broker_issue_count <= 0 and orphan_count <= 0:
+        return ""
+
+    first_issue = audit.broker_alignment_issues[0] if audit.broker_alignment_issues else None
+    if first_issue:
+        symbol = str(first_issue.get("symbol") or "-")
+        issue_type = str(first_issue.get("type") or "broker_issue")
+        return (
+            "journal integrity alert: "
+            f"расхождений с брокером {broker_issue_count}, orphan close {orphan_count}. "
+            f"Первый инцидент: {symbol} / {issue_type}."
+        )
+    first_orphan = audit.orphan_closes[0]
+    return (
+        "journal integrity alert: "
+        f"orphan close {orphan_count}. "
+        f"Первый инцидент: {str(first_orphan.get('symbol') or '-')}."
+    )
+
+
 def defer_close_recovery_to_broker_ops(
     instrument: InstrumentConfig,
     state: InstrumentState,
@@ -7195,8 +7230,12 @@ def run_bot() -> int:
                             mark_cycle_deferred_candidate(item, defer_reason)
                             logging.info("symbol=%s status=entry_deferred_cycle_rank reason=%s", symbol, defer_reason)
                         recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)
+                        journal_integrity_alert = ""
                         if recovered_closes:
                             logging.warning("journal_auto_recovery_applied recovered_closes=%s", recovered_closes)
+                            journal_integrity_alert = build_today_journal_integrity_alert()
+                            if journal_integrity_alert:
+                                logging.warning(journal_integrity_alert)
                         update_signal_observation_outcomes(client, config, watchlist)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist)
                         maybe_send_hourly_summary(client, config, watchlist)
@@ -7212,6 +7251,7 @@ def run_bot() -> int:
                                 consecutive_errors=0,
                                 state="running",
                                 last_cycle_at=last_cycle_at,
+                                last_error=journal_integrity_alert,
                             )
                         )
                         if config.max_cycles > 0 and cycle_count >= config.max_cycles:
