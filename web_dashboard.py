@@ -4038,7 +4038,7 @@ def build_dashboard_html() -> str:
         <table id="reviewTable" style="margin-top:16px;">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">Gross</th><th class="right">Комиссия</th><th class="right">Net</th><th>Выход</th><th>Вердикт</th>
+              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">Gross</th><th class="right">Комиссия</th><th class="right">Net</th><th>Причина и контекст</th><th>Вердикт</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4254,6 +4254,17 @@ def build_dashboard_html() -> str:
         compression: 'Сжатие',
         chop: 'Пила',
         mixed: 'Смешанный режим',
+      };
+      return map[raw] || raw.replaceAll('_', ' ');
+    }
+
+    function formatSetupQualityLabel(value) {
+      const raw = String(value || '').trim();
+      if (!raw || raw === '-') return 'сетап не определён';
+      const map = {
+        strong: 'Сильный сетап',
+        medium: 'Средний сетап',
+        weak: 'Слабый сетап',
       };
       return map[raw] || raw.replaceAll('_', ' ');
     }
@@ -4850,12 +4861,12 @@ def build_dashboard_html() -> str:
         ),
         buildReviewRow(
           'Лучший сетап',
-          review.best_setup_quality ? review.best_setup_quality.label : 'нет данных',
+          review.best_setup_quality ? formatSetupQualityLabel(review.best_setup_quality.label) : 'нет данных',
           review.best_setup_quality ? formatSignedRub(review.best_setup_quality.pnl_rub) : ''
         ),
         buildReviewRow(
           'Худший сетап',
-          review.worst_setup_quality ? review.worst_setup_quality.label : 'нет данных',
+          review.worst_setup_quality ? formatSetupQualityLabel(review.worst_setup_quality.label) : 'нет данных',
           review.worst_setup_quality ? formatSignedRub(review.worst_setup_quality.pnl_rub) : ''
         ),
         buildReviewRow(
@@ -4892,12 +4903,12 @@ def build_dashboard_html() -> str:
           review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Лучшее качество входа за 3 дня',
+          'Лучший edge за 3 дня',
           review.edge_focus_3d?.strongest?.length ? formatEdgeLabel(review.edge_focus_3d.strongest[0].label) : 'нет данных',
           review.edge_focus_3d?.strongest?.length ? [formatSignedRub(review.edge_focus_3d.strongest[0].pnl_rub), `${review.edge_focus_3d.strongest[0].count || 0} сдел.`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Слабое качество входа за 3 дня',
+          'Слабый edge за 3 дня',
           review.edge_focus_3d?.toxic?.length ? formatEdgeLabel(review.edge_focus_3d.toxic[0].label) : 'нет данных',
           review.edge_focus_3d?.toxic?.length ? [formatSignedRub(review.edge_focus_3d.toxic[0].pnl_rub), `${review.edge_focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
         ),
@@ -5039,7 +5050,7 @@ def build_dashboard_html() -> str:
           <td class="mono right">${escapeHtml(row.gross_pnl_rub ?? '-')}</td>
           <td class="mono right">${escapeHtml(row.commission_rub ?? '-')}</td>
           <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</td>
-          <td class="reason">${escapeHtml(row.exit_reason || '-')}<br><span class="muted">${escapeHtml(row.exit_context_display || '-')}</span></td>
+          <td class="reason">${escapeHtml(row.exit_reason || '-')}<br><span class="muted">Вход: ${escapeHtml(row.entry_context_display || '-')}</span></td>
           <td>${escapeHtml(row.verdict || '-')}</td>
         </tr>`);
         reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -5057,7 +5068,7 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Причина выхода</span><br>${escapeHtml(row.exit_reason || '-')}</div>
-            <div class="mobile-card-text"><span class="muted">Контекст</span><br>${escapeHtml(row.exit_context_display || '-')}</div>
+            <div class="mobile-card-text"><span class="muted">Контекст входа</span><br>${escapeHtml(row.entry_context_display || '-')}</div>
             <div class="mobile-card-text"><span class="muted">Вердикт</span><br>${escapeHtml(row.verdict || '-')}</div>
           </div>
         </article>`);
