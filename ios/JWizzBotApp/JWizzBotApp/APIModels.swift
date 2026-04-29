@@ -930,6 +930,38 @@ struct DailyPoint: Decodable, Identifiable {
 
     var id: String { date }
 
+    init(
+        date: String,
+        closedCount: Int,
+        wins: Int,
+        losses: Int,
+        pnlRub: Double,
+        pnlPct: Double,
+        cumulativePnlRub: Double,
+        cumulativePnlPct: Double
+    ) {
+        self.date = date
+        self.closedCount = closedCount
+        self.wins = wins
+        self.losses = losses
+        self.pnlRub = pnlRub
+        self.pnlPct = pnlPct
+        self.cumulativePnlRub = cumulativePnlRub
+        self.cumulativePnlPct = cumulativePnlPct
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        date = try container.decode(String.self, forKey: .date)
+        closedCount = try container.decodeIfPresent(Int.self, forKey: .closedCount) ?? 0
+        wins = try container.decodeIfPresent(Int.self, forKey: .wins) ?? 0
+        losses = try container.decodeIfPresent(Int.self, forKey: .losses) ?? 0
+        pnlRub = try container.decodeIfPresent(Double.self, forKey: .pnlRub) ?? 0
+        pnlPct = try container.decodeIfPresent(Double.self, forKey: .pnlPct) ?? 0
+        cumulativePnlRub = try container.decodeIfPresent(Double.self, forKey: .cumulativePnlRub) ?? 0
+        cumulativePnlPct = try container.decodeIfPresent(Double.self, forKey: .cumulativePnlPct) ?? 0
+    }
+
     enum CodingKeys: String, CodingKey {
         case date
         case closedCount = "closed_count"
