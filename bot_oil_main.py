@@ -5302,6 +5302,19 @@ def calculate_position_sizing_context(
     except Exception as error:
         logging.warning("Не удалось получить max lots для %s: %s", instrument.symbol, error)
 
+    broker_min_lot_override = False
+    if (
+        raw_qty < 1
+        and broker_limit >= 1
+        and signal in {"LONG", "SHORT"}
+        and conviction_weight >= 1.20
+        and strategy_health_score >= 0.95
+        and strategy_regime_health_score >= 0.95
+        and (entry_edge_score >= 0.62 or entry_edge_label in {"confirmed", "high"})
+    ):
+        raw_qty = 1
+        broker_min_lot_override = True
+
     if broker_limit > 0:
         raw_qty = min(raw_qty, broker_limit)
     if config.max_order_quantity > 0:
@@ -5344,6 +5357,7 @@ def calculate_position_sizing_context(
         "qty_by_working": qty_by_working,
         "qty_by_headroom": qty_by_headroom,
         "broker_limit": broker_limit,
+        "broker_min_lot_override": broker_min_lot_override,
         "money_risk_per_contract_rub": money_risk_per_contract,
         "risk_budget_rub": risk_budget,
         "quantity": max(0, raw_qty),
@@ -5417,23 +5431,25 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     edge_score = float(sizing.get("entry_edge_score") or 0.0)
     edge_label = str(sizing.get("entry_edge_label") or "").strip()
     edge_cap_multiplier = float(sizing.get("entry_edge_cap_multiplier") or 1.0)
+    broker_min_lot_override = bool(sizing.get("broker_min_lot_override"))
     recovery_mode_active = bool(sizing.get("recovery_mode_active"))
     daily_loss_recovery_active = bool(sizing.get("daily_loss_recovery_active"))
     recovery_hint = ", recovery mode" if recovery_mode_active else ""
     daily_loss_hint = ", мягкий дневной стоп" if daily_loss_recovery_active else ""
     edge_hint = f", edge {edge_label} {edge_score:.2f}" if edge_score > 0.0 else ""
     edge_cap_hint = f", потолок качества {edge_cap_multiplier:.2f}" if edge_cap_multiplier < 1.0 else ""
+    broker_override_hint = ", 1 лот разрешён по лимиту брокера" if broker_min_lot_override else ""
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
-            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}, запас {margin_headroom:.0f} RUB, "
+            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}, запас {margin_headroom:.0f} RUB, "
             f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
             f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}, "
+        f"health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."

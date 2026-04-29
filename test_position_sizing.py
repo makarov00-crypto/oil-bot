@@ -298,6 +298,56 @@ class PositionSizingTests(unittest.TestCase):
         self.assertLess(sizing["adaptive_size_multiplier"], 0.8)
         self.assertEqual(sizing["entry_edge_label"], "fragile")
 
+    def test_strong_signal_can_use_one_lot_when_broker_allows_it(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="BRK6",
+            figi="FIGI",
+            display_name="Brent",
+            initial_margin_on_buy=17305.0,
+            initial_margin_on_sell=17305.0,
+        )
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.81,
+            last_entry_edge_score=0.65,
+            last_entry_edge_label="confirmed",
+            last_higher_tf_bias="LONG",
+        )
+        client = SimpleNamespace(
+            orders=SimpleNamespace(
+                get_max_lots=lambda request: SimpleNamespace(
+                    buy_limits=SimpleNamespace(buy_max_market_lots=1),
+                    sell_limits=SimpleNamespace(sell_max_lots=1),
+                )
+            )
+        )
+        snapshot = mod.AccountSnapshot(total_portfolio=50000.0, free_rub=18000.0, blocked_guarantee_rub=0.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=16652.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.45
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("тяжёлый", 0.85)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.08, "связка сильна 3 дня")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим trend_expansion нейтрален")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                client, self.config, instrument, state, 119.6, "LONG", "momentum_breakout"
+            )
+
+        self.assertEqual(sizing["qty_by_headroom"], 0)
+        self.assertEqual(sizing["broker_limit"], 1)
+        self.assertTrue(sizing["broker_min_lot_override"])
+        self.assertEqual(sizing["quantity"], 1)
+
     def test_moderate_edge_caps_target_trade_margin(self) -> None:
         self.state.last_setup_quality_label = "medium"
         self.state.last_market_regime = "trend_expansion"
