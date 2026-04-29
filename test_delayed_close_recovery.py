@@ -525,7 +525,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
                 "session": "DAY",
             },
             {
-                "time": "2026-04-29T10:20:32+03:00",
+                "time": "2026-04-29T10:20:52+03:00",
                 "symbol": "TEST",
                 "display_name": "Test",
                 "side": "SHORT",
