@@ -4157,7 +4157,7 @@ def build_dashboard_html() -> str:
         <label for="aiReviewFollowupInput" class="muted">Дополнительный вопрос к AI-разбору</label>
         <textarea id="aiReviewFollowupInput" rows="4" placeholder="Например: почему бот слабо использовал движение по нефти после 18:00?" style="width:100%; resize:vertical; background:rgba(8,16,32,.75); color:#e8f0ff; border:1px solid rgba(138,163,255,.16); border-radius:14px; padding:12px;"></textarea>
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <button id="aiReviewFollowupBtn" class="btn-secondary" type="button">Задать доп. вопрос</button>
+          <button id="aiReviewFollowupBtn" class="btn-secondary" type="button">Задать дополнительный вопрос</button>
           <div class="generated" id="aiReviewFollowupStatus">Дополнительный разбор не запускался.</div>
         </div>
       </div>
@@ -4278,6 +4278,24 @@ def build_dashboard_html() -> str:
         startup_internal_retry: 'ПОВТОР СТАРТА',
       };
       return map[raw] || (value || '-');
+    }
+
+    function humanizeAllocatorText(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '-';
+      return raw
+        .replaceAll('health ', 'форма связки ')
+        .replaceAll('edge high', 'качество входа высокое')
+        .replaceAll('edge confirmed', 'качество входа подтверждённое')
+        .replaceAll('edge moderate', 'качество входа умеренное')
+        .replaceAll('edge fragile', 'качество входа слабое')
+        .replaceAll('recovery mode', 'режим восстановления')
+        .replaceAll('trend_expansion', 'расширение тренда')
+        .replaceAll('trend_pullback', 'откат в тренде')
+        .replaceAll('compression', 'сжатие')
+        .replaceAll('chop', 'пила')
+        .replaceAll('mixed', 'смешанный режим')
+        .replaceAll('impulse', 'импульс');
     }
 
     function formatEventLabel(value) {
@@ -4762,7 +4780,7 @@ def build_dashboard_html() -> str:
         const summary = Array.isArray(state.last_signal_summary) && state.last_signal_summary.length
           ? state.last_signal_summary[0]
           : (state.last_error || '-');
-        const allocatorSummary = state.last_allocator_summary || 'Нет активного расчёта размера позиции.';
+        const allocatorSummary = humanizeAllocatorText(state.last_allocator_summary || 'Нет активного расчёта размера позиции.');
         signalBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
@@ -4954,32 +4972,32 @@ def build_dashboard_html() -> str:
         buildReviewRow(
           'Сильное сегодня',
           review.focus_today?.strongest?.length ? formatStrategyRegimeLabel(review.focus_today.strongest[0].label) : 'нет данных',
-          review.focus_today?.strongest?.length ? [formatSignedRub(review.focus_today.strongest[0].pnl_rub), `${review.focus_today.strongest[0].count || 0} сдел.`].join(' · ') : ''
+          review.focus_today?.strongest?.length ? [formatSignedRub(review.focus_today.strongest[0].pnl_rub), `${review.focus_today.strongest[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow(
           'Токсичное сегодня',
           review.focus_today?.toxic?.length ? formatStrategyRegimeLabel(review.focus_today.toxic[0].label) : 'нет данных',
-          review.focus_today?.toxic?.length ? [formatSignedRub(review.focus_today.toxic[0].pnl_rub), `${review.focus_today.toxic[0].count || 0} сдел.`].join(' · ') : ''
+          review.focus_today?.toxic?.length ? [formatSignedRub(review.focus_today.toxic[0].pnl_rub), `${review.focus_today.toxic[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow(
           'Сильное за 3 дня',
           review.focus_3d?.strongest?.length ? formatStrategyRegimeLabel(review.focus_3d.strongest[0].label) : 'нет данных',
-          review.focus_3d?.strongest?.length ? [formatSignedRub(review.focus_3d.strongest[0].pnl_rub), `${review.focus_3d.strongest[0].count || 0} сдел.`].join(' · ') : ''
+          review.focus_3d?.strongest?.length ? [formatSignedRub(review.focus_3d.strongest[0].pnl_rub), `${review.focus_3d.strongest[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow(
           'Токсичное за 3 дня',
           review.focus_3d?.toxic?.length ? formatStrategyRegimeLabel(review.focus_3d.toxic[0].label) : 'нет данных',
-          review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
+          review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow(
           'Лучшее качество входа за 3 дня',
           review.edge_focus_3d?.strongest?.length ? formatEdgeLabel(review.edge_focus_3d.strongest[0].label) : 'нет данных',
-          review.edge_focus_3d?.strongest?.length ? [formatSignedRub(review.edge_focus_3d.strongest[0].pnl_rub), `${review.edge_focus_3d.strongest[0].count || 0} сдел.`].join(' · ') : ''
+          review.edge_focus_3d?.strongest?.length ? [formatSignedRub(review.edge_focus_3d.strongest[0].pnl_rub), `${review.edge_focus_3d.strongest[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow(
           'Слабое качество входа за 3 дня',
           review.edge_focus_3d?.toxic?.length ? formatEdgeLabel(review.edge_focus_3d.toxic[0].label) : 'нет данных',
-          review.edge_focus_3d?.toxic?.length ? [formatSignedRub(review.edge_focus_3d.toxic[0].pnl_rub), `${review.edge_focus_3d.toxic[0].count || 0} сдел.`].join(' · ') : ''
+          review.edge_focus_3d?.toxic?.length ? [formatSignedRub(review.edge_focus_3d.toxic[0].pnl_rub), `${review.edge_focus_3d.toxic[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow('Рабочая зона', formatStrategyRegimeLabel(review.release1_summary?.working || '-')),
         buildReviewRow('Под наблюдением', formatStrategyRegimeLabel(review.release1_summary?.watch || '-')),
@@ -5005,7 +5023,7 @@ def build_dashboard_html() -> str:
             return buildReviewRow(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}${replaced}`,
-              [meta, item.learning_reason || '', item.reason || ''].filter(Boolean).join(' · ')
+              [meta, humanizeAllocatorText(item.learning_reason || ''), humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · ')
             );
           }).join('')
         : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не перераспределял сигналы');
@@ -5096,7 +5114,7 @@ def build_dashboard_html() -> str:
             return buildReviewRow(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}`,
-              [meta, item.learning_reason || '', item.decision_reason || ''].filter(Boolean).join(' · ')
+              [meta, humanizeAllocatorText(item.learning_reason || ''), humanizeAllocatorText(item.decision_reason || '')].filter(Boolean).join(' · ')
             );
           })).join('')
         : observationSummaryRows.concat([
@@ -5195,7 +5213,7 @@ const aiReview = data.ai_review || {};
         for (const item of followups.slice().reverse()) {
           aiFollowupsEl.insertAdjacentHTML('beforeend', `
             <div class="glass-card">
-              <div class="muted" style="margin-bottom:8px;">Доп. вопрос • ${escapeHtml(item.created_at_moscow || '-')} • ${escapeHtml(item.model || '-')}</div>
+              <div class="muted" style="margin-bottom:8px;">Дополнительный вопрос • ${escapeHtml(item.created_at_moscow || '-')} • ${escapeHtml(item.model || '-')}</div>
               <div style="font-weight:600; margin-bottom:10px;">${escapeHtml(item.question || '-')}</div>
               <div class="prose-review">${markdownToHtml(item.answer || '')}</div>
             </div>
