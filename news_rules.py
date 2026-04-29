@@ -125,6 +125,14 @@ NEWS_RULES: tuple[NewsRule, ...] = (
         priority=2,
     ),
     NewsRule(
+        symbol="NGK6",
+        keywords=("природный газ", "natural gas", "natgas", "lng", "спг", "ttf", "поставки газа", "рынок газа", "газовые хранилища"),
+        long_terms=COMMON_LONG_TERMS + ("холод", "жара", "дефицит газа", "снижение запасов", "европа", "погода", "превысила", "превысил"),
+        short_terms=COMMON_SHORT_TERMS + ("тёплая погода", "рост запасов газа", "слабый спрос", "европа", "погода", "снизилась до", "ниже"),
+        block_terms=COMMON_BLOCK_TERMS,
+        priority=2,
+    ),
+    NewsRule(
         symbol="GNM6",
         keywords=(
             "золото",

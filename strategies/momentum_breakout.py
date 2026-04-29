@@ -329,4 +329,4 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         + "; ".join(short_blockers[:3])
         + ".",
     )
-NATURAL_GAS_SYMBOLS = {"NGJ6", "NJK6"}
+NATURAL_GAS_SYMBOLS = {"NGJ6", "NGK6"}

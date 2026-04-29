@@ -19,7 +19,7 @@ BOND_INDEX = InstrumentGroup(name="bond_index", description="Government bond ind
 GROUP_BY_SYMBOL = {
     "BRK6": COMMODITIES,
     "NGJ6": COMMODITIES,
-    "NJK6": COMMODITIES,
+    "NGK6": COMMODITIES,
     "GNM6": COMMODITIES,
     "USDRUBF": FX,
     "CNYRUBF": FX,

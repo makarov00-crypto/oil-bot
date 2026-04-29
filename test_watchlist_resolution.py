@@ -30,23 +30,23 @@ class WatchlistResolutionTests(unittest.TestCase):
             ),
         ]
         client = SimpleNamespace(instruments=SimpleNamespace(futures=lambda: SimpleNamespace(instruments=futures)))
-        config = SimpleNamespace(symbols=["BRK6", "NJK6", "GNM6"])
+        config = SimpleNamespace(symbols=["BRK6", "NGK6", "GNM6"])
 
         with patch.object(mod.logging, "warning") as warning_mock:
             resolved = mod.resolve_instruments(client, config)
 
         self.assertEqual([item.symbol for item in resolved], ["BRK6", "GNM6"])
         warning_mock.assert_called_once()
-        self.assertIn("NJK6", warning_mock.call_args.args[1])
+        self.assertIn("NGK6", warning_mock.call_args.args[1])
 
     def test_resolve_instruments_still_fails_if_nothing_resolved(self) -> None:
         client = SimpleNamespace(instruments=SimpleNamespace(futures=lambda: SimpleNamespace(instruments=[])))
-        config = SimpleNamespace(symbols=["NJK6"])
+        config = SimpleNamespace(symbols=["NGK6"])
 
         with self.assertRaises(RuntimeError) as ctx:
             mod.resolve_instruments(client, config)
 
-        self.assertIn("NJK6", str(ctx.exception))
+        self.assertIn("NGK6", str(ctx.exception))
 
 
 if __name__ == "__main__":
