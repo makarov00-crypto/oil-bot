@@ -3928,7 +3928,7 @@ def build_dashboard_html() -> str:
         <table id="signalsTable">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>News bias</th><th>Влияние</th><th>Аллокатор</th><th>Ключевая причина</th>
+              <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>Новостный фон</th><th>Влияние новостей</th><th>Аллокатор</th><th>Ключевая причина</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4691,7 +4691,7 @@ def build_dashboard_html() -> str:
           <td class="mono right">${escapeHtml(formatRub(pos.notional_rub))}</td>
           <td class="mono right ${vmClass}">${escapeHtml(formatRub(pos.variation_margin_rub))}</td>
           <td class="mono right ${pctClass}">${escapeHtml(formatPct(pos.pnl_pct))}</td>
-          <td>${escapeHtml(pos.strategy)}</td>
+          <td>${escapeHtml(formatStrategyLabel(pos.strategy || '-'))}</td>
           <td>${signalBadge(pos.last_signal)}</td>
         </tr>`);
         posCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -4707,7 +4707,7 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">Стоимость</span><div class="mobile-card-value mono">${escapeHtml(formatRub(pos.notional_rub))}</div></div>
             <div class="mobile-card-item"><span class="muted">Изм. %</span><div class="mobile-card-value mono ${pctClass}">${escapeHtml(formatPct(pos.pnl_pct))}</div></div>
             <div class="mobile-card-item"><span class="muted">Вар. маржа</span><div class="mobile-card-value mono ${vmClass}">${escapeHtml(formatRub(pos.variation_margin_rub))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(pos.strategy)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(pos.strategy || '-'))}</div></div>
           </div>
         </article>`);
       }
@@ -4728,7 +4728,7 @@ def build_dashboard_html() -> str:
         signalBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
-          <td>${escapeHtml(state.last_strategy_name || state.entry_strategy || '-')}</td>
+          <td>${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</td>
           <td>${signalBadge(state.last_higher_tf_bias || '-')}</td>
           <td>${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</td>
           <td class="reason">${escapeHtml(state.last_news_impact || '-')}</td>
@@ -4741,10 +4741,10 @@ def build_dashboard_html() -> str:
             ${signalBadge(state.last_signal || '-')}
           </div>
           <div class="mobile-card-grid">
-            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(state.last_strategy_name || state.entry_strategy || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</div></div>
             <div class="mobile-card-item"><span class="muted">Старший ТФ</span><div class="mobile-card-value">${signalBadge(state.last_higher_tf_bias || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Влияние</span><div class="mobile-card-value">${escapeHtml(state.last_news_impact || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Влияние новостей</span><div class="mobile-card-value">${escapeHtml(state.last_news_impact || '-')}</div></div>
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Аллокатор</span><br>${escapeHtml(allocatorSummary)}</div>
@@ -4809,7 +4809,7 @@ def build_dashboard_html() -> str:
           <td class="mono right">${escapeHtml(grossText)}</td>
           <td class="mono right">${escapeHtml(commissionText)}</td>
           <td class="mono right ${pnlClass}">${escapeHtml(netText)}</td>
-          <td>${escapeHtml(row.strategy || '-')}</td>
+          <td>${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</td>
           <td class="reason">${escapeHtml(row.reason_display || row.reason || '-')}<br><span class="muted">${escapeHtml(row.context_display || '-')}</span></td>
         </tr>`);
         tradeCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -4826,7 +4826,7 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">До комиссии</span><div class="mobile-card-value mono">${escapeHtml(grossText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(commissionText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Итог</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(netText)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></div>
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason_display || row.reason || '-')}</div>
@@ -5075,7 +5075,7 @@ def build_dashboard_html() -> str:
         reviewBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
           <td>${signalBadge(row.side || '-')}</td>
-          <td>${escapeHtml(row.strategy || '-')}</td>
+          <td>${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</td>
           <td class="mono">${escapeHtml(row.entry_time || '-')}</td>
           <td class="mono">${escapeHtml(row.exit_time || '-')}</td>
           <td class="mono right">${escapeHtml(row.gross_pnl_rub ?? '-')}</td>
@@ -5090,7 +5090,7 @@ def build_dashboard_html() -> str:
             ${signalBadge(row.side || '-')}
           </div>
           <div class="mobile-card-grid">
-            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></div>
             <div class="mobile-card-item"><span class="muted">До комиссии</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub ?? '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub ?? '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Итог</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</div></div>
@@ -5116,7 +5116,7 @@ def build_dashboard_html() -> str:
           reviewBody.insertAdjacentHTML('beforeend', `<tr>
             <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
             <td>${signalBadge(row.side || '-')}</td>
-            <td>${escapeHtml(row.strategy || '-')}</td>
+            <td>${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</td>
             <td class="mono">${escapeHtml(row.time || '-')}</td>
             <td class="mono">в позиции</td>
             <td class="mono right">-</td>
@@ -5131,7 +5131,7 @@ def build_dashboard_html() -> str:
               ${signalBadge(row.side || '-')}
             </div>
             <div class="mobile-card-grid">
-              <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(row.strategy || '-')}</div></div>
+              <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></div>
               <div class="mobile-card-item"><span class="muted">Статус</span><div class="mobile-card-value">открыта</div></div>
               <div class="mobile-card-item"><span class="muted">Время входа</span><div class="mobile-card-value mono">${escapeHtml(row.time || '-')}</div></div>
               <div class="mobile-card-item"><span class="muted">Цена входа</span><div class="mobile-card-value mono">${escapeHtml(row.price || '-')}</div></div>
