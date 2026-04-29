@@ -213,7 +213,29 @@ def trade_context_value(row: dict[str, Any] | None, key: str, default: str = "-"
 def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
     open_rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     closed: list[ClosedTrade] = []
-    for row in rows:
+    last_orphan_close_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    last_kept_close_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def is_probable_duplicate(close_row: dict[str, Any], previous: dict[str, Any] | None) -> bool:
+        if not previous:
+            return False
+        current_dt = close_row.get("_dt")
+        previous_dt = previous.get("_dt")
+        if not isinstance(current_dt, datetime) or not isinstance(previous_dt, datetime):
+            return False
+        if abs((current_dt - previous_dt).total_seconds()) > 90:
+            return False
+        if int(close_row.get("qty_lots") or 0) != int(previous.get("qty_lots") or 0):
+            return False
+        try:
+            current_price = round(float(close_row.get("price") or 0.0), 4)
+            previous_price = round(float(previous.get("price") or 0.0), 4)
+        except Exception:
+            return False
+        return current_price == previous_price
+
+    ordered_rows = sorted(rows, key=lambda row: row.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ))
+    for row in ordered_rows:
         symbol = str(row.get("symbol") or "")
         side = str(row.get("side") or "")
         event = str(row.get("event") or "").upper()
@@ -221,11 +243,30 @@ def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
             continue
         key = (symbol, side)
         if event == "OPEN":
-            open_rows[key].append(row)
+            try:
+                open_qty = max(1, int(row.get("qty_lots") or 1))
+            except Exception:
+                open_qty = 1
+            for _ in range(open_qty):
+                unit_row = dict(row)
+                unit_row["qty_lots"] = 1
+                open_rows[key].append(unit_row)
             continue
         if event != "CLOSE":
             continue
-        open_row = open_rows[key].pop() if open_rows.get(key) else None
+        matched_opens: list[dict[str, Any]] = []
+        try:
+            close_qty = max(1, int(row.get("qty_lots") or 1))
+        except Exception:
+            close_qty = 1
+        while open_rows.get(key) and len(matched_opens) < close_qty:
+            matched_opens.append(open_rows[key].pop())
+        if not matched_opens and (
+            is_probable_duplicate(row, last_orphan_close_by_key.get(key))
+            or is_probable_duplicate(row, last_kept_close_by_key.get(key))
+        ):
+            continue
+        open_row = matched_opens[-1] if matched_opens else None
         try:
             pnl_rub = float(row.get("pnl_rub") or 0.0)
         except Exception:
@@ -255,6 +296,9 @@ def pair_closed_trades(rows: list[dict[str, Any]]) -> list[ClosedTrade]:
                 ),
             )
         )
+        if open_row is None:
+            last_orphan_close_by_key[key] = row
+        last_kept_close_by_key[key] = row
     return closed
 
 

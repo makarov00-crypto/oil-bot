@@ -2036,6 +2036,15 @@ def format_trade_review_row(
     entry_context_display = trade_context_display(open_row or {})
     if entry_context_display == "-":
         entry_context_display = resolved_context_display
+    market_regime = trade_context_value(open_row or {}, "market_regime")
+    if market_regime == "-":
+        market_regime = trade_context_value(close_row, "market_regime")
+    setup_quality_label = trade_context_value(open_row or {}, "setup_quality_label")
+    if setup_quality_label == "-":
+        setup_quality_label = trade_context_value(close_row, "setup_quality_label")
+    edge_label = trade_context_value(open_row or {}, "entry_edge_label")
+    if edge_label == "-":
+        edge_label = trade_context_value(close_row, "entry_edge_label")
     return {
         "symbol": str(close_row.get("symbol", "")),
         "side": close_row.get("side") or (open_row.get("side") if open_row else ""),
@@ -2053,9 +2062,11 @@ def format_trade_review_row(
         "net_pnl_rub": stringify_money(close_row.get("net_pnl_rub"), stringify_money(close_row.get("pnl_rub"))),
         "entry_reason": summarize_trade_reason_text(open_row.get("reason") if open_row else "-"),
         "exit_reason": summarize_trade_reason_text(close_row.get("reason") or "-"),
+        "market_regime": market_regime,
         "entry_context_display": entry_context_display,
         "exit_context_display": resolved_context_display,
-        "edge_label": resolve_trade_context_value(close_row, open_row, "entry_edge_label"),
+        "setup_quality_label": setup_quality_label,
+        "edge_label": edge_label,
         "verdict": verdict,
         "_exit_dt": exit_dt,
     }
@@ -2143,8 +2154,15 @@ def build_trade_review(
             continue
 
         open_row = None
-        if open_by_key.get(key):
-            open_row = open_by_key[key].pop()
+        matched_opens: list[dict[str, Any]] = []
+        try:
+            close_qty = max(1, int(row.get("qty_lots") or 1))
+        except Exception:
+            close_qty = 1
+        while open_by_key.get(key) and len(matched_opens) < close_qty:
+            matched_opens.append(open_by_key[key].pop())
+        if matched_opens:
+            open_row = matched_opens[-1]
         elif is_probable_duplicate_orphan(row, key) or is_probable_duplicate_close(row, key):
             continue
 
@@ -2197,6 +2215,7 @@ def build_trade_review(
     by_symbol: dict[str, float] = {}
     by_strategy: dict[str, float] = {}
     by_regime: dict[str, float] = {}
+    by_setup_quality: dict[str, float] = {}
     by_edge: dict[str, float] = {}
     by_strategy_regime: dict[str, float] = {}
     for item in closed_reviews:
@@ -2204,11 +2223,14 @@ def build_trade_review(
         by_symbol[item["symbol"]] = by_symbol.get(item["symbol"], 0.0) + pnl
         strategy = item.get("strategy") or "-"
         by_strategy[strategy] = by_strategy.get(strategy, 0.0) + pnl
-        regime = item.get("entry_context_display") or item.get("exit_context_display") or "-"
+        regime = item.get("market_regime") or "-"
         by_regime[regime] = by_regime.get(regime, 0.0) + pnl
+        setup_quality = item.get("setup_quality_label") or "-"
+        by_setup_quality[setup_quality] = by_setup_quality.get(setup_quality, 0.0) + pnl
         edge = item.get("edge_label") or "-"
         by_edge[edge] = by_edge.get(edge, 0.0) + pnl
-        strategy_regime = f"{strategy} @ {regime}"
+        strategy_regime_context = item.get("entry_context_display") or item.get("exit_context_display") or regime
+        strategy_regime = f"{strategy} @ {strategy_regime_context}"
         by_strategy_regime[strategy_regime] = by_strategy_regime.get(strategy_regime, 0.0) + pnl
 
     best_symbol = max(by_symbol.items(), key=lambda x: x[1]) if by_symbol else None
@@ -2217,6 +2239,8 @@ def build_trade_review(
     worst_strategy = min(by_strategy.items(), key=lambda x: x[1]) if by_strategy else None
     best_regime = max(by_regime.items(), key=lambda x: x[1]) if by_regime else None
     worst_regime = min(by_regime.items(), key=lambda x: x[1]) if by_regime else None
+    best_setup_quality = max(by_setup_quality.items(), key=lambda x: x[1]) if by_setup_quality else None
+    worst_setup_quality = min(by_setup_quality.items(), key=lambda x: x[1]) if by_setup_quality else None
     best_edge = max(by_edge.items(), key=lambda x: x[1]) if by_edge else None
     worst_edge = min(by_edge.items(), key=lambda x: x[1]) if by_edge else None
     best_strategy_regime = max(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
@@ -2234,6 +2258,8 @@ def build_trade_review(
         "worst_strategy": {"strategy": worst_strategy[0], "pnl_rub": round(worst_strategy[1], 2)} if worst_strategy else None,
         "best_regime": {"regime": best_regime[0], "pnl_rub": round(best_regime[1], 2)} if best_regime else None,
         "worst_regime": {"regime": worst_regime[0], "pnl_rub": round(worst_regime[1], 2)} if worst_regime else None,
+        "best_setup_quality": {"label": best_setup_quality[0], "pnl_rub": round(best_setup_quality[1], 2)} if best_setup_quality else None,
+        "worst_setup_quality": {"label": worst_setup_quality[0], "pnl_rub": round(worst_setup_quality[1], 2)} if worst_setup_quality else None,
         "best_edge": {"label": best_edge[0], "pnl_rub": round(best_edge[1], 2)} if best_edge else None,
         "worst_edge": {"label": worst_edge[0], "pnl_rub": round(worst_edge[1], 2)} if worst_edge else None,
         "best_strategy_regime": {"label": best_strategy_regime[0], "pnl_rub": round(best_strategy_regime[1], 2)} if best_strategy_regime else None,
@@ -2362,11 +2388,23 @@ def build_strategy_regime_summary(
     toxic = focus_3d.get("toxic") or []
     today_strong = focus_today.get("strongest") or []
     today_toxic = focus_today.get("toxic") or []
+    working_label = working[0]["label"] if working else "-"
+    toxic_label = toxic[0]["label"] if toxic else "-"
+    excluded = {label for label in (working_label, toxic_label) if label and label != "-"}
+
+    def first_distinct_label(*groups: list[dict[str, Any]]) -> str:
+        for group in groups:
+            for item in group:
+                label = str(item.get("label") or "-")
+                if not label or label == "-" or label in excluded:
+                    continue
+                return label
+        return "-"
 
     return {
-        "working": working[0]["label"] if working else "-",
-        "toxic": toxic[0]["label"] if toxic else "-",
-        "watch": (today_toxic[0]["label"] if today_toxic else (today_strong[0]["label"] if today_strong else "-")),
+        "working": working_label,
+        "toxic": toxic_label,
+        "watch": first_distinct_label(today_toxic, today_strong, toxic[1:], working[1:]),
     }
 
 
@@ -2410,6 +2448,7 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
     by_day: dict[str, dict[str, float]] = {}
     cumulative = 0.0
     cumulative_base: float | None = None
+    cumulative_from_base = 0.0
     today_key = datetime.now(MOSCOW_TZ).date().isoformat()
 
     days = sorted({row["_date"] for row in rows} | set((accounting_history or {}).keys()))
@@ -2442,8 +2481,11 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
             portfolio_base_float = 0.0
         if portfolio_base_float and cumulative_base is None:
             cumulative_base = portfolio_base_float
+            cumulative_from_base = pnl
+        elif cumulative_base is not None:
+            cumulative_from_base += pnl
         pct = (pnl / portfolio_base_float * 100.0) if portfolio_base_float else None
-        cumulative_pct = (cumulative / cumulative_base * 100.0) if cumulative_base else None
+        cumulative_pct = (cumulative_from_base / cumulative_base * 100.0) if cumulative_base else None
         by_day[day_key] = {
             "date": day_key,
             "closed_count": len(day_rows),
@@ -4807,12 +4849,22 @@ def build_dashboard_html() -> str:
           review.worst_strategy_regime ? formatSignedRub(review.worst_strategy_regime.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Лучшее качество входа',
+          'Лучший сетап',
+          review.best_setup_quality ? review.best_setup_quality.label : 'нет данных',
+          review.best_setup_quality ? formatSignedRub(review.best_setup_quality.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Худший сетап',
+          review.worst_setup_quality ? review.worst_setup_quality.label : 'нет данных',
+          review.worst_setup_quality ? formatSignedRub(review.worst_setup_quality.pnl_rub) : ''
+        ),
+        buildReviewRow(
+          'Лучший edge',
           review.best_edge ? formatEdgeLabel(review.best_edge.label) : 'нет данных',
           review.best_edge ? formatSignedRub(review.best_edge.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Худшее качество входа',
+          'Худший edge',
           review.worst_edge ? formatEdgeLabel(review.worst_edge.label) : 'нет данных',
           review.worst_edge ? formatSignedRub(review.worst_edge.pnl_rub) : ''
         ),

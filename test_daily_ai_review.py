@@ -147,6 +147,123 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertEqual(trades[0].setup_quality_label, "strong")
         self.assertEqual(trades[0].entry_edge_label, "high")
 
+    def test_pair_closed_trades_consumes_full_close_qty_from_open_stack(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-24T10:00:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:00:00+03:00"),
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+                "price": 10.95,
+                "strategy": "opening_range_breakout",
+                "reason": "open stack",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "time": "2026-04-24T10:30:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:30:00+03:00"),
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 3,
+                "price": 10.93,
+                "pnl_rub": 30.0,
+                "strategy": "opening_range_breakout",
+                "reason": "close stack",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "time": "2026-04-24T11:00:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T11:00:00+03:00"),
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 10.92,
+                "strategy": "trend_pullback",
+                "reason": "new open",
+                "context": {"market_regime": "pullback", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
+            },
+            {
+                "time": "2026-04-24T11:20:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T11:20:00+03:00"),
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 10.91,
+                "pnl_rub": 10.0,
+                "strategy": "trend_pullback",
+                "reason": "close new",
+                "context": {"market_regime": "pullback", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
+            },
+        ]
+
+        trades = review.pair_closed_trades(rows)
+
+        self.assertEqual(len(trades), 2)
+        self.assertEqual(trades[-1].entry_time, "24.04 11:00:00")
+        self.assertEqual(trades[-1].strategy, "trend_pullback")
+
+    def test_pair_closed_trades_sorts_rows_and_skips_duplicate_orphan_close(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-24T10:10:40+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:10:40+03:00"),
+                "symbol": "IMOEXF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 2720.0,
+                "pnl_rub": -20.0,
+                "strategy": "trend_rollover",
+                "reason": "duplicate orphan",
+            },
+            {
+                "time": "2026-04-24T10:00:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:00:00+03:00"),
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 80.0,
+                "strategy": "trend_rollover",
+                "reason": "open",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "time": "2026-04-24T10:10:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:10:00+03:00"),
+                "symbol": "IMOEXF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 2720.0,
+                "pnl_rub": -20.0,
+                "strategy": "trend_rollover",
+                "reason": "orphan",
+            },
+            {
+                "time": "2026-04-24T10:30:00+03:00",
+                "_dt": review.datetime.fromisoformat("2026-04-24T10:30:00+03:00"),
+                "symbol": "BRK6",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 81.0,
+                "pnl_rub": 100.0,
+                "strategy": "trend_rollover",
+                "reason": "close",
+            },
+        ]
+
+        trades = review.pair_closed_trades(rows)
+
+        self.assertEqual(len(trades), 2)
+        self.assertEqual(trades[1].entry_time, "24.04 10:00:00")
+
     def test_build_prompt_includes_regime_focus_and_setup_quality_sections(self) -> None:
         trades = [
             review.ClosedTrade(

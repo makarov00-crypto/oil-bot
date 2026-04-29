@@ -120,6 +120,26 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(len(review["closed_reviews"]), 5)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_strategy_regime_summary_avoids_duplicate_watch_labels(self) -> None:
+        summary = dashboard.build_strategy_regime_summary(
+            focus_today={
+                "strongest": [{"label": "trend_pullback @ режим A", "pnl_rub": 40.0, "count": 2}],
+                "toxic": [{"label": "trend_rollover @ режим B", "pnl_rub": -30.0, "count": 2}],
+            },
+            focus_3d={
+                "strongest": [
+                    {"label": "trend_pullback @ режим A", "pnl_rub": 140.0, "count": 6},
+                    {"label": "opening_range_breakout @ режим C", "pnl_rub": 80.0, "count": 3},
+                ],
+                "toxic": [{"label": "trend_rollover @ режим B", "pnl_rub": -90.0, "count": 5}],
+            },
+        )
+
+        self.assertEqual(summary["working"], "trend_pullback @ режим A")
+        self.assertEqual(summary["toxic"], "trend_rollover @ режим B")
+        self.assertEqual(summary["watch"], "opening_range_breakout @ режим C")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_uses_latest_open_and_entry_context_for_summary(self) -> None:
         rows = [
             {
@@ -170,8 +190,78 @@ class DashboardTradeReviewTests(unittest.TestCase):
         trade = review["closed_reviews"][0]
         self.assertEqual(trade["entry_time"], "24.04 12:05:00")
         self.assertEqual(trade["entry_context_display"], "режим entry_regime | сетап strong | качество входа высокое")
-        self.assertEqual(review["best_regime"]["regime"], "режим entry_regime | сетап strong | качество входа высокое")
+        self.assertEqual(review["best_regime"]["regime"], "entry_regime")
+        self.assertEqual(review["best_setup_quality"]["label"], "strong")
+        self.assertEqual(review["best_edge"]["label"], "high")
         self.assertEqual(review["best_strategy_regime"]["label"], "trend_pullback @ режим entry_regime | сетап strong | качество входа высокое")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_trade_review_consumes_full_close_qty_from_open_stack(self) -> None:
+        rows = [
+            {
+                "_dt": datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T12:00:00+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+                "price": 10.95,
+                "strategy": "opening_range_breakout",
+                "reason": "open stack",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "_dt": datetime(2026, 4, 24, 9, 30, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T12:30:00+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 3,
+                "price": 10.93,
+                "pnl_rub": 30.0,
+                "net_pnl_rub": 30.0,
+                "strategy": "opening_range_breakout",
+                "reason": "close stack",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "_dt": datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T13:00:00+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 10.92,
+                "strategy": "opening_range_breakout",
+                "reason": "new open",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+            {
+                "_dt": datetime(2026, 4, 24, 10, 30, tzinfo=timezone.utc),
+                "_date": "2026-04-24",
+                "time": "2026-04-24T13:30:00+03:00",
+                "symbol": "CNYRUBF",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 10.91,
+                "pnl_rub": 10.0,
+                "net_pnl_rub": 10.0,
+                "strategy": "opening_range_breakout",
+                "reason": "close new",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            },
+        ]
+
+        review = dashboard.build_trade_review(rows)
+
+        self.assertEqual(review["closed_count"], 2)
+        self.assertEqual(review["current_open"], [])
+        latest_trade = review["closed_reviews"][0]
+        self.assertEqual(latest_trade["entry_time"], "24.04 13:00:00")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_keeps_pairing_when_global_rows_exceed_limit(self) -> None:
@@ -250,7 +340,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIsNone(by_date["2026-04-23"]["pnl_pct"])
         self.assertIsNone(by_date["2026-04-23"]["cumulative_pnl_pct"])
         self.assertEqual(by_date["2026-04-24"]["pnl_pct"], 5.0)
-        self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 15.0)
+        self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 5.0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_daily_performance_uses_stable_base_for_cumulative_pct(self) -> None:
@@ -274,6 +364,29 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(by_date["2026-04-23"]["cumulative_pnl_pct"], 10.0)
         self.assertEqual(by_date["2026-04-24"]["pnl_pct"], 2.5)
         self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 15.0)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_build_daily_performance_does_not_backfill_cumulative_pct_before_first_base(self) -> None:
+        rows = [
+            {"_date": "2026-04-22", "event": "CLOSE", "pnl_rub": 40.0},
+            {"_date": "2026-04-23", "event": "CLOSE", "pnl_rub": 60.0},
+            {"_date": "2026-04-24", "event": "CLOSE", "pnl_rub": 50.0},
+        ]
+        accounting_history = {
+            "2026-04-23": {"total_portfolio_rub": 1000.0},
+            "2026-04-24": {"total_portfolio_rub": 1200.0},
+        }
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows), patch.object(
+            dashboard, "datetime"
+        ) as fake_datetime:
+            fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+            result = dashboard.build_daily_performance({"total_portfolio_rub": 1200.0}, date(2026, 4, 24), accounting_history)
+
+        by_date = {item["date"]: item for item in result["series"]}
+        self.assertIsNone(by_date["2026-04-22"]["cumulative_pnl_pct"])
+        self.assertEqual(by_date["2026-04-23"]["cumulative_pnl_pct"], 6.0)
+        self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 11.0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_portfolio_view_for_historical_day_ignores_current_live_positions(self) -> None:
@@ -466,7 +579,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["closed_count"], 3)
         self.assertEqual(review["closed_total_pnl_rub"], 120.24)
         self.assertEqual([row["entry_time"] for row in review["closed_reviews"]], ["13.04 09:25:33"] * 3)
-        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong | качество входа высокое")
+        self.assertEqual(review["best_regime"]["regime"], "trend_expansion")
+        self.assertEqual(review["best_setup_quality"]["label"], "strong")
         self.assertEqual(review["best_edge"]["label"], "high")
         self.assertEqual(
             review["best_strategy_regime"]["label"],
@@ -544,7 +658,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         review = dashboard.build_trade_review(rows)
 
-        self.assertEqual(review["best_regime"]["regime"], "режим trend_expansion | сетап strong | качество входа высокое")
+        self.assertEqual(review["best_regime"]["regime"], "trend_expansion")
+        self.assertEqual(review["best_setup_quality"]["label"], "strong")
         self.assertEqual(review["best_edge"]["label"], "high")
         self.assertEqual(
             review["closed_reviews"][0]["exit_context_display"],
