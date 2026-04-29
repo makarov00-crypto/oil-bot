@@ -3514,6 +3514,10 @@ def build_dashboard_html() -> str:
     .review-summary-table.compact .review-summary-main {
       font-size: 13px;
     }
+    .review-summary-table.compact .review-summary-sub {
+      font-size: 11px;
+      margin-top: 1px;
+    }
     .review-summary-table td {
       padding: 8px 0;
       border-bottom: 1px solid rgba(102, 174, 255, 0.10);
@@ -3551,6 +3555,9 @@ def build_dashboard_html() -> str:
       overflow: auto;
       padding-right: 4px;
       scrollbar-width: thin;
+    }
+    .review-scroll.tall {
+      max-height: 420px;
     }
     .alert-panel {
       border-color: rgba(255, 202, 98, 0.28);
@@ -3643,8 +3650,8 @@ def build_dashboard_html() -> str:
       display: block;
     }
     .prose-review {
-      font-size: 14px;
-      line-height: 1.6;
+      font-size: 13px;
+      line-height: 1.5;
       color: #dbe9f8;
       white-space: normal;
     }
@@ -3653,19 +3660,19 @@ def build_dashboard_html() -> str:
     .prose-review h3,
     .prose-review h4 {
       font-family: "Sora", "Manrope", sans-serif;
-      margin: 18px 0 8px;
-      font-size: 18px;
+      margin: 14px 0 6px;
+      font-size: 16px;
     }
     .prose-review ul,
     .prose-review ol {
-      margin: 8px 0 12px 18px;
+      margin: 6px 0 10px 18px;
       padding: 0;
     }
     .prose-review li {
-      margin: 4px 0;
+      margin: 3px 0;
     }
     .prose-review p {
-      margin: 8px 0 12px;
+      margin: 6px 0 10px;
     }
     .prose-review strong {
       color: #f4fbff;
@@ -4087,9 +4094,11 @@ def build_dashboard_html() -> str:
       </div>
       <div class="review-block" style="margin-top:16px;">
         <h3>Наблюдения сигналов</h3>
-        <table class="review-summary-table">
-          <tbody id="signalObservationsBody"></tbody>
-        </table>
+        <div class="review-scroll">
+          <table class="review-summary-table compact">
+            <tbody id="signalObservationsBody"></tbody>
+          </table>
+        </div>
       </div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
@@ -4141,7 +4150,9 @@ def build_dashboard_html() -> str:
         </div>
       </div>
       <div class="muted" id="aiReviewStatus" style="margin-bottom:12px;">Ручной запуск не выполнялся.</div>
-      <div id="aiReviewContent" class="prose-review muted">AI-разбор пока не загружен.</div>
+      <div class="review-scroll tall">
+        <div id="aiReviewContent" class="prose-review muted">AI-разбор пока не загружен.</div>
+      </div>
       <div style="margin-top:16px; display:grid; gap:10px;">
         <label for="aiReviewFollowupInput" class="muted">Дополнительный вопрос к AI-разбору</label>
         <textarea id="aiReviewFollowupInput" rows="4" placeholder="Например: почему бот слабо использовал движение по нефти после 18:00?" style="width:100%; resize:vertical; background:rgba(8,16,32,.75); color:#e8f0ff; border:1px solid rgba(138,163,255,.16); border-radius:14px; padding:12px;"></textarea>
@@ -4150,7 +4161,7 @@ def build_dashboard_html() -> str:
           <div class="generated" id="aiReviewFollowupStatus">Дополнительный разбор не запускался.</div>
         </div>
       </div>
-      <div id="aiReviewFollowups" style="margin-top:16px; display:grid; gap:14px;"></div>
+      <div id="aiReviewFollowups" class="review-scroll" style="margin-top:16px; display:grid; gap:14px;"></div>
     </section>
   </div>
   <div id="newsPopover" class="news-popover" role="dialog" aria-hidden="true">
