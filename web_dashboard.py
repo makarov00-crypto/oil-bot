@@ -1598,6 +1598,18 @@ def stringify_money(value: Any, default: str = "-") -> str:
         return str(value)
 
 
+def humanize_setup_quality_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "-"
+    mapping = {
+        "strong": "сильный",
+        "medium": "средний",
+        "weak": "слабый",
+    }
+    return mapping.get(raw, raw.replace("_", " "))
+
+
 def trade_context_display(row: dict[str, Any]) -> str:
     context = row.get("context")
     if not isinstance(context, dict):
@@ -1619,10 +1631,10 @@ def trade_context_display(row: dict[str, Any]) -> str:
         score_text = ""
         try:
             if quality_score not in (None, ""):
-                score_text = f" {int(quality_score)}/6"
+                score_text = f" {int(quality_score)} из 6"
         except Exception:
             score_text = ""
-        parts.append(f"сетап {quality_label}{score_text}")
+        parts.append(f"сценарий {humanize_setup_quality_label(quality_label)}{score_text}")
     edge_label = str(context.get("entry_edge_label") or "").strip()
     edge_score = context.get("entry_edge_score")
     if edge_label:
@@ -1642,7 +1654,7 @@ def trade_context_display(row: dict[str, Any]) -> str:
     atr_pct = context.get("atr_pct")
     if atr_pct not in (None, ""):
         try:
-            parts.append(f"ATR {float(atr_pct) * 100:.2f}%")
+            parts.append(f"волатильность {float(atr_pct) * 100:.2f}%")
         except Exception:
             pass
     volume_ratio = context.get("volume_ratio")
@@ -3464,6 +3476,17 @@ def build_dashboard_html() -> str:
       border-collapse: collapse;
       font-size: 13px;
     }
+    .review-summary-table.compact td {
+      padding: 6px 0;
+    }
+    .review-summary-table.compact .review-summary-label {
+      width: 96px;
+      font-size: 11px;
+      padding-right: 10px;
+    }
+    .review-summary-table.compact .review-summary-main {
+      font-size: 13px;
+    }
     .review-summary-table td {
       padding: 8px 0;
       border-bottom: 1px solid rgba(102, 174, 255, 0.10);
@@ -3495,6 +3518,12 @@ def build_dashboard_html() -> str:
       color: var(--muted);
       font-size: 13px;
       line-height: 1.4;
+    }
+    .review-scroll {
+      max-height: 260px;
+      overflow: auto;
+      padding-right: 4px;
+      scrollbar-width: thin;
     }
     .alert-panel {
       border-color: rgba(255, 202, 98, 0.28);
@@ -4023,9 +4052,11 @@ def build_dashboard_html() -> str:
       </div>
       <div class="review-block" style="margin-top:16px;">
         <h3>Решения аллокатора</h3>
-        <table class="review-summary-table">
-          <tbody id="allocatorDecisionsBody"></tbody>
-        </table>
+        <div class="review-scroll">
+          <table class="review-summary-table compact">
+            <tbody id="allocatorDecisionsBody"></tbody>
+          </table>
+        </div>
       </div>
       <div class="review-block" style="margin-top:16px;">
         <h3>Наблюдения сигналов</h3>
@@ -4260,11 +4291,11 @@ def build_dashboard_html() -> str:
 
     function formatSetupQualityLabel(value) {
       const raw = String(value || '').trim();
-      if (!raw || raw === '-') return 'сетап не определён';
+      if (!raw || raw === '-') return 'сценарий не определён';
       const map = {
-        strong: 'Сильный сетап',
-        medium: 'Средний сетап',
-        weak: 'Слабый сетап',
+        strong: 'Сильный сценарий',
+        medium: 'Средний сценарий',
+        weak: 'Слабый сценарий',
       };
       return map[raw] || raw.replaceAll('_', ' ');
     }
@@ -4860,12 +4891,12 @@ def build_dashboard_html() -> str:
           review.worst_strategy_regime ? formatSignedRub(review.worst_strategy_regime.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Лучший сетап',
+          'Лучший сценарий',
           review.best_setup_quality ? formatSetupQualityLabel(review.best_setup_quality.label) : 'нет данных',
           review.best_setup_quality ? formatSignedRub(review.best_setup_quality.pnl_rub) : ''
         ),
         buildReviewRow(
-          'Худший сетап',
+          'Худший сценарий',
           review.worst_setup_quality ? formatSetupQualityLabel(review.worst_setup_quality.label) : 'нет данных',
           review.worst_setup_quality ? formatSignedRub(review.worst_setup_quality.pnl_rub) : ''
         ),

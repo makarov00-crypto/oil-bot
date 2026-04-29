@@ -189,11 +189,11 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         trade = review["closed_reviews"][0]
         self.assertEqual(trade["entry_time"], "24.04 12:05:00")
-        self.assertEqual(trade["entry_context_display"], "режим entry_regime | сетап strong | качество входа высокое")
+        self.assertEqual(trade["entry_context_display"], "режим entry_regime | сценарий сильный | качество входа высокое")
         self.assertEqual(review["best_regime"]["regime"], "entry_regime")
         self.assertEqual(review["best_setup_quality"]["label"], "strong")
         self.assertEqual(review["best_edge"]["label"], "high")
-        self.assertEqual(review["best_strategy_regime"]["label"], "trend_pullback @ режим entry_regime | сетап strong | качество входа высокое")
+        self.assertEqual(review["best_strategy_regime"]["label"], "trend_pullback @ режим entry_regime | сценарий сильный | качество входа высокое")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_consumes_full_close_qty_from_open_stack(self) -> None:
@@ -584,12 +584,12 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["best_edge"]["label"], "high")
         self.assertEqual(
             review["best_strategy_regime"]["label"],
-            "opening_range_breakout @ режим trend_expansion | сетап strong | качество входа высокое",
+            "opening_range_breakout @ режим trend_expansion | сценарий сильный | качество входа высокое",
         )
         focus = dashboard.summarize_strategy_regime_focus(rows)
         self.assertEqual(
             focus["strongest"][0]["label"],
-            "opening_range_breakout @ режим trend_expansion | сетап strong | качество входа высокое",
+            "opening_range_breakout @ режим trend_expansion | сценарий сильный | качество входа высокое",
         )
         edge_focus = dashboard.summarize_edge_focus(rows)
         self.assertEqual(edge_focus["strongest"][0]["label"], "high")
@@ -663,12 +663,12 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["best_edge"]["label"], "high")
         self.assertEqual(
             review["closed_reviews"][0]["exit_context_display"],
-            "режим trend_expansion | сетап strong | качество входа высокое",
+            "режим trend_expansion | сценарий сильный | качество входа высокое",
         )
         focus = dashboard.summarize_strategy_regime_focus_from_reviews(review["closed_reviews"])
         self.assertEqual(
             focus["strongest"][0]["label"],
-            "range_break_continuation @ режим trend_expansion | сетап strong | качество входа высокое",
+            "range_break_continuation @ режим trend_expansion | сценарий сильный | качество входа высокое",
         )
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
