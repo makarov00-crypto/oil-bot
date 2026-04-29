@@ -1066,13 +1066,19 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def load_states() -> dict[str, dict]:
+def current_watchlist_symbols() -> set[str]:
+    return set(merge_with_custom_symbols(load_base_symbols_from_env()))
+
+
+def load_states(active_symbols: set[str] | None = None) -> dict[str, dict]:
     states: dict[str, dict] = {}
     if not STATE_DIR.exists():
         return states
     now = datetime.now(timezone.utc)
     for path in sorted(STATE_DIR.glob("*.json")):
         if path.name.startswith("_"):
+            continue
+        if active_symbols is not None and path.stem not in active_symbols:
             continue
         try:
             payload = load_json(path)
@@ -5419,7 +5425,7 @@ def contracts() -> str:
 
 @app.get("/api/dashboard", response_class=JSONResponse)
 def api_dashboard(date: str | None = None) -> dict:
-    states = load_states()
+    states = load_states(current_watchlist_symbols())
     generated_at = datetime.now(timezone.utc)
     portfolio = load_portfolio_snapshot()
     accounting_history = load_accounting_history()
@@ -5555,7 +5561,7 @@ def api_contracts() -> dict:
 
 @app.get("/api/health", response_class=JSONResponse)
 def api_health() -> dict:
-    states = load_states()
+    states = load_states(current_watchlist_symbols())
     return build_health_payload(states)
 
 
