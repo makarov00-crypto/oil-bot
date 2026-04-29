@@ -4476,17 +4476,18 @@ def describe_capacity_block_reason(
     strategy_name: str = "",
 ) -> str:
     sizing = calculate_position_sizing_context(client, config, instrument, state, entry_price, signal, strategy_name)
+    broker_limit = int(sizing.get("broker_limit") or 0)
     margin_per_lot = float(sizing.get("margin_per_lot_rub") or 0.0)
+    if broker_limit <= 0:
+        return (
+            f"брокер сейчас не разрешает открыть {instrument.symbol}: "
+            f"доступный лимит по заявке равен 0 лотов."
+        )
     if margin_per_lot > 0:
         free_rub = float(sizing.get("free_rub") or 0.0)
         working_margin_budget = float(sizing.get("working_margin_budget_rub") or 0.0)
         allocatable_margin = float(sizing.get("allocatable_margin_rub") or 0.0)
         reserve_rub = float(sizing.get("reserve_rub") or 0.0)
-        if free_rub < margin_per_lot:
-            return (
-                f"не хватает средств/ГО для {instrument.symbol}: "
-                f"на 1 лот нужно примерно {margin_per_lot:.2f} RUB, свободно {free_rub:.2f} RUB."
-            )
         if working_margin_budget < margin_per_lot:
             return (
                 f"рабочий бюджет капитала не позволяет открыть {instrument.symbol}: "
@@ -4499,26 +4500,38 @@ def describe_capacity_block_reason(
                 f"(после резерва {reserve_rub:.2f} RUB)."
             )
 
-    try:
-        max_lots = client.orders.get_max_lots(
-            GetMaxLotsRequest(
-                account_id=config.account_id,
-                instrument_id=instrument.figi,
-            )
-        )
-        if signal == "LONG":
-            broker_limit = int(getattr(getattr(max_lots, "buy_limits", None), "buy_max_market_lots", 0) or 0)
-        else:
-            broker_limit = int(getattr(getattr(max_lots, "sell_limits", None), "sell_max_lots", 0) or 0)
-        if broker_limit <= 0:
-            return (
-                f"брокер не разрешает открыть {instrument.symbol}: "
-                f"доступный лимит по заявке сейчас 0 лотов."
-            )
-    except Exception:
-        pass
-
     return f"не удалось открыть {instrument.symbol}: размер позиции получился 0 лотов."
+
+
+def get_broker_max_lots(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    signal: str,
+) -> int:
+    max_lots = client.orders.get_max_lots(
+        GetMaxLotsRequest(
+            account_id=config.account_id,
+            instrument_id=instrument.figi,
+        )
+    )
+    if signal == "LONG":
+        buy_limits = getattr(max_lots, "buy_limits", None)
+        buy_margin_limits = getattr(max_lots, "buy_margin_limits", None)
+        candidates = [
+            int(getattr(buy_limits, "buy_max_market_lots", 0) or 0),
+            int(getattr(buy_limits, "buy_max_lots", 0) or 0),
+            int(getattr(buy_margin_limits, "buy_max_market_lots", 0) or 0),
+            int(getattr(buy_margin_limits, "buy_max_lots", 0) or 0),
+        ]
+        return max(candidates) if candidates else 0
+    sell_limits = getattr(max_lots, "sell_limits", None)
+    sell_margin_limits = getattr(max_lots, "sell_margin_limits", None)
+    candidates = [
+        int(getattr(sell_limits, "sell_max_lots", 0) or 0),
+        int(getattr(sell_margin_limits, "sell_max_lots", 0) or 0),
+    ]
+    return max(candidates) if candidates else 0
 
 
 def summarize_order_request_error(instrument: InstrumentConfig, error: RequestError) -> str:
@@ -5297,16 +5310,7 @@ def calculate_position_sizing_context(
 
     broker_limit = 0
     try:
-        max_lots = client.orders.get_max_lots(
-            GetMaxLotsRequest(
-                account_id=config.account_id,
-                instrument_id=instrument.figi,
-            )
-        )
-        if signal == "LONG":
-            broker_limit = int(getattr(getattr(max_lots, "buy_limits", None), "buy_max_market_lots", 0) or 0)
-        else:
-            broker_limit = int(getattr(getattr(max_lots, "sell_limits", None), "sell_max_lots", 0) or 0)
+        broker_limit = get_broker_max_lots(client, config, instrument, signal)
     except Exception as error:
         logging.warning("Не удалось получить max lots для %s: %s", instrument.symbol, error)
 

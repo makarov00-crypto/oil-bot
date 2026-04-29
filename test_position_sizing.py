@@ -188,6 +188,54 @@ class PositionSizingTests(unittest.TestCase):
         self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
         self.assertTrue(sizing["recovery_mode_active"])
 
+    def test_broker_margin_limit_can_unlock_one_lot_for_strong_long(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="BRK6",
+            figi="FIGI",
+            display_name="Brent",
+            initial_margin_on_buy=17305.0,
+            initial_margin_on_sell=17305.0,
+        )
+        state = mod.InstrumentState(
+            last_higher_tf_bias="LONG",
+            last_news_bias="LONG/HIGH",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.78,
+            last_entry_edge_score=0.94,
+            last_entry_edge_label="high",
+        )
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=16158.22, blocked_guarantee_rub=0.0)
+        max_lots = SimpleNamespace(
+            buy_limits=SimpleNamespace(buy_max_market_lots=0, buy_max_lots=0),
+            buy_margin_limits=SimpleNamespace(buy_max_market_lots=1, buy_max_lots=1),
+            sell_limits=SimpleNamespace(sell_max_lots=0),
+            sell_margin_limits=SimpleNamespace(sell_max_lots=0),
+        )
+        client = SimpleNamespace(orders=SimpleNamespace(get_max_lots=lambda *_args, **_kwargs: max_lots))
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=16652.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.45
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("тяжёлый", 0.85)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.08, "связка сильна 3 дня")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.00, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                client, self.config, instrument, state, 119.61, "LONG", "trend_rollover"
+            )
+
+        self.assertEqual(sizing["broker_limit"], 1)
+        self.assertTrue(sizing["broker_min_lot_override"])
+        self.assertEqual(sizing["quantity"], 1)
+
     def test_health_score_can_boost_size_for_consistent_combo(self) -> None:
         self.state.last_setup_quality_label = "medium"
         self.state.last_market_regime = "mixed"
