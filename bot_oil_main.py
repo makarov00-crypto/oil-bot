@@ -5315,14 +5315,23 @@ def calculate_position_sizing_context(
         logging.warning("Не удалось получить max lots для %s: %s", instrument.symbol, error)
 
     broker_min_lot_override = False
+    strong_signal_profile = (
+        conviction_weight >= 1.20
+        or (
+            conviction_weight >= 1.10
+            and strategy_health_score >= 1.0
+            and strategy_regime_health_score >= 0.95
+            and (
+                entry_edge_score >= 0.45
+                or entry_edge_label in {"moderate", "confirmed", "high"}
+            )
+        )
+    )
     if (
         raw_qty < 1
         and broker_limit >= 1
         and signal in {"LONG", "SHORT"}
-        and conviction_weight >= 1.20
-        and strategy_health_score >= 0.95
-        and strategy_regime_health_score >= 0.95
-        and (entry_edge_score >= 0.62 or entry_edge_label in {"confirmed", "high"})
+        and strong_signal_profile
     ):
         raw_qty = 1
         broker_min_lot_override = True
