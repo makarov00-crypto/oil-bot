@@ -774,6 +774,33 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(reason, "")
 
+    def test_fx_reentry_allows_strong_fresh_impulse_without_waiting_for_new_extreme(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="CNYRUBF",
+            figi="FIGI",
+            display_name="CNY/RUB",
+            min_price_increment=0.001,
+        )
+        state = mod.InstrumentState(
+            trading_day="2026-04-13",
+            last_exit_time=datetime(2026, 4, 13, 15, 0, tzinfo=timezone.utc).isoformat(),
+            last_exit_side="LONG",
+            last_exit_pnl_rub=-42.0,
+            last_exit_price=10.938,
+            last_exit_reason="MACD подтверждённо развернулся вниз и цена потеряла EMA20",
+            last_strategy_name="momentum_breakout",
+            last_setup_quality_label="strong",
+            last_market_regime="impulse",
+            last_market_regime_confidence=0.61,
+            last_entry_edge_score=0.74,
+            last_volume_ratio=1.24,
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "LONG", 10.938)
+
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+
     def test_ngj6_rsi_profit_reentry_requires_new_extreme(self) -> None:
         instrument = mod.InstrumentConfig(
             symbol="NGJ6",

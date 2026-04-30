@@ -3,6 +3,7 @@ from instrument_groups import get_instrument_group
 
 PRIMARY_STRATEGIES_BY_SYMBOL = {
     "BRK6": ["momentum_breakout", "trend_rollover", "trend_pullback"],
+    "CNYRUBF": ["momentum_breakout", "opening_range_breakout", "range_break_continuation", "trend_pullback"],
     "GNM6": ["trend_pullback", "momentum_breakout", "trend_rollover"],
     "IMOEXF": ["range_break_continuation", "failed_breakout", "trend_pullback"],
     "NGJ6": ["trend_pullback", "momentum_breakout"],
@@ -10,6 +11,7 @@ PRIMARY_STRATEGIES_BY_SYMBOL = {
     "RBM6": ["failed_breakout", "range_break_continuation", "trend_pullback"],
     "SRM6": ["range_break_continuation", "failed_breakout", "trend_pullback"],
     "UCM6": ["trend_pullback", "range_break_continuation", "opening_range_breakout"],
+    "USDRUBF": ["momentum_breakout", "opening_range_breakout", "range_break_continuation", "trend_pullback"],
 }
 
 PRIMARY_STRATEGIES_BY_GROUP = {

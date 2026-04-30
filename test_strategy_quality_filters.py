@@ -94,6 +94,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_regime_filter_blocks_breakout_in_compression(self) -> None:
         reason = mod.regime_entry_block_reason(
+            "CNYRUBF",
             "opening_range_breakout",
             "LONG",
             "compression",
@@ -105,6 +106,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_regime_filter_blocks_pullback_outside_trend_context(self) -> None:
         reason = mod.regime_entry_block_reason(
+            "BRK6",
             "trend_pullback",
             "LONG",
             "mixed",
@@ -116,6 +118,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_regime_filter_allows_failed_breakout_in_chop(self) -> None:
         reason = mod.regime_entry_block_reason(
+            "IMOEXF",
             "failed_breakout",
             "LONG",
             "chop",
@@ -126,6 +129,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_regime_filter_blocks_breakout_when_regime_confidence_is_low(self) -> None:
         reason = mod.regime_entry_block_reason(
+            "CNYRUBF",
             "opening_range_breakout",
             "LONG",
             "trend_expansion",
@@ -133,6 +137,17 @@ class StrategyQualityFilterTests(unittest.TestCase):
         )
 
         self.assertIn("уверенность режима слишком низкая", reason)
+
+    def test_regime_filter_allows_fx_fresh_impulse_inside_trend_pullback(self) -> None:
+        reason = mod.regime_entry_block_reason(
+            "CNYRUBF",
+            "range_break_continuation",
+            "LONG",
+            "trend_pullback",
+            {"atr_pct": 0.0008, "volume_ratio": 1.32, "body_ratio": 1.10, "regime_confidence": 0.49},
+        )
+
+        self.assertEqual(reason, "")
 
     def test_classify_market_regime_returns_confidence_and_reason(self) -> None:
         df = candle_rows(
@@ -150,6 +165,40 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertIn(regime, {"trend_expansion", "impulse"})
         self.assertGreater(float(metrics["regime_confidence"]), 0.55)
         self.assertTrue(str(metrics["regime_reason"]))
+
+    def test_fx_higher_tf_bias_can_turn_long_before_ema50_trend_fully_catches_up(self) -> None:
+        base_time = datetime(2026, 4, 15, 6, 0, tzinfo=timezone.utc)
+
+        def make_raw_fx_df() -> pd.DataFrame:
+            closes = [
+                10.980, 10.976, 10.972, 10.968, 10.964, 10.960,
+                10.956, 10.952, 10.949, 10.946, 10.944, 10.942,
+                10.941, 10.940, 10.941, 10.943, 10.947, 10.952,
+                10.958, 10.966, 10.975, 10.984, 10.992, 10.999,
+            ]
+            rows = []
+            for index, close in enumerate(closes):
+                open_price = closes[index - 1] if index > 0 else close + 0.002
+                rows.append(
+                    {
+                        "time": pd.Timestamp(base_time + pd.Timedelta(minutes=15 * index)),
+                        "is_complete": True,
+                        "open": open_price,
+                        "high": max(open_price, close) + 0.003,
+                        "low": min(open_price, close) - 0.003,
+                        "close": close,
+                        "volume": 110.0 if index < len(closes) - 4 else 145.0 + index,
+                    }
+                )
+            return pd.DataFrame(rows)
+
+        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
+        client = object()
+
+        with patch.object(mod, "get_candles", side_effect=lambda *_args, **_kwargs: make_raw_fx_df()):
+            bias = mod.get_higher_tf_bias(client, self.config, instrument)
+
+        self.assertEqual(bias, "LONG")
 
     def test_opening_range_blocks_expensive_fx_without_commission_room(self) -> None:
         df = candle_rows(
@@ -245,6 +294,85 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(signal, "SHORT")
         self.assertIn("старший ТФ=SHORT", reason)
+
+    def test_fx_prefers_momentum_breakout_before_older_breakout_filters(self) -> None:
+        self.assertEqual(
+            get_primary_strategies("CNYRUBF")[:4],
+            ["momentum_breakout", "opening_range_breakout", "range_break_continuation", "trend_pullback"],
+        )
+        self.assertEqual(
+            get_primary_strategies("USDRUBF")[:4],
+            ["momentum_breakout", "opening_range_breakout", "range_break_continuation", "trend_pullback"],
+        )
+
+    def test_opening_range_allows_fx_fresh_macd_volume_breakout_against_lagging_higher_tf(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 10.955, "high": 10.958, "low": 10.952, "ema20": 10.950, "ema50": 10.958, "macd": -0.010, "macd_signal": -0.006, "atr": 0.009, "volume": 90, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {"close": 10.951, "high": 10.954, "low": 10.948, "ema20": 10.949, "ema50": 10.957, "macd": -0.011, "macd_signal": -0.007, "atr": 0.009, "volume": 92, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {"close": 10.948, "high": 10.950, "low": 10.944, "ema20": 10.948, "ema50": 10.956, "macd": -0.012, "macd_signal": -0.008, "atr": 0.009, "volume": 94, "volume_avg": 100, "body": 0.003, "body_avg": 0.004},
+                {"close": 10.946, "high": 10.948, "low": 10.942, "ema20": 10.947, "ema50": 10.955, "macd": -0.013, "macd_signal": -0.009, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {"close": 10.944, "high": 10.946, "low": 10.940, "ema20": 10.946, "ema50": 10.954, "macd": -0.014, "macd_signal": -0.010, "atr": 0.009, "volume": 96, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {"close": 10.943, "high": 10.945, "low": 10.939, "ema20": 10.945, "ema50": 10.953, "macd": -0.015, "macd_signal": -0.011, "atr": 0.009, "volume": 97, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {
+                    "open": 10.943,
+                    "close": 10.970,
+                    "high": 10.975,
+                    "low": 10.942,
+                    "ema20": 10.952,
+                    "ema50": 10.950,
+                    "rsi": 57.0,
+                    "macd": -0.001,
+                    "macd_signal": -0.008,
+                    "atr": 0.010,
+                    "volume": 145.0,
+                    "volume_avg": 100.0,
+                    "body": 0.027,
+                    "body_avg": 0.010,
+                },
+            ]
+        )
+        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
+
+        signal, reason = evaluate_opening_range(df, self.config, instrument, "SHORT")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("MACD только что пересёкся вверх", reason)
+
+    def test_range_break_allows_fx_fresh_macd_volume_breakout_against_lagging_higher_tf(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 10.940, "close": 10.938, "high": 10.942, "low": 10.936, "ema20": 10.944, "ema50": 10.950, "macd": -0.014, "macd_signal": -0.010, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {"open": 10.938, "close": 10.936, "high": 10.940, "low": 10.934, "ema20": 10.943, "ema50": 10.949, "macd": -0.015, "macd_signal": -0.011, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {"open": 10.936, "close": 10.934, "high": 10.938, "low": 10.932, "ema20": 10.942, "ema50": 10.948, "macd": -0.016, "macd_signal": -0.012, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {"open": 10.934, "close": 10.933, "high": 10.936, "low": 10.931, "ema20": 10.941, "ema50": 10.947, "macd": -0.017, "macd_signal": -0.013, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004},
+                {"open": 10.933, "close": 10.934, "high": 10.936, "low": 10.932, "ema20": 10.940, "ema50": 10.946, "macd": -0.016, "macd_signal": -0.013, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004},
+                {"open": 10.934, "close": 10.935, "high": 10.937, "low": 10.933, "ema20": 10.939, "ema50": 10.945, "macd": -0.015, "macd_signal": -0.013, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004},
+                {"open": 10.935, "close": 10.937, "high": 10.938, "low": 10.934, "ema20": 10.938, "ema50": 10.944, "rsi": 49.0, "macd": -0.014, "macd_signal": -0.013, "atr": 0.009, "volume": 96, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
+                {
+                    "open": 10.937,
+                    "close": 10.965,
+                    "high": 10.968,
+                    "low": 10.936,
+                    "ema20": 10.946,
+                    "ema50": 10.944,
+                    "rsi": 58.0,
+                    "macd": -0.002,
+                    "macd_signal": -0.010,
+                    "atr": 0.010,
+                    "volume": 148,
+                    "volume_avg": 100,
+                    "body": 0.028,
+                    "body_avg": 0.010,
+                },
+            ]
+        )
+        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
+
+        signal, reason = evaluate_range_break(df, self.config, instrument, "SHORT")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("MACD только что пересёкся вверх", reason)
 
     def test_ucm6_prefers_pullback_before_breakout_chase(self) -> None:
         self.assertEqual(get_primary_strategies("UCM6")[:2], ["trend_pullback", "range_break_continuation"])

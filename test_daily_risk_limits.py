@@ -554,12 +554,13 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
+            today = mod.datetime.now(mod.MOSCOW_TZ).date()
             for index in range(10):
                 mod.append_signal_observation(
                     mod.TRADE_DB_PATH,
                     {
-                        "observed_at": f"2026-04-24T10:{index:02d}:00+03:00",
-                        "evaluated_at": f"2026-04-24T10:{index:02d}:15+03:00",
+                        "observed_at": f"{today.isoformat()}T10:{index:02d}:00+03:00",
+                        "evaluated_at": f"{today.isoformat()}T10:{index:02d}:15+03:00",
                         "symbol": "BRK6",
                         "signal": "LONG",
                         "strategy": "trend_rollover",
@@ -592,12 +593,13 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
+            today = mod.datetime.now(mod.MOSCOW_TZ).date()
             for index in range(8):
                 mod.append_signal_observation(
                     mod.TRADE_DB_PATH,
                     {
-                        "observed_at": f"2026-04-24T10:{index:02d}:00+03:00",
-                        "evaluated_at": f"2026-04-24T10:{index:02d}:15+03:00",
+                        "observed_at": f"{today.isoformat()}T10:{index:02d}:00+03:00",
+                        "evaluated_at": f"{today.isoformat()}T10:{index:02d}:15+03:00",
                         "symbol": "UCM6",
                         "signal": "SHORT",
                         "strategy": "opening_range_breakout",
@@ -630,12 +632,13 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
+            today = mod.datetime.now(mod.MOSCOW_TZ).date()
             for index in range(2):
                 mod.append_signal_observation(
                     mod.TRADE_DB_PATH,
                     {
-                        "observed_at": f"2026-04-24T10:{index:02d}:00+03:00",
-                        "evaluated_at": f"2026-04-24T10:{index:02d}:15+03:00",
+                        "observed_at": f"{today.isoformat()}T10:{index:02d}:00+03:00",
+                        "evaluated_at": f"{today.isoformat()}T10:{index:02d}:15+03:00",
                         "symbol": "BRK6",
                         "signal": "LONG",
                         "strategy": "trend_rollover",

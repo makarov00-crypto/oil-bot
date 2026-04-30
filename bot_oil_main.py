@@ -2779,29 +2779,93 @@ def get_higher_tf_bias(client: Client, config: BotConfig, instrument: Instrument
     ]
     long_score = 0
     short_score = 0
+    is_fx = get_instrument_group(instrument.symbol).name == "fx"
 
     for interval_minutes, interval, weight in tf_specs:
         try:
             lookback_hours = max(120, int((interval_minutes * 120) / 60) + 1)
             df = get_candles(client, config, instrument, interval, lookback_hours=lookback_hours)
-            if "time" in df.columns:
-                df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
-                df = df.sort_values("time").reset_index(drop=True)
-            if "is_complete" in df.columns:
-                df = df[df["is_complete"]].reset_index(drop=True)
-            if len(df) < 50:
-                continue
-            df["ema50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
-            df = df.dropna().reset_index(drop=True)
-            if df.empty:
-                continue
-            last = df.iloc[-1]
-            close = float(last["close"])
-            ema50 = float(last["ema50"])
-            if close > ema50:
-                long_score += weight
-            elif close < ema50:
-                short_score += weight
+            if is_fx:
+                fx_df = df.copy()
+                if "time" in fx_df.columns:
+                    fx_df["time"] = pd.to_datetime(fx_df["time"], utc=True, errors="coerce")
+                    fx_df = fx_df.sort_values("time").reset_index(drop=True)
+                if "is_complete" in fx_df.columns:
+                    fx_df = fx_df[fx_df["is_complete"]].reset_index(drop=True)
+                if len(fx_df) < 8:
+                    continue
+                fx_df["ema20"] = fx_df["close"].ewm(span=20, adjust=False).mean()
+                fx_df["ema50"] = fx_df["close"].ewm(span=50, adjust=False).mean()
+                ema_fast = fx_df["close"].ewm(span=12, adjust=False).mean()
+                ema_slow = fx_df["close"].ewm(span=26, adjust=False).mean()
+                fx_df["macd"] = ema_fast - ema_slow
+                fx_df["macd_signal"] = fx_df["macd"].ewm(span=9, adjust=False).mean()
+                fx_df["volume_avg"] = fx_df["volume"].rolling(12, min_periods=3).mean()
+                fx_df["body"] = (fx_df["close"] - fx_df["open"]).abs()
+                fx_df["body_avg"] = fx_df["body"].rolling(8, min_periods=3).mean()
+                if len(fx_df) < 3:
+                    continue
+                last = fx_df.iloc[-1]
+                prev = fx_df.iloc[-2]
+                close = float(last["close"])
+                ema20 = float(last["ema20"])
+                ema50 = float(last["ema50"])
+                macd = float(last["macd"])
+                macd_signal = float(last["macd_signal"])
+                prev_macd = float(prev["macd"])
+                prev_macd_signal = float(prev["macd_signal"])
+                volume_avg = float(last["volume_avg"])
+                volume_ratio = (float(last["volume"]) / volume_avg) if volume_avg > 0 else 0.0
+                body_avg = float(last["body_avg"])
+                body_ratio = (float(last["body"]) / body_avg) if body_avg > 0 else 0.0
+
+                if close > ema20:
+                    long_score += weight
+                elif close < ema20:
+                    short_score += weight
+
+                if ema20 >= ema50 * 0.9998:
+                    long_score += weight
+                elif ema20 <= ema50 * 1.0002:
+                    short_score += weight
+
+                if macd > macd_signal and macd >= prev_macd:
+                    long_score += weight
+                elif macd < macd_signal and macd <= prev_macd:
+                    short_score += weight
+
+                macd_gap = macd - macd_signal
+                prev_macd_gap = prev_macd - prev_macd_signal
+                if close > ema20 and macd_gap > 0 and macd_gap > prev_macd_gap:
+                    long_score += weight
+                elif close < ema20 and macd_gap < 0 and macd_gap < prev_macd_gap:
+                    short_score += weight
+
+                fresh_long_cross = macd > macd_signal and prev_macd <= prev_macd_signal
+                fresh_short_cross = macd < macd_signal and prev_macd >= prev_macd_signal
+                if fresh_long_cross and close > ema20 and volume_ratio >= 1.05 and body_ratio >= 0.85:
+                    long_score += weight
+                if fresh_short_cross and close < ema20 and volume_ratio >= 1.05 and body_ratio >= 0.85:
+                    short_score += weight
+            else:
+                if "time" in df.columns:
+                    df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
+                    df = df.sort_values("time").reset_index(drop=True)
+                if "is_complete" in df.columns:
+                    df = df[df["is_complete"]].reset_index(drop=True)
+                if len(df) < 50:
+                    continue
+                df["ema50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
+                df = df.dropna().reset_index(drop=True)
+                if df.empty:
+                    continue
+                last = df.iloc[-1]
+                close = float(last["close"])
+                ema50 = float(last["ema50"])
+                if close > ema50:
+                    long_score += weight
+                elif close < ema50:
+                    short_score += weight
         except RuntimeError:
             continue
 
@@ -3035,11 +3099,13 @@ def estimate_setup_quality(
 
 
 def regime_entry_block_reason(
+    symbol: str,
     strategy_name: str,
     signal: str,
     market_regime: str,
     metrics: dict[str, float | str],
 ) -> str:
+    group_name = get_instrument_group(symbol).name
     strategy = (strategy_name or "").strip()
     if signal not in {"LONG", "SHORT"}:
         return ""
@@ -3048,6 +3114,17 @@ def regime_entry_block_reason(
     volume_ratio = float(metrics.get("volume_ratio") or 0.0)
     body_ratio = float(metrics.get("body_ratio") or 0.0)
     regime_confidence = float(metrics.get("regime_confidence") or 0.0)
+
+    fx_fresh_impulse_override = (
+        group_name == "fx"
+        and strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}
+        and volume_ratio >= 1.15
+        and body_ratio >= 0.95
+        and regime_confidence >= 0.46
+    )
+
+    if fx_fresh_impulse_override and market_regime in {"trend_pullback", "mixed"}:
+        return ""
 
     if market_regime == "compression":
         if strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}:
@@ -5825,6 +5902,36 @@ def position_reentry_allowed(
             min_steps=6,
         )
 
+    def fx_strong_reentry_override() -> bool:
+        if get_instrument_group(instrument.symbol).name != "fx":
+            return False
+        if state.last_exit_side != signal:
+            return False
+        if signal not in {"LONG", "SHORT"}:
+            return False
+        exit_reason = str(state.last_exit_reason or "").lower()
+        if "macd" not in exit_reason and "ema20" not in exit_reason and state.last_exit_pnl_rub >= 0:
+            return False
+        setup_label = str(state.last_setup_quality_label or "").strip().lower()
+        regime = str(state.last_market_regime or "").strip().lower()
+        regime_confidence = float(state.last_market_regime_confidence or 0.0)
+        edge_score = float(state.last_entry_edge_score or 0.0)
+        volume_ratio = float(state.last_volume_ratio or 0.0)
+        strategy_name = str(state.last_strategy_name or "").strip().lower()
+        if strategy_name not in {"momentum_breakout", "opening_range_breakout", "range_break_continuation"}:
+            return False
+        if regime in {"compression", "chop"}:
+            return False
+        if regime_confidence < 0.50:
+            return False
+        if volume_ratio < 1.10:
+            return False
+        if setup_label == "strong" and edge_score >= 0.62:
+            return True
+        if setup_label == "medium" and edge_score >= 0.78 and regime in {"impulse", "trend_expansion"}:
+            return True
+        return False
+
     group_name = get_instrument_group(instrument.symbol).name
     guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "BRK6", "IMOEXF", "CNYRUBF", "UCM6", "VBM6", *NATURAL_GAS_SYMBOLS}
     if instrument.symbol not in guarded_symbols and group_name not in {"fx", "equity_index", "equity_futures"}:
@@ -5842,6 +5949,9 @@ def position_reentry_allowed(
     except ValueError:
         trading_day = None
     if trading_day and last_exit_at.astimezone(MOSCOW_TZ).date() < trading_day:
+        return True, ""
+
+    if fx_strong_reentry_override():
         return True, ""
 
     if group_name == "fx" and state.last_exit_side == signal and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal()):
@@ -6994,6 +7104,7 @@ def process_instrument(
                                 state.last_allocator_summary = f"Аллокатор в recovery mode: {recovery_block_reason}"
                             else:
                                 regime_block_reason = regime_entry_block_reason(
+                                    instrument.symbol,
                                     primary_strategy_name,
                                     signal,
                                     market_regime,
@@ -7099,6 +7210,7 @@ def process_instrument(
                                     )
                                 else:
                                     regime_block_reason = regime_entry_block_reason(
+                                        instrument.symbol,
                                         primary_strategy_name,
                                         signal,
                                         market_regime,

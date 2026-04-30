@@ -104,6 +104,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     impulse_ok = body_avg > 0 and body >= body_avg * 0.55
     momentum_up = macd > macd_signal and macd >= prev_macd
     momentum_down = macd < macd_signal and macd <= prev_macd
+    fresh_macd_cross_up = macd > macd_signal and prev_macd <= prev_macd_signal
+    fresh_macd_cross_down = macd < macd_signal and prev_macd >= prev_macd_signal
     volatility_ok = atr_pct >= 0.0005
     trend_up = close > ema20 and close > ema50
     trend_down = close < ema20 and close < ema50
@@ -115,15 +117,47 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     higher_tf_short_ok = higher_tf_bias != "LONG"
     is_fx = get_instrument_group(instrument.symbol).name == "fx"
     is_expensive_fx = instrument.symbol in {"USDRUBF", "UCM6"}
+    volume_burst = volume_avg > 0 and volume >= volume_avg * 1.20
+    impulse_burst = body_avg > 0 and body >= body_avg * 0.95
     if is_fx:
         volume_ok = volume_avg > 0 and volume >= volume_avg * 0.95
         impulse_ok = body_avg > 0 and body >= body_avg * 0.70
         volatility_ok = atr_pct >= 0.0008
         higher_tf_long_ok = higher_tf_bias == "LONG"
         higher_tf_short_ok = higher_tf_bias == "SHORT"
+        volume_burst = volume_avg > 0 and volume >= volume_avg * (1.18 if is_expensive_fx else 1.15)
+        impulse_burst = body_avg > 0 and body >= body_avg * (0.95 if is_expensive_fx else 0.90)
     commission_room_ok = True
     if is_fx:
         commission_room_ok = max(opening_width_pct, atr_pct) >= (0.0012 if is_expensive_fx else 0.0010)
+    fx_fresh_impulse_long = (
+        is_fx
+        and soft_breakout_up
+        and trend_up
+        and hold_above_range
+        and rsi_long_ok
+        and fresh_macd_cross_up
+        and volume_burst
+        and impulse_burst
+        and volatility_ok
+        and commission_room_ok
+    )
+    fx_fresh_impulse_short = (
+        is_fx
+        and soft_breakout_down
+        and trend_down
+        and hold_below_range
+        and rsi_short_ok
+        and fresh_macd_cross_down
+        and volume_burst
+        and impulse_burst
+        and volatility_ok
+        and commission_room_ok
+    )
+    if fx_fresh_impulse_long:
+        higher_tf_long_ok = True
+    if fx_fresh_impulse_short:
+        higher_tf_short_ok = True
     hard_or_strong_soft_up = breakout_up or (soft_breakout_up and volume_ok and impulse_ok and momentum_up)
     hard_or_strong_soft_down = breakout_down or (soft_breakout_down and volume_ok and impulse_ok and momentum_down)
 
@@ -138,6 +172,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         "объём достаточный" if volume_ok else "объём слабый",
         "импульс свечи есть" if impulse_ok else "импульс свечи слабый",
         "MACD поддерживает рост" if momentum_up else "MACD не поддерживает рост",
+        "MACD только что пересёкся вверх" if fresh_macd_cross_up else "свежего разворота MACD вверх нет",
         f"ATR%={atr_pct:.4f}, минимум 0.0005",
         "запас движения перекрывает комиссию" if commission_room_ok else "запас движения мал для комиссии",
     ]
@@ -152,6 +187,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         "объём достаточный" if volume_ok else "объём слабый",
         "импульс свечи есть" if impulse_ok else "импульс свечи слабый",
         "MACD поддерживает снижение" if momentum_down else "MACD не поддерживает снижение",
+        "MACD только что пересёкся вниз" if fresh_macd_cross_down else "свежего разворота MACD вниз нет",
         f"ATR%={atr_pct:.4f}, минимум 0.0005",
         "запас движения перекрывает комиссию" if commission_room_ok else "запас движения мал для комиссии",
     ]
@@ -239,27 +275,27 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if is_fx:
         long_ok = (
             higher_tf_long_ok
-            and breakout_up
+            and (breakout_up or fx_fresh_impulse_long)
             and trend_up
             and hold_above_range
-            and volume_ok
-            and impulse_ok
-            and momentum_up
+            and (volume_ok or fx_fresh_impulse_long)
+            and (impulse_ok or fx_fresh_impulse_long)
+            and (momentum_up or fx_fresh_impulse_long)
             and volatility_ok
             and commission_room_ok
-            and long_score >= 8
+            and (long_score >= 8 or fx_fresh_impulse_long)
         )
         short_ok = (
             higher_tf_short_ok
-            and breakout_down
+            and (breakout_down or fx_fresh_impulse_short)
             and trend_down
             and hold_below_range
-            and volume_ok
-            and impulse_ok
-            and momentum_down
+            and (volume_ok or fx_fresh_impulse_short)
+            and (impulse_ok or fx_fresh_impulse_short)
+            and (momentum_down or fx_fresh_impulse_short)
             and volatility_ok
             and commission_room_ok
-            and short_score >= 8
+            and (short_score >= 8 or fx_fresh_impulse_short)
         )
 
     if long_ok:
