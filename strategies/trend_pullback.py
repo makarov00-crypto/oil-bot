@@ -26,11 +26,11 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
             near_ema20_pct=0.0062,
-            volume_factor=0.95,
+            volume_factor=0.90,
             atr_min_pct=0.0014,
-            impulse_body_factor=0.82,
+            impulse_body_factor=0.72,
             long_rsi_min=39.0,
-            long_rsi_max=56.0,
+            long_rsi_max=60.0,
             short_rsi_min=38.0,
             short_rsi_max=60.0,
             rsi_exit_long=config.rsi_exit_long,
@@ -164,6 +164,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     if instrument.symbol == "UCM6":
         macd_turn_up = macd > macd_signal and macd > prev_macd
     if instrument.symbol in NATURAL_GAS_SYMBOLS:
+        prev_macd_signal = float(prev["macd_signal"])
+        macd_turn_up = macd > macd_signal and (
+            macd >= prev_macd or (prev_macd > prev_prev_macd and prev_macd > prev_macd_signal)
+        )
         macd_turn_down = macd_turn_down and prev_macd >= prev_prev_macd
     trend_long = close > ema50 and ema50_slope > profile.ema_slope_threshold
     trend_short = close < ema50 and ema50_slope < -profile.ema_slope_threshold
@@ -176,10 +180,14 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     if instrument.symbol == "UCM6":
         trend_long = close > ema20 and close > ema50 and ema20 >= ema50 * 0.9995
         trend_short = close < ema20 and close < ema50 and ema20 <= ema50 * 1.0005
+    if instrument.symbol in NATURAL_GAS_SYMBOLS:
+        trend_long = close > ema20 and close > ema50 and ema20 >= ema50 * 0.9985
+        trend_short = close < ema20 and close < ema50 and ema20 <= ema50 * 1.0015
     not_overbought = close < float(last["bb_upper"])
     not_oversold = close > float(last["bb_lower"])
     volatility_ok = atr_pct >= profile.atr_min_pct
     ucm6_fast_short = False
+    gas_reclaim_long = False
     if instrument.symbol == "UCM6":
         bb_mid = float(last["bb_mid"])
         ucm6_fast_short = (
@@ -194,6 +202,27 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
             and 32.0 <= rsi <= 56.0
             and macd < macd_signal
             and macd <= prev_macd
+            and volatility_ok
+        )
+    if instrument.symbol in NATURAL_GAS_SYMBOLS:
+        bb_mid = float(last["bb_mid"])
+        reclaim_window = df.iloc[-4:-1].copy()
+        reclaim_window["close"] = reclaim_window["close"].astype(float)
+        reclaim_window["ema20"] = reclaim_window["ema20"].astype(float)
+        reclaim_window["bb_mid"] = reclaim_window["bb_mid"].astype(float)
+        recent_washout = bool(
+            ((reclaim_window["close"] <= reclaim_window["ema20"]) | (reclaim_window["close"] <= reclaim_window["bb_mid"])).any()
+        )
+        gas_reclaim_long = (
+            higher_tf_bias == "LONG"
+            and close > ema20
+            and close >= bb_mid
+            and recent_washout
+            and profile.long_rsi_min <= rsi <= profile.long_rsi_max
+            and macd_turn_up
+            and volume_ok
+            and impulse_ok
+            and not_overbought
             and volatility_ok
         )
     long_blockers: list[str] = []
@@ -229,14 +258,20 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
     if not trend_long:
         long_blockers.append("нет подтверждённого восходящего тренда по EMA50")
     if uses_pullback_trend_regime(instrument.symbol) or instrument.symbol == "UCM6":
-        if not pullback_ok:
+        if instrument.symbol in NATURAL_GAS_SYMBOLS:
+            if not (pullback_ok or gas_reclaim_long):
+                long_blockers.append("для газа нет 15m reclaim выше EMA20/BB-mid после пролива")
+        elif not pullback_ok:
             long_blockers.append("нет отката к EMA20 или средней Bollinger")
     elif not near_ema20:
         long_blockers.append("цена ушла слишком далеко от EMA20")
     if not (profile.long_rsi_min <= rsi <= profile.long_rsi_max):
         long_blockers.append(f"RSI {rsi:.2f} вне зоны входа {profile.long_rsi_min:.0f}-{profile.long_rsi_max:.0f}")
     if not macd_turn_up:
-        long_blockers.append("MACD не ускоряется вверх")
+        if instrument.symbol in NATURAL_GAS_SYMBOLS:
+            long_blockers.append("MACD не развернулся вверх и не удерживает рост 1-2 свечи")
+        else:
+            long_blockers.append("MACD не ускоряется вверх")
     if not impulse_ok:
         long_blockers.append("нет нужного импульса свечи")
     if not volume_ok:
@@ -308,6 +343,17 @@ def evaluate_signal(df, config, instrument, higher_tf_bias) -> tuple[str, str]:
             and not_overbought
         )
     if instrument.symbol in NATURAL_GAS_SYMBOLS:
+        long_ok = (
+            higher_tf_bias == "LONG"
+            and trend_long
+            and (pullback_ok or gas_reclaim_long)
+            and profile.long_rsi_min <= rsi <= profile.long_rsi_max
+            and macd_turn_up
+            and impulse_ok
+            and volume_ok
+            and not_overbought
+            and volatility_ok
+        )
         # Газу нужен чуть более живой pullback, иначе он почти не торгуется.
         short_ok = short_ok and near_ema20
 

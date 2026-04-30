@@ -641,6 +641,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def test_ngj6_prefers_pullback_before_momentum_breakout(self) -> None:
         self.assertEqual(get_primary_strategies("NGJ6")[:2], ["trend_pullback", "momentum_breakout"])
 
+    def test_ngk6_uses_15m_working_interval_for_signal_processing(self) -> None:
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "NGK6"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 5)
+
     def test_ngj6_blocks_late_momentum_long_chase(self) -> None:
         df = candle_rows(
             [
@@ -702,6 +706,28 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(signal, "LONG")
         self.assertIn("старший ТФ=SHORT", reason)
+
+    def test_ngk6_allows_15m_reclaim_long_after_profitable_short_style_reversal(self) -> None:
+        from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
+
+        df = candle_rows(
+            [
+                {"open": 2.708, "close": 2.704, "high": 2.710, "low": 2.702, "ema20": 2.712, "ema50": 2.724, "ema200": 2.736, "macd": -0.012, "macd_signal": -0.008, "volume": 118, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.712, "bb_upper": 2.730},
+                {"open": 2.704, "close": 2.698, "high": 2.706, "low": 2.694, "ema20": 2.708, "ema50": 2.720, "ema200": 2.734, "macd": -0.014, "macd_signal": -0.009, "volume": 125, "volume_avg": 100, "body": 0.006, "body_avg": 0.005, "bb_mid": 2.708, "bb_upper": 2.726},
+                {"open": 2.698, "close": 2.691, "high": 2.700, "low": 2.688, "ema20": 2.704, "ema50": 2.716, "ema200": 2.731, "macd": -0.015, "macd_signal": -0.010, "volume": 132, "volume_avg": 100, "body": 0.007, "body_avg": 0.005, "bb_mid": 2.704, "bb_upper": 2.722},
+                {"open": 2.691, "close": 2.682, "high": 2.694, "low": 2.678, "ema20": 2.698, "ema50": 2.710, "ema200": 2.726, "macd": -0.017, "macd_signal": -0.012, "volume": 142, "volume_avg": 100, "body": 0.009, "body_avg": 0.006, "bb_mid": 2.698, "bb_upper": 2.717},
+                {"open": 2.682, "close": 2.639, "high": 2.684, "low": 2.632, "ema20": 2.676, "ema50": 2.690, "ema200": 2.712, "macd": -0.011, "macd_signal": -0.012, "volume": 190, "volume_avg": 120, "body": 0.043, "body_avg": 0.010, "bb_mid": 2.676, "bb_upper": 2.702},
+                {"open": 2.639, "close": 2.669, "high": 2.672, "low": 2.637, "ema20": 2.674, "ema50": 2.686, "ema200": 2.706, "macd": -0.006, "macd_signal": -0.011, "volume": 176, "volume_avg": 125, "body": 0.030, "body_avg": 0.012, "bb_mid": 2.674, "bb_upper": 2.704},
+                {"open": 2.669, "close": 2.684, "high": 2.688, "low": 2.666, "ema20": 2.674, "ema50": 2.679, "ema200": 2.699, "macd": 0.001, "macd_signal": -0.007, "volume": 168, "volume_avg": 130, "body": 0.015, "body_avg": 0.012, "bb_mid": 2.674, "bb_upper": 2.708},
+                {"open": 2.684, "close": 2.717, "high": 2.721, "low": 2.682, "ema20": 2.690, "ema50": 2.678, "ema200": 2.696, "rsi": 58.0, "macd": 0.007, "macd_signal": -0.001, "atr": 0.010, "volume": 182, "volume_avg": 135, "body": 0.033, "body_avg": 0.013, "bb_mid": 2.690, "bb_upper": 2.734},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="NGK6", figi="FIGI", display_name="Natural Gas")
+
+        signal, reason = evaluate_trend_pullback(df, self.config, instrument, "LONG")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("старший ТФ=LONG", reason)
 
     def test_ngj6_blocks_weak_short_when_price_reclaims_bollinger_mid(self) -> None:
         df = candle_rows(

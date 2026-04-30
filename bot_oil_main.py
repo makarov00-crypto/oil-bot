@@ -2677,8 +2677,25 @@ def get_candles(
     return df
 
 
-def get_lower_tf_lookback_hours(config: BotConfig, symbol: str | None = None) -> int:
-    base_hours = max(config.candle_hours, int((config.candle_interval_minutes * 240) / 60) + 1)
+def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
+    if symbol in NATURAL_GAS_SYMBOLS:
+        return config.higher_tf_interval
+    return config.candle_interval
+
+
+def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
+    if symbol in NATURAL_GAS_SYMBOLS:
+        return config.higher_tf_interval_minutes
+    return config.candle_interval_minutes
+
+
+def get_lower_tf_lookback_hours(
+    config: BotConfig,
+    symbol: str | None = None,
+    interval_minutes: int | None = None,
+) -> int:
+    effective_minutes = interval_minutes or config.candle_interval_minutes
+    base_hours = max(config.candle_hours, int((effective_minutes * 240) / 60) + 1)
     # For EMA200 on 5m candles, exchange session gaps mean a simple 30h wall-clock
     # lookback can still contain too few actual candles on mornings and after weekends.
     lookback_hours = max(base_hours, 72)
@@ -6913,13 +6930,19 @@ def process_instrument(
             return None
 
     try:
+        signal_interval = get_signal_interval_for_symbol(config, instrument.symbol)
+        signal_interval_minutes = get_signal_interval_minutes_for_symbol(config, instrument.symbol)
         lower_df = add_indicators(
             get_candles(
                 client,
                 config,
                 instrument,
-                config.candle_interval,
-                lookback_hours=get_lower_tf_lookback_hours(config, instrument.symbol),
+                signal_interval,
+                lookback_hours=get_lower_tf_lookback_hours(
+                    config,
+                    instrument.symbol,
+                    interval_minutes=signal_interval_minutes,
+                ),
             )
         )
     except RuntimeError as error:
@@ -6953,8 +6976,12 @@ def process_instrument(
                     client,
                     config,
                     instrument,
-                    config.candle_interval,
-                    lookback_hours=get_lower_tf_lookback_hours(config, instrument.symbol),
+                    signal_interval,
+                    lookback_hours=get_lower_tf_lookback_hours(
+                        config,
+                        instrument.symbol,
+                        interval_minutes=signal_interval_minutes,
+                    ),
                 )
             )
         except RuntimeError as error:
