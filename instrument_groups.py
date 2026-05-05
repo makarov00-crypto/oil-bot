@@ -16,8 +16,11 @@ EQUITY_FUTURES = InstrumentGroup(name="equity_futures", description="Single-stoc
 BOND_INDEX = InstrumentGroup(name="bond_index", description="Government bond index futures")
 
 
+BRENT_SYMBOLS = {"BRK6", "BMM6"}
+
 GROUP_BY_SYMBOL = {
     "BRK6": COMMODITIES,
+    "BMM6": COMMODITIES,
     "NGJ6": COMMODITIES,
     "NGK6": COMMODITIES,
     "GNM6": COMMODITIES,
@@ -30,8 +33,20 @@ GROUP_BY_SYMBOL = {
     "RBM6": BOND_INDEX,
 }
 
-
-DEFAULT_SYMBOLS = ",".join(GROUP_BY_SYMBOL.keys())
+DEFAULT_SYMBOLS = ",".join(
+    [
+        "BMM6",
+        "NGK6",
+        "GNM6",
+        "USDRUBF",
+        "CNYRUBF",
+        "UCM6",
+        "IMOEXF",
+        "SRM6",
+        "VBM6",
+        "RBM6",
+    ]
+)
 
 
 def get_instrument_group(symbol: str) -> InstrumentGroup:
@@ -46,6 +61,10 @@ def get_instrument_group(symbol: str) -> InstrumentGroup:
 
 def is_currency_instrument(symbol: str) -> bool:
     return get_instrument_group(symbol).name == FX.name
+
+
+def is_brent_symbol(symbol: str) -> bool:
+    return str(symbol or "").strip().upper() in BRENT_SYMBOLS
 
 
 def uses_pullback_trend_regime(symbol: str) -> bool:

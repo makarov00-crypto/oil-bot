@@ -7,6 +7,7 @@ import pandas as pd
 
 import bot_oil_main as mod
 from bot_oil_main import BotConfig, InstrumentConfig
+from instrument_groups import DEFAULT_SYMBOLS
 from strategy_registry import get_primary_strategies
 from strategies.breakdown_continuation import evaluate_signal as evaluate_range_break
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
@@ -304,6 +305,13 @@ class StrategyQualityFilterTests(unittest.TestCase):
             get_primary_strategies("USDRUBF")[:4],
             ["momentum_breakout", "opening_range_breakout", "range_break_continuation", "trend_pullback"],
         )
+
+    def test_active_brent_contract_uses_same_strategy_stack(self) -> None:
+        self.assertEqual(
+            get_primary_strategies("BMM6")[:3],
+            ["momentum_breakout", "trend_rollover", "trend_pullback"],
+        )
+        self.assertIn("BMM6", DEFAULT_SYMBOLS.split(","))
 
     def test_opening_range_allows_fx_fresh_macd_volume_breakout_against_lagging_higher_tf(self) -> None:
         df = candle_rows(

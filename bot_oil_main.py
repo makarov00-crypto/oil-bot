@@ -20,6 +20,7 @@ from custom_instruments import merge_with_custom_symbols
 from instrument_groups import (
     DEFAULT_SYMBOLS,
     get_instrument_group,
+    is_brent_symbol,
     is_currency_instrument as is_currency_symbol,
 )
 from news_bias import NewsBias, select_active_biases
@@ -4694,7 +4695,7 @@ def get_margin_headroom_rub(client: Client, config: BotConfig, snapshot: Account
 
 
 def get_instrument_allocation_weight(symbol: str) -> tuple[str, float]:
-    if symbol in {"BRK6", "USDRUBF", *NATURAL_GAS_SYMBOLS}:
+    if is_brent_symbol(symbol) or symbol in {"USDRUBF", *NATURAL_GAS_SYMBOLS}:
         return "тяжёлый", 0.85
     if symbol in {"GNM6", "SRM6"}:
         return "средний", 1.0
@@ -4961,7 +4962,7 @@ def get_candidate_correlation_bucket(candidate: dict[str, Any]) -> str:
     signal = str(candidate.get("signal") or "").strip().upper()
     if not symbol or signal not in {"LONG", "SHORT"}:
         return ""
-    if symbol == "BRK6" or symbol in NATURAL_GAS_SYMBOLS:
+    if is_brent_symbol(symbol) or symbol in NATURAL_GAS_SYMBOLS:
         family = "energy"
     elif symbol == "GNM6":
         family = "gold"
@@ -5384,7 +5385,7 @@ def calculate_position_sizing_context(
         can_afford_min_lot_by_headroom = qty_by_headroom >= 1
         near_min_lot_by_working = working_margin_budget >= margin_per_lot * 0.96
         if (
-            instrument.symbol == "BRK6"
+            is_brent_symbol(instrument.symbol)
             and can_afford_min_lot_by_headroom
             and conviction_weight >= 1.10
             and signal in {"LONG", "SHORT"}
@@ -5900,7 +5901,7 @@ def position_reentry_allowed(
         )
 
     def brk6_fresh_impulse_override() -> bool:
-        if instrument.symbol != "BRK6":
+        if not is_brent_symbol(instrument.symbol):
             return False
         if signal != "LONG":
             return False
@@ -5950,8 +5951,8 @@ def position_reentry_allowed(
         return False
 
     group_name = get_instrument_group(instrument.symbol).name
-    guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "BRK6", "IMOEXF", "CNYRUBF", "UCM6", "VBM6", *NATURAL_GAS_SYMBOLS}
-    if instrument.symbol not in guarded_symbols and group_name not in {"fx", "equity_index", "equity_futures"}:
+    guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "IMOEXF", "CNYRUBF", "UCM6", "VBM6", *NATURAL_GAS_SYMBOLS}
+    if instrument.symbol not in guarded_symbols and not is_brent_symbol(instrument.symbol) and group_name not in {"fx", "equity_index", "equity_futures"}:
         return True, ""
     if not state.last_exit_time:
         return True, ""
@@ -6031,7 +6032,7 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 60)
         if state.last_exit_side and state.last_exit_side != signal:
             cooldown_minutes = max(cooldown_minutes, 75)
-    elif instrument.symbol == "BRK6":
+    elif is_brent_symbol(instrument.symbol):
         if state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             cooldown_minutes = max(cooldown_minutes, 40)
         if state.last_exit_pnl_rub < 0:
@@ -6061,9 +6062,9 @@ def position_reentry_allowed(
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
         if brk6_fresh_impulse_override():
             return True, ""
-        if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
-                return False, "для BRK6 повторный вход после убыточного выхода разрешён только после обновления экстремума."
+                return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после обновления экстремума."
         if instrument.symbol in NATURAL_GAS_SYMBOLS and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после нового экстремума."
@@ -6083,9 +6084,9 @@ def position_reentry_allowed(
         if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
-        if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
-                return False, "для BRK6 повторный вход после убыточного выхода разрешён только после обновления экстремума."
+                return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после обновления экстремума."
         if instrument.symbol in NATURAL_GAS_SYMBOLS and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после нового экстремума."
@@ -6098,8 +6099,8 @@ def position_reentry_allowed(
         return True, ""
 
     remaining = int((next_allowed - now).total_seconds() // 60) + 1
-    if instrument.symbol == "BRK6" and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
-        return False, f"для BRK6 после прибыльного выхода нужен либо новый сильный импульс по новостям и цене, либо пауза ещё ~{remaining} мин."
+    if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+        return False, f"для {instrument.symbol} после прибыльного выхода нужен либо новый сильный импульс по новостям и цене, либо пауза ещё ~{remaining} мин."
     return False, f"для {instrument.symbol} действует cooldown после выхода: ждать ещё ~{remaining} мин."
 
 
