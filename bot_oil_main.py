@@ -2004,6 +2004,8 @@ def reconcile_missing_trade_closes_from_broker(
                 "strategy": open_row.get("strategy") or "",
                 "mode": open_row.get("mode") or ("DRY_RUN" if config.dry_run else "LIVE"),
                 "session": open_row.get("session") or get_market_session(),
+                "_entry_price": entry_price,
+                "_entry_time": str(open_row.get("time") or ""),
             }
         )
         used_op_qty[candidate.op_id] = op_used_qty + qty
@@ -2012,15 +2014,46 @@ def reconcile_missing_trade_closes_from_broker(
     if not matches:
         return 0
 
-    rows.extend(matches)
+    aggregated_matches: list[dict[str, Any]] = []
+    aggregate_index: dict[tuple[Any, ...], int] = {}
+    for row in matches:
+        aggregate_key = (
+            str(row.get("time") or ""),
+            str(row.get("symbol") or "").upper(),
+            str(row.get("side") or "").upper(),
+            round(float(row.get("price") or 0.0), 6),
+            str(row.get("broker_op_id") or ""),
+            str(row.get("strategy") or ""),
+            str(row.get("reason") or ""),
+            str(row.get("source") or ""),
+            str(row.get("mode") or ""),
+            str(row.get("session") or ""),
+            str(row.get("display_name") or ""),
+            round(float(row.get("_entry_price") or 0.0), 6),
+            str(row.get("_entry_time") or ""),
+        )
+        existing_idx = aggregate_index.get(aggregate_key)
+        if existing_idx is None:
+            clean_row = dict(row)
+            clean_row.pop("_entry_price", None)
+            clean_row.pop("_entry_time", None)
+            aggregated_matches.append(clean_row)
+            aggregate_index[aggregate_key] = len(aggregated_matches) - 1
+            continue
+        target = aggregated_matches[existing_idx]
+        target["qty_lots"] = int(target.get("qty_lots") or 0) + int(row.get("qty_lots") or 0)
+        for money_key in ("pnl_rub", "gross_pnl_rub", "commission_rub", "net_pnl_rub"):
+            target[money_key] = round(float(target.get(money_key) or 0.0) + float(row.get(money_key) or 0.0), 2)
+
+    rows.extend(aggregated_matches)
     rows.sort(key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC))
     save_trade_journal(rows)
     logging.warning(
         "journal_auto_recovery recovered_closes=%s symbols=%s",
-        len(matches),
-        [row["symbol"] for row in matches],
+        len(aggregated_matches),
+        [row["symbol"] for row in aggregated_matches],
     )
-    return len(matches)
+    return len(aggregated_matches)
 
 
 def build_today_journal_integrity_alert() -> str:

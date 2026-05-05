@@ -372,8 +372,8 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered, 2)
         closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
         self.assertEqual(len(closes), 2)
-        self.assertTrue(all(row["qty_lots"] == 1 for row in closes))
-        self.assertTrue(all(row["commission_rub"] == 11.0 for row in closes))
+        self.assertEqual([row["qty_lots"] for row in closes], [1, 1])
+        self.assertEqual([row["commission_rub"] for row in closes], [11.0, 11.0])
         self.assertEqual([row["broker_op_unit"] for row in closes], [0, 1])
 
     def test_auto_recovery_matches_previous_day_open_closed_after_midnight(self) -> None:
@@ -593,10 +593,11 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
                 target_day=datetime(2026, 4, 29, tzinfo=timezone.utc).date(),
             )
 
-        self.assertEqual(recovered, 2)
+        self.assertEqual(recovered, 1)
         closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
-        self.assertEqual(len(closes), 2)
-        self.assertTrue(all(row["side"] == "SHORT" for row in closes))
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0]["side"], "SHORT")
+        self.assertEqual(closes[0]["qty_lots"], 2)
 
     def test_build_today_journal_integrity_alert_reports_broker_issue(self) -> None:
         fake_audit = SimpleNamespace(
