@@ -60,6 +60,7 @@ app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
 
 INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
     "BRK6": "BR-5.26 Нефть Brent",
+    "BMM6": "BR-6.26 Нефть Brent",
     "USDRUBF": "USDRUBF Доллар - Рубль",
     "CNYRUBF": "CNYRUBF Юань - Рубль",
     "IMOEXF": "IMOEXF Индекс МосБиржи",
@@ -4187,6 +4188,7 @@ def build_dashboard_html() -> str:
 
     let instrumentNames = {
       BRK6: 'BR-5.26 Нефть Brent',
+      BMM6: 'BR-6.26 Нефть Brent',
       USDRUBF: 'USDRUBF Доллар - Рубль',
       CNYRUBF: 'CNYRUBF Юань - Рубль',
       IMOEXF: 'IMOEXF Индекс МосБиржи',
