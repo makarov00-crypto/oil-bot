@@ -188,11 +188,13 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if is_brent_symbol(instrument.symbol):
         soft_short_structure = soft_breakdown_down or rollover_short
         soft_long_structure = rollover_long and close >= recent_high * 0.9995
+        hard_short_structure = breakdown_down and (volume_ok or impulse_ok)
+        hard_long_structure = breakout_up and (volume_ok or impulse_ok)
         short_ok = (
             higher_tf_short_ok
             and close_below_trend
             and (
-                breakdown_down
+                hard_short_structure
                 or (
                     soft_short_structure
                     and macd_down
@@ -209,7 +211,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             higher_tf_long_ok
             and close_above_trend
             and (
-                breakout_up
+                hard_long_structure
                 or (
                     soft_long_structure
                     and macd_up

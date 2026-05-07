@@ -713,6 +713,26 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "HOLD")
         self.assertIn("MACD не подтверждает снижение", reason)
 
+    def test_bmm6_trend_rollover_blocks_hard_breakdown_when_volume_and_impulse_are_weak(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 101.50, "close": 101.44, "high": 101.52, "low": 101.42, "ema20": 101.46, "ema50": 101.50, "macd": -0.04, "macd_signal": -0.02, "volume": 110, "volume_avg": 100, "body": 0.06, "body_avg": 0.08},
+                {"open": 101.44, "close": 101.40, "high": 101.46, "low": 101.38, "ema20": 101.43, "ema50": 101.48, "macd": -0.05, "macd_signal": -0.03, "volume": 108, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
+                {"open": 101.40, "close": 101.36, "high": 101.42, "low": 101.34, "ema20": 101.40, "ema50": 101.46, "macd": -0.06, "macd_signal": -0.04, "volume": 106, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
+                {"open": 101.36, "close": 101.33, "high": 101.38, "low": 101.31, "ema20": 101.37, "ema50": 101.44, "macd": -0.07, "macd_signal": -0.05, "volume": 105, "volume_avg": 100, "body": 0.03, "body_avg": 0.08},
+                {"open": 101.33, "close": 101.31, "high": 101.35, "low": 101.29, "ema20": 101.35, "ema50": 101.42, "macd": -0.08, "macd_signal": -0.06, "volume": 104, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
+                {"open": 101.31, "close": 101.29, "high": 101.33, "low": 101.27, "ema20": 101.33, "ema50": 101.40, "macd": -0.09, "macd_signal": -0.07, "volume": 103, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
+                {"open": 101.29, "close": 101.27, "high": 101.31, "low": 101.25, "ema20": 101.31, "ema50": 101.38, "macd": -0.10, "macd_signal": -0.08, "volume": 102, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
+                {"open": 101.27, "close": 101.22, "high": 101.28, "low": 101.20, "ema20": 101.29, "ema50": 101.36, "rsi": 44.0, "macd": -0.11, "macd_signal": -0.09, "atr": 0.11, "volume": 83, "volume_avg": 100, "body": 0.05, "body_avg": 0.08},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
+
+        signal, reason = evaluate_trend_rollover(df, self.config, instrument, "SHORT")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("объём слишком слабый", reason)
+
     def test_ngj6_blocks_late_momentum_long_chase(self) -> None:
         df = candle_rows(
             [
