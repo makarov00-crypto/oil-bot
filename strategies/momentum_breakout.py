@@ -1,3 +1,6 @@
+from instrument_groups import is_brent_symbol
+
+
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -40,7 +43,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     ngj6_volume_reversal_short = False
     ngj6_pullback_reclaim_long = False
 
-    if instrument.symbol == "BRK6":
+    if is_brent_symbol(instrument.symbol):
         volume_ok = volume_avg > 0 and volume >= volume_avg * 0.75
         impulse_ok = body_avg > 0 and body >= body_avg * 0.60
         rsi_long_ok = 44.0 <= rsi <= 78.0
@@ -119,9 +122,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     soft_breakout_quality_up = True
     soft_breakout_quality_down = True
-    if instrument.symbol == "BRK6" or instrument.symbol in NATURAL_GAS_SYMBOLS:
-        soft_volume_factor = 1.05 if instrument.symbol == "BRK6" else 1.15
-        soft_impulse_factor = 0.85 if instrument.symbol == "BRK6" else 1.05
+    if is_brent_symbol(instrument.symbol) or instrument.symbol in NATURAL_GAS_SYMBOLS:
+        soft_volume_factor = 1.05 if is_brent_symbol(instrument.symbol) else 1.15
+        soft_impulse_factor = 0.85 if is_brent_symbol(instrument.symbol) else 1.05
         soft_breakout_quality_up = (
             breakout_up
             or (
@@ -262,7 +265,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and short_score >= 7
         )
 
-    if instrument.symbol == "BRK6":
+    if is_brent_symbol(instrument.symbol):
         long_ok = (
             higher_tf_long_ok
             and close_above_trend

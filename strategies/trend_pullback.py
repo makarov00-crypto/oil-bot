@@ -1,4 +1,4 @@
-from instrument_groups import get_instrument_group, uses_pullback_trend_regime
+from instrument_groups import get_instrument_group, is_brent_symbol, uses_pullback_trend_regime
 from strategies.base import StrategyProfile
 
 
@@ -38,7 +38,7 @@ def get_strategy_profile(config, instrument) -> StrategyProfile:
             allow_short=True,
         )
 
-    if symbol == "BRK6":
+    if is_brent_symbol(symbol):
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
             near_ema20_pct=0.0085,

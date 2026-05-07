@@ -8,11 +8,13 @@ import pandas as pd
 import bot_oil_main as mod
 from bot_oil_main import BotConfig, InstrumentConfig
 from instrument_groups import DEFAULT_SYMBOLS
+from news_rules import NEWS_RULES
 from strategy_registry import get_primary_strategies
 from strategies.breakdown_continuation import evaluate_signal as evaluate_range_break
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range
+from strategies.trend_pullback import get_strategy_profile
 
 
 def make_config() -> BotConfig:
@@ -653,6 +655,41 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "NGK6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "RBM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 5)
+
+    def test_bmm6_inherits_brent_news_rule(self) -> None:
+        brk6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BRK6")
+        bmm6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BMM6")
+
+        self.assertEqual(bmm6_rule.keywords, brk6_rule.keywords)
+        self.assertEqual(bmm6_rule.long_terms, brk6_rule.long_terms)
+        self.assertEqual(bmm6_rule.short_terms, brk6_rule.short_terms)
+
+    def test_bmm6_momentum_breakout_uses_brent_specific_short_filters(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 102.40, "close": 102.32, "high": 102.42, "low": 102.28, "ema20": 102.36, "ema50": 102.40, "macd": -0.10, "macd_signal": -0.06, "volume": 115, "volume_avg": 100, "body": 0.08, "body_avg": 0.10},
+                {"open": 102.32, "close": 102.20, "high": 102.34, "low": 102.18, "ema20": 102.30, "ema50": 102.36, "macd": -0.14, "macd_signal": -0.08, "volume": 118, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
+                {"open": 102.20, "close": 102.08, "high": 102.22, "low": 102.05, "ema20": 102.22, "ema50": 102.31, "macd": -0.18, "macd_signal": -0.10, "volume": 120, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
+                {"open": 102.08, "close": 101.96, "high": 102.10, "low": 101.94, "ema20": 102.14, "ema50": 102.25, "macd": -0.23, "macd_signal": -0.13, "volume": 122, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
+                {"open": 101.96, "close": 101.84, "high": 101.98, "low": 101.82, "ema20": 102.06, "ema50": 102.18, "macd": -0.28, "macd_signal": -0.17, "volume": 124, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
+                {"open": 101.84, "close": 101.72, "high": 101.86, "low": 101.70, "ema20": 101.98, "ema50": 102.10, "macd": -0.33, "macd_signal": -0.22, "volume": 126, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
+                {"open": 101.72, "close": 101.62, "high": 101.74, "low": 101.60, "ema20": 101.88, "ema50": 102.02, "macd": -0.38, "macd_signal": -0.28, "volume": 128, "volume_avg": 100, "body": 0.10, "body_avg": 0.10},
+                {"open": 101.62, "close": 101.58, "high": 101.64, "low": 101.56, "ema20": 101.78, "ema50": 101.94, "rsi": 42.0, "macd": -0.43, "macd_signal": -0.34, "atr": 0.09, "volume": 102, "volume_avg": 100, "body": 0.04, "body_avg": 0.10, "bb_mid": 101.78},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
+
+        signal, reason = evaluate_momentum_breakout(df, self.config, instrument, "SHORT")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("импульс свечи слишком слабый", reason)
+
+    def test_bmm6_uses_brent_pullback_profile(self) -> None:
+        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
+        profile = get_strategy_profile(self.config, instrument)
+
+        self.assertEqual(profile.volume_factor, 0.82)
+        self.assertEqual(profile.long_rsi_max, 66.0)
 
     def test_ngj6_blocks_late_momentum_long_chase(self) -> None:
         df = candle_rows(
