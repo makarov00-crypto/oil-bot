@@ -14,6 +14,7 @@ from strategies.breakdown_continuation import evaluate_signal as evaluate_range_
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range
+from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
 from strategies.trend_pullback import get_strategy_profile
 from strategies.trend_rollover import evaluate_signal as evaluate_trend_rollover
 
@@ -87,6 +88,8 @@ def candle_rows(rows: list[dict]) -> pd.DataFrame:
             "volume_avg": row.get("volume_avg", 100.0),
             "body": row.get("body", abs(row.get("close", 0.0) - row.get("open", row.get("close", 0.0)))),
             "body_avg": row.get("body_avg", 0.1),
+            "stoch_k": row.get("stoch_k", 50.0),
+            "stoch_d": row.get("stoch_d", 50.0),
         }
         result.append(item)
     return pd.DataFrame(result)
@@ -302,17 +305,17 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def test_fx_prefers_momentum_breakout_before_older_breakout_filters(self) -> None:
         self.assertEqual(
             get_primary_strategies("CNYRUBF")[:4],
-            ["momentum_breakout", "opening_range_breakout", "range_break_continuation", "trend_pullback"],
+            ["reversal_15m"],
         )
         self.assertEqual(
             get_primary_strategies("USDRUBF")[:4],
-            ["momentum_breakout", "opening_range_breakout", "range_break_continuation", "trend_pullback"],
+            ["reversal_15m"],
         )
 
     def test_active_brent_contract_uses_same_strategy_stack(self) -> None:
         self.assertEqual(
             get_primary_strategies("BMM6")[:3],
-            ["momentum_breakout", "trend_rollover", "trend_pullback"],
+            ["reversal_15m"],
         )
         self.assertIn("BMM6", DEFAULT_SYMBOLS.split(","))
 
@@ -386,7 +389,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertIn("MACD только что пересёкся вверх", reason)
 
     def test_ucm6_prefers_pullback_before_breakout_chase(self) -> None:
-        self.assertEqual(get_primary_strategies("UCM6")[:2], ["trend_pullback", "range_break_continuation"])
+        self.assertEqual(get_primary_strategies("UCM6")[:1], ["reversal_15m"])
 
     def test_ucm6_allows_higher_tf_long_pullback_reclaim(self) -> None:
         from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
@@ -472,7 +475,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertIn("ложный пробой вниз", reason)
 
     def test_brk6_uses_rollover_strategy_for_intraday_reversal(self) -> None:
-        self.assertIn("trend_rollover", get_primary_strategies("BRK6"))
+        self.assertEqual(get_primary_strategies("BRK6")[:1], ["reversal_15m"])
 
     def test_gnm6_prefers_pullback_before_breakout_and_rollover(self) -> None:
         self.assertEqual(get_primary_strategies("GNM6")[:3], ["trend_pullback", "momentum_breakout", "trend_rollover"])
@@ -650,13 +653,56 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertIn("старший ТФ не LONG, а SHORT", reason)
 
     def test_ngj6_prefers_pullback_before_momentum_breakout(self) -> None:
-        self.assertEqual(get_primary_strategies("NGJ6")[:2], ["trend_pullback", "momentum_breakout"])
+        self.assertEqual(get_primary_strategies("NGJ6")[:1], ["reversal_15m"])
 
     def test_ngk6_uses_15m_working_interval_for_signal_processing(self) -> None:
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "NGK6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "RBM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BMM6"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "USDRUBF"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "CNYRUBF"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "UCM6"), 15)
+
+    def test_reversal_15m_allows_fx_long_on_fresh_cross_with_volume_and_stochastic(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 10.920, "close": 10.918, "high": 10.922, "low": 10.916, "ema20": 10.925, "ema50": 10.930, "rsi": 42.0, "macd": -0.015, "macd_signal": -0.010, "volume": 90, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 28.0, "stoch_d": 32.0, "atr": 0.006, "bb_upper": 10.935, "bb_lower": 10.905},
+                {"open": 10.918, "close": 10.919, "high": 10.921, "low": 10.917, "ema20": 10.923, "ema50": 10.929, "rsi": 43.0, "macd": -0.013, "macd_signal": -0.010, "volume": 94, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 32.0, "stoch_d": 31.0, "atr": 0.006, "bb_upper": 10.934, "bb_lower": 10.906},
+                {"open": 10.919, "close": 10.922, "high": 10.924, "low": 10.918, "ema20": 10.922, "ema50": 10.928, "rsi": 45.0, "macd": -0.011, "macd_signal": -0.009, "volume": 98, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 38.0, "stoch_d": 34.0, "atr": 0.006, "bb_upper": 10.933, "bb_lower": 10.907},
+                {"open": 10.922, "close": 10.925, "high": 10.927, "low": 10.921, "ema20": 10.922, "ema50": 10.927, "rsi": 47.0, "macd": -0.009, "macd_signal": -0.008, "volume": 102, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 44.0, "stoch_d": 38.0, "atr": 0.006, "bb_upper": 10.933, "bb_lower": 10.908},
+                {"open": 10.925, "close": 10.929, "high": 10.932, "low": 10.924, "ema20": 10.923, "ema50": 10.926, "rsi": 49.0, "macd": -0.0070, "macd_signal": -0.0068, "volume": 106, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 50.0, "stoch_d": 42.0, "atr": 0.007, "bb_upper": 10.934, "bb_lower": 10.909},
+                {"open": 10.929, "close": 10.934, "high": 10.937, "low": 10.928, "ema20": 10.925, "ema50": 10.926, "rsi": 52.0, "macd": -0.0062, "macd_signal": -0.0060, "volume": 110, "volume_avg": 100, "body": 0.005, "body_avg": 0.004, "stoch_k": 58.0, "stoch_d": 48.0, "atr": 0.007, "bb_upper": 10.936, "bb_lower": 10.910},
+                {"open": 10.934, "close": 10.941, "high": 10.944, "low": 10.933, "ema20": 10.928, "ema50": 10.927, "rsi": 55.0, "macd": -0.0030, "macd_signal": -0.0045, "volume": 118, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 66.0, "stoch_d": 56.0, "atr": 0.007, "bb_upper": 10.940, "bb_lower": 10.912},
+                {"open": 10.941, "close": 10.950, "high": 10.954, "low": 10.940, "ema20": 10.932, "ema50": 10.928, "rsi": 58.0, "macd": 0.0028, "macd_signal": -0.0015, "volume": 138, "volume_avg": 100, "body": 0.009, "body_avg": 0.004, "stoch_k": 74.0, "stoch_d": 61.0, "atr": 0.008, "bb_upper": 10.946, "bb_lower": 10.914},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("MACD cross вверх: да", reason)
+
+    def test_reversal_15m_blocks_fx_in_chop(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 10.950, "close": 10.952, "high": 10.954, "low": 10.948, "ema20": 10.950, "ema50": 10.949, "rsi": 51.0, "macd": 0.002, "macd_signal": 0.001, "volume": 96, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 54.0, "stoch_d": 52.0, "atr": 0.004, "bb_upper": 10.958, "bb_lower": 10.942},
+                {"open": 10.952, "close": 10.949, "high": 10.953, "low": 10.947, "ema20": 10.950, "ema50": 10.949, "rsi": 49.0, "macd": -0.001, "macd_signal": 0.000, "volume": 95, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 46.0, "stoch_d": 50.0, "atr": 0.004, "bb_upper": 10.957, "bb_lower": 10.943},
+                {"open": 10.949, "close": 10.953, "high": 10.955, "low": 10.948, "ema20": 10.950, "ema50": 10.949, "rsi": 50.0, "macd": 0.002, "macd_signal": 0.001, "volume": 94, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 55.0, "stoch_d": 49.0, "atr": 0.004, "bb_upper": 10.957, "bb_lower": 10.943},
+                {"open": 10.953, "close": 10.950, "high": 10.954, "low": 10.948, "ema20": 10.950, "ema50": 10.949, "rsi": 48.0, "macd": -0.001, "macd_signal": 0.000, "volume": 93, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 45.0, "stoch_d": 49.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
+                {"open": 10.950, "close": 10.954, "high": 10.956, "low": 10.949, "ema20": 10.950, "ema50": 10.949, "rsi": 51.0, "macd": 0.002, "macd_signal": 0.001, "volume": 92, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 56.0, "stoch_d": 48.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
+                {"open": 10.954, "close": 10.951, "high": 10.955, "low": 10.949, "ema20": 10.951, "ema50": 10.949, "rsi": 49.0, "macd": -0.001, "macd_signal": 0.000, "volume": 91, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 44.0, "stoch_d": 48.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
+                {"open": 10.951, "close": 10.955, "high": 10.957, "low": 10.950, "ema20": 10.951, "ema50": 10.949, "rsi": 50.0, "macd": 0.002, "macd_signal": 0.001, "volume": 90, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 55.0, "stoch_d": 47.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
+                {"open": 10.955, "close": 10.952, "high": 10.956, "low": 10.950, "ema20": 10.951, "ema50": 10.949, "rsi": 48.0, "macd": -0.001, "macd_signal": 0.000, "volume": 89, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 43.0, "stoch_d": 47.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("режим compression", reason)
 
     def test_bmm6_inherits_brent_news_rule(self) -> None:
         brk6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BRK6")

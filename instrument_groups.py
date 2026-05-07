@@ -17,6 +17,7 @@ BOND_INDEX = InstrumentGroup(name="bond_index", description="Government bond ind
 
 
 BRENT_SYMBOLS = {"BRK6", "BMM6"}
+UNIFIED_REVERSAL_15M_SYMBOLS = {"BRK6", "BMM6", "NGJ6", "NGK6", "USDRUBF", "CNYRUBF", "UCM6"}
 
 GROUP_BY_SYMBOL = {
     "BRK6": COMMODITIES,
@@ -65,6 +66,10 @@ def is_currency_instrument(symbol: str) -> bool:
 
 def is_brent_symbol(symbol: str) -> bool:
     return str(symbol or "").strip().upper() in BRENT_SYMBOLS
+
+
+def uses_unified_reversal_15m(symbol: str) -> bool:
+    return str(symbol or "").strip().upper() in UNIFIED_REVERSAL_15M_SYMBOLS
 
 
 def uses_pullback_trend_regime(symbol: str) -> bool:

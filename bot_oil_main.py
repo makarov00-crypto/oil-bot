@@ -22,6 +22,7 @@ from instrument_groups import (
     get_instrument_group,
     is_brent_symbol,
     is_currency_instrument as is_currency_symbol,
+    uses_unified_reversal_15m,
 )
 from news_bias import NewsBias, select_active_biases
 from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
@@ -67,6 +68,7 @@ INTRADAY_CHOP_GUARD_STRATEGIES = {
     "range_break_continuation",
     "breakdown_continuation",
     "momentum_breakout",
+    "reversal_15m",
     "trend_pullback",
     "trend_rollover",
 }
@@ -2712,13 +2714,13 @@ def get_candles(
 
 
 def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
-    if symbol in NATURAL_GAS_SYMBOLS or symbol == "RBM6":
+    if uses_unified_reversal_15m(symbol) or symbol == "RBM6":
         return config.higher_tf_interval
     return config.candle_interval
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
-    if symbol in NATURAL_GAS_SYMBOLS or symbol == "RBM6" or is_brent_symbol(symbol):
+    if uses_unified_reversal_15m(symbol) or symbol == "RBM6":
         return config.higher_tf_interval_minutes
     return config.candle_interval_minutes
 
@@ -2768,6 +2770,9 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     macd = ta.trend.MACD(result["close"], window_slow=26, window_fast=12, window_sign=9)
     result["macd"] = macd.macd()
     result["macd_signal"] = macd.macd_signal()
+    stoch = ta.momentum.StochasticOscillator(result["high"], result["low"], result["close"], window=14, smooth_window=3)
+    result["stoch_k"] = stoch.stoch()
+    result["stoch_d"] = stoch.stoch_signal()
     bb = ta.volatility.BollingerBands(result["close"], window=20, window_dev=2)
     result["bb_upper"] = bb.bollinger_hband()
     result["bb_lower"] = bb.bollinger_lband()
@@ -3175,6 +3180,9 @@ def regime_entry_block_reason(
     )
 
     if fx_fresh_impulse_override and market_regime in {"trend_pullback", "mixed"}:
+        return ""
+
+    if strategy == "reversal_15m":
         return ""
 
     if market_regime == "compression":
@@ -4440,7 +4448,7 @@ def recovery_mode_block_reason(
     if not status["active"] or signal not in {"LONG", "SHORT"}:
         return ""
 
-    allowed_strategies = {"trend_pullback", "failed_breakout", "trend_rollover"}
+    allowed_strategies = {"trend_pullback", "failed_breakout", "trend_rollover", "reversal_15m"}
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     regime = str(state.last_market_regime or "").strip().lower()
     higher_tf_bias = str(state.last_higher_tf_bias or "").strip().upper()
@@ -4451,7 +4459,7 @@ def recovery_mode_block_reason(
         return f"{status['reason']} Нужен только strong setup."
     if regime not in {"trend_pullback", "trend_expansion", "impulse"}:
         return f"{status['reason']} Текущий режим {regime or '-'} слишком слабый для recovery mode."
-    if higher_tf_bias != signal:
+    if strategy_name != "reversal_15m" and higher_tf_bias != signal:
         return f"{status['reason']} Нужен вход только по направлению старшего ТФ."
     return ""
 
@@ -4753,6 +4761,8 @@ def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_n
         weight += 0.10
     elif strategy_name == "range_break_continuation":
         weight += 0.05
+    elif strategy_name == "reversal_15m":
+        weight += 0.12
     return min(weight, 1.65)
 
 
@@ -5683,6 +5693,12 @@ def get_exit_profile(config: BotConfig, strategy_name: str) -> ExitProfile:
             breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0090),
             trailing_stop_pct=max(config.trailing_stop_pct, 0.0070),
         )
+    if strategy == "reversal_15m":
+        return ExitProfile(
+            min_hold_minutes=max(config.min_hold_minutes, 20),
+            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0075),
+            trailing_stop_pct=max(config.trailing_stop_pct, 0.0060),
+        )
     if strategy == "trend_rollover":
         return ExitProfile(
             min_hold_minutes=max(config.min_hold_minutes, 35),
@@ -5980,7 +5996,7 @@ def position_reentry_allowed(
         edge_score = float(state.last_entry_edge_score or 0.0)
         volume_ratio = float(state.last_volume_ratio or 0.0)
         strategy_name = str(state.last_strategy_name or "").strip().lower()
-        if strategy_name not in {"momentum_breakout", "opening_range_breakout", "range_break_continuation"}:
+        if strategy_name not in {"momentum_breakout", "opening_range_breakout", "range_break_continuation", "reversal_15m"}:
             return False
         if regime in {"compression", "chop"}:
             return False

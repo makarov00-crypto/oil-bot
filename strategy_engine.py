@@ -4,6 +4,7 @@ from strategies.compression_breakout import evaluate_signal as evaluate_compress
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range_breakout
+from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
 from strategies.trend_rollover import evaluate_signal as evaluate_trend_rollover
 from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
 
@@ -12,6 +13,7 @@ PRIMARY_EVALUATORS = {
     "trend_pullback": evaluate_trend_pullback,
     "compression_breakout": evaluate_compression_breakout,
     "opening_range_breakout": evaluate_opening_range_breakout,
+    "reversal_15m": evaluate_reversal_15m,
     "range_break_continuation": evaluate_breakdown_continuation,
     "breakdown_continuation": evaluate_breakdown_continuation,
     "failed_breakout": evaluate_failed_breakout,
