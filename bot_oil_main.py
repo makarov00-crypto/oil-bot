@@ -2718,7 +2718,7 @@ def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
-    if symbol in NATURAL_GAS_SYMBOLS or symbol == "RBM6":
+    if symbol in NATURAL_GAS_SYMBOLS or symbol == "RBM6" or is_brent_symbol(symbol):
         return config.higher_tf_interval_minutes
     return config.candle_interval_minutes
 
@@ -5720,11 +5720,18 @@ def get_adaptive_exit_profile(
         recovery_active = bool(get_recovery_mode_status(instrument.symbol, state.entry_strategy)["active"])
 
     if regime in {"compression", "chop"} or setup_label == "weak" or recovery_active or (0.0 < regime_confidence < 0.48):
-        profile = ExitProfile(
-            min_hold_minutes=min(profile.min_hold_minutes, 20),
-            breakeven_profit_pct=min(profile.breakeven_profit_pct, 0.0045),
-            trailing_stop_pct=min(profile.trailing_stop_pct, 0.0040),
-        )
+        if is_brent_symbol(instrument.symbol):
+            profile = ExitProfile(
+                min_hold_minutes=min(profile.min_hold_minutes, 25),
+                breakeven_profit_pct=min(profile.breakeven_profit_pct, 0.0055),
+                trailing_stop_pct=min(profile.trailing_stop_pct, 0.0050),
+            )
+        else:
+            profile = ExitProfile(
+                min_hold_minutes=min(profile.min_hold_minutes, 20),
+                breakeven_profit_pct=min(profile.breakeven_profit_pct, 0.0045),
+                trailing_stop_pct=min(profile.trailing_stop_pct, 0.0040),
+            )
         if regime in {"compression", "chop"}:
             reasons.append(f"режим {regime}")
         if setup_label == "weak":
@@ -5795,7 +5802,11 @@ def select_exit_indicator_df(
 ) -> pd.DataFrame:
     higher_tf_exit_symbols = {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS}
     if (
-        (instrument.symbol in higher_tf_exit_symbols or get_instrument_group(instrument.symbol).name == "fx")
+        (
+            instrument.symbol in higher_tf_exit_symbols
+            or get_instrument_group(instrument.symbol).name == "fx"
+            or is_brent_symbol(instrument.symbol)
+        )
         and higher_tf_df is not None
         and len(higher_tf_df) >= 3
     ):
@@ -6095,6 +6106,9 @@ def position_reentry_allowed(
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
         if brk6_fresh_impulse_override():
             return True, ""
+        if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
+                return False, f"для {instrument.symbol} повторный вход после прибыльного выхода разрешён только после нового экстремума."
         if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после обновления экстремума."
@@ -6117,6 +6131,9 @@ def position_reentry_allowed(
         if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
+        if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
+                return False, f"для {instrument.symbol} повторный вход после прибыльного выхода разрешён только после нового экстремума."
         if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после обновления экстремума."

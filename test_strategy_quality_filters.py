@@ -15,6 +15,7 @@ from strategies.failed_breakout import evaluate_signal as evaluate_failed_breako
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range
 from strategies.trend_pullback import get_strategy_profile
+from strategies.trend_rollover import evaluate_signal as evaluate_trend_rollover
 
 
 def make_config() -> BotConfig:
@@ -654,7 +655,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def test_ngk6_uses_15m_working_interval_for_signal_processing(self) -> None:
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "NGK6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "RBM6"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 5)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BMM6"), 15)
 
     def test_bmm6_inherits_brent_news_rule(self) -> None:
         brk6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BRK6")
@@ -690,6 +692,26 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(profile.volume_factor, 0.82)
         self.assertEqual(profile.long_rsi_max, 66.0)
+
+    def test_bmm6_trend_rollover_blocks_soft_short_without_macd_volume_and_impulse(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 101.50, "close": 101.44, "high": 101.52, "low": 101.42, "ema20": 101.46, "ema50": 101.50, "macd": -0.06, "macd_signal": -0.04, "volume": 108, "volume_avg": 100, "body": 0.06, "body_avg": 0.08},
+                {"open": 101.44, "close": 101.40, "high": 101.46, "low": 101.38, "ema20": 101.43, "ema50": 101.48, "macd": -0.07, "macd_signal": -0.05, "volume": 106, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
+                {"open": 101.40, "close": 101.36, "high": 101.42, "low": 101.34, "ema20": 101.40, "ema50": 101.46, "macd": -0.075, "macd_signal": -0.06, "volume": 104, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
+                {"open": 101.36, "close": 101.33, "high": 101.38, "low": 101.31, "ema20": 101.37, "ema50": 101.44, "macd": -0.074, "macd_signal": -0.065, "volume": 103, "volume_avg": 100, "body": 0.03, "body_avg": 0.08},
+                {"open": 101.33, "close": 101.31, "high": 101.35, "low": 101.29, "ema20": 101.35, "ema50": 101.42, "macd": -0.073, "macd_signal": -0.068, "volume": 102, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
+                {"open": 101.31, "close": 101.29, "high": 101.33, "low": 101.27, "ema20": 101.33, "ema50": 101.40, "macd": -0.072, "macd_signal": -0.069, "volume": 101, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
+                {"open": 101.29, "close": 101.27, "high": 101.31, "low": 101.25, "ema20": 101.31, "ema50": 101.38, "macd": -0.071, "macd_signal": -0.070, "volume": 100, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
+                {"open": 101.27, "close": 101.26, "high": 101.29, "low": 101.24, "ema20": 101.29, "ema50": 101.36, "rsi": 44.0, "macd": -0.0705, "macd_signal": -0.0702, "atr": 0.11, "volume": 99, "volume_avg": 100, "body": 0.01, "body_avg": 0.08},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
+
+        signal, reason = evaluate_trend_rollover(df, self.config, instrument, "SHORT")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("MACD не подтверждает снижение", reason)
 
     def test_ngj6_blocks_late_momentum_long_chase(self) -> None:
         df = candle_rows(
@@ -822,7 +844,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertIs(mod.select_exit_indicator_df(rbm6, lower_df, higher_df), higher_df)
         self.assertIs(mod.select_exit_indicator_df(imoexf, lower_df, higher_df), higher_df)
         self.assertIs(mod.select_exit_indicator_df(usdrubf, lower_df, higher_df), higher_df)
-        self.assertIs(mod.select_exit_indicator_df(brk6, lower_df, higher_df), lower_df)
+        self.assertIs(mod.select_exit_indicator_df(brk6, lower_df, higher_df), higher_df)
         self.assertTrue(mod.macd_crossed_down_with_ema_loss(higher_df))
 
     def test_imoexf_short_exit_detects_higher_tf_macd_reclaim(self) -> None:

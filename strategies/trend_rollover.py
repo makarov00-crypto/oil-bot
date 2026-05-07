@@ -1,3 +1,6 @@
+from instrument_groups import is_brent_symbol
+
+
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -49,6 +52,18 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         volatility_ok = atr_pct >= 0.0011
         higher_tf_short_ok = higher_tf_bias == "SHORT"
         higher_tf_long_ok = higher_tf_bias == "LONG"
+
+    if is_brent_symbol(instrument.symbol):
+        soft_breakdown_down = close_below_trend and close <= recent_low * 1.0010
+        volume_ok = volume_avg > 0 and volume >= volume_avg * 0.85
+        impulse_ok = body_avg > 0 and body >= body_avg * 0.75
+        rsi_short_ok = 30.0 <= rsi <= 56.0
+        rsi_long_ok = 44.0 <= rsi <= 68.0
+        volatility_ok = atr_pct >= 0.0010
+        higher_tf_short_ok = higher_tf_bias == "SHORT"
+        higher_tf_long_ok = higher_tf_bias == "LONG"
+        macd_down = macd < macd_signal and macd <= prev_macd
+        macd_up = macd > macd_signal and macd >= prev_macd
 
     short_reasons = [
         f"старший ТФ={higher_tf_bias}",
@@ -168,6 +183,44 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and volatility_ok
             and (breakout_up or (rollover_long and close >= recent_high * 0.9995))
             and long_score >= 8
+        )
+
+    if is_brent_symbol(instrument.symbol):
+        soft_short_structure = soft_breakdown_down or rollover_short
+        soft_long_structure = rollover_long and close >= recent_high * 0.9995
+        short_ok = (
+            higher_tf_short_ok
+            and close_below_trend
+            and (
+                breakdown_down
+                or (
+                    soft_short_structure
+                    and macd_down
+                    and volume_ok
+                    and impulse_ok
+                )
+            )
+            and rsi_short_ok
+            and volatility_ok
+            and macd_down
+            and short_score >= 7
+        )
+        long_ok = (
+            higher_tf_long_ok
+            and close_above_trend
+            and (
+                breakout_up
+                or (
+                    soft_long_structure
+                    and macd_up
+                    and volume_ok
+                    and impulse_ok
+                )
+            )
+            and rsi_long_ok
+            and volatility_ok
+            and macd_up
+            and long_score >= 7
         )
 
     if short_ok:

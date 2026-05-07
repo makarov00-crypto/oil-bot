@@ -51,8 +51,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         volatility_ok = atr_pct >= 0.0008
         higher_tf_long_ok = higher_tf_bias == "LONG"
         higher_tf_short_ok = higher_tf_bias == "SHORT"
-        soft_breakout_up = close > ema20 and close > ema50 and close >= range_high * 0.997
-        soft_breakout_down = close < ema20 and close < ema50 and close <= range_low * 1.003
+        soft_breakout_up = close > ema20 and close > ema50 and close >= range_high * 0.9985
+        soft_breakout_down = close < ema20 and close < ema50 and close <= range_low * 1.0015
         macd_up = macd > macd_signal and (macd >= prev_macd or (macd - macd_signal) >= 0.05)
         macd_down = macd < macd_signal and (macd <= prev_macd or (macd_signal - macd) >= 0.05)
 
@@ -276,7 +276,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and volume_ok
             and impulse_ok
             and volatility_ok
-            and long_score >= 5
+            and long_score >= 6
         )
         short_ok = (
             higher_tf_short_ok
@@ -288,7 +288,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and volume_ok
             and impulse_ok
             and volatility_ok
-            and short_score >= 5
+            and short_score >= 6
         )
 
     if instrument.symbol in NATURAL_GAS_SYMBOLS:
