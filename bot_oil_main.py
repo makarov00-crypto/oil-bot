@@ -2712,13 +2712,13 @@ def get_candles(
 
 
 def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
-    if symbol in NATURAL_GAS_SYMBOLS:
+    if symbol in NATURAL_GAS_SYMBOLS or symbol == "RBM6":
         return config.higher_tf_interval
     return config.candle_interval
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
-    if symbol in NATURAL_GAS_SYMBOLS:
+    if symbol in NATURAL_GAS_SYMBOLS or symbol == "RBM6":
         return config.higher_tf_interval_minutes
     return config.candle_interval_minutes
 

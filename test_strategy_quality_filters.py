@@ -651,6 +651,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_ngk6_uses_15m_working_interval_for_signal_processing(self) -> None:
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "NGK6"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "RBM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 5)
 
     def test_ngj6_blocks_late_momentum_long_chase(self) -> None:
