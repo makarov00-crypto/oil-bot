@@ -2740,6 +2740,15 @@ def get_lower_tf_lookback_hours(
         # Currency futures can start the week with a shorter effective trading history
         # inside the same wall-clock window, so we keep a longer bootstrap window.
         lookback_hours = max(lookback_hours, 120)
+    if symbol and uses_unified_reversal_15m(symbol):
+        # The unified 15m reversal engine relies on EMA200 and other rolling metrics,
+        # so the default commodity bootstrap window can be too short after holidays
+        # or contract rollovers even when the API returns candles correctly.
+        lookback_hours = max(lookback_hours, 120)
+    if symbol and symbol in NATURAL_GAS_SYMBOLS:
+        # Natural gas sessions are more prone to sparse recent history around
+        # rollovers and holiday windows, so keep an extra cushion.
+        lookback_hours = max(lookback_hours, 168)
     if get_market_session() == "WEEKEND":
         return max(lookback_hours, 72)
     return lookback_hours

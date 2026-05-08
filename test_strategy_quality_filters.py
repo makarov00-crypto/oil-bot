@@ -670,6 +670,20 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "UCM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "VBM6"), 15)
 
+    def test_unified_reversal_symbols_use_longer_bootstrap_lookback(self) -> None:
+        self.assertGreaterEqual(
+            mod.get_lower_tf_lookback_hours(self.config, "BMM6", interval_minutes=15),
+            120,
+        )
+        self.assertGreaterEqual(
+            mod.get_lower_tf_lookback_hours(self.config, "USDRUBF", interval_minutes=15),
+            120,
+        )
+        self.assertGreaterEqual(
+            mod.get_lower_tf_lookback_hours(self.config, "NGK6", interval_minutes=15),
+            168,
+        )
+
     def test_reversal_15m_allows_fx_long_on_fresh_cross_with_volume_and_stochastic(self) -> None:
         df = candle_rows(
             [
