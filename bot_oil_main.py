@@ -3341,24 +3341,31 @@ def build_global_diagnostic_message(
     for instrument in watchlist:
         news_bias = news.get(instrument.symbol)
         try:
+            signal_interval = get_signal_interval_for_symbol(config, instrument.symbol)
+            signal_interval_minutes = get_signal_interval_minutes_for_symbol(config, instrument.symbol)
             lower_df = add_indicators(
                 get_candles(
                     client,
                     config,
                     instrument,
-                    config.candle_interval,
-                    lookback_hours=get_lower_tf_lookback_hours(config, instrument.symbol),
+                    signal_interval,
+                    lookback_hours=get_lower_tf_lookback_hours(
+                        config,
+                        instrument.symbol,
+                        interval_minutes=signal_interval_minutes,
+                    ),
                 ),
                 include_ema200=not uses_unified_reversal_15m(instrument.symbol),
             )
-            higher_tf_bias = get_higher_tf_bias(client, config, instrument)
+            higher_tf_bias = "" if uses_unified_reversal_15m(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
             signal, reason, strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
             signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
             summary = summarize_signal_reason(signal, reason)
+            higher_tf_label = "локальный 15м" if strategy_name == "reversal_15m" else higher_tf_bias
             lines.extend(
                 [
                     f"{signal_emoji(signal)} {instrument.symbol}: {signal}",
-                    f"• Стратегия: {strategy_name} | Старший ТФ: {higher_tf_bias}",
+                    f"• Стратегия: {strategy_name} | Старший ТФ: {higher_tf_label}",
                     f"• Влияние: {describe_news_bias_impact(signal, news_bias)}",
                     f"• Ключевое: {summary[0] if summary else 'нет явного вывода'}",
                     "",
@@ -5811,7 +5818,10 @@ def select_exit_indicator_df(
     instrument: InstrumentConfig,
     lower_df: pd.DataFrame,
     higher_tf_df: pd.DataFrame | None = None,
+    strategy_name: str = "",
 ) -> pd.DataFrame:
+    if str(strategy_name or "").strip().lower() == "reversal_15m":
+        return lower_df
     higher_tf_exit_symbols = {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS}
     if (
         (
@@ -6811,7 +6821,7 @@ def check_exit(
         state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or price, price)
     state.min_price = min(state.min_price or price, price)
-    exit_df = select_exit_indicator_df(instrument, df, higher_tf_df)
+    exit_df = select_exit_indicator_df(instrument, df, higher_tf_df, state.entry_strategy)
     last = exit_df.iloc[-1]
     profile = get_strategy_profile(config, instrument)
     exit_profile = get_exit_profile(config, state.entry_strategy)
@@ -6971,6 +6981,8 @@ def process_instrument(
     collect_entry_candidate_only: bool = False,
 ) -> dict[str, Any] | None:
     state = load_state(instrument.symbol)
+    if uses_unified_reversal_15m(instrument.symbol):
+        state.last_higher_tf_bias = ""
     reconcile_state_accounting(instrument.symbol, state)
     if not config.dry_run:
         reconcile_delayed_close_from_broker(client, config, instrument, state)
@@ -7031,13 +7043,19 @@ def process_instrument(
         raise
 
     higher_tf_df: pd.DataFrame | None = None
-    if instrument.symbol in {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS} or get_instrument_group(instrument.symbol).name == "fx":
+    if (
+        not uses_unified_reversal_15m(instrument.symbol)
+        and (
+            instrument.symbol in {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS}
+            or get_instrument_group(instrument.symbol).name == "fx"
+        )
+    ):
         try:
             higher_tf_df = get_configured_higher_tf_df(client, config, instrument)
         except RuntimeError as error:
             logging.info("symbol=%s status=waiting_for_higher_tf_exit_context reason=%s", instrument.symbol, error)
 
-    higher_tf_bias = get_higher_tf_bias(client, config, instrument)
+    higher_tf_bias = "" if uses_unified_reversal_15m(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
     context_higher_tf_bias = "" if primary_strategy_name == "reversal_15m" else higher_tf_bias
     display_higher_tf_bias = "локальный 15м" if primary_strategy_name == "reversal_15m" else higher_tf_bias

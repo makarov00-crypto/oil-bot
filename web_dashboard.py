@@ -4233,6 +4233,14 @@ def build_dashboard_html() -> str:
       return `<span class="badge ${css}">${escapeHtml(labelMap[raw] || raw)}</span>`;
     }
 
+    function higherTFBadge(state) {
+      const strategy = String(state.last_strategy_name || state.entry_strategy || '').trim().toLowerCase();
+      if (strategy === 'reversal_15m') {
+        return `<span class="badge hold">ЛОКАЛЬНЫЙ 15М</span>`;
+      }
+      return signalBadge(state.last_higher_tf_bias || '-');
+    }
+
     function displaySignal(value) {
       const raw = String(value || '-').toUpperCase();
       const labelMap = {
@@ -4805,7 +4813,7 @@ def build_dashboard_html() -> str:
           <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
           <td>${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</td>
-          <td>${signalBadge(state.last_higher_tf_bias || '-')}</td>
+          <td>${higherTFBadge(state)}</td>
           <td>${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</td>
           <td class="reason">${escapeHtml(state.last_news_impact || '-')}</td>
           <td class="reason">${escapeHtml(allocatorSummary)}</td>
@@ -4818,7 +4826,7 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Старший ТФ</span><div class="mobile-card-value">${signalBadge(state.last_higher_tf_bias || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Старший ТФ</span><div class="mobile-card-value">${higherTFBadge(state)}</div></div>
             <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</div></div>
             <div class="mobile-card-item"><span class="muted">Влияние новостей</span><div class="mobile-card-value">${escapeHtml(state.last_news_impact || '-')}</div></div>
           </div>

@@ -57,7 +57,7 @@ struct SignalsScreen: View {
                                     }
 
                                     HStack(spacing: 8) {
-                                        SignalPill(text: "Старший ТФ: \(displaySignal(state.higherTFBias))", raw: state.higherTFBias)
+                                        SignalPill(text: "Старший ТФ: \(displayHigherTF(for: state))", raw: higherTFRaw(for: state))
                                         SignalPill(text: displayBias(state.newsBias), raw: state.newsBias)
                                     }
 
@@ -135,6 +135,22 @@ struct SignalsScreen: View {
             return first
         }
         return state.lastError ?? "-"
+    }
+
+    private func displayHigherTF(for state: InstrumentSignalState) -> String {
+        let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if strategy == "reversal_15m" {
+            return "ЛОКАЛЬНЫЙ 15М"
+        }
+        return displaySignal(state.higherTFBias)
+    }
+
+    private func higherTFRaw(for state: InstrumentSignalState) -> String? {
+        let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if strategy == "reversal_15m" {
+            return "LOCAL_15M"
+        }
+        return state.higherTFBias
     }
 
     private var manualInstrumentCard: some View {

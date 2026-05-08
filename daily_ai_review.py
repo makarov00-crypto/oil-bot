@@ -399,6 +399,13 @@ def humanize_side_name(value: Any) -> str:
     return mapping.get(raw, raw or "-")
 
 
+def humanize_signal_timeframe(state: dict[str, Any]) -> str:
+    strategy_name = str(state.get("last_strategy_name") or state.get("entry_strategy") or "").strip().lower()
+    if strategy_name == "reversal_15m":
+        return "локальный 15м"
+    return humanize_side_name(state.get("last_higher_tf_bias", "-"))
+
+
 def summarize_closed_trades(trades: list[ClosedTrade]) -> dict[str, Any]:
     wins = sum(1 for trade in trades if trade.pnl_rub > 0)
     losses = sum(1 for trade in trades if trade.pnl_rub < 0)
@@ -795,7 +802,7 @@ def build_prompt(
     for symbol, state in sorted(states.items()):
         signal_lines.append(
             f"- {symbol}: сигнал={humanize_side_name(state.get('last_signal','-'))}, стратегия={humanize_strategy_name(state.get('last_strategy_name') or state.get('entry_strategy') or '-')}, "
-            f"старший ТФ={humanize_side_name(state.get('last_higher_tf_bias','-'))}, новости={state.get('last_news_bias','NEUTRAL')}, "
+            f"старший ТФ={humanize_signal_timeframe(state)}, новости={state.get('last_news_bias','NEUTRAL')}, "
             f"блокер={first_summary_line(state)}"
         )
     if not signal_lines:
