@@ -6981,8 +6981,10 @@ def process_instrument(
     collect_entry_candidate_only: bool = False,
 ) -> dict[str, Any] | None:
     state = load_state(instrument.symbol)
-    if uses_unified_reversal_15m(instrument.symbol):
+    higher_tf_cleared = False
+    if uses_unified_reversal_15m(instrument.symbol) and state.last_higher_tf_bias:
         state.last_higher_tf_bias = ""
+        higher_tf_cleared = True
     reconcile_state_accounting(instrument.symbol, state)
     if not config.dry_run:
         reconcile_delayed_close_from_broker(client, config, instrument, state)
@@ -7000,6 +7002,8 @@ def process_instrument(
             logging.info("symbol=%s status=session_closed", instrument.symbol)
         else:
             state.last_error = closed_message
+            if higher_tf_cleared:
+                save_state(instrument.symbol, state)
         return None
     if session_name == "WEEKEND" and is_currency_symbol(instrument.symbol):
         weekend_message = "Выходной день: валютный фьючерс не торгуется."
@@ -7013,8 +7017,12 @@ def process_instrument(
             logging.info("symbol=%s status=weekend_currency_closed", instrument.symbol)
         else:
             state.last_error = weekend_message
+            if higher_tf_cleared:
+                save_state(instrument.symbol, state)
         if state.position_side == "FLAT" and not has_pending_order(state):
             state.last_signal = "HOLD"
+            if higher_tf_cleared:
+                save_state(instrument.symbol, state)
             return None
 
     try:
