@@ -3038,10 +3038,11 @@ def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, 
     long_trend = close > ema20 and ema20 >= ema50
     short_trend = close < ema20 and ema20 <= ema50
     near_ema20 = abs(close - ema20) / close <= 0.0025 if close else False
+    has_higher_tf_bias = higher_tf_bias in {"LONG", "SHORT"}
     directional_match = (
         (higher_tf_bias == "LONG" and long_trend)
         or (higher_tf_bias == "SHORT" and short_trend)
-    )
+    ) if has_higher_tf_bias else (long_trend or short_trend)
     trend_strength = clamp_float((ema_spread_pct / 0.0032) + (distance_to_ema20_pct / 0.0035), 0.0, 1.0)
     participation_strength = clamp_float(((max(volume_ratio, 0.0) - 0.85) / 0.45), 0.0, 1.0)
     impulse_strength = clamp_float(((max(body_ratio, 0.0) - 0.75) / 0.55), 0.0, 1.0)
@@ -3104,11 +3105,17 @@ def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, 
     elif regime == "chop":
         reason_parts = ["низкая волатильность", "плоские средние", "нет направленного преимущества"]
     elif regime == "trend_pullback":
-        direction_text = "LONG" if higher_tf_bias == "LONG" else "SHORT"
-        reason_parts = [f"старший ТФ поддерживает {direction_text}", "есть тренд", "цена вернулась к EMA20"]
+        if has_higher_tf_bias:
+            direction_text = "LONG" if higher_tf_bias == "LONG" else "SHORT"
+            reason_parts = [f"старший ТФ поддерживает {direction_text}", "есть тренд", "цена вернулась к EMA20"]
+        else:
+            reason_parts = ["локальный тренд подтверждён", "есть тренд", "цена вернулась к EMA20"]
     elif regime == "trend_expansion":
-        direction_text = "LONG" if higher_tf_bias == "LONG" else "SHORT"
-        reason_parts = [f"старший ТФ поддерживает {direction_text}", "EMA20/EMA50 выстроены", "диапазон расширяется"]
+        if has_higher_tf_bias:
+            direction_text = "LONG" if higher_tf_bias == "LONG" else "SHORT"
+            reason_parts = [f"старший ТФ поддерживает {direction_text}", "EMA20/EMA50 выстроены", "диапазон расширяется"]
+        else:
+            reason_parts = ["локальный тренд подтверждён", "EMA20/EMA50 выстроены", "диапазон расширяется"]
     elif regime == "impulse":
         reason_parts = ["объём выше нормы", "тело свечи усилено", "волатильность расширилась"]
     else:
@@ -4030,6 +4037,8 @@ def get_daily_loss_recovery_entry_reason(
             "мягкий дневной стоп: нужен подтверждённый режим рынка, "
             "текущая уверенность режима слишком низкая."
         )
+    if str(state.last_strategy_name or "").strip().lower() == "reversal_15m":
+        return ""
     if str(state.last_higher_tf_bias or "").strip().upper() != signal:
         return "мягкий дневной стоп: вход разрешён только по направлению старшего ТФ."
     return ""
@@ -4047,38 +4056,7 @@ def build_profit_lock_exit_reason(
     state: InstrumentState,
     current_price: float,
 ) -> str:
-    if state.entry_price is None or state.position_qty <= 0 or state.position_side == "FLAT":
-        return ""
-    if state.position_side == "LONG":
-        best_price = max(float(state.max_price or current_price), current_price)
-    else:
-        best_price = min(float(state.min_price or current_price), current_price)
-    best_gross = calculate_futures_pnl_rub(
-        instrument,
-        state.entry_price,
-        best_price,
-        state.position_qty,
-        state.position_side,
-    )
-    current_gross = calculate_futures_pnl_rub(
-        instrument,
-        state.entry_price,
-        current_price,
-        state.position_qty,
-        state.position_side,
-    )
-    round_trip_commission = estimate_round_trip_commission_rub(state)
-    lock_trigger = max(round_trip_commission * 2.5, 50.0)
-    lock_floor = max(round_trip_commission * 0.75, 10.0)
-    if best_gross < lock_trigger:
-        return ""
-    if current_gross > lock_floor:
-        return ""
-    return (
-        "Profit-lock: позиция уже давала "
-        f"{best_gross:.2f} RUB gross, текущий результат {current_gross:.2f} RUB; "
-        f"защищаем движение после покрытия комиссии ~{round_trip_commission:.2f} RUB."
-    )
+    return ""
 
 
 def calculate_today_strategy_performance(symbol: str, strategy_name: str) -> dict[str, Any]:
@@ -4376,7 +4354,9 @@ def get_entry_edge_profile(
         edge -= 0.12
         reasons.append("режим неустойчив")
 
-    if str(state.last_higher_tf_bias or "").strip().upper() == signal:
+    if strategy_name == "reversal_15m":
+        reasons.append("локальный 15м")
+    elif str(state.last_higher_tf_bias or "").strip().upper() == signal:
         edge += 0.06
         reasons.append("по старшему ТФ")
     else:
@@ -4751,7 +4731,7 @@ def get_instrument_allocation_weight(symbol: str) -> tuple[str, float]:
 
 def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_name: str) -> float:
     weight = 1.0
-    if state.last_higher_tf_bias == signal:
+    if strategy_name != "reversal_15m" and state.last_higher_tf_bias == signal:
         weight += 0.15
     news_bias, news_strength = parse_bias_label(state.last_news_bias)
     if news_bias == signal:
@@ -7046,6 +7026,8 @@ def process_instrument(
 
     higher_tf_bias = get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
+    context_higher_tf_bias = "" if primary_strategy_name == "reversal_15m" else higher_tf_bias
+    display_higher_tf_bias = "локальный 15м" if primary_strategy_name == "reversal_15m" else higher_tf_bias
     news_bias = get_active_news_biases().get(instrument.symbol)
     signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
     signal_summary = summarize_signal_reason(signal, reason)
@@ -7108,7 +7090,7 @@ def process_instrument(
         current_price,
         reason,
         candle_time,
-        higher_tf_bias,
+        display_higher_tf_bias,
         lower_df,
         news_bias,
         compare_lines,
@@ -7117,13 +7099,13 @@ def process_instrument(
     state.last_error = ""
     state.last_signal = signal
     state.last_strategy_name = primary_strategy_name
-    state.last_higher_tf_bias = higher_tf_bias
+    state.last_higher_tf_bias = context_higher_tf_bias
     state.last_news_bias = format_news_bias_label(news_bias)
     state.last_news_impact = describe_news_bias_impact(signal, news_bias)
-    market_regime, regime_metrics = classify_market_regime(lower_df, higher_tf_bias)
+    market_regime, regime_metrics = classify_market_regime(lower_df, context_higher_tf_bias)
     setup_quality_score, setup_quality_label = estimate_setup_quality(
         signal,
-        higher_tf_bias,
+        context_higher_tf_bias,
         market_regime,
         regime_metrics,
         news_bias,

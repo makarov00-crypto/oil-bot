@@ -324,7 +324,7 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertEqual(reason, "")
 
-    def test_profit_lock_triggers_after_giving_back_commission_covered_move(self) -> None:
+    def test_profit_lock_is_disabled_even_after_giving_back_move(self) -> None:
         instrument = mod.InstrumentConfig(
             symbol="TEST",
             figi="FIGI",
@@ -342,10 +342,9 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         reason = mod.build_profit_lock_exit_reason(instrument, state, 108.0)
 
-        self.assertIn("Profit-lock", reason)
-        self.assertIn("позиция уже давала 80.00 RUB", reason)
+        self.assertEqual(reason, "")
 
-    def test_profit_lock_waits_until_move_covers_commission(self) -> None:
+    def test_profit_lock_stays_disabled_for_smaller_move(self) -> None:
         instrument = mod.InstrumentConfig(
             symbol="TEST",
             figi="FIGI",

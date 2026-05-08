@@ -710,6 +710,26 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "HOLD")
         self.assertIn("режим compression", reason)
 
+    def test_reversal_15m_allows_fx_short_on_early_breakdown_before_ema_alignment(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 10.986, "close": 10.984, "high": 10.988, "low": 10.982, "ema20": 10.975, "ema50": 10.971, "rsi": 59.0, "macd": 0.005, "macd_signal": 0.0035, "volume": 90, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 74.0, "stoch_d": 68.0, "atr": 0.007, "bb_upper": 10.991, "bb_lower": 10.967},
+                {"open": 10.984, "close": 10.983, "high": 10.986, "low": 10.981, "ema20": 10.976, "ema50": 10.972, "rsi": 58.0, "macd": 0.0045, "macd_signal": 0.0034, "volume": 91, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 73.0, "stoch_d": 67.0, "atr": 0.007, "bb_upper": 10.990, "bb_lower": 10.967},
+                {"open": 10.983, "close": 10.982, "high": 10.985, "low": 10.980, "ema20": 10.976, "ema50": 10.972, "rsi": 57.5, "macd": 0.0042, "macd_signal": 0.0033, "volume": 92, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 72.0, "stoch_d": 66.5, "atr": 0.007, "bb_upper": 10.990, "bb_lower": 10.966},
+                {"open": 10.982, "close": 10.980, "high": 10.984, "low": 10.978, "ema20": 10.976, "ema50": 10.972, "rsi": 57.0, "macd": 0.004, "macd_signal": 0.003, "volume": 92, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 71.0, "stoch_d": 66.0, "atr": 0.007, "bb_upper": 10.990, "bb_lower": 10.966},
+                {"open": 10.980, "close": 10.979, "high": 10.982, "low": 10.977, "ema20": 10.977, "ema50": 10.973, "rsi": 55.0, "macd": 0.003, "macd_signal": 0.0032, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 66.0, "stoch_d": 64.0, "atr": 0.007, "bb_upper": 10.989, "bb_lower": 10.968},
+                {"open": 10.979, "close": 10.972, "high": 10.980, "low": 10.970, "ema20": 10.976, "ema50": 10.974, "rsi": 48.0, "macd": 0.000, "macd_signal": 0.0026, "volume": 175, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 41.0, "stoch_d": 56.0, "atr": 0.009, "bb_upper": 10.988, "bb_lower": 10.967},
+                {"open": 10.972, "close": 10.965, "high": 10.973, "low": 10.962, "ema20": 10.974, "ema50": 10.973, "rsi": 42.0, "macd": 0.0008, "macd_signal": 0.0006, "volume": 210, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 24.0, "stoch_d": 39.0, "atr": 0.010, "bb_upper": 10.986, "bb_lower": 10.963},
+                {"open": 10.965, "close": 10.958, "high": 10.966, "low": 10.955, "ema20": 10.971, "ema50": 10.972, "rsi": 39.0, "macd": -0.006, "macd_signal": -0.0010, "volume": 205, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 17.0, "stoch_d": 26.0, "atr": 0.010, "bb_upper": 10.984, "bb_lower": 10.959},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("MACD cross вниз: да", reason)
+
     def test_bmm6_inherits_brent_news_rule(self) -> None:
         brk6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BRK6")
         bmm6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BMM6")

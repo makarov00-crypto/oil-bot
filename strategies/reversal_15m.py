@@ -173,8 +173,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     trend_up = close > ema20 and ema20 >= ema50 and ema20 >= prev_ema20
     trend_down = close < ema20 and ema20 <= ema50 and ema20 <= prev_ema20
-    expansion_up = trend_up and macd_hist > 0 and macd_hist > prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
-    expansion_down = trend_down and macd_hist < 0 and macd_hist < prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
+    structure_up = close > ema20 and close > ema50 and ema20 >= prev_ema20 and close >= prev_close
+    structure_down = close < ema20 and close < ema50 and ema20 <= prev_ema20 and close <= prev_close
+    expansion_up = structure_up and macd_hist > 0 and macd_hist > prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
+    expansion_down = structure_down and macd_hist < 0 and macd_hist < prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
     compression = atr_pct <= profile.compression_atr_pct and recent_range_pct <= profile.compression_range_pct and bb_width_pct <= profile.compression_bb_width_pct and volume_ratio < 1.05
     chop = (not compression) and macd_flip_count >= 2 and recent_range_pct <= profile.chop_range_pct and volume_ratio < profile.strong_volume_ratio
 
