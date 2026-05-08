@@ -12,6 +12,7 @@ from news_rules import NEWS_RULES
 from strategy_registry import get_primary_strategies
 from strategies.breakdown_continuation import evaluate_signal as evaluate_range_break
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
+from strategies.macd_stoch_reversal import evaluate_signal as evaluate_macd_stoch_reversal
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range
 from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
@@ -83,6 +84,8 @@ def candle_rows(rows: list[dict]) -> pd.DataFrame:
             "rsi": row.get("rsi", 50.0),
             "macd": row.get("macd", 0.1),
             "macd_signal": row.get("macd_signal", 0.0),
+            "stoch_k": row.get("stoch_k", 50.0),
+            "stoch_d": row.get("stoch_d", 50.0),
             "atr": row.get("atr", 0.1),
             "volume": row.get("volume", 100.0),
             "volume_avg": row.get("volume_avg", 100.0),
@@ -311,6 +314,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
             get_primary_strategies("USDRUBF")[:4],
             ["reversal_15m"],
         )
+        self.assertEqual(get_primary_strategies("IMOEXF"), ["macd_stoch_reversal"])
 
     def test_active_brent_contract_uses_same_strategy_stack(self) -> None:
         self.assertEqual(
@@ -501,8 +505,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "LONG")
         self.assertIn("старший ТФ=LONG", reason)
 
-    def test_imoexf_uses_failed_breakout_strategy_for_reversal(self) -> None:
-        self.assertIn("failed_breakout", get_primary_strategies("IMOEXF"))
+    def test_imoexf_uses_macd_stoch_reversal_strategy(self) -> None:
+        self.assertEqual(get_primary_strategies("IMOEXF"), ["macd_stoch_reversal"])
 
     def test_rbm6_is_bond_index_with_reversal_first_strategy(self) -> None:
         self.assertEqual(mod.get_instrument_group("RBM6").name, "bond_index")
@@ -660,9 +664,11 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "RBM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BMM6"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "IMOEXF"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "USDRUBF"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "CNYRUBF"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "UCM6"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "VBM6"), 15)
 
     def test_reversal_15m_allows_fx_long_on_fresh_cross_with_volume_and_stochastic(self) -> None:
         df = candle_rows(
@@ -738,6 +744,40 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(profile.volume_factor, 0.82)
         self.assertEqual(profile.long_rsi_max, 66.0)
+
+    def test_imoexf_macd_stoch_reversal_gives_long_on_indicator_alignment(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 2611.0, "close": 2612.0, "high": 2613.0, "low": 2610.0, "ema20": 2618.0, "ema50": 2622.0, "rsi": 38.0, "macd": -5.0, "macd_signal": -4.2, "stoch_k": 18.0, "stoch_d": 22.0, "volume": 900, "volume_avg": 1000},
+                {"open": 2612.0, "close": 2614.0, "high": 2615.0, "low": 2611.0, "ema20": 2617.0, "ema50": 2621.0, "rsi": 41.0, "macd": -4.6, "macd_signal": -4.1, "stoch_k": 24.0, "stoch_d": 23.0, "volume": 980, "volume_avg": 1000},
+                {"open": 2614.0, "close": 2620.0, "high": 2621.0, "low": 2613.0, "ema20": 2618.0, "ema50": 2621.0, "rsi": 48.0, "macd": -3.6, "macd_signal": -3.9, "stoch_k": 42.0, "stoch_d": 30.0, "volume": 1180, "volume_avg": 1000},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
+
+        signal, reason = evaluate_macd_stoch_reversal(df, self.config, instrument, "SHORT")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("RSI растёт: да", reason)
+        self.assertIn("Stochastic растёт: да", reason)
+        self.assertIn("MACD cross вверх: да", reason)
+
+    def test_imoexf_macd_stoch_reversal_gives_short_on_reverse_alignment(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 2633.0, "close": 2631.0, "high": 2634.0, "low": 2630.0, "ema20": 2627.0, "ema50": 2624.0, "rsi": 63.0, "macd": 4.8, "macd_signal": 4.1, "stoch_k": 82.0, "stoch_d": 77.0, "volume": 950, "volume_avg": 1000},
+                {"open": 2631.0, "close": 2628.0, "high": 2632.0, "low": 2627.0, "ema20": 2627.5, "ema50": 2624.5, "rsi": 59.0, "macd": 4.3, "macd_signal": 4.0, "stoch_k": 74.0, "stoch_d": 76.0, "volume": 1010, "volume_avg": 1000},
+                {"open": 2628.0, "close": 2625.0, "high": 2629.0, "low": 2624.0, "ema20": 2626.5, "ema50": 2624.8, "rsi": 52.0, "macd": 3.5, "macd_signal": 3.9, "stoch_k": 58.0, "stoch_d": 68.0, "volume": 1250, "volume_avg": 1000},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
+
+        signal, reason = evaluate_macd_stoch_reversal(df, self.config, instrument, "LONG")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("RSI падает: да", reason)
+        self.assertIn("Stochastic падает: да", reason)
+        self.assertIn("MACD cross вниз: да", reason)
 
     def test_bmm6_trend_rollover_blocks_soft_short_without_macd_volume_and_impulse(self) -> None:
         df = candle_rows(

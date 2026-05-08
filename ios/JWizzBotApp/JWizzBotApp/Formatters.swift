@@ -100,6 +100,7 @@ func humanizeAllocatorText(_ raw: String?) -> String {
         .replacingOccurrences(of: "recovery mode", with: "режим восстановления")
         .replacingOccurrences(of: "trend_expansion", with: "расширение тренда")
         .replacingOccurrences(of: "trend_pullback", with: "откат в тренде")
+        .replacingOccurrences(of: "macd_stoch_reversal", with: "волновой переворот")
         .replacingOccurrences(of: "compression", with: "сжатие")
         .replacingOccurrences(of: "chop", with: "пила")
         .replacingOccurrences(of: "mixed", with: "смешанный режим")

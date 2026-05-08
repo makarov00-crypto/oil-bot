@@ -90,6 +90,11 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
         "summary": "Ловит перезапуск тренда после локальной паузы, когда рынок подтверждает rollover и снова пытается развить движение.",
         "when": "Используется там, где инструмент любит сначала притормозить, а потом ещё раз ускориться по тренду.",
     },
+    "macd_stoch_reversal": {
+        "title": "Переворот по MACD/RSI/Stochastic",
+        "summary": "Вход по совпадению направления RSI и Stochastic с пересечением MACD на 15-минутном таймфрейме.",
+        "when": "Подходит для индексных волн, когда разворот подтверждается импульсом индикаторов и нарастающим объёмом.",
+    },
     "range_break_continuation": {
         "title": "Продолжение пробоя диапазона",
         "summary": "Вход после подтверждённого пробоя диапазона с расчётом на продолжение движения за пределами локального коридора.",
@@ -1637,6 +1642,7 @@ def humanize_market_regime_label(value: Any) -> str:
     mapping = {
         "trend_expansion": "расширение тренда",
         "trend_pullback": "откат в тренде",
+        "macd_stoch_reversal": "волновой переворот",
         "impulse": "импульс",
         "compression": "сжатие",
         "chop": "пила",
@@ -1769,6 +1775,7 @@ def humanize_strategy_name(strategy: str | None) -> str:
         "trend_rollover": "разворот тренда",
         "momentum_breakout": "импульсный пробой",
         "failed_breakout": "ложный пробой",
+        "macd_stoch_reversal": "переворот по MACD/RSI/Stochastic",
         "breakdown_continuation": "продолжение слома диапазона",
         "recovered_position": "восстановленная позиция",
     }
@@ -4302,6 +4309,7 @@ def build_dashboard_html() -> str:
         .replaceAll('recovery mode', 'режим восстановления')
         .replaceAll('trend_expansion', 'расширение тренда')
         .replaceAll('trend_pullback', 'откат в тренде')
+        .replaceAll('macd_stoch_reversal', 'волновой переворот')
         .replaceAll('compression', 'сжатие')
         .replaceAll('chop', 'пила')
         .replaceAll('mixed', 'смешанный режим')
@@ -4332,6 +4340,7 @@ def build_dashboard_html() -> str:
         momentum_breakout: 'Импульсный пробой',
         trend_pullback: 'Откат по тренду',
         trend_rollover: 'Разворот тренда',
+        macd_stoch_reversal: 'Переворот по MACD/RSI/Stochastic',
         range_break_continuation: 'Продолжение пробоя диапазона',
         failed_breakout: 'Ложный пробой',
         opening_range_breakout: 'Пробой утреннего диапазона',
@@ -4347,6 +4356,7 @@ def build_dashboard_html() -> str:
       const map = {
         trend_expansion: 'Расширение тренда',
         trend_pullback: 'Откат в тренде',
+        macd_stoch_reversal: 'Волновой переворот',
         impulse: 'Импульс',
         compression: 'Сжатие',
         chop: 'Пила',

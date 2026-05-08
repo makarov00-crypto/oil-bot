@@ -678,6 +678,7 @@ struct TradesScreen: View {
         case "momentum_breakout": return "Импульсный пробой"
         case "trend_pullback": return "Откат по тренду"
         case "trend_rollover": return "Перезапуск тренда"
+        case "macd_stoch_reversal": return "Переворот по MACD/RSI/Stochastic"
         case "range_break_continuation": return "Продолжение пробоя диапазона"
         case "failed_breakout": return "Ложный пробой"
         case "opening_range_breakout": return "Пробой утреннего диапазона"
@@ -692,6 +693,7 @@ struct TradesScreen: View {
         switch value {
         case "trend_expansion": return "Расширение тренда"
         case "trend_pullback": return "Откат в тренде"
+        case "macd_stoch_reversal": return "Волновой переворот"
         case "impulse": return "Импульс"
         case "compression": return "Сжатие"
         case "chop": return "Пила"

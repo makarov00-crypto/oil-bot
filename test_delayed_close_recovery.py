@@ -844,11 +844,10 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("нового экстремума", reason)
 
-    def test_imoexf_uses_failed_breakout_primary_strategy(self) -> None:
+    def test_imoexf_uses_macd_stoch_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("IMOEXF")
 
-        self.assertIn("failed_breakout", strategies)
-        self.assertEqual(strategies, ["range_break_continuation", "failed_breakout", "trend_pullback"])
+        self.assertEqual(strategies, ["macd_stoch_reversal"])
 
     def test_srm6_uses_failed_breakout_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("SRM6")

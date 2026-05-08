@@ -67,6 +67,7 @@ INTRADAY_CHOP_GUARD_STRATEGIES = {
     "opening_range_breakout",
     "range_break_continuation",
     "breakdown_continuation",
+    "macd_stoch_reversal",
     "momentum_breakout",
     "reversal_15m",
     "trend_pullback",
@@ -2714,13 +2715,13 @@ def get_candles(
 
 
 def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
-    if uses_unified_reversal_15m(symbol) or symbol == "RBM6":
+    if uses_unified_reversal_15m(symbol) or symbol in {"RBM6", "IMOEXF", "VBM6"}:
         return config.higher_tf_interval
     return config.candle_interval
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
-    if uses_unified_reversal_15m(symbol) or symbol == "RBM6":
+    if uses_unified_reversal_15m(symbol) or symbol in {"RBM6", "IMOEXF", "VBM6"}:
         return config.higher_tf_interval_minutes
     return config.candle_interval_minutes
 
@@ -2767,6 +2768,9 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     result["ema200"] = ta.trend.EMAIndicator(result["close"], window=200).ema_indicator()
     result["ema50_slope"] = result["ema50"].pct_change()
     result["rsi"] = ta.momentum.RSIIndicator(result["close"], window=14).rsi()
+    stoch = ta.momentum.StochasticOscillator(result["high"], result["low"], result["close"], window=14, smooth_window=3)
+    result["stoch_k"] = stoch.stoch()
+    result["stoch_d"] = stoch.stoch_signal()
     macd = ta.trend.MACD(result["close"], window_slow=26, window_fast=12, window_sign=9)
     result["macd"] = macd.macd()
     result["macd_signal"] = macd.macd_signal()
@@ -4448,7 +4452,7 @@ def recovery_mode_block_reason(
     if not status["active"] or signal not in {"LONG", "SHORT"}:
         return ""
 
-    allowed_strategies = {"trend_pullback", "failed_breakout", "trend_rollover", "reversal_15m"}
+    allowed_strategies = {"trend_pullback", "failed_breakout", "trend_rollover", "reversal_15m", "macd_stoch_reversal"}
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     regime = str(state.last_market_regime or "").strip().lower()
     higher_tf_bias = str(state.last_higher_tf_bias or "").strip().upper()
@@ -6852,6 +6856,7 @@ def check_exit(
             adaptive_exit_reason,
         )
     is_trend_rollover = state.entry_strategy == "trend_rollover"
+    is_macd_stoch_reversal = state.entry_strategy == "macd_stoch_reversal"
     prev = exit_df.iloc[-2]
     prev2 = exit_df.iloc[-3]
     macd = float(last["macd"])
@@ -6884,6 +6889,12 @@ def check_exit(
             )
         opposite_signal_confirmed = fresh_signal == "SHORT" and close < ema20 and close <= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
+        if is_macd_stoch_reversal:
+            if price <= stop_price:
+                close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
+            elif fresh_signal == "SHORT":
+                close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал SHORT")
+            return
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if instrument.symbol == "RBM6" and higher_tf_df is not None:
             profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)
@@ -6922,6 +6933,12 @@ def check_exit(
             )
         opposite_signal_confirmed = fresh_signal == "LONG" and close > ema20 and close >= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
+        if is_macd_stoch_reversal:
+            if price >= stop_price:
+                close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
+            elif fresh_signal == "LONG":
+                close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал LONG")
+            return
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if instrument.symbol == "RBM6" and higher_tf_df is not None:
             profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)

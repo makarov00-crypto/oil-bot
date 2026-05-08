@@ -2,6 +2,7 @@ from strategy_registry import get_primary_strategies
 from strategies.breakdown_continuation import evaluate_signal as evaluate_breakdown_continuation
 from strategies.compression_breakout import evaluate_signal as evaluate_compression_breakout
 from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
+from strategies.macd_stoch_reversal import evaluate_signal as evaluate_macd_stoch_reversal
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range_breakout
 from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
@@ -17,6 +18,7 @@ PRIMARY_EVALUATORS = {
     "range_break_continuation": evaluate_breakdown_continuation,
     "breakdown_continuation": evaluate_breakdown_continuation,
     "failed_breakout": evaluate_failed_breakout,
+    "macd_stoch_reversal": evaluate_macd_stoch_reversal,
     "momentum_breakout": evaluate_momentum_breakout,
     "trend_rollover": evaluate_trend_rollover,
 }
