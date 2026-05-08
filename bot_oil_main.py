@@ -2761,7 +2761,7 @@ def get_higher_tf_lookback_hours(config: BotConfig, symbol: str | None = None) -
     return base_hours
 
 
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def add_indicators(df: pd.DataFrame, *, include_ema200: bool = True) -> pd.DataFrame:
     result = df.copy()
     if "time" in result.columns:
         result["time"] = pd.to_datetime(result["time"], utc=True, errors="coerce")
@@ -2774,7 +2774,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         raise RuntimeError("Недостаточно данных для стратегии")
     result["ema20"] = ta.trend.EMAIndicator(result["close"], window=20).ema_indicator()
     result["ema50"] = ta.trend.EMAIndicator(result["close"], window=50).ema_indicator()
-    result["ema200"] = ta.trend.EMAIndicator(result["close"], window=200).ema_indicator()
+    if include_ema200:
+        result["ema200"] = ta.trend.EMAIndicator(result["close"], window=200).ema_indicator()
     result["ema50_slope"] = result["ema50"].pct_change()
     result["rsi"] = ta.momentum.RSIIndicator(result["close"], window=14).rsi()
     stoch = ta.momentum.StochasticOscillator(result["high"], result["low"], result["close"], window=14, smooth_window=3)
@@ -2953,7 +2954,8 @@ def get_configured_higher_tf_df(client: Client, config: BotConfig, instrument: I
             instrument,
             config.higher_tf_interval,
             lookback_hours=get_higher_tf_lookback_hours(config, instrument.symbol),
-        )
+        ),
+        include_ema200=False,
     )
 
 
@@ -3346,7 +3348,8 @@ def build_global_diagnostic_message(
                     instrument,
                     config.candle_interval,
                     lookback_hours=get_lower_tf_lookback_hours(config, instrument.symbol),
-                )
+                ),
+                include_ema200=not uses_unified_reversal_15m(instrument.symbol),
             )
             higher_tf_bias = get_higher_tf_bias(client, config, instrument)
             signal, reason, strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
@@ -7016,7 +7019,8 @@ def process_instrument(
                     instrument.symbol,
                     interval_minutes=signal_interval_minutes,
                 ),
-            )
+            ),
+            include_ema200=not uses_unified_reversal_15m(instrument.symbol),
         )
     except RuntimeError as error:
         if "Недостаточно данных для стратегии" in str(error) or "API не вернул свечи" in str(error):

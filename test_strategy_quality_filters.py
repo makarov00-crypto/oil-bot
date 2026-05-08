@@ -684,6 +684,31 @@ class StrategyQualityFilterTests(unittest.TestCase):
             168,
         )
 
+    def test_add_indicators_can_skip_ema200_for_unified_reversal(self) -> None:
+        rows = []
+        price = 10.0
+        for idx in range(80):
+            price += 0.01
+            rows.append(
+                {
+                    "time": pd.Timestamp("2026-05-01T00:00:00Z") + pd.Timedelta(minutes=15 * idx),
+                    "is_complete": True,
+                    "open": price - 0.02,
+                    "high": price + 0.03,
+                    "low": price - 0.03,
+                    "close": price,
+                    "volume": 100 + idx,
+                }
+            )
+        df = pd.DataFrame(rows)
+
+        result = mod.add_indicators(df, include_ema200=False)
+
+        self.assertFalse(result.empty)
+        self.assertNotIn("ema200", result.columns)
+        self.assertIn("ema20", result.columns)
+        self.assertIn("ema50", result.columns)
+
     def test_reversal_15m_allows_fx_long_on_fresh_cross_with_volume_and_stochastic(self) -> None:
         df = candle_rows(
             [
