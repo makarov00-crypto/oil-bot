@@ -6981,16 +6981,16 @@ def process_instrument(
     collect_entry_candidate_only: bool = False,
 ) -> dict[str, Any] | None:
     state = load_state(instrument.symbol)
-    higher_tf_cleared = False
-    if uses_unified_reversal_15m(instrument.symbol) and state.last_higher_tf_bias:
-        state.last_higher_tf_bias = ""
-        higher_tf_cleared = True
     reconcile_state_accounting(instrument.symbol, state)
     if not config.dry_run:
         reconcile_delayed_close_from_broker(client, config, instrument, state)
         state = load_state(instrument.symbol)
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
         return None
+    higher_tf_cleared = False
+    if uses_unified_reversal_15m(instrument.symbol) and state.last_higher_tf_bias:
+        state.last_higher_tf_bias = ""
+        higher_tf_cleared = True
     session_name = get_market_session()
     if session_name == "CLOSED":
         closed_message = "Вне торговой сессии срочного рынка Мосбиржи."
