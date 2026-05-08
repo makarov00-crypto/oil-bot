@@ -8,6 +8,7 @@ bot_state/*
 !bot_state/.gitkeep
 logs/*
 !logs/.gitkeep
+.locks/
 .DS_Store
 .xcode-derived/
 xcuserdata/
