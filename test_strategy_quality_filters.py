@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pandas as pd
 
 import bot_oil_main as mod
+import strategy_engine
 from bot_oil_main import BotConfig, InstrumentConfig
 from instrument_groups import DEFAULT_SYMBOLS
 from news_rules import NEWS_RULES
@@ -514,6 +515,26 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def test_rbm6_is_bond_index_with_unified_reversal_strategy(self) -> None:
         self.assertEqual(mod.get_instrument_group("RBM6").name, "bond_index")
         self.assertEqual(get_primary_strategies("RBM6"), ["reversal_15m"])
+
+    def test_rbm6_primary_bundle_no_longer_falls_back_to_legacy_stack(self) -> None:
+        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
+        df = candle_rows(
+            [
+                {"open": 12000.0, "close": 11998.0, "high": 12002.0, "low": 11996.0, "ema20": 12001.0, "ema50": 12003.0, "rsi": 55.0, "macd": 0.004, "macd_signal": 0.003, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 4.0, "stoch_k": 62.0, "stoch_d": 58.0, "atr": 8.0, "bb_upper": 12008.0, "bb_lower": 11992.0},
+                {"open": 11998.0, "close": 11995.0, "high": 12000.0, "low": 11992.0, "ema20": 11999.0, "ema50": 12002.0, "rsi": 49.0, "macd": -0.002, "macd_signal": 0.001, "volume": 145, "volume_avg": 100, "body": 3.0, "body_avg": 4.0, "stoch_k": 41.0, "stoch_d": 53.0, "atr": 10.0, "bb_upper": 12006.0, "bb_lower": 11991.0},
+                {"open": 11995.0, "close": 11990.0, "high": 11996.0, "low": 11988.0, "ema20": 11997.0, "ema50": 12001.0, "rsi": 43.0, "macd": -0.008, "macd_signal": -0.002, "volume": 160, "volume_avg": 100, "body": 5.0, "body_avg": 4.0, "stoch_k": 29.0, "stoch_d": 44.0, "atr": 11.0, "bb_upper": 12003.0, "bb_lower": 11987.0},
+                {"open": 11990.0, "close": 11986.0, "high": 11991.0, "low": 11984.0, "ema20": 11994.0, "ema50": 12000.0, "rsi": 38.0, "macd": -0.013, "macd_signal": -0.006, "volume": 170, "volume_avg": 100, "body": 4.0, "body_avg": 4.0, "stoch_k": 22.0, "stoch_d": 35.0, "atr": 11.0, "bb_upper": 12001.0, "bb_lower": 11983.0},
+                {"open": 11986.0, "close": 11985.0, "high": 11988.0, "low": 11984.0, "ema20": 11992.0, "ema50": 11998.0, "rsi": 37.0, "macd": -0.014, "macd_signal": -0.009, "volume": 150, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 21.0, "stoch_d": 30.0, "atr": 10.0, "bb_upper": 11999.0, "bb_lower": 11982.0},
+                {"open": 11985.0, "close": 11984.0, "high": 11986.0, "low": 11983.0, "ema20": 11990.0, "ema50": 11997.0, "rsi": 36.0, "macd": -0.015, "macd_signal": -0.011, "volume": 140, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 20.0, "stoch_d": 27.0, "atr": 10.0, "bb_upper": 11997.0, "bb_lower": 11981.0},
+                {"open": 11984.0, "close": 11983.0, "high": 11985.0, "low": 11982.0, "ema20": 11988.0, "ema50": 11996.0, "rsi": 35.0, "macd": -0.016, "macd_signal": -0.012, "volume": 135, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 19.0, "stoch_d": 24.0, "atr": 10.0, "bb_upper": 11995.0, "bb_lower": 11980.0},
+                {"open": 11983.0, "close": 11982.0, "high": 11984.0, "low": 11981.0, "ema20": 11986.0, "ema50": 11995.0, "rsi": 34.0, "macd": -0.017, "macd_signal": -0.013, "volume": 130, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 18.0, "stoch_d": 22.0, "atr": 10.0, "bb_upper": 11994.0, "bb_lower": 11979.0},
+            ]
+        )
+
+        signal, reason, strategy_name = strategy_engine.evaluate_primary_signal_bundle(df, self.config, instrument, "LONG")
+
+        self.assertEqual(strategy_name, "reversal_15m")
+        self.assertIn("reversal_15m", reason)
 
     def test_rbm6_failed_breakout_allows_morning_reversal_long(self) -> None:
         df = candle_rows(

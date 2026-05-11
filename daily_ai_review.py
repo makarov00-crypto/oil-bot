@@ -339,11 +339,10 @@ def humanize_strategy_name(value: Any) -> str:
         "trend_rollover": "разворот тренда",
         "momentum_breakout": "импульсный пробой",
         "failed_breakout": "ложный пробой",
-        "macd_stoch_reversal": "переворот по MACD/RSI/Stochastic",
+        "macd_stoch_reversal": "волновой переворот",
         "breakdown_continuation": "продолжение движения вниз",
         "recovered_position": "восстановленная позиция",
         "williams": "подтверждение по Williams %R",
-        "macd_stoch_reversal": "волновой переворот",
     }
     return mapping.get(raw, raw.replace("_", " "))
 
