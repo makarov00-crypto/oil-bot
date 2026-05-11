@@ -4072,7 +4072,7 @@ def build_dashboard_html() -> str:
         <div id="positionsCards" class="mobile-cards"></div>
         <div class="table-scroll desktop-table">
           <table id="positionsTable">
-            <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход</th><th>Текущая</th><th>Стоимость</th><th>Вар. маржа</th><th>Изм. %</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
+            <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход → текущая</th><th class="right">Плавающий результат</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -4984,15 +4984,13 @@ def build_dashboard_html() -> str:
         const pct = Number(pos.pnl_pct || 0);
         const vmClass = vm > 0 ? 'good' : vm < 0 ? 'bad' : 'muted';
         const pctClass = pct > 0 ? 'good' : pct < 0 ? 'bad' : 'muted';
+        const positionSummary = `${formatRub(pos.variation_margin_rub)} · ${formatPct(pos.pnl_pct)}`;
         posBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(pos.symbol, pos.display_name || '')}</td>
           <td>${signalBadge(pos.side)}</td>
           <td class="mono">${escapeHtml(pos.qty)}</td>
-          <td class="mono">${escapeHtml(formatPrice(pos.entry_price))}</td>
-          <td class="mono">${escapeHtml(formatPrice(pos.current_price))}</td>
-          <td class="mono right">${escapeHtml(formatRub(pos.notional_rub))}</td>
-          <td class="mono right ${vmClass}">${escapeHtml(formatRub(pos.variation_margin_rub))}</td>
-          <td class="mono right ${pctClass}">${escapeHtml(formatPct(pos.pnl_pct))}</td>
+          <td><div class="trade-cell-main mono">${escapeHtml(formatPrice(pos.entry_price))} → ${escapeHtml(formatPrice(pos.current_price))}</div><div class="trade-cell-sub">стоимость ${escapeHtml(formatRub(pos.notional_rub))}</div></td>
+          <td class="mono right ${vmClass}">${escapeHtml(positionSummary)}</td>
           <td>${escapeHtml(formatStrategyLabel(pos.strategy || '-'))}</td>
           <td>${signalBadge(pos.last_signal)}</td>
         </tr>`);
@@ -5004,17 +5002,15 @@ def build_dashboard_html() -> str:
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(pos.qty)}</div></div>
             <div class="mobile-card-item"><span class="muted">Сигнал</span><div class="mobile-card-value">${signalBadge(pos.last_signal)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Вход</span><div class="mobile-card-value mono">${escapeHtml(formatPrice(pos.entry_price))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Текущая</span><div class="mobile-card-value mono">${escapeHtml(formatPrice(pos.current_price))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Вход → текущая</span><div class="mobile-card-value mono">${escapeHtml(formatPrice(pos.entry_price))} → ${escapeHtml(formatPrice(pos.current_price))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Плавающий результат</span><div class="mobile-card-value mono ${vmClass}">${escapeHtml(positionSummary)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стоимость</span><div class="mobile-card-value mono">${escapeHtml(formatRub(pos.notional_rub))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Изм. %</span><div class="mobile-card-value mono ${pctClass}">${escapeHtml(formatPct(pos.pnl_pct))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Вар. маржа</span><div class="mobile-card-value mono ${vmClass}">${escapeHtml(formatRub(pos.variation_margin_rub))}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(pos.strategy || '-'))}</div></div>
           </div>
         </article>`);
       }
       if (!data.summary.open_positions.length) {
-        posBody.insertAdjacentHTML('beforeend', '<tr><td colspan="10" class="muted">Открытых позиций нет.</td></tr>');
+        posBody.insertAdjacentHTML('beforeend', '<tr><td colspan="7" class="muted">Открытых позиций нет.</td></tr>');
         posCards.insertAdjacentHTML('beforeend', '<div class="muted">Открытых позиций нет.</div>');
       }
 
