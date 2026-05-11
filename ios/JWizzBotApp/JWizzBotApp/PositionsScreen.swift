@@ -34,11 +34,10 @@ struct PositionsScreen: View {
                                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                                         compactInfo("Лоты", "\(position.qty)")
                                         compactInfo("Сигнал", displaySignal(position.lastSignal))
-                                        compactInfo("Вход", formatPrice(position.entryPrice))
-                                        compactInfo("Текущая", formatPrice(position.currentPrice))
+                                        compactInfo("Вход → текущая", "\(formatPrice(position.entryPrice)) → \(formatPrice(position.currentPrice))")
+                                        compactInfo("Плавающий результат", "\(formatRub(position.variationMarginRub)) · \(formatPct(position.pnlPct))", tone: statusTone(for: position.variationMarginRub))
                                         compactInfo("Стоимость", formatRub(position.notionalRub))
-                                        compactInfo("Вар. маржа", formatRub(position.variationMarginRub), tone: statusTone(for: position.variationMarginRub))
-                                        compactInfo("Изм. %", formatPct(position.pnlPct), tone: statusTone(for: position.pnlPct))
+                                        compactInfo("Стратегия", formatStrategyLabel(position.strategy))
                                     }
                                 }
                             }
@@ -85,5 +84,17 @@ struct PositionsScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func formatStrategyLabel(_ value: String) -> String {
+        switch value {
+        case "reversal_15m": return "15м разворот"
+        case "momentum_breakout": return "Импульсный пробой"
+        case "trend_pullback": return "Откат по тренду"
+        case "trend_rollover": return "Перезапуск тренда"
+        case "range_break_continuation": return "Продолжение пробоя диапазона"
+        case "-", "": return "не определена"
+        default: return value.replacingOccurrences(of: "_", with: " ")
+        }
     }
 }

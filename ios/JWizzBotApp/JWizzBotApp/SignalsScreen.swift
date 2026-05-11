@@ -57,26 +57,26 @@ struct SignalsScreen: View {
                                     }
 
                                     HStack(spacing: 8) {
-                                        SignalPill(text: "Старший ТФ: \(displayHigherTF(for: state))", raw: higherTFRaw(for: state))
+                                        SignalPill(text: displayScope(for: state), raw: scopeRaw(for: state))
                                         SignalPill(text: displayBias(state.newsBias), raw: state.newsBias)
                                     }
 
                                     Divider().overlay(Color.white.opacity(0.08))
 
-                                    InfoRow(title: "Влияние новостей", value: state.newsImpact ?? "-")
+                                    InfoRow(title: "Новости", value: newsSummary(for: state))
                                     if let allocator = state.lastAllocatorSummary, !allocator.isEmpty {
-                                        InfoRow(title: "Аллокатор", value: allocator)
+                                        InfoRow(title: "Аллокатор", value: allocatorSummary(allocator))
                                     }
                                     InfoRow(title: "Позиция", value: "\(displaySignal(state.positionSide)) / \(state.positionQty ?? 0) лот")
-                                    InfoRow(title: "Ключевая причина", value: firstSummary(for: state))
+                                    InfoRow(title: "Почему сейчас", value: firstSummary(for: state))
 
                                     if state.signalSummary.count > 1 {
                                         VStack(alignment: .leading, spacing: 6) {
-                                            Text("Детали")
+                                            Text("Подробности")
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
                                             ForEach(state.signalSummary.dropFirst(), id: \.self) { line in
-                                                Text("• \(line)")
+                                                Text("• \(shortSummary(line))")
                                                     .font(.subheadline)
                                                     .foregroundStyle(.secondary)
                                             }
@@ -132,25 +132,50 @@ struct SignalsScreen: View {
 
     private func firstSummary(for state: InstrumentSignalState) -> String {
         if let first = state.signalSummary.first, !first.isEmpty {
-            return first
+            return shortSummary(first)
         }
-        return state.lastError ?? "-"
+        return shortSummary(state.lastError ?? "-")
     }
 
-    private func displayHigherTF(for state: InstrumentSignalState) -> String {
+    private func displayScope(for state: InstrumentSignalState) -> String {
         let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if strategy == "reversal_15m" {
-            return "ЛОКАЛЬНЫЙ 15М"
+            return "UNIFIED 15М"
         }
-        return displaySignal(state.higherTFBias)
+        return "LEGACY"
     }
 
-    private func higherTFRaw(for state: InstrumentSignalState) -> String? {
+    private func scopeRaw(for state: InstrumentSignalState) -> String? {
         let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if strategy == "reversal_15m" {
-            return "LOCAL_15M"
+            return "UNIFIED"
         }
-        return state.higherTFBias
+        return "LEGACY"
+    }
+
+    private func newsSummary(for state: InstrumentSignalState) -> String {
+        let bias = displayBias(state.newsBias)
+        let impact = (state.newsImpact ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !impact.isEmpty, impact != "-" else { return bias }
+        return "\(bias) · \(shortSummary(impact, limit: 120))"
+    }
+
+    private func allocatorSummary(_ raw: String) -> String {
+        shortSummary(raw, limit: 140)
+    }
+
+    private func shortSummary(_ raw: String, limit: Int = 160) -> String {
+        let compact = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: "•")
+            .first?
+            .components(separatedBy: "|")
+            .first?
+            .components(separatedBy: ". ")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? raw
+        guard compact.count > limit else { return compact }
+        return String(compact.prefix(limit - 3)) + "..."
     }
 
     private var manualInstrumentCard: some View {

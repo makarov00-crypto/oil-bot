@@ -130,13 +130,23 @@ struct TradesScreen: View {
 
                             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                                 compactInfo("Сторона", displaySignal(trade.side))
-                                compactInfo("Лоты", formatInt(trade.qtyLots))
                                 compactInfo("Цена", trade.price ?? "-")
-                                compactInfo("До комиссии", isOpenEvent ? "не применяется" : formatTradePnl(trade.grossPnlRub))
-                                compactInfo("Комиссия", isOpenEvent ? entryCommissionText(trade.commissionRub) : formatTradePnl(trade.commissionRub), tone: isOpenEvent ? .white : statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
-                                compactInfo("Итог", isOpenEvent ? "не применяется" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
-                                compactInfo("Стратегия", trade.strategy ?? "-")
-                                compactInfo("Причина", trade.reasonDisplay ?? trade.reason ?? "-")
+                                compactInfo("Лоты", formatInt(trade.qtyLots))
+                                compactInfo("Итог", isOpenEvent ? "открытие" : formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: isOpenEvent ? .white : statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
+                                compactInfo("Стратегия", formatStrategyLabel(trade.strategy ?? "-"))
+                                compactInfo("Что произошло", tradeEventSummary(trade))
+                            }
+
+                            if !isOpenEvent {
+                                compactBlock(
+                                    title: "Детали",
+                                    value: "До комиссии: \(formatTradePnl(trade.grossPnlRub)) · Комиссия: \(formatTradePnl(trade.commissionRub))"
+                                )
+                            } else {
+                                compactBlock(
+                                    title: "Детали",
+                                    value: "Комиссия входа: \(entryCommissionText(trade.commissionRub))"
+                                )
                             }
                         }
                     }
@@ -149,7 +159,7 @@ struct TradesScreen: View {
         VStack(spacing: 16) {
             GlassCard {
                 VStack(alignment: .leading, spacing: 14) {
-                    SectionHeader(title: "Обзор сделок", subtitle: "Короткий разбор дня по стратегиям и режимам рынка")
+                    SectionHeader(title: "Обзор сделок", subtitle: "Короткий разбор дня без лишнего шума")
 
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                         MetricGlassTile(title: "Закрыто", value: "\(payload.tradeReview.closedCount)")
@@ -160,22 +170,13 @@ struct TradesScreen: View {
                     }
 
                     reviewInfoBlock(
-                        title: "Что сработало и что тянет вниз",
+                        title: "Что помогло и что мешало",
                         rows: [
                             ("Лучший инструмент", bestSymbolText(payload.tradeReview.bestSymbol)),
                             ("Худший инструмент", worstSymbolText(payload.tradeReview.worstSymbol)),
                             ("Лучшая стратегия", bestStrategyText(payload.tradeReview.bestStrategy)),
-                            ("Худшая стратегия", worstStrategyText(payload.tradeReview.worstStrategy)),
-                        ]
-                    )
-
-                    reviewInfoBlock(
-                        title: "Разбор по режимам и связкам",
-                        rows: [
-                            ("Лучший режим", regimeText(payload.tradeReview.bestRegime)),
-                            ("Худший режим", regimeText(payload.tradeReview.worstRegime)),
-                            ("Лучшая связка", labelPnlText(payload.tradeReview.bestStrategyRegime)),
-                            ("Худшая связка", labelPnlText(payload.tradeReview.worstStrategyRegime)),
+                            ("Что тянет вниз", worstStrategyText(payload.tradeReview.worstStrategy)),
+                            ("Режим дня", regimeText(payload.tradeReview.bestRegime)),
                         ]
                     )
 
@@ -183,12 +184,10 @@ struct TradesScreen: View {
                         title: "На что смотреть сейчас",
                         rows: [
                             ("Сильное сегодня", focusText(payload.tradeReview.focusToday?.strongest.first)),
-                            ("Токсичное сегодня", focusText(payload.tradeReview.focusToday?.toxic.first)),
-                            ("Сильное 3 дня", focusText(payload.tradeReview.focus3d?.strongest.first)),
-                            ("Токсичное 3 дня", focusText(payload.tradeReview.focus3d?.toxic.first)),
+                            ("Слабое сегодня", focusText(payload.tradeReview.focusToday?.toxic.first)),
                             ("Рабочая зона", strategyRegimeText(payload.tradeReview.release1Summary?.working)),
                             ("Под наблюдением", strategyRegimeText(payload.tradeReview.release1Summary?.watch)),
-                            ("Токсичная зона", strategyRegimeText(payload.tradeReview.release1Summary?.toxic)),
+                            ("Осторожно", strategyRegimeText(payload.tradeReview.release1Summary?.toxic)),
                         ]
                     )
 
@@ -226,10 +225,10 @@ struct TradesScreen: View {
                                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                                         compactInfo("Статус", "открыта")
                                         compactInfo("Время входа", trade.time ?? "-")
-                                        compactInfo("Цена входа", trade.price.map { String(format: "%.4f", $0) } ?? "-")
+                                        compactInfo("Цена", trade.price.map { String(format: "%.4f", $0) } ?? "-")
                                         compactInfo("Комиссия входа", formatTradePnl(trade.commissionRub))
-                                        compactInfo("Причина", trade.reasonDisplay ?? trade.reason ?? "-")
-                                        compactInfo("Контекст", trade.contextDisplay ?? "-")
+                                        compactInfo("Вход", shortText(trade.reasonDisplay ?? trade.reason ?? "-"))
+                                        compactInfo("Контекст", shortText(trade.contextDisplay ?? "-"))
                                     }
                                 }
                             }
@@ -258,26 +257,17 @@ struct TradesScreen: View {
                             }
 
                             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                                compactInfo("Вход", trade.entryTime)
-                                compactInfo("Выход", trade.exitTime)
-                                compactInfo("Цена входа", trade.entryPrice ?? "-")
-                                compactInfo("Цена выхода", trade.exitPrice ?? "-")
+                                compactInfo("Вход → выход", "\(trade.entryTime) → \(trade.exitTime)")
+                                compactInfo("Режим", displaySession(trade.session))
                                 compactInfo("Лоты", formatInt(trade.qtyLots))
-                                compactInfo("Сессия", displaySession(trade.session))
-                                compactInfo("До комиссии", formatTradePnl(trade.grossPnlRub))
-                                compactInfo("Комиссия", formatTradePnl(trade.commissionRub), tone: statusTone(for: -(safeDouble(trade.commissionRub) ?? 0)))
                                 compactInfo("Итог", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                             }
 
                             Divider().overlay(Color.white.opacity(0.08))
 
-                            if let entryContext = trade.entryContextDisplay, !entryContext.isEmpty {
-                                compactBlock(title: "Контекст входа", value: entryContext)
-                            }
-                            compactBlock(title: "Причина выхода", value: trade.exitReason)
-                            if let exitContext = trade.exitContextDisplay, !exitContext.isEmpty {
-                                compactBlock(title: "Контекст выхода", value: trade.exitContextDisplay ?? "-")
-                            }
+                            compactBlock(title: "Вход", value: shortText(trade.entryContextDisplay ?? trade.entryReason ?? "-"))
+                            compactBlock(title: "Выход", value: shortText(trade.exitReason))
+                            compactBlock(title: "Детали", value: "До комиссии: \(formatTradePnl(trade.grossPnlRub)) · Комиссия: \(formatTradePnl(trade.commissionRub))")
                             compactBlock(title: "Вердикт", value: trade.verdict)
                         }
                     }
@@ -317,15 +307,15 @@ struct TradesScreen: View {
         let decisions = Array((payload.allocatorDecisions ?? []).prefix(6))
         if decisions.isEmpty {
             reviewInfoBlock(
-                title: "Решения аллокатора",
+                title: "Последние решения аллокатора",
                 rows: [
                     ("Сегодня", "решений пока нет"),
-                    ("Смысл", "появятся отложенные входы и переключения капитала"),
+                    ("Смысл", "тут будут только решение, причина и доступное ГО"),
                 ]
             )
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Решения аллокатора")
+                Text("Последние решения аллокатора")
                     .font(.headline)
                 VStack(spacing: 0) {
                     ForEach(Array(decisions.enumerated()), id: \.element.id) { index, decision in
@@ -358,7 +348,7 @@ struct TradesScreen: View {
         let summary = payload.signalObservations
         let items = Array((summary?.items ?? []).prefix(5))
         VStack(alignment: .leading, spacing: 12) {
-            Text("Наблюдения сигналов")
+            Text("Сигналы за день")
                 .font(.headline)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
@@ -366,18 +356,7 @@ struct TradesScreen: View {
                 MetricGlassTile(title: "Подтвердились", value: "\(summary?.favorable ?? 0)", tone: .green)
                 MetricGlassTile(title: "Упущенные шансы", value: "\(summary?.deferredFavorable ?? 0)", tone: .orange)
                 MetricGlassTile(title: "Слабые выбранные", value: "\(summary?.selectedUnfavorable ?? 0)", tone: .red)
-                MetricGlassTile(
-                    title: "Бонусы обучения",
-                    value: "\(summary?.learningBonusCount ?? 0)",
-                    tone: .green,
-                    help: "Сколько наблюдений вошло с повышением приоритета из-за недавней хорошей истории похожей связки."
-                )
-                MetricGlassTile(
-                    title: "Штрафы обучения",
-                    value: "\(summary?.learningPenaltyCount ?? 0)",
-                    tone: .red,
-                    help: "Сколько наблюдений вошло с понижением приоритета из-за слабой недавней статистики похожей связки."
-                )
+                MetricGlassTile(title: "Ждут проверки", value: "\(summary?.pending ?? 0)")
             }
 
             Text("Точность короткой проверки: \(String(format: "%.1f%%", summary?.favorableRate ?? 0)). Ждут проверки: \(summary?.pending ?? 0).")
@@ -395,19 +374,9 @@ struct TradesScreen: View {
                 emptyText: "Пока нет проверенных слабых связок.",
                 items: Array((summary?.combos?.weakest ?? []).prefix(3))
             )
-            signalObservationLearningCombosBlock(
-                title: "Чаще усиливаем",
-                emptyText: "Пока нет устойчивых learning-бонусов.",
-                items: Array((summary?.learningCombos?.strongest ?? []).prefix(3))
-            )
-            signalObservationLearningCombosBlock(
-                title: "Чаще режем",
-                emptyText: "Пока нет устойчивых learning-штрафов.",
-                items: Array((summary?.learningCombos?.weakest ?? []).prefix(3))
-            )
             reviewInfoBlock(
                 title: "Что делать сейчас",
-                rows: Array((summary?.actions ?? ["Явных действий по learning-данным пока нет."]).prefix(3)).enumerated().map {
+                rows: Array((summary?.actions ?? ["Явных шагов по сигналам пока нет."]).prefix(3)).enumerated().map {
                     ("Шаг \($0.offset + 1)", $0.element.replacingOccurrences(of: "- ", with: "", options: .anchored))
                 }
             )
@@ -598,10 +567,6 @@ struct TradesScreen: View {
         if let priority = decision.priorityScore {
             parts.append("приоритет \(String(format: "%.2f", priority))")
         }
-        if let learning = decision.learningAdjustment, abs(learning) >= 0.005 {
-            let learningLabel = learning > 0 ? "обучение +\(String(format: "%.2f", learning))" : "обучение \(String(format: "%.2f", learning))"
-            parts.append(learningLabel)
-        }
         if let edge = decision.entryEdgeScore {
             parts.append("качество входа \(String(format: "%.2f", edge))")
         }
@@ -613,9 +578,6 @@ struct TradesScreen: View {
         }
         if let replaced = decision.replacedSymbol, !replaced.isEmpty {
             parts.append("вытеснил \(displayName(for: replaced))")
-        }
-        if let learningReason = decision.learningReason, !learningReason.isEmpty {
-            parts.append(humanizeAllocatorText(learningReason))
         }
         if let reason = decision.reason, !reason.isEmpty {
             parts.append(humanizeAllocatorText(reason))
@@ -641,15 +603,8 @@ struct TradesScreen: View {
         if let priority = item.priorityScore {
             parts.append("приоритет \(String(format: "%.2f", priority))")
         }
-        if let learning = item.learningAdjustment, abs(learning) >= 0.005 {
-            let learningLabel = learning > 0 ? "обучение +\(String(format: "%.2f", learning))" : "обучение \(String(format: "%.2f", learning))"
-            parts.append(learningLabel)
-        }
         if let edge = item.entryEdgeScore {
             parts.append("качество входа \(String(format: "%.2f", edge))")
-        }
-        if let learningReason = item.learningReason, !learningReason.isEmpty {
-            parts.append(humanizeAllocatorText(learningReason))
         }
         if let reason = item.decisionReason, !reason.isEmpty {
             parts.append(humanizeAllocatorText(reason))
@@ -675,6 +630,7 @@ struct TradesScreen: View {
 
     private func formatStrategyLabel(_ value: String) -> String {
         switch value {
+        case "reversal_15m": return "15м разворот"
         case "momentum_breakout": return "Импульсный пробой"
         case "trend_pullback": return "Откат по тренду"
         case "trend_rollover": return "Перезапуск тренда"
@@ -715,6 +671,17 @@ struct TradesScreen: View {
     private func entryCommissionText(_ value: String?) -> String {
         guard let value, !value.isEmpty else { return "уточняется" }
         return formatTradePnl(value)
+    }
+
+    private func shortText(_ value: String, limit: Int = 160) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        return String(trimmed.prefix(limit - 1)) + "…"
+    }
+
+    private func tradeEventSummary(_ trade: TradeEvent) -> String {
+        let base = trade.reasonDisplay ?? trade.reason ?? "-"
+        return shortText(base)
     }
 
     private func loadingView(_ text: String) -> some View {
