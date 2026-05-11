@@ -4096,7 +4096,7 @@ def build_dashboard_html() -> str:
         <table id="signalsTable">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сигнал</th><th>Стратегия</th><th>Старший ТФ</th><th>Новостный фон</th><th>Влияние новостей</th><th>Аллокатор</th><th>Ключевая причина</th>
+              <th>Инструмент</th><th>Сигнал</th><th>Контур</th><th>Стратегия</th><th>Новости</th><th>Аллокатор</th><th>Почему сейчас</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4355,6 +4355,14 @@ def build_dashboard_html() -> str:
       return signalBadge(state.last_higher_tf_bias || '-');
     }
 
+    function signalScopeBadge(state) {
+      const strategy = String(state.last_strategy_name || state.entry_strategy || '').trim().toLowerCase();
+      if (strategy === 'reversal_15m') {
+        return `<span class="badge hold">UNIFIED 15М</span>`;
+      }
+      return `<span class="badge short">LEGACY</span>`;
+    }
+
     function displaySignal(value) {
       const raw = String(value || '-').toUpperCase();
       const labelMap = {
@@ -4436,6 +4444,27 @@ def build_dashboard_html() -> str:
         .replaceAll('chop', 'пила')
         .replaceAll('mixed', 'смешанный режим')
         .replaceAll('impulse', 'импульс');
+    }
+
+    function summarizeAllocatorSummary(value) {
+      const text = humanizeAllocatorText(value);
+      if (!text || text === '-') return 'нет расчёта';
+      const trimmed = text.split(' • ')[0].split(' | ')[0].trim();
+      return trimmed.length > 140 ? `${trimmed.slice(0, 137)}...` : trimmed;
+    }
+
+    function summarizeSignalReason(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return 'нет причины';
+      const first = raw.split('•')[0].split('|')[0].split('. ')[0].trim();
+      return first.length > 140 ? `${first.slice(0, 137)}...` : first;
+    }
+
+    function formatNewsSummary(state) {
+      const bias = formatBiasLabel(state.last_news_bias || 'NEUTRAL');
+      const impact = String(state.last_news_impact || '').trim();
+      if (!impact || impact === '-') return bias;
+      return `${bias} · ${impact}`;
     }
 
     function formatEventLabel(value) {
@@ -4997,16 +5026,17 @@ def build_dashboard_html() -> str:
         const summary = Array.isArray(state.last_signal_summary) && state.last_signal_summary.length
           ? state.last_signal_summary[0]
           : (state.last_error || '-');
-        const allocatorSummary = humanizeAllocatorText(state.last_allocator_summary || 'Нет активного расчёта размера позиции.');
+        const allocatorSummary = summarizeAllocatorSummary(state.last_allocator_summary || 'Нет активного расчёта размера позиции.');
+        const signalReason = summarizeSignalReason(summary);
+        const newsSummary = formatNewsSummary(state);
         signalBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
+          <td>${signalScopeBadge(state)}</td>
           <td>${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</td>
-          <td>${higherTFBadge(state)}</td>
-          <td>${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</td>
-          <td class="reason">${escapeHtml(state.last_news_impact || '-')}</td>
+          <td class="reason">${escapeHtml(newsSummary)}</td>
           <td class="reason">${escapeHtml(allocatorSummary)}</td>
-          <td class="reason">${escapeHtml(summary)}</td>
+          <td class="reason">${escapeHtml(signalReason)}</td>
         </tr>`);
         signalCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
@@ -5014,16 +5044,15 @@ def build_dashboard_html() -> str:
             ${signalBadge(state.last_signal || '-')}
           </div>
           <div class="mobile-card-grid">
+            <div class="mobile-card-item"><span class="muted">Контур</span><div class="mobile-card-value">${signalScopeBadge(state)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Старший ТФ</span><div class="mobile-card-value">${higherTFBadge(state)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(formatBiasLabel(state.last_news_bias || 'NEUTRAL'))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Влияние новостей</span><div class="mobile-card-value">${escapeHtml(state.last_news_impact || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(newsSummary)}</div></div>
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Аллокатор</span><br>${escapeHtml(allocatorSummary)}</div>
           </div>
           <div class="mobile-card-footer">
-            <div class="mobile-card-text"><span class="muted">Ключевая причина</span><br>${escapeHtml(summary)}</div>
+            <div class="mobile-card-text"><span class="muted">Почему сейчас</span><br>${escapeHtml(signalReason)}</div>
           </div>
         </article>`);
       }
