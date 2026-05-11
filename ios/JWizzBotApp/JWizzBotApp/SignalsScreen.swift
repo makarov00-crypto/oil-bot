@@ -197,7 +197,10 @@ struct SignalsScreen: View {
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 if !manualTemplates.isEmpty {
-                    Picker("Инструмент-шаблон", selection: $selectedTemplateSymbol) {
+                    Picker("Инструмент-шаблон", selection: Binding(
+                        get: { validTemplateSymbol },
+                        set: { selectedTemplateSymbol = $0 }
+                    )) {
                         ForEach(manualTemplates, id: \.symbol) { template in
                             Text(templateLine(template))
                                 .tag(template.symbol)
@@ -205,7 +208,7 @@ struct SignalsScreen: View {
                     }
                     .pickerStyle(.menu)
                     .onAppear {
-                        if selectedTemplateSymbol.isEmpty {
+                        if selectedTemplateSymbol.isEmpty || !manualTemplates.contains(where: { $0.symbol == selectedTemplateSymbol }) {
                             selectedTemplateSymbol = manualTemplates.first?.symbol ?? ""
                         }
                     }
@@ -213,7 +216,7 @@ struct SignalsScreen: View {
 
                 Button {
                     Task {
-                        await store.addManualInstrument(symbol: newTicker, cloneFrom: selectedTemplateSymbol)
+                        await store.addManualInstrument(symbol: newTicker, cloneFrom: validTemplateSymbol)
                         if store.addInstrumentMessage?.contains("добавлен") == true || store.addInstrumentMessage?.contains("обновл") == true {
                             newTicker = ""
                         }
@@ -230,7 +233,7 @@ struct SignalsScreen: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.isAddingInstrument || selectedTemplateSymbol.isEmpty)
+                .disabled(store.isAddingInstrument || validTemplateSymbol.isEmpty)
 
                 if !customInstruments.isEmpty {
                     Divider().overlay(Color.white.opacity(0.08))
@@ -257,5 +260,12 @@ struct SignalsScreen: View {
     private func templateLine(_ template: InstrumentTemplate) -> String {
         let primary = template.primaryStrategies.joined(separator: ", ")
         return "\(template.symbol) → \(primary)"
+    }
+
+    private var validTemplateSymbol: String {
+        if manualTemplates.contains(where: { $0.symbol == selectedTemplateSymbol }) {
+            return selectedTemplateSymbol
+        }
+        return manualTemplates.first?.symbol ?? ""
     }
 }
