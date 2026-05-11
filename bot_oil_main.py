@@ -2715,13 +2715,13 @@ def get_candles(
 
 
 def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
-    if uses_unified_reversal_15m(symbol) or symbol in {"RBM6", "IMOEXF", "VBM6"}:
+    if uses_unified_reversal_15m(symbol):
         return config.higher_tf_interval
     return config.candle_interval
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
-    if uses_unified_reversal_15m(symbol) or symbol in {"RBM6", "IMOEXF", "VBM6"}:
+    if uses_unified_reversal_15m(symbol):
         return config.higher_tf_interval_minutes
     return config.candle_interval_minutes
 
@@ -2746,9 +2746,10 @@ def get_lower_tf_lookback_hours(
         # inside the same wall-clock window, so we keep a longer bootstrap window.
         lookback_hours = max(lookback_hours, 120)
     if symbol and uses_unified_reversal_15m(symbol):
-        # The unified 15m reversal engine relies on EMA200 and other rolling metrics,
-        # so the default commodity bootstrap window can be too short after holidays
-        # or contract rollovers even when the API returns candles correctly.
+        # The unified 15m reversal engine needs a stable rolling window for MACD,
+        # RSI, stochastic, Bollinger, ATR and volume baselines, so the default
+        # commodity bootstrap window can still be too short after holidays or
+        # contract rollovers even when the API returns candles correctly.
         lookback_hours = max(lookback_hours, 120)
     if symbol and symbol in NATURAL_GAS_SYMBOLS:
         # Natural gas sessions are more prone to sparse recent history around
@@ -5958,6 +5959,8 @@ def position_reentry_allowed(
     signal: str,
     current_price: float,
 ) -> tuple[bool, str]:
+    is_unified_reversal = uses_unified_reversal_15m(instrument.symbol)
+
     def exit_reason_has_macd_ema_reversal() -> bool:
         reason = str(state.last_exit_reason or "").lower()
         return "macd" in reason or "ema20" in reason or "цена вернулась" in reason or "цена потеряла" in reason
@@ -6043,7 +6046,24 @@ def position_reentry_allowed(
     if fx_strong_reentry_override():
         return True, ""
 
-    if group_name == "fx" and state.last_exit_side == signal and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal()):
+    if is_unified_reversal and state.last_exit_side == signal and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal()):
+        min_steps = 2
+        if instrument.symbol == "CNYRUBF":
+            min_steps = 1
+        elif instrument.symbol in NATURAL_GAS_SYMBOLS:
+            min_steps = 3
+        if not strong_same_side_reentry_confirmed(min_steps):
+            return (
+                False,
+                f"для {instrument.symbol} повторный вход по reversal_15m разрешён только после нового экстремума цены.",
+            )
+
+    if (
+        not is_unified_reversal
+        and group_name == "fx"
+        and state.last_exit_side == signal
+        and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal())
+    ):
         min_steps = 1 if instrument.symbol == "CNYRUBF" else 2
         if not strong_same_side_reentry_confirmed(min_steps):
             return (
@@ -6052,6 +6072,8 @@ def position_reentry_allowed(
             )
 
     if (
+        not is_unified_reversal
+        and
         group_name in {"equity_index", "equity_futures"}
         and state.last_exit_side == signal
         and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal())
@@ -6072,7 +6094,23 @@ def position_reentry_allowed(
         return False, f"для {instrument.symbol} повторный вход после RSI-фиксации прибыли разрешён только после нового экстремума."
 
     cooldown_minutes = 0
-    if instrument.symbol == "GNM6":
+    if is_unified_reversal:
+        if "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            cooldown_minutes = max(cooldown_minutes, 20 if group_name == "fx" else 25)
+        if state.last_exit_pnl_rub < 0:
+            cooldown_minutes = max(cooldown_minutes, 45)
+        if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+            cooldown_minutes = max(cooldown_minutes, 60)
+        if instrument.symbol in NATURAL_GAS_SYMBOLS:
+            if state.last_exit_pnl_rub < 0:
+                cooldown_minutes = max(cooldown_minutes, 60)
+            if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+                cooldown_minutes = max(cooldown_minutes, 90)
+        if "Трейлинг-стоп" in state.last_exit_reason or "Стоп-лосс" in state.last_exit_reason:
+            cooldown_minutes = max(cooldown_minutes, 60)
+        if instrument.symbol in NATURAL_GAS_SYMBOLS and "Трейлинг-стоп" in state.last_exit_reason:
+            cooldown_minutes = max(cooldown_minutes, 90)
+    elif instrument.symbol == "GNM6":
         if state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
             cooldown_minutes = max(cooldown_minutes, 35)
         if state.last_exit_pnl_rub < 0:
@@ -6128,7 +6166,11 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 45)
 
     if cooldown_minutes <= 0:
-        if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+        if is_unified_reversal and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            min_steps = 2 if instrument.symbol not in NATURAL_GAS_SYMBOLS else 3
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=min_steps):
+                return False, f"для {instrument.symbol} повторный вход после фиксации прибыли разрешён только после нового экстремума."
+        if not is_unified_reversal and instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
         if brk6_fresh_impulse_override():
@@ -6145,7 +6187,7 @@ def position_reentry_allowed(
         if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, "для GNM6 повторный LONG после прибыльного выхода разрешён только после нового экстремума."
-        if instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if not is_unified_reversal and instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."
         return True, ""
@@ -6155,7 +6197,11 @@ def position_reentry_allowed(
     if brk6_fresh_impulse_override():
         return True, ""
     if now >= next_allowed:
-        if instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+        if is_unified_reversal and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+            min_steps = 2 if instrument.symbol not in NATURAL_GAS_SYMBOLS else 3
+            if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=min_steps):
+                return False, f"для {instrument.symbol} повторный вход после фиксации прибыли разрешён только после нового экстремума."
+        if not is_unified_reversal and instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
         if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
@@ -6170,7 +6216,7 @@ def position_reentry_allowed(
         if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, "для GNM6 повторный LONG после прибыльного выхода разрешён только после нового экстремума."
-        if instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if not is_unified_reversal and instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."
         return True, ""

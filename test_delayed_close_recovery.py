@@ -844,21 +844,20 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("нового экстремума", reason)
 
-    def test_imoexf_uses_macd_stoch_reversal_primary_strategy(self) -> None:
+    def test_imoexf_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("IMOEXF")
 
-        self.assertEqual(strategies, ["macd_stoch_reversal"])
+        self.assertEqual(strategies, ["reversal_15m"])
 
-    def test_srm6_uses_failed_breakout_primary_strategy(self) -> None:
+    def test_srm6_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("SRM6")
 
-        self.assertIn("failed_breakout", strategies)
-        self.assertEqual(strategies, ["range_break_continuation", "failed_breakout", "trend_pullback"])
+        self.assertEqual(strategies, ["reversal_15m"])
 
-    def test_rbm6_uses_reversal_first_primary_strategy(self) -> None:
+    def test_rbm6_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("RBM6")
 
-        self.assertEqual(strategies, ["failed_breakout", "range_break_continuation", "trend_pullback"])
+        self.assertEqual(strategies, ["reversal_15m"])
 
     def test_gnm6_uses_pullback_first_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("GNM6")

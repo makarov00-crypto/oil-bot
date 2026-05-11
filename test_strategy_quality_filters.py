@@ -314,7 +314,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
             get_primary_strategies("USDRUBF")[:4],
             ["reversal_15m"],
         )
-        self.assertEqual(get_primary_strategies("IMOEXF"), ["macd_stoch_reversal"])
+        self.assertEqual(get_primary_strategies("IMOEXF"), ["reversal_15m"])
+        self.assertEqual(get_primary_strategies("SRM6"), ["reversal_15m"])
+        self.assertEqual(get_primary_strategies("VBM6"), ["reversal_15m"])
+        self.assertEqual(get_primary_strategies("RBM6"), ["reversal_15m"])
 
     def test_active_brent_contract_uses_same_strategy_stack(self) -> None:
         self.assertEqual(
@@ -505,12 +508,12 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "LONG")
         self.assertIn("старший ТФ=LONG", reason)
 
-    def test_imoexf_uses_macd_stoch_reversal_strategy(self) -> None:
-        self.assertEqual(get_primary_strategies("IMOEXF"), ["macd_stoch_reversal"])
+    def test_imoexf_uses_unified_reversal_strategy(self) -> None:
+        self.assertEqual(get_primary_strategies("IMOEXF"), ["reversal_15m"])
 
-    def test_rbm6_is_bond_index_with_reversal_first_strategy(self) -> None:
+    def test_rbm6_is_bond_index_with_unified_reversal_strategy(self) -> None:
         self.assertEqual(mod.get_instrument_group("RBM6").name, "bond_index")
-        self.assertEqual(get_primary_strategies("RBM6")[:2], ["failed_breakout", "range_break_continuation"])
+        self.assertEqual(get_primary_strategies("RBM6"), ["reversal_15m"])
 
     def test_rbm6_failed_breakout_allows_morning_reversal_long(self) -> None:
         df = candle_rows(
@@ -665,6 +668,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BMM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "IMOEXF"), 15)
+        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "SRM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "USDRUBF"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "CNYRUBF"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "UCM6"), 15)

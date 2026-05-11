@@ -17,7 +17,19 @@ BOND_INDEX = InstrumentGroup(name="bond_index", description="Government bond ind
 
 
 BRENT_SYMBOLS = {"BRK6", "BMM6"}
-UNIFIED_REVERSAL_15M_SYMBOLS = {"BRK6", "BMM6", "NGJ6", "NGK6", "USDRUBF", "CNYRUBF", "UCM6"}
+UNIFIED_REVERSAL_15M_SYMBOLS = {
+    "BRK6",
+    "BMM6",
+    "NGJ6",
+    "NGK6",
+    "USDRUBF",
+    "CNYRUBF",
+    "UCM6",
+    "IMOEXF",
+    "SRM6",
+    "VBM6",
+    "RBM6",
+}
 
 GROUP_BY_SYMBOL = {
     "BRK6": COMMODITIES,

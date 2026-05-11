@@ -6,13 +6,14 @@ PRIMARY_STRATEGIES_BY_SYMBOL = {
     "BMM6": ["reversal_15m"],
     "CNYRUBF": ["reversal_15m"],
     "GNM6": ["trend_pullback", "momentum_breakout", "trend_rollover"],
-    "IMOEXF": ["macd_stoch_reversal"],
+    "IMOEXF": ["reversal_15m"],
     "NGJ6": ["reversal_15m"],
     "NGK6": ["reversal_15m"],
-    "RBM6": ["failed_breakout", "range_break_continuation", "trend_pullback"],
-    "SRM6": ["range_break_continuation", "failed_breakout", "trend_pullback"],
+    "RBM6": ["reversal_15m"],
+    "SRM6": ["reversal_15m"],
     "UCM6": ["reversal_15m"],
     "USDRUBF": ["reversal_15m"],
+    "VBM6": ["reversal_15m"],
 }
 
 PRIMARY_STRATEGIES_BY_GROUP = {
