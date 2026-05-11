@@ -4200,26 +4200,20 @@ def build_dashboard_html() -> str:
       </div>
       <div class="review-layout">
         <div class="review-block">
-          <h3>Что сработало и что тянет вниз</h3>
+          <h3>Что помогло и что мешало</h3>
           <table class="review-summary-table">
             <tbody id="reviewPerformanceBody"></tbody>
           </table>
         </div>
         <div class="review-block">
-          <h3>Разбор по режимам и связкам</h3>
+          <h3>Что делать сейчас</h3>
           <table class="review-summary-table">
-            <tbody id="reviewRegimeBody"></tbody>
-          </table>
-        </div>
-        <div class="review-block">
-          <h3>На что смотреть сейчас</h3>
-          <table class="review-summary-table">
-            <tbody id="reviewFocusBody"></tbody>
+            <tbody id="reviewActionBody"></tbody>
           </table>
         </div>
       </div>
       <div class="review-block" style="margin-top:16px;">
-        <h3>Решения аллокатора</h3>
+        <h3>Последние решения аллокатора</h3>
         <div class="review-scroll">
           <table class="review-summary-table compact">
             <tbody id="allocatorDecisionsBody"></tbody>
@@ -4227,7 +4221,7 @@ def build_dashboard_html() -> str:
         </div>
       </div>
       <div class="review-block" style="margin-top:16px;">
-        <h3>Наблюдения сигналов</h3>
+        <h3>Сигналы за день</h3>
         <div class="review-scroll">
           <table class="review-summary-table compact">
             <tbody id="signalObservationsBody"></tbody>
@@ -5147,84 +5141,38 @@ def build_dashboard_html() -> str:
           review.worst_strategy ? formatSignedRub(review.worst_strategy.pnl_rub) : ''
         ),
       ].join('');
-      const reviewRegimeBody = document.getElementById('reviewRegimeBody');
-      reviewRegimeBody.innerHTML = [
+      const reviewActionBody = document.getElementById('reviewActionBody');
+      reviewActionBody.innerHTML = [
         buildReviewRow(
-          'Лучший режим',
-          review.best_regime ? formatRegimeLabel(review.best_regime.regime) : 'нет данных',
-          review.best_regime ? formatSignedRub(review.best_regime.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Худший режим',
-          review.worst_regime ? formatRegimeLabel(review.worst_regime.regime) : 'нет данных',
-          review.worst_regime ? formatSignedRub(review.worst_regime.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Лучшая связка',
-          review.best_strategy_regime ? formatStrategyRegimeLabel(review.best_strategy_regime.label) : 'нет данных',
-          review.best_strategy_regime ? formatSignedRub(review.best_strategy_regime.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Худшая связка',
-          review.worst_strategy_regime ? formatStrategyRegimeLabel(review.worst_strategy_regime.label) : 'нет данных',
-          review.worst_strategy_regime ? formatSignedRub(review.worst_strategy_regime.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Лучший сценарий',
-          review.best_setup_quality ? formatSetupQualityLabel(review.best_setup_quality.label) : 'нет данных',
-          review.best_setup_quality ? formatSignedRub(review.best_setup_quality.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Худший сценарий',
-          review.worst_setup_quality ? formatSetupQualityLabel(review.worst_setup_quality.label) : 'нет данных',
-          review.worst_setup_quality ? formatSignedRub(review.worst_setup_quality.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Лучшее качество входа',
-          review.best_edge ? formatEdgeLabel(review.best_edge.label) : 'нет данных',
-          review.best_edge ? formatSignedRub(review.best_edge.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Худшее качество входа',
-          review.worst_edge ? formatEdgeLabel(review.worst_edge.label) : 'нет данных',
-          review.worst_edge ? formatSignedRub(review.worst_edge.pnl_rub) : ''
-        ),
-      ].join('');
-      const reviewFocusBody = document.getElementById('reviewFocusBody');
-      reviewFocusBody.innerHTML = [
-        buildReviewRow(
-          'Сильное сегодня',
+          'Что работало сегодня',
           review.focus_today?.strongest?.length ? formatStrategyRegimeLabel(review.focus_today.strongest[0].label) : 'нет данных',
           review.focus_today?.strongest?.length ? [formatSignedRub(review.focus_today.strongest[0].pnl_rub), `${review.focus_today.strongest[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Токсичное сегодня',
+          'Что мешало сегодня',
           review.focus_today?.toxic?.length ? formatStrategyRegimeLabel(review.focus_today.toxic[0].label) : 'нет данных',
           review.focus_today?.toxic?.length ? [formatSignedRub(review.focus_today.toxic[0].pnl_rub), `${review.focus_today.toxic[0].count || 0} сделки`].join(' · ') : ''
         ),
         buildReviewRow(
-          'Сильное за 3 дня',
-          review.focus_3d?.strongest?.length ? formatStrategyRegimeLabel(review.focus_3d.strongest[0].label) : 'нет данных',
-          review.focus_3d?.strongest?.length ? [formatSignedRub(review.focus_3d.strongest[0].pnl_rub), `${review.focus_3d.strongest[0].count || 0} сделки`].join(' · ') : ''
+          'Сейчас можно усиливать',
+          review.release1_summary?.working ? formatStrategyRegimeLabel(review.release1_summary.working) : 'нет явной рабочей зоны',
+          review.best_regime ? `лучший режим дня: ${formatRegimeLabel(review.best_regime.regime)}` : ''
         ),
         buildReviewRow(
-          'Токсичное за 3 дня',
-          review.focus_3d?.toxic?.length ? formatStrategyRegimeLabel(review.focus_3d.toxic[0].label) : 'нет данных',
-          review.focus_3d?.toxic?.length ? [formatSignedRub(review.focus_3d.toxic[0].pnl_rub), `${review.focus_3d.toxic[0].count || 0} сделки`].join(' · ') : ''
+          'Пока только смотреть',
+          review.release1_summary?.watch ? formatStrategyRegimeLabel(review.release1_summary.watch) : 'нет отдельной зоны ожидания',
+          review.focus_3d?.strongest?.length ? `за 3 дня лучше всего: ${formatStrategyRegimeLabel(review.focus_3d.strongest[0].label)}` : ''
         ),
         buildReviewRow(
-          'Лучшее качество входа за 3 дня',
+          'Чего избегать',
+          review.release1_summary?.toxic ? formatStrategyRegimeLabel(review.release1_summary.toxic) : 'явно токсичной зоны нет',
+          review.focus_3d?.toxic?.length ? `за 3 дня хуже всего: ${formatStrategyRegimeLabel(review.focus_3d.toxic[0].label)}` : ''
+        ),
+        buildReviewRow(
+          'Качество входа',
           review.edge_focus_3d?.strongest?.length ? formatEdgeLabel(review.edge_focus_3d.strongest[0].label) : 'нет данных',
-          review.edge_focus_3d?.strongest?.length ? [formatSignedRub(review.edge_focus_3d.strongest[0].pnl_rub), `${review.edge_focus_3d.strongest[0].count || 0} сделки`].join(' · ') : ''
+          review.edge_focus_3d?.toxic?.length ? `слабое место: ${formatEdgeLabel(review.edge_focus_3d.toxic[0].label)}` : ''
         ),
-        buildReviewRow(
-          'Слабое качество входа за 3 дня',
-          review.edge_focus_3d?.toxic?.length ? formatEdgeLabel(review.edge_focus_3d.toxic[0].label) : 'нет данных',
-          review.edge_focus_3d?.toxic?.length ? [formatSignedRub(review.edge_focus_3d.toxic[0].pnl_rub), `${review.edge_focus_3d.toxic[0].count || 0} сделки`].join(' · ') : ''
-        ),
-        buildReviewRow('Рабочая зона', formatStrategyRegimeLabel(review.release1_summary?.working || '-')),
-        buildReviewRow('Под наблюдением', formatStrategyRegimeLabel(review.release1_summary?.watch || '-')),
-        buildReviewRow('Токсичная зона', formatStrategyRegimeLabel(review.release1_summary?.toxic || '-')),
       ].join('');
 
       const allocatorDecisionsBody = document.getElementById('allocatorDecisionsBody');
@@ -5236,17 +5184,13 @@ def build_dashboard_html() -> str:
             const replaced = item.replaced_symbol ? ` вместо ${instrumentNames[item.replaced_symbol] || item.replaced_symbol}` : '';
             const score = Number(item.priority_score || 0);
             const scoreText = score > 0 ? `приоритет ${score.toFixed(2)}` : '';
-            const learning = Number(item.learning_adjustment || 0);
-            const learningText = Number.isFinite(learning) && Math.abs(learning) >= 0.005
-              ? `поправка обучения ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
-              : '';
             const margin = Number(item.requested_margin_rub || 0);
             const marginText = margin > 0 ? `ГО ${formatRub(margin)}` : '';
-            const meta = [scoreText, learningText, marginText].filter(Boolean).join(' · ');
+            const meta = [scoreText, marginText].filter(Boolean).join(' · ');
             return buildReviewRow(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}${replaced}`,
-              [meta, humanizeAllocatorText(item.learning_reason || ''), humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · ')
+              [meta, humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · ')
             );
           }).join('')
         : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не перераспределял сигналы');
@@ -5256,23 +5200,14 @@ def build_dashboard_html() -> str:
       const observationItems = Array.isArray(signalObservations.items) ? signalObservations.items : [];
       const observationActions = Array.isArray(signalObservations.actions) ? signalObservations.actions : [];
       const observationCombos = signalObservations.combos || {};
-      const learningCombos = signalObservations.learning_combos || {};
       const strongestCombos = Array.isArray(observationCombos.strongest) ? observationCombos.strongest : [];
       const weakestCombos = Array.isArray(observationCombos.weakest) ? observationCombos.weakest : [];
-      const strongestLearningCombos = Array.isArray(learningCombos.strongest) ? learningCombos.strongest : [];
-      const weakestLearningCombos = Array.isArray(learningCombos.weakest) ? learningCombos.weakest : [];
       const formatObservationCombo = (item) => {
         const rate = Number(item.confirmation_rate || 0);
         const avgMove = Number(item.avg_move_pct || 0);
         const sample = Number(item.evaluated || 0);
         const sampleText = item.sample_warning ? `${sample} пров., мало данных` : `${sample} пров.`;
         return `${rate.toFixed(1)}% · ${sampleText} · среднее движение ${avgMove.toFixed(2)}%`;
-      };
-      const formatLearningCombo = (item) => {
-        const avgAdjustment = Number(item.avg_adjustment || 0);
-        const rate = Number(item.confirmation_rate || 0);
-        const count = Number(item.count || 0);
-        return `${count} корр. · средняя поправка ${avgAdjustment > 0 ? '+' : ''}${avgAdjustment.toFixed(2)} · подтверждение ${rate.toFixed(1)}%`;
       };
       const observationSummaryRows = [
         buildReviewRow(
@@ -5291,24 +5226,9 @@ def build_dashboard_html() -> str:
           'выбранные сигналы, которые через горизонт не подтвердились'
         ),
         buildReviewRow(
-          'Поправки обучения',
-          `бонусов ${signalObservations.learning_bonus_count || 0} · штрафов ${signalObservations.learning_penalty_count || 0}`,
-          'сколько наблюдений уже шли с повышением или понижением приоритета'
-        ),
-        buildReviewRow(
-          'Чаще усиливаем',
-          strongestLearningCombos.length ? strongestLearningCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
-          strongestLearningCombos.length ? strongestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых бонусов обучения'
-        ),
-        buildReviewRow(
-          'Чаще режем',
-          weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
-          weakestLearningCombos.length ? weakestLearningCombos.slice(0, 2).map(formatLearningCombo).join(' | ') : 'пока нет устойчивых штрафов обучения'
-        ),
-        buildReviewRow(
           'Что менять первым',
           observationActions.length ? observationActions[0] : 'действий пока нет',
-          observationActions.length > 1 ? observationActions.slice(1, 3).join(' | ') : 'нужно накопить ещё наблюдения для обучения'
+          observationActions.length > 1 ? observationActions.slice(1, 3).join(' | ') : 'нужно накопить ещё наблюдения'
         ),
         buildReviewRow(
           'Лучшие связки',
@@ -5329,15 +5249,11 @@ def build_dashboard_html() -> str:
             const moveText = Number.isFinite(move) ? `движение ${move.toFixed(2)}%` : '';
             const priority = Number(item.priority_score);
             const priorityText = Number.isFinite(priority) && priority > 0 ? `приоритет ${priority.toFixed(2)}` : '';
-            const learning = Number(item.learning_adjustment || 0);
-            const learningText = Number.isFinite(learning) && Math.abs(learning) >= 0.005
-              ? `поправка обучения ${learning > 0 ? '+' : ''}${learning.toFixed(2)}`
-              : '';
-            const meta = [item.outcome_display || '', moveText, priorityText, learningText].filter(Boolean).join(' · ');
+            const meta = [item.outcome_display || '', moveText, priorityText].filter(Boolean).join(' · ');
             return buildReviewRow(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}`,
-              [meta, humanizeAllocatorText(item.learning_reason || ''), humanizeAllocatorText(item.decision_reason || '')].filter(Boolean).join(' · ')
+              [meta, humanizeAllocatorText(item.decision_reason || '')].filter(Boolean).join(' · ')
             );
           })).join('')
         : observationSummaryRows.concat([
