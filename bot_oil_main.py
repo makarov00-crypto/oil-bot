@@ -2736,6 +2736,11 @@ def get_lower_tf_lookback_hours(
     # For EMA200 on 5m candles, exchange session gaps mean a simple 30h wall-clock
     # lookback can still contain too few actual candles on mornings and after weekends.
     lookback_hours = max(base_hours, 72)
+    if effective_minutes <= 5:
+        # Legacy 5m strategies still depend on EMA200. After long weekends or holiday
+        # gaps a 72h wall-clock slice may contain too few tradable candles, which makes
+        # the bot look "closed" even though the market is already open.
+        lookback_hours = max(lookback_hours, 120)
     if symbol and get_instrument_group(symbol).name == "fx":
         # Currency futures can start the week with a shorter effective trading history
         # inside the same wall-clock window, so we keep a longer bootstrap window.
@@ -7045,6 +7050,7 @@ def process_instrument(
     except RuntimeError as error:
         if "Недостаточно данных для стратегии" in str(error) or "API не вернул свечи" in str(error):
             state.last_error = str(error)
+            state.last_news_impact = "ожидание свечей/индикаторов"
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=waiting_for_candles", instrument.symbol)
             return None
