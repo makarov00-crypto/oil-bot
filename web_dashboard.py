@@ -2099,6 +2099,33 @@ def format_trade_review_row(
     edge_label = trade_context_value(open_row or {}, "entry_edge_label")
     if edge_label == "-":
         edge_label = trade_context_value(close_row, "entry_edge_label")
+    exit_reason = summarize_trade_reason_text(close_row.get("reason") or "-")
+    entry_reason = summarize_trade_reason_text(open_row.get("reason") if open_row else "-")
+    is_unified = uses_unified_reversal_15m(str(close_row.get("symbol", "")))
+    is_signal_flip = (
+        "противоположный сигнал" in exit_reason.lower()
+        or "смене режима" in verdict.lower()
+        or "смена режима" in exit_reason.lower()
+    )
+    loss_hint = ""
+    if pnl_numeric < 0:
+        exit_reason_lower = exit_reason.lower()
+        entry_reason_lower = entry_reason.lower()
+        regime_lower = str(market_regime or "").lower()
+        if "late entry" in entry_reason_lower or "позд" in entry_reason_lower:
+            loss_hint = "поздний вход"
+        elif "chop" in regime_lower or "пила" in regime_lower:
+            loss_hint = "пила"
+        elif "compression" in regime_lower or "сжатие" in regime_lower:
+            loss_hint = "сжатие"
+        elif "стоп" in exit_reason_lower:
+            loss_hint = "выбило по стопу"
+        elif "трейлинг" in exit_reason_lower:
+            loss_hint = "откат после импульса"
+        elif "объём слабый" in entry_reason_lower or "объём слабый" in exit_reason_lower:
+            loss_hint = "слабый объём"
+        else:
+            loss_hint = "требует разбора"
     return {
         "symbol": str(close_row.get("symbol", "")),
         "side": close_row.get("side") or (open_row.get("side") if open_row else ""),
@@ -2114,14 +2141,18 @@ def format_trade_review_row(
         "gross_pnl_rub": stringify_money(close_row.get("gross_pnl_rub")),
         "commission_rub": stringify_money(close_row.get("commission_rub")),
         "net_pnl_rub": stringify_money(close_row.get("net_pnl_rub"), stringify_money(close_row.get("pnl_rub"))),
-        "entry_reason": summarize_trade_reason_text(open_row.get("reason") if open_row else "-"),
-        "exit_reason": summarize_trade_reason_text(close_row.get("reason") or "-"),
+        "entry_reason": entry_reason,
+        "exit_reason": exit_reason,
         "market_regime": market_regime,
+        "market_regime_display": humanize_market_regime_label(market_regime),
         "entry_context_display": entry_context_display,
         "exit_context_display": resolved_context_display,
         "setup_quality_label": setup_quality_label,
         "edge_label": edge_label,
         "verdict": verdict,
+        "is_unified_reversal": is_unified,
+        "is_signal_flip": is_signal_flip,
+        "loss_hint": loss_hint,
         "_exit_dt": exit_dt,
     }
 
@@ -2299,6 +2330,7 @@ def build_trade_review(
     worst_edge = min(by_edge.items(), key=lambda x: x[1]) if by_edge else None
     best_strategy_regime = max(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
     worst_strategy_regime = min(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
+    signal_flip_count = sum(1 for item in closed_reviews if item.get("is_signal_flip"))
 
     return {
         "closed_count": len(closed_reviews),
@@ -2306,6 +2338,7 @@ def build_trade_review(
         "losses": losses,
         "win_rate": win_rate,
         "closed_total_pnl_rub": round(total, 2),
+        "signal_flip_count": signal_flip_count,
         "best_symbol": {"symbol": best_symbol[0], "pnl_rub": round(best_symbol[1], 2)} if best_symbol else None,
         "worst_symbol": {"symbol": worst_symbol[0], "pnl_rub": round(worst_symbol[1], 2)} if worst_symbol else None,
         "best_strategy": {"strategy": best_strategy[0], "pnl_rub": round(best_strategy[1], 2)} if best_strategy else None,
@@ -3574,6 +3607,92 @@ def build_dashboard_html() -> str:
     .review-scroll.tall {
       max-height: 420px;
     }
+    .trade-review-summary {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-top: 16px;
+    }
+    .trade-review-summary-card {
+      background: rgba(10, 18, 34, 0.68);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .trade-review-summary-card .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .trade-review-summary-card .value {
+      font: 700 20px/1.15 "Sora", "Manrope", sans-serif;
+      color: #eef6ff;
+    }
+    .trade-review-summary-card .sub {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+    .trade-cell-main {
+      font-weight: 600;
+      color: #eff6ff;
+      line-height: 1.35;
+    }
+    .trade-cell-sub {
+      margin-top: 3px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+    .trade-review-text {
+      max-width: 290px;
+      line-height: 1.4;
+    }
+    .trade-review-details {
+      margin-top: 6px;
+    }
+    .trade-review-details summary {
+      cursor: pointer;
+      color: #bfe8ff;
+      font-size: 12px;
+      user-select: none;
+    }
+    .trade-review-details[open] summary {
+      margin-bottom: 6px;
+    }
+    .trade-review-detail-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+    .trade-review-detail-item {
+      background: rgba(7, 13, 24, 0.5);
+      border: 1px solid rgba(102, 174, 255, 0.08);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+    .trade-review-detail-item .muted {
+      display: block;
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+    .trade-regime-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(102, 174, 255, 0.18);
+      background: rgba(67, 197, 255, 0.08);
+      color: #d9f3ff;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .trade-flag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
     .alert-panel {
       border-color: rgba(255, 202, 98, 0.28);
       box-shadow:
@@ -4115,12 +4234,13 @@ def build_dashboard_html() -> str:
           </table>
         </div>
       </div>
+      <div id="reviewTradeSummary" class="trade-review-summary"></div>
       <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="reviewTable" style="margin-top:16px;">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сторона</th><th>Стратегия</th><th>Вход</th><th>Выход</th><th class="right">До комиссии</th><th class="right">Комиссия</th><th class="right">Итог</th><th>Причина и контекст</th><th>Вердикт</th>
+              <th>Инструмент</th><th>Сторона</th><th>Вход → выход</th><th class="right">Итог</th><th>Вход</th><th>Выход</th><th>Режим</th><th>Стратегия</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4345,6 +4465,7 @@ def build_dashboard_html() -> str:
       const raw = String(value || '').trim();
       if (!raw || raw === '-') return 'не определена';
       const map = {
+        reversal_15m: '15м разворот',
         momentum_breakout: 'Импульсный пробой',
         trend_pullback: 'Откат по тренду',
         trend_rollover: 'Разворот тренда',
@@ -4404,6 +4525,80 @@ def build_dashboard_html() -> str:
         fragile: 'Слабое качество входа',
       };
       return map[raw] || raw;
+    }
+
+    function buildTradeSummaryCard(label, value, sub = '', valueClass = '') {
+      return `<div class="trade-review-summary-card">
+        <div class="label">${escapeHtml(label)}</div>
+        <div class="value ${escapeHtml(valueClass)}">${escapeHtml(value)}</div>
+        ${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ''}
+      </div>`;
+    }
+
+    function isUnifiedReversalTrade(row) {
+      return String(row.strategy || '').trim().toLowerCase() === 'reversal_15m';
+    }
+
+    function isSignalFlipTrade(row) {
+      if (row.is_signal_flip === true) return true;
+      const exitReason = String(row.exit_reason || '').toLowerCase();
+      const verdict = String(row.verdict || '').toLowerCase();
+      return exitReason.includes('противоположный сигнал') || exitReason.includes('смена режима') || verdict.includes('смене режима');
+    }
+
+    function classifyLossHint(row) {
+      if (String(row.loss_hint || '').trim()) {
+        return String(row.loss_hint);
+      }
+      const pnl = Number(row.pnl_rub ?? row.net_pnl_rub);
+      if (!Number.isFinite(pnl) || pnl >= 0) return '';
+      const regime = String(row.market_regime || '').toLowerCase();
+      const exitReason = String(row.exit_reason || '').toLowerCase();
+      const entryReason = String(row.entry_reason || '').toLowerCase();
+      if (entryReason.includes('late entry') || entryReason.includes('позд')) return 'поздний вход';
+      if (regime.includes('chop') || regime.includes('пила')) return 'пила';
+      if (regime.includes('compression') || regime.includes('сжатие')) return 'сжатие';
+      if (exitReason.includes('стоп')) return 'выбило по стопу';
+      if (exitReason.includes('трейлинг')) return 'откат после импульса';
+      return 'требует разбора';
+    }
+
+    function buildTradeEntrySummary(row) {
+      const main = row.entry_reason && row.entry_reason !== '-' ? row.entry_reason : 'контекст входа не сохранён';
+      const parts = [];
+      if (row.setup_quality_label && row.setup_quality_label !== '-') {
+        parts.push(formatSetupQualityLabel(row.setup_quality_label));
+      }
+      if (row.edge_label && row.edge_label !== '-') {
+        parts.push(formatEdgeLabel(row.edge_label));
+      }
+      return { main, sub: parts.join(' · ') };
+    }
+
+    function buildTradeExitSummary(row) {
+      const main = row.exit_reason && row.exit_reason !== '-' ? row.exit_reason : 'причина выхода не сохранена';
+      const verdict = String(row.verdict || '').trim();
+      const lossHint = classifyLossHint(row);
+      const parts = [verdict];
+      if (lossHint) parts.push(lossHint);
+      return { main, sub: parts.filter(Boolean).join(' · ') };
+    }
+
+    function buildTradeDetailHtml(row) {
+      const items = [
+        ['До комиссии', row.gross_pnl_rub ?? '-'],
+        ['Комиссия', row.commission_rub ?? '-'],
+        ['Цена входа', row.entry_price ?? '-'],
+        ['Цена выхода', row.exit_price ?? '-'],
+        ['Контекст входа', row.entry_context_display || '-'],
+        ['Контекст выхода', row.exit_context_display || '-'],
+      ];
+      return `<details class="trade-review-details">
+        <summary>Подробности</summary>
+        <div class="trade-review-detail-grid">
+          ${items.map(([label, value]) => `<div class="trade-review-detail-item"><span class="muted">${escapeHtml(label)}</span><div>${escapeHtml(String(value || '-'))}</div></div>`).join('')}
+        </div>
+      </details>`;
     }
 
     function formatSignedRub(value) {
@@ -5151,22 +5346,45 @@ def build_dashboard_html() -> str:
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');
+      const reviewTradeSummary = document.getElementById('reviewTradeSummary');
       reviewBody.innerHTML = '';
       reviewCards.innerHTML = '';
+      const bestSymbolLabel = review.best_symbol ? (instrumentNames[review.best_symbol.symbol] || review.best_symbol.symbol || '-') : 'нет данных';
+      const worstSymbolLabel = review.worst_symbol ? (instrumentNames[review.worst_symbol.symbol] || review.worst_symbol.symbol || '-') : 'нет данных';
+      if (reviewTradeSummary) {
+        reviewTradeSummary.innerHTML = [
+          buildTradeSummaryCard('Сделок', String(review.closed_count ?? 0), `в плюс ${review.wins ?? 0} · win rate ${Number(review.win_rate ?? 0).toFixed(1)}%`),
+          buildTradeSummaryCard('Итог дня', formatSignedRub(review.closed_total_pnl_rub), `убытков ${review.losses ?? 0}`, Number(review.closed_total_pnl_rub) >= 0 ? 'good' : 'bad'),
+          buildTradeSummaryCard('Переворотов', String(review.signal_flip_count ?? 0), 'закрытия по смене сигнала'),
+          buildTradeSummaryCard('Лучший инструмент', bestSymbolLabel, review.best_symbol ? formatSignedRub(review.best_symbol.pnl_rub) : ''),
+          buildTradeSummaryCard('Худший инструмент', worstSymbolLabel, review.worst_symbol ? formatSignedRub(review.worst_symbol.pnl_rub) : ''),
+        ].join('');
+      }
       for (const row of (review.closed_reviews || [])) {
         const pnlNum = Number(row.pnl_rub);
         const pnlClass = Number.isFinite(pnlNum) ? (pnlNum >= 0 ? 'good' : 'bad') : 'muted';
+        const entrySummary = buildTradeEntrySummary(row);
+        const exitSummary = buildTradeExitSummary(row);
+        const flipBadge = isSignalFlipTrade(row) ? '<span class="badge hold">ПЕРЕВОРОТ</span>' : '';
+        const unifiedBadge = isUnifiedReversalTrade(row) ? '<span class="badge long">15М РАЗВОРОТ</span>' : '';
+        const regimeBadge = `<span class="trade-regime-badge">${escapeHtml(formatRegimeLabel(row.market_regime || '-'))}</span>`;
         reviewBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
           <td>${signalBadge(row.side || '-')}</td>
-          <td>${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</td>
-          <td class="mono">${escapeHtml(row.entry_time || '-')}</td>
-          <td class="mono">${escapeHtml(row.exit_time || '-')}</td>
-          <td class="mono right">${escapeHtml(row.gross_pnl_rub ?? '-')}</td>
-          <td class="mono right">${escapeHtml(row.commission_rub ?? '-')}</td>
-          <td class="mono right ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</td>
-          <td class="reason">${escapeHtml(row.exit_reason || '-')}<br><span class="muted">Вход: ${escapeHtml(row.entry_context_display || '-')}</span></td>
-          <td>${escapeHtml(row.verdict || '-')}</td>
+          <td><div class="trade-cell-main mono">${escapeHtml(row.entry_time || '-')} → ${escapeHtml(row.exit_time || '-')}</div><div class="trade-cell-sub">лотов ${escapeHtml(String(row.qty_lots || '-'))}</div></td>
+          <td class="right"><div class="trade-cell-main mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</div><div class="trade-cell-sub">до комиссии ${escapeHtml(row.gross_pnl_rub ?? '-')} · комиссия ${escapeHtml(row.commission_rub ?? '-')}</div></td>
+          <td class="trade-review-text">
+            <div class="trade-cell-main">${escapeHtml(entrySummary.main)}</div>
+            ${entrySummary.sub ? `<div class="trade-cell-sub">${escapeHtml(entrySummary.sub)}</div>` : ''}
+            <div class="trade-flag-row">${flipBadge}${unifiedBadge}</div>
+          </td>
+          <td class="trade-review-text">
+            <div class="trade-cell-main">${escapeHtml(exitSummary.main)}</div>
+            ${exitSummary.sub ? `<div class="trade-cell-sub">${escapeHtml(exitSummary.sub)}</div>` : ''}
+            ${buildTradeDetailHtml(row)}
+          </td>
+          <td>${regimeBadge}</td>
+          <td><div class="trade-cell-main">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></td>
         </tr>`);
         reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
@@ -5174,17 +5392,16 @@ def build_dashboard_html() -> str:
             ${signalBadge(row.side || '-')}
           </div>
           <div class="mobile-card-grid">
-            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></div>
-            <div class="mobile-card-item"><span class="muted">До комиссии</span><div class="mobile-card-value mono">${escapeHtml(row.gross_pnl_rub ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(row.commission_rub ?? '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Итог</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(row.net_pnl_rub ?? row.pnl_rub ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Вход</span><div class="mobile-card-value mono">${escapeHtml(row.entry_time || '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Выход</span><div class="mobile-card-value mono">${escapeHtml(row.exit_time || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Вход → выход</span><div class="mobile-card-value mono">${escapeHtml(row.entry_time || '-')} → ${escapeHtml(row.exit_time || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Режим</span><div class="mobile-card-value">${regimeBadge}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(String(row.qty_lots || '-'))}</div></div>
           </div>
           <div class="mobile-card-footer">
-            <div class="mobile-card-text"><span class="muted">Причина выхода</span><br>${escapeHtml(row.exit_reason || '-')}</div>
-            <div class="mobile-card-text"><span class="muted">Контекст входа</span><br>${escapeHtml(row.entry_context_display || '-')}</div>
-            <div class="mobile-card-text"><span class="muted">Вердикт</span><br>${escapeHtml(row.verdict || '-')}</div>
+            <div class="mobile-card-text"><span class="muted">Вход</span><br>${escapeHtml(entrySummary.main)}${entrySummary.sub ? `<br><span class="muted">${escapeHtml(entrySummary.sub)}</span>` : ''}</div>
+            <div class="mobile-card-text"><span class="muted">Выход</span><br>${escapeHtml(exitSummary.main)}${exitSummary.sub ? `<br><span class="muted">${escapeHtml(exitSummary.sub)}</span>` : ''}</div>
+            <div class="mobile-card-text"><span class="muted">Подробности</span><br>До комиссии ${escapeHtml(row.gross_pnl_rub ?? '-')} · комиссия ${escapeHtml(row.commission_rub ?? '-')}</div>
           </div>
         </article>`);
       }
@@ -5193,21 +5410,19 @@ def build_dashboard_html() -> str:
         const hint = currentOpen.length
           ? `Закрытых сделок пока нет. Сейчас открыто позиций: ${currentOpen.length}.`
           : 'Закрытых сделок пока нет.';
-        reviewBody.insertAdjacentHTML('beforeend', `<tr><td colspan="10" class="muted">${escapeHtml(hint)}</td></tr>`);
+        reviewBody.insertAdjacentHTML('beforeend', `<tr><td colspan="8" class="muted">${escapeHtml(hint)}</td></tr>`);
         reviewCards.insertAdjacentHTML('beforeend', `<div class="muted">${escapeHtml(hint)}</div>`);
         for (const row of currentOpen) {
           const openCommissionText = row.commission_rub ?? '-';
           reviewBody.insertAdjacentHTML('beforeend', `<tr>
             <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
             <td>${signalBadge(row.side || '-')}</td>
-            <td>${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</td>
-            <td class="mono">${escapeHtml(row.time || '-')}</td>
-            <td class="mono">в позиции</td>
-            <td class="mono right">-</td>
-            <td class="mono right">${escapeHtml(openCommissionText)}</td>
-            <td class="mono right">-</td>
-            <td class="reason">${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}<br><span class="muted">${escapeHtml(row.context_display || '-')}</span></td>
-            <td>открыта</td>
+            <td><div class="trade-cell-main mono">${escapeHtml(row.time || '-')} → в позиции</div><div class="trade-cell-sub">лотов ${escapeHtml(String(row.qty_lots || '-'))}</div></td>
+            <td class="right"><div class="trade-cell-main mono">-</div><div class="trade-cell-sub">комиссия входа ${escapeHtml(openCommissionText)}</div></td>
+            <td class="trade-review-text"><div class="trade-cell-main">${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}</div><div class="trade-cell-sub">${escapeHtml(row.context_display || '-')}</div></td>
+            <td class="trade-review-text"><div class="trade-cell-main">позиция открыта</div></td>
+            <td><span class="trade-regime-badge">в позиции</span></td>
+            <td><div class="trade-cell-main">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></td>
           </tr>`);
           reviewCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
             <div class="mobile-card-head">
@@ -5222,7 +5437,7 @@ def build_dashboard_html() -> str:
               <div class="mobile-card-item"><span class="muted">Комиссия входа</span><div class="mobile-card-value mono">${escapeHtml(openCommissionText)}</div></div>
             </div>
             <div class="mobile-card-footer">
-              <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}</div>
+              <div class="mobile-card-text"><span class="muted">Вход</span><br>${escapeHtml(row.reason_display || row.reason || 'позиция открыта')}</div>
               <div class="mobile-card-text"><span class="muted">Контекст</span><br>${escapeHtml(row.context_display || '-')}</div>
             </div>
           </article>`);
