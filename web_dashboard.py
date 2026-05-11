@@ -4161,7 +4161,7 @@ def build_dashboard_html() -> str:
         <table id="tradesTable">
           <thead>
             <tr>
-              <th>Время</th><th>Инструмент</th><th>Событие</th><th>Статус</th><th>Сторона</th><th>Лоты</th><th class="right">Цена</th><th class="right">До комиссии</th><th class="right">Комиссия</th><th class="right">Итог</th><th>Стратегия</th><th>Причина</th>
+              <th>Время</th><th>Инструмент</th><th>Событие</th><th>Сторона</th><th>Цена</th><th class="right">Итог</th><th>Стратегия</th><th>Что произошло</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4458,6 +4458,23 @@ def build_dashboard_html() -> str:
       if (!raw) return 'нет причины';
       const first = raw.split('•')[0].split('|')[0].split('. ')[0].trim();
       return first.length > 140 ? `${first.slice(0, 137)}...` : first;
+    }
+
+    function summarizeTradeEvent(row) {
+      const reason = String(row.reason_display || row.reason || '').trim();
+      const context = String(row.context_display || '').trim();
+      const event = String(row.event || '').toUpperCase();
+      const status = String(row.event_status || '').toLowerCase();
+      const parts = [];
+      if (reason) parts.push(reason);
+      if (status === 'active') {
+        parts.push('позиция сейчас открыта');
+      } else if (event === 'CLOSE') {
+        parts.push('позиция закрыта');
+      }
+      if (context && context !== '-') parts.push(context);
+      const summary = parts.filter(Boolean).join(' · ');
+      return summary.length > 220 ? `${summary.slice(0, 217)}...` : (summary || 'детали не сохранены');
     }
 
     function formatNewsSummary(state) {
@@ -5096,19 +5113,16 @@ def build_dashboard_html() -> str:
           ? (row.commission_rub ?? 'уточняется')
           : (row.commission_rub ?? '-');
         const netText = isOpenEvent ? 'не применяется' : (row.net_pnl_rub ?? pnl);
+        const eventSummary = summarizeTradeEvent(row);
         tradeBody.insertAdjacentHTML('beforeend', `<tr>
           <td class="mono">${escapeHtml(row.time || '-')}</td>
           <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
-          <td>${escapeHtml(formatEventLabel(row.event || '-'))}</td>
-          <td>${eventStatusBadge(row.event_status || 'history')}</td>
+          <td><div class="trade-cell-main">${escapeHtml(formatEventLabel(row.event || '-'))}</div><div class="trade-cell-sub">${eventStatusBadge(row.event_status || 'history')}</div></td>
           <td>${signalBadge(row.side || '-')}</td>
-          <td class="mono">${escapeHtml(row.qty_lots || '-')}</td>
-          <td class="mono right">${escapeHtml(row.price ?? '-')}</td>
-          <td class="mono right">${escapeHtml(grossText)}</td>
-          <td class="mono right">${escapeHtml(commissionText)}</td>
+          <td><div class="trade-cell-main mono">${escapeHtml(row.price ?? '-')}</div><div class="trade-cell-sub">лотов ${escapeHtml(String(row.qty_lots || '-'))}</div></td>
           <td class="mono right ${pnlClass}">${escapeHtml(netText)}</td>
           <td>${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</td>
-          <td class="reason">${escapeHtml(row.reason_display || row.reason || '-')}<br><span class="muted">${escapeHtml(row.context_display || '-')}</span></td>
+          <td class="reason">${escapeHtml(eventSummary)}<br><span class="muted">до комиссии ${escapeHtml(grossText)} · комиссия ${escapeHtml(commissionText)}</span></td>
         </tr>`);
         tradeCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
@@ -5116,24 +5130,22 @@ def build_dashboard_html() -> str:
             ${eventStatusBadge(row.event_status || 'history')}
           </div>
           <div class="mobile-card-grid">
-            <div class="mobile-card-item"><span class="muted">Время</span><div class="mobile-card-value mono">${escapeHtml(row.time || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Событие</span><div class="mobile-card-value">${escapeHtml(formatEventLabel(row.event || '-'))}</div></div>
             <div class="mobile-card-item"><span class="muted">Сторона</span><div class="mobile-card-value">${signalBadge(row.side || '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(row.qty_lots || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Время</span><div class="mobile-card-value mono">${escapeHtml(row.time || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Цена</span><div class="mobile-card-value mono">${escapeHtml(row.price ?? '-')}</div></div>
-            <div class="mobile-card-item"><span class="muted">До комиссии</span><div class="mobile-card-value mono">${escapeHtml(grossText)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Комиссия</span><div class="mobile-card-value mono">${escapeHtml(commissionText)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(row.qty_lots || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Итог</span><div class="mobile-card-value mono ${pnlClass}">${escapeHtml(netText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(row.strategy || '-'))}</div></div>
           </div>
           <div class="mobile-card-footer">
-            <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(row.reason_display || row.reason || '-')}</div>
-            <div class="mobile-card-text"><span class="muted">Контекст</span><br>${escapeHtml(row.context_display || '-')}</div>
+            <div class="mobile-card-text"><span class="muted">Что произошло</span><br>${escapeHtml(eventSummary)}</div>
+            <div class="mobile-card-text"><span class="muted">Детали</span><br>До комиссии ${escapeHtml(grossText)} · комиссия ${escapeHtml(commissionText)}</div>
           </div>
         </article>`);
       }
       if (!filteredTrades.length) {
-        tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="12" class="muted">Журнал сделок пока пуст.</td></tr>');
+        tradeBody.insertAdjacentHTML('beforeend', '<tr><td colspan="8" class="muted">Журнал сделок пока пуст.</td></tr>');
         tradeCards.insertAdjacentHTML('beforeend', '<div class="muted">Журнал сделок пока пуст.</div>');
       }
 
