@@ -5618,8 +5618,6 @@ def api_dashboard(date: str | None = None) -> dict:
     portfolio = load_portfolio_snapshot()
     accounting_history = load_accounting_history()
     runtime = load_runtime_status()
-    session_name = str((runtime or {}).get("session") or "").upper()
-    session_closed = session_name in {"CLOSED", "WEEKEND"}
     broker_positions = {
         str(item.get("symbol", "")): item
         for item in ((portfolio or {}).get("broker_open_positions") or [])
@@ -5631,18 +5629,10 @@ def api_dashboard(date: str | None = None) -> dict:
         if item.get("_state_stale") and symbol not in broker_positions:
             item["last_signal"] = "HOLD"
             item["last_strategy_name"] = item.get("last_strategy_name") or item.get("entry_strategy") or "-"
-            if session_closed:
-                closed_message = "Вне торговой сессии срочного рынка Мосбиржи."
-                item["last_news_impact"] = "торговая сессия закрыта"
-                item["last_error"] = closed_message
-                existing_summary = [str(part).strip() for part in (item.get("last_signal_summary") or []) if str(part).strip()]
-                if not existing_summary:
-                    item["last_signal_summary"] = ["Нет актуального расчёта сигнала."]
-            else:
-                stale_at = item.get("_state_updated_at_moscow") or "-"
-                item["last_signal_summary"] = [f"Данные по инструменту устарели: последнее обновление {stale_at}."]
-                item["last_news_impact"] = "стейт не обновляется"
-                item["last_error"] = f"State stale с {stale_at}"
+            stale_at = item.get("_state_updated_at_moscow") or "-"
+            item["last_signal_summary"] = [f"Данные по инструменту устарели: последнее обновление {stale_at}."]
+            item["last_news_impact"] = "стейт не обновляется"
+            item["last_error"] = f"State stale с {stale_at}"
         display_states[symbol] = item
     target_day = datetime.now(MOSCOW_TZ).date()
     if date:
