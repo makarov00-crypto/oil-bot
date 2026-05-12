@@ -181,7 +181,7 @@ struct NewsScreen: View {
     }
 
     private func whyImportant(for item: NewsBiasItem) -> String {
-        let pieces = [
+        let pieces: [String] = [
             item.category,
             item.topics?.isEmpty == false ? "темы: \((item.topics ?? []).joined(separator: ", "))" : nil,
             item.reason
