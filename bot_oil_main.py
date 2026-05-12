@@ -710,6 +710,49 @@ def append_signal_observation_decision(
     return append_signal_observation(TRADE_DB_PATH, row)
 
 
+def append_hold_signal_observation(
+    *,
+    symbol: str,
+    strategy_name: str,
+    reason: str,
+    signal_summary: list[str],
+    candle_time: str,
+    observed_price: float,
+    market_regime: str,
+    regime_confidence: float,
+    setup_quality_label: str,
+    entry_edge_score: float,
+) -> str:
+    observed_at = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
+    summary = [str(item).strip() for item in signal_summary[:3] if str(item).strip()]
+    row = {
+        "observed_at": observed_at,
+        "observation_key": candle_time.strip(),
+        "symbol": symbol,
+        "signal": "HOLD",
+        "strategy": strategy_name,
+        "decision": "hold",
+        "decision_reason": compact_reason(reason),
+        "priority_score": 0.0,
+        "entry_edge_score": float(entry_edge_score or 0.0),
+        "market_regime": market_regime,
+        "regime_confidence": float(regime_confidence or 0.0),
+        "setup_quality": setup_quality_label,
+        "observed_price": float(observed_price or 0.0),
+        "horizon_minutes": 15,
+        "evaluated_at": observed_at,
+        "current_price": float(observed_price or 0.0),
+        "context": {
+            "candle_time": candle_time,
+            "signal_summary": summary,
+            "hold_blockers": summary,
+            "execution_status": "not_candidate",
+            "execution_note": "стратегия не подтвердила вход",
+        },
+    }
+    return append_signal_observation(TRADE_DB_PATH, row)
+
+
 def selected_signal_execution_status(state: InstrumentState) -> tuple[str, str]:
     if has_pending_order(state) and state.pending_order_action == "OPEN":
         return "submitted_open", f"заявка отправлена брокеру: {state.pending_order_id or '-'}"
@@ -7220,6 +7263,24 @@ def process_instrument(
     state.last_atr_pct = float(regime_metrics.get("atr_pct") or 0.0)
     state.last_range_width_pct = float(regime_metrics.get("range_width_pct") or 0.0)
     state.last_signal_summary = signal_summary
+    if (
+        primary_strategy_name == "reversal_15m"
+        and signal == "HOLD"
+        and state.position_side == "FLAT"
+        and not has_pending_order(state)
+    ):
+        append_hold_signal_observation(
+            symbol=instrument.symbol,
+            strategy_name=primary_strategy_name,
+            reason=reason,
+            signal_summary=signal_summary,
+            candle_time=candle_time,
+            observed_price=current_price,
+            market_regime=market_regime,
+            regime_confidence=float(state.last_market_regime_confidence or 0.0),
+            setup_quality_label=setup_quality_label,
+            entry_edge_score=float(state.last_entry_edge_score or 0.0),
+        )
     state.last_allocator_quantity = 0
     if signal not in {"LONG", "SHORT"}:
         state.last_allocator_summary = "Аллокатор не активен: сейчас нет сигнала на вход."

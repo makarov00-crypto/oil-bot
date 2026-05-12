@@ -165,8 +165,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     macd_signal_series = [float(value) for value in recent["macd_signal"].tolist()]
     long_cross_age = _bars_since_cross(macd_series, macd_signal_series, "LONG")
     short_cross_age = _bars_since_cross(macd_series, macd_signal_series, "SHORT")
-    recent_long_cross = long_cross_age is not None and long_cross_age <= 1
-    recent_short_cross = short_cross_age is not None and short_cross_age <= 1
+    recent_long_cross = long_cross_age is not None and long_cross_age <= 3
+    recent_short_cross = short_cross_age is not None and short_cross_age <= 3
     macd_hist = macd - macd_signal
     prev_hist = prev_macd - prev_macd_signal
     macd_flip_count = _macd_flip_count(macd_series, macd_signal_series)
@@ -178,7 +178,21 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     expansion_up = structure_up and macd_hist > 0 and macd_hist > prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
     expansion_down = structure_down and macd_hist < 0 and macd_hist < prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
     compression = atr_pct <= profile.compression_atr_pct and recent_range_pct <= profile.compression_range_pct and bb_width_pct <= profile.compression_bb_width_pct and volume_ratio < 1.05
-    chop = (not compression) and macd_flip_count >= 2 and recent_range_pct <= profile.chop_range_pct and volume_ratio < profile.strong_volume_ratio
+    fresh_impulse_override = (
+        (
+            (long_cross_age is not None and long_cross_age <= 1)
+            or (short_cross_age is not None and short_cross_age <= 1)
+        )
+        and volume_ratio >= profile.min_volume_ratio
+        and body_ratio >= profile.strong_body_ratio
+    )
+    chop = (
+        (not compression)
+        and macd_flip_count >= 4
+        and recent_range_pct <= profile.chop_range_pct
+        and volume_ratio < profile.strong_volume_ratio
+        and not fresh_impulse_override
+    )
 
     if compression:
         regime = "compression"
@@ -198,25 +212,50 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     rsi_long_ok = profile.rsi_long_min <= rsi <= profile.rsi_long_max and rsi >= prev_rsi
     rsi_short_ok = profile.rsi_short_min <= rsi <= profile.rsi_short_max and rsi <= prev_rsi
-    stoch_long_ok = stoch_k > stoch_d and stoch_k >= prev_stoch_k and stoch_d >= prev_stoch_d
-    stoch_short_ok = stoch_k < stoch_d and stoch_k <= prev_stoch_k and stoch_d <= prev_stoch_d
+    stoch_long_ok = (
+        (stoch_k > stoch_d and stoch_k >= prev_stoch_k and stoch_d >= prev_stoch_d)
+        or (
+            stoch_k >= prev_stoch_k
+            and stoch_d >= prev_stoch_d
+            and abs(stoch_k - stoch_d) <= 4.0
+        )
+    )
+    stoch_short_ok = (
+        (stoch_k < stoch_d and stoch_k <= prev_stoch_k and stoch_d <= prev_stoch_d)
+        or (
+            stoch_k <= prev_stoch_k
+            and stoch_d <= prev_stoch_d
+            and abs(stoch_k - stoch_d) <= 4.0
+        )
+    )
     volume_ok = volume_ratio >= profile.min_volume_ratio
     impulse_ok = body_ratio >= profile.min_body_ratio
     volatility_ok = atr_pct >= profile.min_atr_pct
+    macd_long_ok = macd >= macd_signal and macd_hist >= prev_hist
+    macd_short_ok = macd <= macd_signal and macd_hist <= prev_hist
+    early_long_ok = close >= ema20 and ema20 >= prev_ema20
+    early_short_ok = close <= ema20 and ema20 <= prev_ema20
+    strong_impulse_override = volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio
 
     late_long = (
         long_cross_age is None
-        or long_cross_age > 1
+        or long_cross_age > 3
         or rsi >= profile.late_rsi_long
         or stoch_k >= profile.late_stoch_high
-        or distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
+        or (
+            distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
+            and not strong_impulse_override
+        )
     )
     late_short = (
         short_cross_age is None
-        or short_cross_age > 1
+        or short_cross_age > 3
         or rsi <= profile.late_rsi_short
         or stoch_k <= profile.late_stoch_low
-        or distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
+        or (
+            distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
+            and not strong_impulse_override
+        )
     )
 
     long_reasons = [
@@ -274,8 +313,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     long_ok = (
         regime in {"trend", "expansion", "compression"}
         and regime != "chop"
-        and (trend_up or expansion_up or compression_long_ok)
+        and (trend_up or expansion_up or compression_long_ok or early_long_ok)
         and recent_long_cross
+        and macd_long_ok
         and rsi_long_ok
         and stoch_long_ok
         and volume_ok
@@ -286,8 +326,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     short_ok = (
         regime in {"trend", "expansion", "compression"}
         and regime != "chop"
-        and (trend_down or expansion_down or compression_short_ok)
+        and (trend_down or expansion_down or compression_short_ok or early_short_ok)
         and recent_short_cross
+        and macd_short_ok
         and rsi_short_ok
         and stoch_short_ok
         and volume_ok

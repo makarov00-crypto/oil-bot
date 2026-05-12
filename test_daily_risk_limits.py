@@ -825,6 +825,42 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(rows[0]["decision_reason"], "второй проход")
         self.assertEqual(rows[0]["observed_price"], 80.2)
 
+    def test_append_hold_signal_observation_persists_blockers_by_candle(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trade.sqlite3"):
+            first_uid = mod.append_hold_signal_observation(
+                symbol="IMOEXF",
+                strategy_name="reversal_15m",
+                reason="Сигнал HOLD (reversal_15m): объём слишком слабый.",
+                signal_summary=["Long: объём слишком слабый, late entry: движение уже ушло"],
+                candle_time="2026-05-12 10:00",
+                observed_price=2681.5,
+                market_regime="trend_pullback",
+                regime_confidence=0.61,
+                setup_quality_label="medium",
+                entry_edge_score=0.54,
+            )
+            second_uid = mod.append_hold_signal_observation(
+                symbol="IMOEXF",
+                strategy_name="reversal_15m",
+                reason="Сигнал HOLD (reversal_15m): stochastic не подтверждает рост.",
+                signal_summary=["Long: stochastic не подтверждает рост, late entry: движение уже ушло"],
+                candle_time="2026-05-12 10:00",
+                observed_price=2682.0,
+                market_regime="trend_pullback",
+                regime_confidence=0.64,
+                setup_quality_label="medium",
+                entry_edge_score=0.58,
+            )
+            rows = mod.load_signal_observations(mod.TRADE_DB_PATH)
+
+        self.assertEqual(first_uid, second_uid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["signal"], "HOLD")
+        self.assertEqual(rows[0]["decision"], "hold")
+        self.assertEqual(rows[0]["observed_price"], 2682.0)
+        self.assertEqual(rows[0]["context"]["candle_time"], "2026-05-12 10:00")
+        self.assertTrue(rows[0]["evaluated_at"])
+
     def test_mark_cycle_deferred_candidate_persists_learning_reason(self) -> None:
         with TemporaryDirectory() as temp_dir, patch.object(mod, "ALLOCATOR_DECISIONS_PATH", mod.Path(temp_dir) / "allocator_decisions.jsonl"), patch.object(
             mod, "load_state", return_value=mod.InstrumentState()

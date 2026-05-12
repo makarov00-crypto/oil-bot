@@ -519,11 +519,12 @@ def signal_observation_combo_label(row: dict[str, Any]) -> str:
 
 
 def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) -> dict[str, Any]:
-    evaluated = [row for row in rows if row.get("evaluated_at")]
+    tradeable_rows = [row for row in rows if str(row.get("signal") or "").upper() in {"LONG", "SHORT"}]
+    evaluated = [row for row in tradeable_rows if row.get("evaluated_at")]
     favorable = [row for row in evaluated if row.get("favorable") is True]
-    pending = [row for row in rows if not row.get("evaluated_at")]
-    selected = [row for row in rows if str(row.get("decision") or "") == "selected"]
-    deferred = [row for row in rows if str(row.get("decision") or "") == "deferred"]
+    pending = [row for row in tradeable_rows if not row.get("evaluated_at")]
+    selected = [row for row in tradeable_rows if str(row.get("decision") or "") == "selected"]
+    deferred = [row for row in tradeable_rows if str(row.get("decision") or "") == "deferred"]
     deferred_favorable = [row for row in deferred if row.get("favorable") is True]
     selected_unfavorable = [
         row
@@ -531,15 +532,15 @@ def summarize_signal_observations(rows: list[dict[str, Any]], limit: int = 5) ->
         if signal_observation_was_executed(row) and row.get("evaluated_at") and row.get("favorable") is False
     ]
     learning_bonus_rows = [
-        row for row in rows if signal_observation_context_float(row, "learning_adjustment") >= 0.005
+        row for row in tradeable_rows if signal_observation_context_float(row, "learning_adjustment") >= 0.005
     ]
     learning_penalty_rows = [
-        row for row in rows if signal_observation_context_float(row, "learning_adjustment") <= -0.005
+        row for row in tradeable_rows if signal_observation_context_float(row, "learning_adjustment") <= -0.005
     ]
     learning_groups: dict[str, dict[str, Any]] = {}
 
     groups: dict[str, dict[str, Any]] = {}
-    for row in rows:
+    for row in tradeable_rows:
         label = signal_observation_combo_label(row)
         learning_adjustment = signal_observation_context_float(row, "learning_adjustment")
         if abs(learning_adjustment) >= 0.005 and row.get("evaluated_at"):

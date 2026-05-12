@@ -1557,22 +1557,23 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
             load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day - timedelta(days=offset), limit=300)
         )
     rows.sort(key=lambda item: str(item.get("observed_at") or ""), reverse=True)
-    evaluated = [item for item in rows if item.get("evaluated_at")]
+    tradeable_rows = [item for item in rows if str(item.get("signal") or "").upper() in {"LONG", "SHORT"}]
+    evaluated = [item for item in tradeable_rows if item.get("evaluated_at")]
     favorable = [item for item in evaluated if item.get("favorable") is True]
-    deferred = [item for item in rows if str(item.get("decision") or "") == "deferred"]
-    selected = [item for item in rows if str(item.get("decision") or "") == "selected"]
+    deferred = [item for item in tradeable_rows if str(item.get("decision") or "") == "deferred"]
+    selected = [item for item in tradeable_rows if str(item.get("decision") or "") == "selected"]
     deferred_favorable = [item for item in deferred if item.get("favorable") is True]
     selected_unfavorable = [
         item
         for item in selected
         if _signal_observation_was_executed(item) and item.get("evaluated_at") and item.get("favorable") is False
     ]
-    pending = [item for item in rows if not item.get("evaluated_at")]
+    pending = [item for item in tradeable_rows if not item.get("evaluated_at")]
     learning_bonus_rows = [
-        item for item in rows if (_signal_observation_context_float(item, "learning_adjustment") >= 0.005)
+        item for item in tradeable_rows if (_signal_observation_context_float(item, "learning_adjustment") >= 0.005)
     ]
     learning_penalty_rows = [
-        item for item in rows if (_signal_observation_context_float(item, "learning_adjustment") <= -0.005)
+        item for item in tradeable_rows if (_signal_observation_context_float(item, "learning_adjustment") <= -0.005)
     ]
 
     items: list[dict[str, Any]] = []
@@ -1590,10 +1591,11 @@ def load_signal_observation_summary_for_day(target_day: date, limit: int = 20) -
         items.append(item)
 
     favorable_rate = round((len(favorable) / len(evaluated)) * 100, 1) if evaluated else 0.0
-    learning_combos = _summarize_signal_observation_learning_combos(rows)
-    recent_learning_combos = _summarize_signal_observation_learning_combos(recent_rows, limit=5)
+    learning_combos = _summarize_signal_observation_learning_combos(tradeable_rows)
+    recent_tradeable_rows = [item for item in recent_rows if str(item.get("signal") or "").upper() in {"LONG", "SHORT"}]
+    recent_learning_combos = _summarize_signal_observation_learning_combos(recent_tradeable_rows, limit=5)
     summary = {
-        "total": len(rows),
+        "total": len(tradeable_rows),
         "evaluated": len(evaluated),
         "pending": len(pending),
         "favorable": len(favorable),
