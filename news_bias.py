@@ -14,18 +14,48 @@ class NewsMessage:
     text: str
     created_at: datetime
     message_id: int | None = None
+    url: str = ""
 
 
 @dataclass(frozen=True)
 class NewsBias:
     symbol: str
+    category: str
     bias: str
     strength: str
     source: str
     reason: str
+    summary: str
+    horizon: str
+    actionability: str
     expires_at: datetime
     score: int
     message_text: str = ""
+    message_url: str = ""
+    topics: tuple[str, ...] = ()
+
+
+IMMEDIATE_TERMS = (
+    "сейчас",
+    "сегодня",
+    "срочно",
+    "только что",
+    "оперативно",
+    "немедленно",
+    "внепланово",
+    "экстренно",
+)
+
+BACKDROP_TERMS = (
+    "ожидания",
+    "ожидается",
+    "может",
+    "вероятно",
+    "прогноз",
+    "прогнозы",
+    "оценка",
+    "перспектива",
+)
 
 
 def build_reason(
@@ -79,6 +109,60 @@ def classify_strength(score: int, source_weight: int) -> str:
     return "LOW"
 
 
+def classify_horizon(
+    text: str,
+    bias: str,
+    strength: str,
+    source: str,
+    block_hits: list[str],
+) -> str:
+    if bias == "BLOCK" or block_hits:
+        return "NOW"
+    if source == MOEX_DERIVATIVES:
+        return "NOW"
+    if collect_hits(text, IMMEDIATE_TERMS):
+        return "NOW"
+    if strength == "HIGH":
+        return "INTRADAY"
+    if collect_hits(text, BACKDROP_TERMS):
+        return "BACKGROUND"
+    return "INTRADAY" if bias in {"LONG", "SHORT"} else "BACKGROUND"
+
+
+def classify_actionability(bias: str, strength: str, horizon: str) -> str:
+    if bias == "BLOCK":
+        return "BLOCK"
+    if bias in {"LONG", "SHORT"} and horizon == "NOW" and strength in {"MEDIUM", "HIGH"}:
+        return "ACTION"
+    if bias in {"LONG", "SHORT"} and horizon == "INTRADAY":
+        return "WATCH"
+    return "BACKGROUND"
+
+
+def build_summary(
+    symbol: str,
+    category: str,
+    bias: str,
+    strength: str,
+    keyword_hits: list[str],
+    long_hits: list[str],
+    short_hits: list[str],
+    block_hits: list[str],
+) -> str:
+    topics = keyword_hits[:2]
+    if bias == "BLOCK":
+        block_text = ", ".join(block_hits[:2]) if block_hits else "биржевое ограничение"
+        return f"{symbol}: риск-стоп по теме {block_text}"
+    if bias == "LONG":
+        driver = ", ".join(long_hits[:2]) if long_hits else ", ".join(topics) or category
+        return f"{symbol}: фон в лонг ({driver})"
+    if bias == "SHORT":
+        driver = ", ".join(short_hits[:2]) if short_hits else ", ".join(topics) or category
+        return f"{symbol}: фон в шорт ({driver})"
+    neutral_topic = ", ".join(topics) or category
+    return f"{symbol}: новостной фон без явного сигнала ({neutral_topic})"
+
+
 def detect_news_bias(message: NewsMessage) -> list[NewsBias]:
     text = normalize_text(message.text)
     channel_rule = CHANNEL_RULES.get(message.channel)
@@ -114,17 +198,37 @@ def detect_news_bias(message: NewsMessage) -> list[NewsBias]:
             continue
 
         strength = classify_strength(score, channel_rule.source_weight)
+        horizon = classify_horizon(text, bias, strength, message.channel, block_hits)
         ttl = timedelta(minutes=channel_rule.default_ttl_minutes)
         results.append(
             NewsBias(
                 symbol=rule.symbol,
+                category=rule.category,
                 bias=bias,
                 strength=strength,
                 source=message.channel,
                 reason=build_reason(bias, keyword_hits, long_hits, short_hits, block_hits),
+                summary=build_summary(
+                    rule.symbol,
+                    rule.category,
+                    bias,
+                    strength,
+                    keyword_hits,
+                    long_hits,
+                    short_hits,
+                    block_hits,
+                ),
+                horizon=horizon,
+                actionability=classify_actionability(
+                    bias,
+                    strength,
+                    horizon,
+                ),
                 expires_at=message.created_at.astimezone(UTC) + ttl,
                 score=score * channel_rule.source_weight,
                 message_text=message.text,
+                message_url=message.url,
+                topics=tuple(keyword_hits[:3]),
             )
         )
 

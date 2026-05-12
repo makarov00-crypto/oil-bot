@@ -4131,28 +4131,29 @@ def build_dashboard_html() -> str:
       </div>
       <div class="grid">
         <div>
-          <div class="muted">Активных bias</div>
+          <div class="muted">Всего в работе</div>
           <div class="metric" id="newsCount">-</div>
         </div>
         <div>
-          <div class="muted">LONG</div>
-          <div class="metric" id="newsLongCount">-</div>
+          <div class="muted">Срочно сейчас</div>
+          <div class="metric" id="newsKeyCount">-</div>
         </div>
         <div>
-          <div class="muted">SHORT</div>
-          <div class="metric" id="newsShortCount">-</div>
+          <div class="muted">Влияет на сигналы</div>
+          <div class="metric" id="newsSignalCount">-</div>
         </div>
         <div>
-          <div class="muted">BLOCK</div>
+          <div class="muted">Жёсткий блок</div>
           <div class="metric" id="newsBlockCount">-</div>
         </div>
       </div>
+      <div id="newsLeadCards" class="review-grid" style="margin-top:16px;"></div>
       <div id="newsCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="newsTable" style="margin-top:16px;">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Bias</th><th>Сила</th><th>Источник</th><th>Актуально до</th><th>Причина</th>
+              <th>Инструмент</th><th>Что важно</th><th>Сейчас</th><th>Источник</th><th>Актуально до</th><th>Почему это важно</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4433,6 +4434,43 @@ def build_dashboard_html() -> str:
       return map[raw] || raw || '-';
     }
 
+    function formatNewsHorizon(value) {
+      const raw = String(value || '').toUpperCase();
+      const map = { NOW: 'сейчас', INTRADAY: 'внутри дня', BACKGROUND: 'фон' };
+      return map[raw] || raw.toLowerCase() || '-';
+    }
+
+    function formatNewsActionability(value) {
+      const raw = String(value || '').toUpperCase();
+      const map = {
+        ACTION: 'влияет на вход',
+        WATCH: 'держать в уме',
+        BLOCK: 'жёсткий блок',
+        BACKGROUND: 'просто фон',
+      };
+      return map[raw] || raw.toLowerCase() || '-';
+    }
+
+    function formatNewsCategory(value) {
+      const raw = String(value || '').trim();
+      return raw || 'рынок';
+    }
+
+    function classifyNewsBucket(item) {
+      const actionability = String(item.actionability || '').toUpperCase();
+      const horizon = String(item.horizon || '').toUpperCase();
+      if (actionability === 'BLOCK') return 'block';
+      if (actionability === 'ACTION' || horizon === 'NOW') return 'key';
+      if (actionability === 'WATCH') return 'signal';
+      return 'background';
+    }
+
+    function formatNewsWhatMatters(item) {
+      const bias = formatBiasLabel(item.bias || 'NEUTRAL');
+      const action = formatNewsActionability(item.actionability || '');
+      return `${bias} · ${action}`;
+    }
+
     function formatRuntimeState(value) {
       const raw = String(value || '').toLowerCase();
       const map = {
@@ -4706,6 +4744,12 @@ def build_dashboard_html() -> str:
       return raw;
     }
 
+    function summarizeNewsCard(item) {
+      const summary = String(item.summary || '').trim();
+      if (summary) return summary;
+      return humanizeNewsReason(item.reason || '-');
+    }
+
     function closeNewsPopover() {
       const popover = document.getElementById('newsPopover');
       if (!popover) return;
@@ -4966,30 +5010,68 @@ def build_dashboard_html() -> str:
 
       const news = data.news || {};
       const activeBiases = Array.isArray(news.active_biases) ? news.active_biases : [];
+      const keyNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'key');
+      const signalNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'signal');
+      const blockNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'block');
+      const backgroundNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'background');
       document.getElementById('newsUpdatedAt').textContent = `Новости: ${news.fetched_at_moscow || '-'}`;
       document.getElementById('newsCount').textContent = activeBiases.length;
-      document.getElementById('newsLongCount').textContent = activeBiases.filter((item) => item.bias === 'LONG').length;
-      document.getElementById('newsShortCount').textContent = activeBiases.filter((item) => item.bias === 'SHORT').length;
+      document.getElementById('newsKeyCount').textContent = keyNews.length;
+      document.getElementById('newsSignalCount').textContent = signalNews.length;
       document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
 
+      const newsLeadCards = document.getElementById('newsLeadCards');
       const newsBody = document.querySelector('#newsTable tbody');
       const newsCards = document.getElementById('newsCards');
+      newsLeadCards.innerHTML = '';
       newsBody.innerHTML = '';
       newsCards.innerHTML = '';
+      const leadItems = [
+        {
+          title: 'Ключевое сейчас',
+          value: keyNews.length ? keyNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'сильных новостей сейчас нет',
+          sub: keyNews.length ? 'это может быстро повлиять на входы' : 'техника сейчас важнее фона',
+        },
+        {
+          title: 'Влияет на сигналы',
+          value: signalNews.length ? signalNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'новости не давят на сигналы',
+          sub: signalNews.length ? 'держим в уме, но не рубим входы автоматически' : 'сильных конфликтов сейчас нет',
+        },
+        {
+          title: 'Фон',
+          value: backgroundNews.length ? backgroundNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'фон спокоен',
+          sub: backgroundNews.length ? 'это скорее контекст, а не причина сделки' : 'лишнего шума в новостях нет',
+        },
+      ];
+      newsLeadCards.innerHTML = leadItems.map((item) => `
+        <div class="glass-card">
+          <div class="label">${escapeHtml(item.title)}</div>
+          <div class="review-summary-main">${escapeHtml(item.value)}</div>
+          <div class="review-summary-sub">${escapeHtml(item.sub)}</div>
+        </div>
+      `).join('');
       for (const item of activeBiases) {
         const hasMessage = String(item.message_text || '').trim().length > 0;
         const reasonText = humanizeNewsReason(item.reason || '-');
+        const summaryText = summarizeNewsCard(item);
         const sourceLabel = String(item.source || '-').replaceAll('_', ' ');
+        const whatMatters = formatNewsWhatMatters(item);
+        const nowText = `${formatNewsHorizon(item.horizon || '')} · ${formatStrength(item.strength || '-')}`;
+        const whyImportant = [
+          formatNewsCategory(item.category || ''),
+          item.topics && item.topics.length ? `темы: ${item.topics.join(', ')}` : '',
+          reasonText,
+        ].filter(Boolean).join(' · ');
         const detailsButton = hasMessage
           ? `<button type="button" class="hint-button js-news-popover" data-source="${escapeHtml(sourceLabel)}" data-news-text="${escapeHtml(item.message_text)}">текст</button>`
           : '';
         newsBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(item.symbol || '-', item.display_name || '')}</td>
-          <td>${signalBadge(item.bias || '-')}</td>
-          <td>${escapeHtml(formatStrength(item.strength || '-'))}</td>
+          <td><div class="trade-cell-main">${escapeHtml(summaryText)}</div><div class="trade-cell-sub">${escapeHtml(whatMatters)}</div></td>
+          <td>${escapeHtml(nowText)}</td>
           <td>${escapeHtml(item.source || '-')}</td>
           <td class="mono">${escapeHtml(item.expires_at_moscow || '-')}</td>
-          <td><div class="news-reason"><span class="reason">${escapeHtml(reasonText)}</span>${detailsButton}</div></td>
+          <td><div class="news-reason"><span class="reason">${escapeHtml(whyImportant)}</span>${detailsButton}</div></td>
         </tr>`);
         newsCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">
@@ -4997,12 +5079,13 @@ def build_dashboard_html() -> str:
             ${signalBadge(item.bias || '-')}
           </div>
           <div class="mobile-card-grid">
-            <div class="mobile-card-item"><span class="muted">Сила</span><div class="mobile-card-value">${escapeHtml(formatStrength(item.strength || '-'))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Что важно</span><div class="mobile-card-value">${escapeHtml(whatMatters)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Сейчас</span><div class="mobile-card-value">${escapeHtml(nowText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Источник</span><div class="mobile-card-value">${escapeHtml(item.source || '-')}</div></div>
             <div class="mobile-card-item"><span class="muted">Актуально до</span><div class="mobile-card-value mono">${escapeHtml(item.expires_at_moscow || '-')}</div></div>
           </div>
           <div class="mobile-card-footer">
-            <div class="mobile-card-text"><span class="muted">Причина</span><br>${escapeHtml(reasonText)}</div>
+            <div class="mobile-card-text"><span class="muted">Почему это важно</span><br>${escapeHtml(whyImportant)}</div>
             ${hasMessage ? `<div class="mobile-card-text">${detailsButton}</div>` : ''}
           </div>
         </article>`);

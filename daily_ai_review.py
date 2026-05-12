@@ -812,7 +812,8 @@ def build_prompt(
     for item in active_news[:10]:
         news_lines.append(
             f"- {item.get('symbol','-')}: {item.get('bias','-')}/{item.get('strength','-')} | "
-            f"{item.get('source','-')} | {item.get('reason','-')}"
+            f"горизонт={item.get('horizon','-')} | действие={item.get('actionability','-')} | "
+            f"{item.get('source','-')} | {item.get('summary') or item.get('reason','-')}"
         )
     if not news_lines:
         news_lines.append("- Активных новостных сигналов сейчас нет.")

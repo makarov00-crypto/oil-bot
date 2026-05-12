@@ -2378,12 +2378,18 @@ def describe_news_bias_impact(signal: str, news_bias: NewsBias | None) -> str:
     if news_bias is None or news_bias.bias == "NEUTRAL":
         return "новости не вмешиваются"
     if news_bias.bias == "BLOCK":
-        return "новости блокируют новый вход"
+        return "сильная новость блокирует новый вход"
     if signal == "HOLD":
-        return f"новости задают контекст {news_bias.bias}, но техника вход не подтвердила"
+        if news_bias.actionability == "ACTION":
+            return f"новости поддерживают движение {news_bias.bias}, но техника ещё не дала вход"
+        if news_bias.actionability == "WATCH":
+            return f"новости дают фон {news_bias.bias.lower()}, но это пока скорее контекст"
+        return f"новости подсвечивают тему {news_bias.category}, но вход не подтверждён"
     if news_bias.bias == signal:
-        return f"новости усиливают сигнал {signal}"
-    return f"новости конфликтуют с сигналом {signal}"
+        if news_bias.actionability == "ACTION":
+            return f"новости заметно усиливают сигнал {signal}"
+        return f"новости поддерживают сигнал {signal}"
+    return f"новости спорят с сигналом {signal}"
 
 
 def format_news_bias_lines(news_bias: NewsBias | None) -> list[str]:
@@ -2391,6 +2397,8 @@ def format_news_bias_lines(news_bias: NewsBias | None) -> list[str]:
         return ["• News bias: NEUTRAL"]
     return [
         f"• News bias: {news_bias.bias} ({news_bias.strength})",
+        f"• Горизонт: {news_bias.horizon}",
+        f"• Действие: {news_bias.actionability}",
         f"• Источник: {news_bias.source}",
         f"• Причина: {news_bias.reason}",
     ]
@@ -2523,11 +2531,17 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
             "active_biases": [
                 {
                     "symbol": item.symbol,
+                    "category": item.category,
                     "bias": item.bias,
                     "strength": item.strength,
                     "source": item.source,
                     "reason": item.reason,
+                    "summary": item.summary,
+                    "horizon": item.horizon,
+                    "actionability": item.actionability,
                     "message_text": item.message_text,
+                    "message_url": item.message_url,
+                    "topics": list(item.topics),
                     "expires_at": item.expires_at.isoformat(),
                     "expires_at_moscow": item.expires_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
                     "score": item.score,
@@ -2545,11 +2559,17 @@ def apply_news_bias_to_signal(signal: str, reason: str, news_bias: NewsBias | No
     if news_bias.bias == "BLOCK" and signal in {"LONG", "SHORT"}:
         return "HOLD", f"{reason}. News bias BLOCK: {news_bias.reason}."
     if signal == "LONG" and news_bias.bias == "SHORT":
-        return "HOLD", f"{reason}. News bias конфликтует с LONG: {news_bias.reason}."
+        if news_bias.actionability in {"ACTION", "BLOCK"} or news_bias.strength == "HIGH":
+            return "HOLD", f"{reason}. News bias конфликтует с LONG: {news_bias.reason}."
+        return signal, f"{reason}. Новости спорят с LONG, но это пока лишь фон: {news_bias.reason}."
     if signal == "SHORT" and news_bias.bias == "LONG":
-        return "HOLD", f"{reason}. News bias конфликтует с SHORT: {news_bias.reason}."
+        if news_bias.actionability in {"ACTION", "BLOCK"} or news_bias.strength == "HIGH":
+            return "HOLD", f"{reason}. News bias конфликтует с SHORT: {news_bias.reason}."
+        return signal, f"{reason}. Новости спорят с SHORT, но это пока лишь фон: {news_bias.reason}."
     if signal in {"LONG", "SHORT"} and news_bias.bias == signal:
-        return signal, f"{reason}. News bias подтверждает сигнал: {news_bias.reason}."
+        if news_bias.actionability == "ACTION":
+            return signal, f"{reason}. News bias подтверждает сигнал: {news_bias.reason}."
+        return signal, f"{reason}. Новости поддерживают сигнал как фон: {news_bias.reason}."
     return signal, reason
 
 

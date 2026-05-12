@@ -120,6 +120,7 @@ def build_news_messages(posts: Iterable[ChannelPost]) -> list[NewsMessage]:
             text=post.text,
             created_at=post.created_at,
             message_id=post.message_id,
+            url=post.url,
         )
         for post in posts
     ]
@@ -134,6 +135,7 @@ def detect_biases_for_posts(posts: Iterable[ChannelPost]) -> list[tuple[ChannelP
                 text=post.text,
                 created_at=post.created_at,
                 message_id=post.message_id,
+                url=post.url,
             )
         )
         if biases:

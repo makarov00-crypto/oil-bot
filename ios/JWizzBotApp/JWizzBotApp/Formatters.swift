@@ -68,6 +68,25 @@ func displayBias(_ raw: String?) -> String {
     return mapped.joined(separator: " / ")
 }
 
+func displayNewsHorizon(_ raw: String?) -> String {
+    switch (raw ?? "").uppercased() {
+    case "NOW": return "сейчас"
+    case "INTRADAY": return "внутри дня"
+    case "BACKGROUND": return "фон"
+    default: return raw ?? "-"
+    }
+}
+
+func displayNewsActionability(_ raw: String?) -> String {
+    switch (raw ?? "").uppercased() {
+    case "ACTION": return "влияет на вход"
+    case "WATCH": return "держать в уме"
+    case "BLOCK": return "жёсткий блок"
+    case "BACKGROUND": return "просто фон"
+    default: return raw ?? "-"
+    }
+}
+
 func displayEvent(_ raw: String?) -> String {
     switch (raw ?? "").uppercased() {
     case "OPEN": return "ОТКРЫТИЕ"

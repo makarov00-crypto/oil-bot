@@ -364,22 +364,34 @@ struct NewsSnapshot: Decodable {
 
 struct NewsBiasItem: Decodable, Identifiable {
     let symbol: String
+    let category: String?
     let bias: String
     let strength: String
     let source: String
     let reason: String
+    let summary: String?
+    let horizon: String?
+    let actionability: String?
+    let topics: [String]?
     let messageText: String?
+    let messageURL: String?
     let expiresAtMoscow: String?
 
     var id: String { "\(symbol)-\(source)-\(bias)" }
 
     enum CodingKeys: String, CodingKey {
         case symbol
+        case category
         case bias
         case strength
         case source
         case reason
+        case summary
+        case horizon
+        case actionability
+        case topics
         case messageText = "message_text"
+        case messageURL = "message_url"
         case expiresAtMoscow = "expires_at_moscow"
     }
 }

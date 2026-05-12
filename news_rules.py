@@ -9,6 +9,7 @@ MARKETSNAPSHOT = "marketsnapshot"
 @dataclass(frozen=True)
 class NewsRule:
     symbol: str
+    category: str
     keywords: tuple[str, ...]
     long_terms: tuple[str, ...]
     short_terms: tuple[str, ...]
@@ -94,6 +95,7 @@ COMMON_BLOCK_TERMS = (
 NEWS_RULES: tuple[NewsRule, ...] = (
     NewsRule(
         symbol="BRK6",
+        category="нефть",
         keywords=(
             "нефть",
             "brent",
@@ -118,6 +120,7 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="BMM6",
+        category="нефть",
         keywords=(
             "нефть",
             "brent",
@@ -142,6 +145,7 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="NGJ6",
+        category="газ",
         keywords=("природный газ", "natural gas", "natgas", "lng", "спг", "ttf", "поставки газа", "рынок газа", "газовые хранилища"),
         long_terms=COMMON_LONG_TERMS + ("холод", "жара", "дефицит газа", "снижение запасов", "европа", "погода", "превысила", "превысил"),
         short_terms=COMMON_SHORT_TERMS + ("тёплая погода", "рост запасов газа", "слабый спрос", "европа", "погода", "снизилась до", "ниже"),
@@ -150,6 +154,7 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="NGK6",
+        category="газ",
         keywords=("природный газ", "natural gas", "natgas", "lng", "спг", "ttf", "поставки газа", "рынок газа", "газовые хранилища"),
         long_terms=COMMON_LONG_TERMS + ("холод", "жара", "дефицит газа", "снижение запасов", "европа", "погода", "превысила", "превысил"),
         short_terms=COMMON_SHORT_TERMS + ("тёплая погода", "рост запасов газа", "слабый спрос", "европа", "погода", "снизилась до", "ниже"),
@@ -158,6 +163,7 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="GNM6",
+        category="золото",
         keywords=(
             "золото",
             "gold",
@@ -175,6 +181,7 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="USDRUBF",
+        category="валюта",
         keywords=("usd/rub", "usdrub", "доллар/рубль", "доллар к рублю", "курс доллара", "курс рубля", "валютная пара usd/rub"),
         long_terms=COMMON_LONG_TERMS + ("ослабление рубля", "рост доллара", "спрос на валюту"),
         short_terms=COMMON_SHORT_TERMS + ("укрепление рубля", "продажа валютной выручки", "экспортеры", "цб", "минфин", "ставка", "санкции"),
@@ -183,6 +190,7 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="CNYRUBF",
+        category="валюта",
         keywords=("cny/rub", "cnyrub", "юань/рубль", "юань к рублю", "курс юаня", "курс cny", "китайская валюта"),
         long_terms=COMMON_LONG_TERMS + ("ослабление рубля", "рост юаня", "спрос на юань", "китай", "расчеты", "превысил", "превысила", "выше"),
         short_terms=COMMON_SHORT_TERMS + ("укрепление рубля", "слабость юаня", "китай", "расчеты", "снизился до", "ниже"),
@@ -190,7 +198,17 @@ NEWS_RULES: tuple[NewsRule, ...] = (
         priority=3,
     ),
     NewsRule(
+        symbol="UCM6",
+        category="валюта",
+        keywords=("usd/cny", "usdcny", "доллар/юань", "доллар к юаню", "курс доллара к юаню", "китайский юань"),
+        long_terms=COMMON_LONG_TERMS + ("ослабление юаня", "сильный доллар", "давление на cny", "китай", "пошлины", "торговые войны", "выше"),
+        short_terms=COMMON_SHORT_TERMS + ("укрепление юаня", "слабый доллар", "поддержка юаня", "китай", "стимулы", "ниже"),
+        block_terms=COMMON_BLOCK_TERMS,
+        priority=3,
+    ),
+    NewsRule(
         symbol="IMOEXF",
+        category="индекс",
         keywords=("imoex", "индекс мосбиржи", "индекс мосбиржи imoex", "московская биржа индекс", "индекс российского рынка"),
         long_terms=COMMON_LONG_TERMS + ("дивиденд", "позитив по рынку", "рост рынка", "рынок рф", "российский рынок"),
         short_terms=COMMON_SHORT_TERMS + ("негатив по рынку", "геополитический риск", "давление на рынок", "рынок рф", "российский рынок"),
@@ -199,9 +217,28 @@ NEWS_RULES: tuple[NewsRule, ...] = (
     ),
     NewsRule(
         symbol="SRM6",
+        category="банки",
         keywords=("сбер", "sber", "сбербанк", "sberbank", "акции сбера", "акции сбербанка"),
         long_terms=COMMON_LONG_TERMS + ("сильная отчетность", "дивиденды сбера", "рост прибыли", "банковский сектор", "кредитование"),
         short_terms=COMMON_SHORT_TERMS + ("санкции на банки", "слабая отчетность", "давление на банковский сектор", "банковский сектор", "кредитование"),
+        block_terms=COMMON_BLOCK_TERMS,
+        priority=2,
+    ),
+    NewsRule(
+        symbol="VBM6",
+        category="банки",
+        keywords=("втб", "vtb", "банк втб", "акции втб", "vtbr"),
+        long_terms=COMMON_LONG_TERMS + ("сильная отчетность", "рост прибыли", "банковский сектор", "дивиденды", "кредитование"),
+        short_terms=COMMON_SHORT_TERMS + ("слабая отчетность", "санкции на банки", "давление на банковский сектор", "допэмиссия"),
+        block_terms=COMMON_BLOCK_TERMS,
+        priority=2,
+    ),
+    NewsRule(
+        symbol="RBM6",
+        category="облигации",
+        keywords=("rgbi", "индекс гособлигаций", "индекс облигаций", "офз", "доходности офз", "рынок облигаций"),
+        long_terms=COMMON_LONG_TERMS + ("снижение доходностей", "спрос на офз", "мягкая риторика цб", "снижение ставки", "рост облигаций"),
+        short_terms=COMMON_SHORT_TERMS + ("рост доходностей", "жесткая риторика цб", "рост ставки", "давление на офз", "снижение облигаций"),
         block_terms=COMMON_BLOCK_TERMS,
         priority=2,
     ),
