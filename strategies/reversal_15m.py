@@ -1,6 +1,10 @@
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 
 from instrument_groups import is_brent_symbol
+
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,19 @@ def _macd_flip_count(macd: list[float], signal: list[float]) -> int:
     return flips
 
 
+def _is_late_evening_candle(value) -> bool:
+    try:
+        if hasattr(value, "tz_convert"):
+            local_time = value.tz_convert(MOSCOW_TZ)
+        elif hasattr(value, "astimezone"):
+            local_time = value.astimezone(MOSCOW_TZ)
+        else:
+            return False
+    except Exception:
+        return False
+    return local_time.hour >= 21
+
+
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
     profile = get_profile(instrument.symbol)
     if len(df) < 8:
@@ -135,6 +152,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     volume_ratio = (volume / volume_avg) if volume_avg > 0 else 0.0
     body_ratio = (body / body_avg) if body_avg > 0 else 0.0
     distance_to_ema20_pct = abs(close - ema20) / close if close else 0.0
+    late_evening = _is_late_evening_candle(last.get("time"))
     recent_high = float(pre_recent["high"].max())
     recent_low = float(pre_recent["low"].min())
     recent_range_pct = (float(recent["high"].max()) - float(recent["low"].min())) / close if close else 0.0
@@ -240,6 +258,35 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     early_long_ok = close >= ema20 and ema20 >= prev_ema20
     early_short_ok = close <= ema20 and ema20 <= prev_ema20
     strong_impulse_override = volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio
+    evening_volume_ok = (not late_evening) or volume_ratio >= 1.0
+    slow_long_continuation_ok = (
+        regime != "chop"
+        and recent_long_cross
+        and macd_long_ok
+        and close >= ema20
+        and ema20 >= prev_ema20
+        and close >= prev_close
+        and rsi >= prev_rsi
+        and (stoch_long_ok or (stoch_k >= 68.0 and stoch_d >= 55.0))
+        and soft_volume_ok
+        and evening_volume_ok
+        and (soft_impulse_ok or volume_ratio >= profile.strong_volume_ratio)
+        and distance_to_ema20_pct <= profile.max_distance_to_ema20_pct
+    )
+    slow_short_continuation_ok = (
+        regime != "chop"
+        and recent_short_cross
+        and macd_short_ok
+        and close <= ema20
+        and ema20 <= prev_ema20
+        and close <= prev_close
+        and (rsi <= prev_rsi or rsi <= profile.late_rsi_short)
+        and (stoch_short_ok or (stoch_k <= 32.0 and stoch_d <= 36.0))
+        and soft_volume_ok
+        and evening_volume_ok
+        and (soft_impulse_ok or volume_ratio >= profile.strong_volume_ratio)
+        and distance_to_ema20_pct <= profile.max_distance_to_ema20_pct
+    )
 
     late_long = (
         long_cross_age is None
@@ -271,6 +318,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"импульс x{body_ratio:.2f}",
         f"ATR%={atr_pct:.4f}",
         f"distance EMA20={distance_to_ema20_pct:.4f}",
+        f"вечер после 21: {'да' if late_evening else 'нет'}",
     ]
     short_reasons = [
         f"режим={regime}",
@@ -281,6 +329,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"импульс x{body_ratio:.2f}",
         f"ATR%={atr_pct:.4f}",
         f"distance EMA20={distance_to_ema20_pct:.4f}",
+        f"вечер после 21: {'да' if late_evening else 'нет'}",
     ]
 
     long_blockers: list[str] = []
@@ -292,26 +341,26 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
     if regime == "compression" and not (compression_short_ok or (macd_short_ok and early_short_ok and soft_volume_ok and soft_impulse_ok)):
         short_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
-    if not rsi_long_ok:
+    if not rsi_long_ok and not slow_long_continuation_ok:
         long_blockers.append("RSI не подтверждает рост")
-    if not rsi_short_ok:
+    if not rsi_short_ok and not slow_short_continuation_ok:
         short_blockers.append("RSI не подтверждает снижение")
-    if not stoch_long_ok:
+    if not stoch_long_ok and not slow_long_continuation_ok:
         long_blockers.append("stochastic не подтверждает рост")
-    if not stoch_short_ok:
+    if not stoch_short_ok and not slow_short_continuation_ok:
         short_blockers.append("stochastic не подтверждает снижение")
     if not soft_volume_ok:
         long_blockers.append("объём слишком слабый")
         short_blockers.append("объём слишком слабый")
-    if not soft_impulse_ok:
+    if not soft_impulse_ok and not (slow_long_continuation_ok or slow_short_continuation_ok):
         long_blockers.append("импульс свечи слишком слабый")
         short_blockers.append("импульс свечи слишком слабый")
-    if not soft_volatility_ok:
+    if not soft_volatility_ok and not (slow_long_continuation_ok or slow_short_continuation_ok):
         long_blockers.append("волатильность слишком низкая")
         short_blockers.append("волатильность слишком низкая")
-    if late_long:
+    if late_long and not slow_long_continuation_ok:
         long_blockers.append("late entry: движение уже ушло")
-    if late_short:
+    if late_short and not slow_short_continuation_ok:
         short_blockers.append("late entry: движение уже ушло")
 
     regime_allows_long = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and fresh_impulse_override)
@@ -340,6 +389,12 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and soft_volatility_ok
         and not late_short
     )
+    if not long_ok and slow_long_continuation_ok:
+        long_ok = True
+        long_reasons.append("медленное продолжение вверх по MACD")
+    if not short_ok and slow_short_continuation_ok:
+        short_ok = True
+        short_reasons.append("медленное продолжение вниз по MACD")
 
     if long_ok:
         return "LONG", "Сигнал LONG (reversal_15m): " + "; ".join(long_reasons) + "."
