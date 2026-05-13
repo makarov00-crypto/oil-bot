@@ -2855,6 +2855,11 @@ def add_indicators(df: pd.DataFrame, *, include_ema200: bool = True) -> pd.DataF
     result["macd_signal"] = macd.macd_signal()
     median_price = (result["high"] + result["low"]) / 2
     result["ao"] = median_price.rolling(5).mean() - median_price.rolling(20).mean()
+    high_low_range = (result["high"] - result["low"]).astype(float).replace(0.0, float("nan"))
+    money_flow_multiplier = ((result["close"] - result["low"]) - (result["high"] - result["close"])) / high_low_range
+    money_flow_volume = money_flow_multiplier.fillna(0.0).astype(float) * result["volume"]
+    adl = money_flow_volume.cumsum()
+    result["chaikin"] = adl.ewm(span=5, adjust=False).mean() - adl.ewm(span=20, adjust=False).mean()
     bb = ta.volatility.BollingerBands(result["close"], window=20, window_dev=2)
     result["bb_upper"] = bb.bollinger_hband()
     result["bb_lower"] = bb.bollinger_lband()

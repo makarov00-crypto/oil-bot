@@ -167,6 +167,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     prev_hist = prev_macd - prev_macd_signal
     ao = float(last.get("ao", macd_hist))
     prev_ao = float(prev.get("ao", prev_hist))
+    chaikin = float(last.get("chaikin", 0.0))
+    prev_chaikin = float(prev.get("chaikin", 0.0))
+    chaikin_delta = chaikin - prev_chaikin
     macd_flip_count = _macd_flip_count(macd_series, macd_signal_series)
 
     trend_up = close > ema20 and ema20 >= ema50 and ema20 >= prev_ema20
@@ -241,8 +244,12 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     )
     ao_long_ok = ao >= prev_ao and (ao > 0 or macd_hist > 0)
     ao_short_ok = ao <= prev_ao and (ao < 0 or macd_hist < 0)
+    chaikin_long_ok = chaikin >= prev_chaikin and (chaikin > 0 or chaikin_delta > 0)
+    chaikin_short_ok = chaikin <= prev_chaikin and (chaikin < 0 or chaikin_delta < 0)
     volume_ok = volume_ratio >= profile.min_volume_ratio
     soft_volume_ok = volume_ratio >= soft_volume_floor
+    long_volume_ok = soft_volume_ok or (late_evening and volume_ratio >= 0.35 and chaikin_long_ok)
+    short_volume_ok = soft_volume_ok or (late_evening and volume_ratio >= 0.35 and chaikin_short_ok)
     impulse_ok = body_ratio >= profile.min_body_ratio
     soft_impulse_ok = body_ratio >= soft_impulse_floor
     volatility_ok = atr_pct >= profile.min_atr_pct
@@ -262,7 +269,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     early_long_ok = close >= ema20 and ema20 >= prev_ema20
     early_short_ok = close <= ema20 and ema20 <= prev_ema20
     strong_impulse_override = volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio
-    evening_volume_ok = (not late_evening) or volume_ratio >= 1.0
+    evening_long_pressure_ok = (not late_evening) or volume_ratio >= 1.0 or (volume_ratio >= 0.35 and chaikin_long_ok)
+    evening_short_pressure_ok = (not late_evening) or volume_ratio >= 1.0 or (volume_ratio >= 0.35 and chaikin_short_ok)
     slow_long_continuation_ok = (
         regime != "chop"
         and recent_long_cross
@@ -272,8 +280,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and close >= prev_close
         and rsi >= prev_rsi
         and ao_long_ok
-        and soft_volume_ok
-        and evening_volume_ok
+        and long_volume_ok
+        and evening_long_pressure_ok
         and (soft_impulse_ok or volume_ratio >= profile.strong_volume_ratio)
         and distance_to_ema20_pct <= profile.max_distance_to_ema20_pct
     )
@@ -286,8 +294,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and close <= prev_close
         and (rsi <= prev_rsi or rsi <= profile.late_rsi_short)
         and ao_short_ok
-        and soft_volume_ok
-        and evening_volume_ok
+        and short_volume_ok
+        and evening_short_pressure_ok
         and (soft_impulse_ok or volume_ratio >= profile.strong_volume_ratio)
         and distance_to_ema20_pct <= profile.max_distance_to_ema20_pct
     )
@@ -318,6 +326,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"MACD cross вверх: {'да' if recent_long_cross else 'нет'}",
         f"RSI={rsi:.2f} и {'растёт' if rsi >= prev_rsi else 'падает'}",
         f"AO={ao:.4f} и {'растёт' if ao >= prev_ao else 'падает'}",
+        f"поток Чайкина={chaikin:.2f} и {'растёт' if chaikin >= prev_chaikin else 'падает'}",
         f"Stochastic K/D={stoch_k:.1f}/{stoch_d:.1f}",
         f"объём x{volume_ratio:.2f}",
         f"импульс x{body_ratio:.2f}",
@@ -330,6 +339,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"MACD cross вниз: {'да' if recent_short_cross else 'нет'}",
         f"RSI={rsi:.2f} и {'падает' if rsi <= prev_rsi else 'растёт'}",
         f"AO={ao:.4f} и {'падает' if ao <= prev_ao else 'растёт'}",
+        f"поток Чайкина={chaikin:.2f} и {'падает' if chaikin <= prev_chaikin else 'растёт'}",
         f"Stochastic K/D={stoch_k:.1f}/{stoch_d:.1f}",
         f"объём x{volume_ratio:.2f}",
         f"импульс x{body_ratio:.2f}",
@@ -343,9 +353,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if regime == "chop":
         long_blockers.append("режим chop: переворот запрещён")
         short_blockers.append("режим chop: переворот запрещён")
-    if regime == "compression" and not (compression_long_ok or (macd_long_ok and early_long_ok and soft_volume_ok and soft_impulse_ok)):
+    if regime == "compression" and not (compression_long_ok or (macd_long_ok and early_long_ok and long_volume_ok and soft_impulse_ok)):
         long_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
-    if regime == "compression" and not (compression_short_ok or (macd_short_ok and early_short_ok and soft_volume_ok and soft_impulse_ok)):
+    if regime == "compression" and not (compression_short_ok or (macd_short_ok and early_short_ok and short_volume_ok and soft_impulse_ok)):
         short_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
     if not rsi_long_ok and not slow_long_continuation_ok:
         long_blockers.append("RSI не подтверждает рост")
@@ -355,8 +365,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("AO не подтверждает рост")
     if not ao_short_ok and not slow_short_continuation_ok:
         short_blockers.append("AO не подтверждает снижение")
-    if not soft_volume_ok:
+    if not long_volume_ok:
         long_blockers.append("объём слишком слабый")
+    if not short_volume_ok:
         short_blockers.append("объём слишком слабый")
     if not soft_impulse_ok and not (slow_long_continuation_ok or slow_short_continuation_ok):
         long_blockers.append("импульс свечи слишком слабый")
@@ -378,7 +389,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and macd_long_ok
         and rsi_long_ok
         and ao_long_ok
-        and soft_volume_ok
+        and long_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok
         and not late_long
@@ -390,7 +401,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and macd_short_ok
         and rsi_short_ok
         and ao_short_ok
-        and soft_volume_ok
+        and short_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok
         and not late_short

@@ -87,6 +87,7 @@ def candle_rows(rows: list[dict]) -> pd.DataFrame:
             "macd": row.get("macd", 0.1),
             "macd_signal": row.get("macd_signal", 0.0),
             "ao": row.get("ao", row.get("macd", 0.1) - row.get("macd_signal", 0.0)),
+            "chaikin": row.get("chaikin", 0.0),
             "stoch_k": row.get("stoch_k", 50.0),
             "stoch_d": row.get("stoch_d", 50.0),
             "atr": row.get("atr", 0.1),
@@ -768,6 +769,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertNotIn("ema200", result.columns)
         self.assertIn("ema20", result.columns)
         self.assertIn("ema50", result.columns)
+        self.assertIn("chaikin", result.columns)
 
     def test_reversal_15m_allows_fx_long_on_fresh_cross_with_volume_and_stochastic(self) -> None:
         df = candle_rows(
@@ -970,6 +972,27 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(signal, "HOLD")
         self.assertIn("объём слишком слабый", reason)
+
+    def test_reversal_15m_allows_weak_evening_short_when_chaikin_confirms_pressure(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 11986.0, "close": 11984.0, "high": 11987.0, "low": 11983.0, "ema20": 11986.0, "ema50": 11988.0, "rsi": 45.0, "macd": 0.8, "macd_signal": 0.4, "volume": 80, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 58.0, "stoch_d": 52.0, "atr": 3.0, "bb_upper": 11994.0, "bb_lower": 11978.0, "chaikin": 90.0},
+                {"open": 11984.0, "close": 11982.0, "high": 11985.0, "low": 11981.0, "ema20": 11985.0, "ema50": 11987.0, "rsi": 41.0, "macd": 0.5, "macd_signal": 0.4, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 42.0, "stoch_d": 44.0, "atr": 3.0, "bb_upper": 11993.0, "bb_lower": 11977.0, "chaikin": 75.0},
+                {"open": 11982.0, "close": 11980.0, "high": 11983.0, "low": 11979.0, "ema20": 11984.0, "ema50": 11986.0, "rsi": 38.0, "macd": 0.2, "macd_signal": 0.3, "volume": 60, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 31.0, "stoch_d": 38.0, "atr": 3.0, "bb_upper": 11992.0, "bb_lower": 11976.0, "chaikin": 55.0},
+                {"open": 11980.0, "close": 11978.0, "high": 11981.0, "low": 11977.0, "ema20": 11982.0, "ema50": 11985.0, "rsi": 35.0, "macd": -0.2, "macd_signal": 0.1, "volume": 55, "volume_avg": 100, "body": 0.8, "body_avg": 1.0, "stoch_k": 28.0, "stoch_d": 14.0, "atr": 3.0, "bb_upper": 11991.0, "bb_lower": 11975.0, "chaikin": 25.0},
+                {"open": 11978.0, "close": 11976.0, "high": 11979.0, "low": 11975.0, "ema20": 11980.0, "ema50": 11984.0, "rsi": 32.0, "macd": -0.8, "macd_signal": -0.1, "volume": 50, "volume_avg": 100, "body": 0.6, "body_avg": 1.0, "stoch_k": 22.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11990.0, "bb_lower": 11974.0, "chaikin": -5.0},
+                {"open": 11976.0, "close": 11975.0, "high": 11977.0, "low": 11974.0, "ema20": 11978.0, "ema50": 11983.0, "rsi": 30.0, "macd": -1.2, "macd_signal": -0.4, "volume": 48, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 20.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11989.0, "bb_lower": 11973.0, "chaikin": -35.0},
+                {"open": 11975.0, "close": 11973.0, "high": 11976.0, "low": 11972.0, "ema20": 11976.0, "ema50": 11982.0, "rsi": 29.0, "macd": -1.6, "macd_signal": -0.7, "volume": 44, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 19.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11988.0, "bb_lower": 11972.0, "chaikin": -60.0},
+                {"open": 11973.0, "close": 11972.0, "high": 11974.0, "low": 11971.0, "ema20": 11975.0, "ema50": 11981.0, "rsi": 28.0, "macd": -2.0, "macd_signal": -1.0, "volume": 42, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 18.8, "stoch_d": 18.2, "atr": 3.0, "bb_upper": 11987.0, "bb_lower": 11971.0, "chaikin": -95.0},
+            ]
+        )
+        df["time"] = pd.date_range("2026-05-13 21:15", periods=len(df), freq="15min", tz="Europe/Moscow")
+        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("поток Чайкина=", reason)
 
     def test_bmm6_inherits_brent_news_rule(self) -> None:
         brk6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BRK6")
