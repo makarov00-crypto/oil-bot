@@ -165,8 +165,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     macd_signal_series = [float(value) for value in recent["macd_signal"].tolist()]
     long_cross_age = _bars_since_cross(macd_series, macd_signal_series, "LONG")
     short_cross_age = _bars_since_cross(macd_series, macd_signal_series, "SHORT")
-    recent_long_cross = long_cross_age is not None and long_cross_age <= 3
-    recent_short_cross = short_cross_age is not None and short_cross_age <= 3
+    recent_long_cross = long_cross_age is not None and long_cross_age <= 6
+    recent_short_cross = short_cross_age is not None and short_cross_age <= 6
     macd_hist = macd - macd_signal
     prev_hist = prev_macd - prev_macd_signal
     macd_flip_count = _macd_flip_count(macd_series, macd_signal_series)
@@ -207,8 +207,11 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     breakout_up = close > recent_high and close > ema20
     breakout_down = close < recent_low and close < ema20
-    compression_long_ok = regime == "compression" and breakout_up and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio
-    compression_short_ok = regime == "compression" and breakout_down and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio
+    soft_volume_floor = max(0.55, profile.min_volume_ratio - 0.30)
+    soft_impulse_floor = max(0.45, profile.min_body_ratio - 0.35)
+    soft_volatility_floor = profile.min_atr_pct * 0.60
+    compression_long_ok = regime == "compression" and breakout_up and volume_ratio >= soft_volume_floor and body_ratio >= soft_impulse_floor
+    compression_short_ok = regime == "compression" and breakout_down and volume_ratio >= soft_volume_floor and body_ratio >= soft_impulse_floor
 
     rsi_long_ok = profile.rsi_long_min <= rsi <= profile.rsi_long_max and rsi >= prev_rsi
     rsi_short_ok = profile.rsi_short_min <= rsi <= profile.rsi_short_max and rsi <= prev_rsi
@@ -219,6 +222,11 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and stoch_d >= prev_stoch_d
             and abs(stoch_k - stoch_d) <= 4.0
         )
+        or (
+            stoch_k >= prev_stoch_k
+            and stoch_d >= (prev_stoch_d - 2.0)
+            and stoch_k >= 68.0
+        )
     )
     stoch_short_ok = (
         (stoch_k < stoch_d and stoch_k <= prev_stoch_k and stoch_d <= prev_stoch_d)
@@ -227,34 +235,52 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and stoch_d <= prev_stoch_d
             and abs(stoch_k - stoch_d) <= 4.0
         )
+        or (
+            stoch_k <= prev_stoch_k
+            and stoch_d <= (prev_stoch_d + 2.0)
+            and stoch_k <= 32.0
+        )
     )
     volume_ok = volume_ratio >= profile.min_volume_ratio
+    soft_volume_ok = volume_ratio >= soft_volume_floor
     impulse_ok = body_ratio >= profile.min_body_ratio
+    soft_impulse_ok = body_ratio >= soft_impulse_floor
     volatility_ok = atr_pct >= profile.min_atr_pct
-    macd_long_ok = macd >= macd_signal and macd_hist >= prev_hist
-    macd_short_ok = macd <= macd_signal and macd_hist <= prev_hist
+    soft_volatility_ok = atr_pct >= soft_volatility_floor
+    macd_long_ok = (
+        macd >= macd_signal
+        and macd_hist >= (prev_hist - 1e-9)
+        and long_cross_age is not None
+        and long_cross_age <= 6
+    )
+    macd_short_ok = (
+        macd <= macd_signal
+        and macd_hist <= (prev_hist + 1e-9)
+        and short_cross_age is not None
+        and short_cross_age <= 6
+    )
     early_long_ok = close >= ema20 and ema20 >= prev_ema20
     early_short_ok = close <= ema20 and ema20 <= prev_ema20
     strong_impulse_override = volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio
 
     late_long = (
         long_cross_age is None
-        or long_cross_age > 3
+        or long_cross_age > 6
         or rsi >= profile.late_rsi_long
-        or stoch_k >= profile.late_stoch_high
         or (
             distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
             and not strong_impulse_override
+            and (long_cross_age is None or long_cross_age > 1)
         )
     )
     late_short = (
         short_cross_age is None
-        or short_cross_age > 3
+        or short_cross_age > 6
         or rsi <= profile.late_rsi_short
-        or stoch_k <= profile.late_stoch_low
         or (
             distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
             and not strong_impulse_override
+            and (short_cross_age is None or short_cross_age > 1)
         )
     )
 
@@ -284,9 +310,9 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if regime == "chop":
         long_blockers.append("режим chop: переворот запрещён")
         short_blockers.append("режим chop: переворот запрещён")
-    if regime == "compression" and not compression_long_ok:
+    if regime == "compression" and not (compression_long_ok or (macd_long_ok and early_long_ok and soft_volume_ok and soft_impulse_ok)):
         long_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
-    if regime == "compression" and not compression_short_ok:
+    if regime == "compression" and not (compression_short_ok or (macd_short_ok and early_short_ok and soft_volume_ok and soft_impulse_ok)):
         short_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
     if not rsi_long_ok:
         long_blockers.append("RSI не подтверждает рост")
@@ -296,13 +322,13 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("stochastic не подтверждает рост")
     if not stoch_short_ok:
         short_blockers.append("stochastic не подтверждает снижение")
-    if not volume_ok:
+    if not soft_volume_ok:
         long_blockers.append("объём слишком слабый")
         short_blockers.append("объём слишком слабый")
-    if not impulse_ok:
+    if not soft_impulse_ok:
         long_blockers.append("импульс свечи слишком слабый")
         short_blockers.append("импульс свечи слишком слабый")
-    if not volatility_ok:
+    if not soft_volatility_ok:
         long_blockers.append("волатильность слишком низкая")
         short_blockers.append("волатильность слишком низкая")
     if late_long:
@@ -310,30 +336,30 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     if late_short:
         short_blockers.append("late entry: движение уже ушло")
 
+    regime_allows_long = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and fresh_impulse_override)
+    regime_allows_short = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and fresh_impulse_override)
     long_ok = (
-        regime in {"trend", "expansion", "compression"}
-        and regime != "chop"
+        regime_allows_long
         and (trend_up or expansion_up or compression_long_ok or early_long_ok)
         and recent_long_cross
         and macd_long_ok
         and rsi_long_ok
         and stoch_long_ok
-        and volume_ok
-        and impulse_ok
-        and volatility_ok
+        and soft_volume_ok
+        and soft_impulse_ok
+        and soft_volatility_ok
         and not late_long
     )
     short_ok = (
-        regime in {"trend", "expansion", "compression"}
-        and regime != "chop"
+        regime_allows_short
         and (trend_down or expansion_down or compression_short_ok or early_short_ok)
         and recent_short_cross
         and macd_short_ok
         and rsi_short_ok
         and stoch_short_ok
-        and volume_ok
-        and impulse_ok
-        and volatility_ok
+        and soft_volume_ok
+        and soft_impulse_ok
+        and soft_volatility_ok
         and not late_short
     )
 

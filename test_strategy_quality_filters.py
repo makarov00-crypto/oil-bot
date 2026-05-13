@@ -834,6 +834,66 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "LONG")
         self.assertIn("MACD cross вверх: да", reason)
 
+    def test_reversal_15m_allows_long_in_mixed_regime_when_macd_rsi_and_stoch_align(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 73.78, "close": 73.76, "high": 73.80, "low": 73.74, "ema20": 73.83, "ema50": 73.90, "rsi": 38.0, "macd": -0.22, "macd_signal": -0.18, "volume": 72, "volume_avg": 100, "body": 0.02, "body_avg": 0.05, "stoch_k": 18.0, "stoch_d": 26.0, "atr": 0.11, "bb_upper": 74.00, "bb_lower": 73.60},
+                {"open": 73.76, "close": 73.71, "high": 73.77, "low": 73.69, "ema20": 73.80, "ema50": 73.89, "rsi": 34.0, "macd": -0.24, "macd_signal": -0.19, "volume": 78, "volume_avg": 100, "body": 0.05, "body_avg": 0.05, "stoch_k": 14.0, "stoch_d": 22.0, "atr": 0.11, "bb_upper": 73.98, "bb_lower": 73.58},
+                {"open": 73.71, "close": 73.67, "high": 73.72, "low": 73.64, "ema20": 73.77, "ema50": 73.88, "rsi": 30.0, "macd": -0.25, "macd_signal": -0.20, "volume": 81, "volume_avg": 100, "body": 0.04, "body_avg": 0.05, "stoch_k": 10.0, "stoch_d": 18.0, "atr": 0.11, "bb_upper": 73.96, "bb_lower": 73.56},
+                {"open": 73.67, "close": 73.69, "high": 73.71, "low": 73.66, "ema20": 73.74, "ema50": 73.86, "rsi": 33.0, "macd": -0.23, "macd_signal": -0.20, "volume": 84, "volume_avg": 100, "body": 0.02, "body_avg": 0.05, "stoch_k": 16.0, "stoch_d": 16.0, "atr": 0.11, "bb_upper": 73.94, "bb_lower": 73.55},
+                {"open": 73.69, "close": 73.73, "high": 73.75, "low": 73.68, "ema20": 73.72, "ema50": 73.84, "rsi": 39.0, "macd": -0.19, "macd_signal": -0.19, "volume": 88, "volume_avg": 100, "body": 0.04, "body_avg": 0.05, "stoch_k": 28.0, "stoch_d": 20.0, "atr": 0.11, "bb_upper": 73.92, "bb_lower": 73.54},
+                {"open": 73.73, "close": 73.78, "high": 73.80, "low": 73.72, "ema20": 73.71, "ema50": 73.82, "rsi": 44.0, "macd": -0.15, "macd_signal": -0.17, "volume": 92, "volume_avg": 100, "body": 0.05, "body_avg": 0.05, "stoch_k": 44.0, "stoch_d": 28.0, "atr": 0.11, "bb_upper": 73.90, "bb_lower": 73.53},
+                {"open": 73.78, "close": 73.84, "high": 73.86, "low": 73.77, "ema20": 73.73, "ema50": 73.80, "rsi": 48.0, "macd": -0.12, "macd_signal": -0.15, "volume": 86, "volume_avg": 100, "body": 0.06, "body_avg": 0.05, "stoch_k": 68.0, "stoch_d": 42.0, "atr": 0.11, "bb_upper": 73.89, "bb_lower": 73.54},
+                {"open": 73.84, "close": 73.90, "high": 73.92, "low": 73.83, "ema20": 73.76, "ema50": 73.79, "rsi": 52.0, "macd": -0.10, "macd_signal": -0.13, "volume": 82, "volume_avg": 100, "body": 0.06, "body_avg": 0.05, "stoch_k": 83.0, "stoch_d": 56.0, "atr": 0.11, "bb_upper": 73.90, "bb_lower": 73.55},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("MACD cross вверх: да", reason)
+
+    def test_reversal_15m_treats_high_stochastic_as_strength_when_macd_and_rsi_confirm(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 10.84, "close": 10.83, "high": 10.85, "low": 10.82, "ema20": 10.87, "ema50": 10.90, "rsi": 41.0, "macd": -0.030, "macd_signal": -0.025, "volume": 88, "volume_avg": 100, "body": 0.01, "body_avg": 0.02, "stoch_k": 22.0, "stoch_d": 28.0, "atr": 0.02, "bb_upper": 10.90, "bb_lower": 10.77},
+                {"open": 10.83, "close": 10.81, "high": 10.84, "low": 10.80, "ema20": 10.86, "ema50": 10.89, "rsi": 37.0, "macd": -0.032, "macd_signal": -0.026, "volume": 92, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 18.0, "stoch_d": 25.0, "atr": 0.02, "bb_upper": 10.89, "bb_lower": 10.76},
+                {"open": 10.81, "close": 10.80, "high": 10.82, "low": 10.79, "ema20": 10.85, "ema50": 10.88, "rsi": 35.0, "macd": -0.031, "macd_signal": -0.026, "volume": 96, "volume_avg": 100, "body": 0.01, "body_avg": 0.02, "stoch_k": 16.0, "stoch_d": 22.0, "atr": 0.02, "bb_upper": 10.88, "bb_lower": 10.75},
+                {"open": 10.80, "close": 10.82, "high": 10.83, "low": 10.79, "ema20": 10.84, "ema50": 10.87, "rsi": 39.0, "macd": -0.028, "macd_signal": -0.026, "volume": 94, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 26.0, "stoch_d": 22.0, "atr": 0.02, "bb_upper": 10.87, "bb_lower": 10.75},
+                {"open": 10.82, "close": 10.84, "high": 10.85, "low": 10.81, "ema20": 10.83, "ema50": 10.86, "rsi": 44.0, "macd": -0.024, "macd_signal": -0.025, "volume": 95, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 42.0, "stoch_d": 28.0, "atr": 0.02, "bb_upper": 10.86, "bb_lower": 10.75},
+                {"open": 10.84, "close": 10.86, "high": 10.87, "low": 10.83, "ema20": 10.83, "ema50": 10.85, "rsi": 48.0, "macd": -0.018, "macd_signal": -0.022, "volume": 90, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 58.0, "stoch_d": 38.0, "atr": 0.02, "bb_upper": 10.86, "bb_lower": 10.76},
+                {"open": 10.86, "close": 10.89, "high": 10.90, "low": 10.85, "ema20": 10.84, "ema50": 10.85, "rsi": 51.0, "macd": -0.011, "macd_signal": -0.017, "volume": 84, "volume_avg": 100, "body": 0.03, "body_avg": 0.02, "stoch_k": 73.0, "stoch_d": 49.0, "atr": 0.02, "bb_upper": 10.87, "bb_lower": 10.76},
+                {"open": 10.89, "close": 10.91, "high": 10.92, "low": 10.88, "ema20": 10.85, "ema50": 10.85, "rsi": 53.0, "macd": -0.006, "macd_signal": -0.012, "volume": 80, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 89.0, "stoch_d": 68.0, "atr": 0.02, "bb_upper": 10.88, "bb_lower": 10.77},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("Stochastic K/D=89.0/68.0", reason)
+
+    def test_reversal_15m_allows_short_in_mixed_regime_when_macd_rsi_and_stoch_align(self) -> None:
+        df = candle_rows(
+            [
+                {"open": 33120.0, "close": 33132.0, "high": 33136.0, "low": 33118.0, "ema20": 33100.0, "ema50": 33080.0, "rsi": 66.0, "macd": 21.0, "macd_signal": 17.0, "volume": 76, "volume_avg": 100, "body": 12.0, "body_avg": 10.0, "stoch_k": 86.0, "stoch_d": 80.0, "atr": 48.0, "bb_upper": 33160.0, "bb_lower": 33020.0},
+                {"open": 33132.0, "close": 33136.0, "high": 33140.0, "low": 33128.0, "ema20": 33105.0, "ema50": 33084.0, "rsi": 68.0, "macd": 22.0, "macd_signal": 18.0, "volume": 80, "volume_avg": 100, "body": 4.0, "body_avg": 10.0, "stoch_k": 90.0, "stoch_d": 83.0, "atr": 48.0, "bb_upper": 33162.0, "bb_lower": 33024.0},
+                {"open": 33136.0, "close": 33130.0, "high": 33138.0, "low": 33126.0, "ema20": 33108.0, "ema50": 33088.0, "rsi": 63.0, "macd": 20.0, "macd_signal": 18.5, "volume": 85, "volume_avg": 100, "body": 6.0, "body_avg": 10.0, "stoch_k": 84.0, "stoch_d": 84.0, "atr": 48.0, "bb_upper": 33161.0, "bb_lower": 33028.0},
+                {"open": 33130.0, "close": 33118.0, "high": 33132.0, "low": 33116.0, "ema20": 33109.0, "ema50": 33091.0, "rsi": 58.0, "macd": 16.0, "macd_signal": 17.8, "volume": 88, "volume_avg": 100, "body": 12.0, "body_avg": 10.0, "stoch_k": 69.0, "stoch_d": 78.0, "atr": 48.0, "bb_upper": 33158.0, "bb_lower": 33032.0},
+                {"open": 33118.0, "close": 33108.0, "high": 33120.0, "low": 33105.0, "ema20": 33108.0, "ema50": 33094.0, "rsi": 54.0, "macd": 12.0, "macd_signal": 16.4, "volume": 90, "volume_avg": 100, "body": 10.0, "body_avg": 10.0, "stoch_k": 52.0, "stoch_d": 69.0, "atr": 48.0, "bb_upper": 33154.0, "bb_lower": 33036.0},
+                {"open": 33108.0, "close": 33098.0, "high": 33110.0, "low": 33095.0, "ema20": 33104.0, "ema50": 33096.0, "rsi": 49.0, "macd": 8.0, "macd_signal": 14.0, "volume": 92, "volume_avg": 100, "body": 10.0, "body_avg": 10.0, "stoch_k": 38.0, "stoch_d": 56.0, "atr": 48.0, "bb_upper": 33150.0, "bb_lower": 33040.0},
+                {"open": 33098.0, "close": 33090.0, "high": 33100.0, "low": 33088.0, "ema20": 33099.0, "ema50": 33097.0, "rsi": 45.0, "macd": 4.5, "macd_signal": 11.0, "volume": 87, "volume_avg": 100, "body": 8.0, "body_avg": 10.0, "stoch_k": 29.0, "stoch_d": 43.0, "atr": 48.0, "bb_upper": 33146.0, "bb_lower": 33044.0},
+                {"open": 33090.0, "close": 33082.0, "high": 33092.0, "low": 33079.0, "ema20": 33095.0, "ema50": 33097.0, "rsi": 41.0, "macd": 1.0, "macd_signal": 7.5, "volume": 82, "volume_avg": 100, "body": 8.0, "body_avg": 10.0, "stoch_k": 18.0, "stoch_d": 31.0, "atr": 48.0, "bb_upper": 33142.0, "bb_lower": 33048.0},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="SRM6", figi="FIGI", display_name="Sber")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("MACD cross вниз: да", reason)
+
     def test_bmm6_inherits_brent_news_rule(self) -> None:
         brk6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BRK6")
         bmm6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BMM6")
