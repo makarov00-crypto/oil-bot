@@ -5959,6 +5959,23 @@ def macd_crossed_up_with_ema_reclaim(df: pd.DataFrame) -> bool:
     return close > ema20 and (crossed or confirmed)
 
 
+def reversal_15m_pressure_intact(df: pd.DataFrame, side: str) -> bool:
+    if len(df) < 2:
+        return False
+    last = df.iloc[-1]
+    close = float(last["close"])
+    ema20 = float(last["ema20"])
+    macd = float(last["macd"])
+    macd_signal = float(last["macd_signal"])
+    macd_hist = macd - macd_signal
+    ao = float(last.get("ao", macd_hist))
+    if side == "LONG":
+        return close > ema20 and macd > macd_signal and ao > 0
+    if side == "SHORT":
+        return close < ema20 and macd < macd_signal and ao < 0
+    return False
+
+
 def rbm6_sideways_exhaustion_exit_reason(
     instrument: InstrumentConfig,
     state: InstrumentState,
@@ -6989,6 +7006,7 @@ def check_exit(
         )
     is_trend_rollover = state.entry_strategy == "trend_rollover"
     is_macd_stoch_reversal = state.entry_strategy == "macd_stoch_reversal"
+    is_unified_reversal = state.entry_strategy == "reversal_15m"
     prev = exit_df.iloc[-2]
     prev2 = exit_df.iloc[-3]
     macd = float(last["macd"])
@@ -7040,7 +7058,13 @@ def check_exit(
             or state.breakeven_armed
         ) and price <= trailing_price:
             close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} <= {trailing_price:.4f}")
-        elif min_hold_passed and state.breakeven_armed and rsi >= profile.rsi_exit_long and not is_trend_rollover:
+        elif (
+            min_hold_passed
+            and state.breakeven_armed
+            and rsi >= profile.rsi_exit_long
+            and not is_trend_rollover
+            and not (is_unified_reversal and reversal_15m_pressure_intact(exit_df, "LONG"))
+        ):
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
         elif min_hold_passed and macd_down:
             close_position(client, config, instrument, state, "MACD подтверждённо развернулся вниз и цена потеряла EMA20")
@@ -7089,6 +7113,7 @@ def check_exit(
             and state.breakeven_armed
             and rsi <= profile.rsi_exit_short
             and not is_trend_rollover
+            and not (is_unified_reversal and reversal_15m_pressure_intact(exit_df, "SHORT"))
             and (
                 instrument.symbol not in {"VBM6", "USDRUBF"}
                 or macd_up

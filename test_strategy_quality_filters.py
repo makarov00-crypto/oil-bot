@@ -1321,6 +1321,30 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         close_mock.assert_not_called()
 
+    def test_reversal_15m_short_does_not_exit_on_rsi_oversold_while_ao_confirms_trend(self) -> None:
+        lower_df = candle_rows(
+            [
+                {"close": 107.08, "ema20": 107.77, "macd": -0.0424, "macd_signal": 0.0496, "rsi": 38.91, "ao": -0.2135},
+                {"close": 106.80, "ema20": 107.61, "macd": -0.1532, "macd_signal": -0.0141, "rsi": 35.50, "ao": -0.4805},
+                {"close": 106.33, "ema20": 107.49, "macd": -0.2347, "macd_signal": -0.0582, "rsi": 30.60, "ao": -0.6735},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent mini")
+        state = mod.InstrumentState(
+            position_side="SHORT",
+            position_qty=1,
+            entry_price=107.95,
+            min_price=106.33,
+            breakeven_armed=True,
+            entry_strategy="reversal_15m",
+            entry_time="2026-05-13T14:00:00+00:00",
+        )
+
+        with patch.object(mod, "get_last_price", return_value=106.33), patch.object(mod, "close_position") as close_mock:
+            mod.check_exit(None, self.config, instrument, state, lower_df, "HOLD", higher_tf_df=lower_df)
+
+        close_mock.assert_not_called()
+
     def test_rbm6_sideways_exhaustion_locks_profit_after_impulse(self) -> None:
         df = candle_rows(
             [
