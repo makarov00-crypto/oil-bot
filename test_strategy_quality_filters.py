@@ -700,6 +700,35 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(get_reversal_profile("NGK6"), get_reversal_profile("USDRUBF"))
         self.assertEqual(get_reversal_profile("NGJ6"), get_reversal_profile("SRM6"))
 
+    def test_unified_reversal_setup_quality_promotes_early_reversal_without_higher_tf_bonus(self) -> None:
+        score, label = mod.estimate_setup_quality(
+            "LONG",
+            "SHORT",
+            "compression",
+            {
+                "volume_ratio": 0.51,
+                "body_ratio": 0.38,
+                "regime_confidence": 0.891,
+            },
+            strategy_name="reversal_15m",
+        )
+
+        self.assertEqual(score, 3)
+        self.assertEqual(label, "medium")
+
+    def test_unified_reversal_entry_edge_is_not_crushed_by_early_compression(self) -> None:
+        state = mod.InstrumentState(
+            last_setup_quality_label="medium",
+            last_market_regime="compression",
+            last_market_regime_confidence=0.891,
+        )
+
+        edge, label, reason = mod.get_entry_edge_profile(state, "VBM6", "reversal_15m", "LONG")
+
+        self.assertGreaterEqual(edge, 0.60)
+        self.assertEqual(label, "confirmed")
+        self.assertIn("локальный 15м", reason)
+
     def test_unified_reversal_symbols_use_longer_bootstrap_lookback(self) -> None:
         self.assertGreaterEqual(
             mod.get_lower_tf_lookback_hours(self.config, "BMM6", interval_minutes=15),

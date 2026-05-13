@@ -3223,18 +3223,29 @@ def estimate_setup_quality(
     market_regime: str,
     metrics: dict[str, float | str],
     news_bias: NewsBias | None = None,
+    strategy_name: str = "",
 ) -> tuple[int, str]:
     if signal not in {"LONG", "SHORT"}:
         return 0, "none"
     score = 1
-    if higher_tf_bias == signal:
-        score += 1
-    if float(metrics.get("volume_ratio") or 0.0) >= 1.0:
-        score += 1
-    if float(metrics.get("body_ratio") or 0.0) >= 0.8:
-        score += 1
+    is_unified_reversal = str(strategy_name or "").strip().lower() == "reversal_15m"
+    volume_ratio = float(metrics.get("volume_ratio") or 0.0)
+    body_ratio = float(metrics.get("body_ratio") or 0.0)
     regime_confidence = float(metrics.get("regime_confidence") or 0.0)
-    if market_regime in {"trend_expansion", "trend_pullback", "impulse"} and regime_confidence >= 0.58:
+
+    if not is_unified_reversal and higher_tf_bias == signal:
+        score += 1
+    volume_threshold = 0.55 if is_unified_reversal else 1.0
+    body_threshold = 0.35 if is_unified_reversal else 0.8
+    if volume_ratio >= volume_threshold:
+        score += 1
+    if body_ratio >= body_threshold:
+        score += 1
+    reversal_regimes = {"trend_expansion", "trend_pullback", "impulse", "mixed", "compression", "chop"}
+    if is_unified_reversal:
+        if market_regime in reversal_regimes and regime_confidence >= 0.58:
+            score += 1
+    elif market_regime in {"trend_expansion", "trend_pullback", "impulse"} and regime_confidence >= 0.58:
         score += 1
     if news_bias is not None and news_bias.bias == signal:
         score += 1
@@ -4414,16 +4425,17 @@ def get_entry_edge_profile(
 
     edge = 0.50
     reasons: list[str] = []
+    is_unified_reversal = str(strategy_name or "").strip().lower() == "reversal_15m"
 
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     if setup_label == "strong":
-        edge += 0.16
+        edge += 0.14 if is_unified_reversal else 0.16
         reasons.append("сильный сетап")
     elif setup_label == "medium":
-        edge += 0.05
+        edge += 0.09 if is_unified_reversal else 0.05
         reasons.append("средний сетап")
     elif setup_label == "weak":
-        edge -= 0.14
+        edge -= 0.04 if is_unified_reversal else 0.14
         reasons.append("слабый сетап")
 
     regime = str(state.last_market_regime or "").strip().lower()
@@ -4432,7 +4444,7 @@ def get_entry_edge_profile(
         edge += 0.08
         reasons.append(f"режим {regime}")
     elif regime in {"compression", "chop"}:
-        edge -= 0.10
+        edge -= 0.02 if is_unified_reversal else 0.10
         reasons.append(f"режим {regime}")
 
     if regime_confidence >= 0.75:
@@ -7263,6 +7275,7 @@ def process_instrument(
         market_regime,
         regime_metrics,
         news_bias,
+        primary_strategy_name,
     )
     state.last_market_regime = market_regime
     state.last_market_regime_confidence = float(regime_metrics.get("regime_confidence") or 0.0)
