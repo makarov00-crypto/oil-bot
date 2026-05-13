@@ -4,8 +4,10 @@ struct TradesScreen: View {
     @ObservedObject var store: DashboardStore
     @State private var segment = 0
     @State private var eventFilter = 0
+    @State private var reviewSegment = 0
 
     private let eventFilters = ["Все", "Активные", "Закрытые", "История"]
+    private let reviewSections = ["Сделки", "Стратегия", "Аллокатор"]
 
     var body: some View {
         NavigationStack {
@@ -169,107 +171,99 @@ struct TradesScreen: View {
                         MetricGlassTile(title: "Итог по закрытым", value: formatRub(payload.tradeReview.closedTotalPnlRub), tone: statusTone(for: payload.tradeReview.closedTotalPnlRub))
                     }
 
-                    reviewInfoBlock(
-                        title: "Что помогло и что мешало",
-                        rows: [
-                            ("Лучший инструмент", bestSymbolText(payload.tradeReview.bestSymbol)),
-                            ("Худший инструмент", worstSymbolText(payload.tradeReview.worstSymbol)),
-                            ("Лучшая стратегия", bestStrategyText(payload.tradeReview.bestStrategy)),
-                            ("Что тянет вниз", worstStrategyText(payload.tradeReview.worstStrategy)),
-                            ("Режим дня", regimeText(payload.tradeReview.bestRegime)),
-                        ]
-                    )
-
-                    reviewInfoBlock(
-                        title: "На что смотреть сейчас",
-                        rows: [
-                            ("Сильное сегодня", focusText(payload.tradeReview.focusToday?.strongest.first)),
-                            ("Слабое сегодня", focusText(payload.tradeReview.focusToday?.toxic.first)),
-                            ("Рабочая зона", strategyRegimeText(payload.tradeReview.release1Summary?.working)),
-                            ("Под наблюдением", strategyRegimeText(payload.tradeReview.release1Summary?.watch)),
-                            ("Осторожно", strategyRegimeText(payload.tradeReview.release1Summary?.toxic)),
-                        ]
-                    )
-
-                    allocatorDecisionsBlock(payload: payload)
-                    signalObservationsBlock(payload: payload)
+                    reviewInfoBlock(title: "Сейчас важно", rows: reviewNowRows(payload: payload))
+                    SegmentedGlassPicker(title: "Обзор", selection: $reviewSegment, items: reviewSections)
                 }
             }
 
-            if payload.tradeReview.closedReviews.isEmpty {
-                VStack(spacing: 16) {
-                    EmptyGlassState(
-                        title: "Закрытых сделок пока нет",
-                        subtitle: payload.tradeReview.currentOpen?.isEmpty == false
-                            ? "Есть открытые позиции. Они показаны ниже."
-                            : "Когда появятся закрытия, они будут разобраны здесь.",
-                        systemImage: "chart.bar.doc.horizontal"
-                    )
+            switch reviewSegment {
+            case 1:
+                strategyDiagnosticsContent(payload: payload)
+            case 2:
+                GlassCard {
+                    allocatorDecisionsBlock(payload: payload)
+                }
+            default:
+                reviewTradesContent(payload: payload)
+            }
+        }
+    }
 
-                    if let currentOpen = payload.tradeReview.currentOpen, !currentOpen.isEmpty {
-                        ForEach(currentOpen) { trade in
-                            GlassCard {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    HStack(alignment: .top) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(trade.symbol)
-                                                .font(.title3.weight(.semibold))
-                                            Text(formatStrategyLabel(trade.strategy ?? "-"))
-                                                .font(.subheadline)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        SignalPill(text: displaySignal(trade.side), raw: trade.side)
-                                    }
+    @ViewBuilder
+    private func reviewTradesContent(payload: DashboardPayload) -> some View {
+        if payload.tradeReview.closedReviews.isEmpty {
+            VStack(spacing: 16) {
+                EmptyGlassState(
+                    title: "Закрытых сделок пока нет",
+                    subtitle: payload.tradeReview.currentOpen?.isEmpty == false
+                        ? "Есть открытые позиции. Они показаны ниже."
+                        : "Когда появятся закрытия, они будут разобраны здесь.",
+                    systemImage: "chart.bar.doc.horizontal"
+                )
 
-                                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                                        compactInfo("Статус", "открыта")
-                                        compactInfo("Время входа", trade.time ?? "-")
-                                        compactInfo("Цена", trade.price.map { String(format: "%.4f", $0) } ?? "-")
-                                        compactInfo("Комиссия входа", formatTradePnl(trade.commissionRub))
-                                        compactInfo("Вход", shortText(trade.reasonDisplay ?? trade.reason ?? "-"))
-                                        compactInfo("Контекст", shortText(trade.contextDisplay ?? "-"))
+                if let currentOpen = payload.tradeReview.currentOpen, !currentOpen.isEmpty {
+                    ForEach(currentOpen) { trade in
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(trade.symbol)
+                                            .font(.title3.weight(.semibold))
+                                        Text(formatStrategyLabel(trade.strategy ?? "-"))
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
                                     }
+                                    Spacer()
+                                    SignalPill(text: displaySignal(trade.side), raw: trade.side)
+                                }
+
+                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                                    compactInfo("Статус", "открыта")
+                                    compactInfo("Время входа", trade.time ?? "-")
+                                    compactInfo("Цена", trade.price.map { String(format: "%.4f", $0) } ?? "-")
+                                    compactInfo("Комиссия входа", formatTradePnl(trade.commissionRub))
+                                    compactInfo("Вход", shortText(trade.reasonDisplay ?? trade.reason ?? "-"))
+                                    compactInfo("Контекст", shortText(trade.contextDisplay ?? "-"))
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                ForEach(payload.tradeReview.closedReviews) { trade in
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .top) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(trade.symbol)
-                                        .font(.title3.weight(.semibold))
-                                    Text(formatStrategyLabel(trade.strategy))
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                VStack(alignment: .trailing, spacing: 6) {
-                                    SignalPill(text: displaySignal(trade.side), raw: trade.side)
-                                    Text(formatTradePnl(trade.netPnlRub ?? trade.pnlRub))
-                                        .font(.headline.weight(.semibold))
-                                        .foregroundStyle(statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
-                                }
+            }
+        } else {
+            ForEach(payload.tradeReview.closedReviews) { trade in
+                GlassCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(trade.symbol)
+                                    .font(.title3.weight(.semibold))
+                                Text(formatStrategyLabel(trade.strategy))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
                             }
-
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                                compactInfo("Вход → выход", "\(trade.entryTime) → \(trade.exitTime)")
-                                compactInfo("Режим", displaySession(trade.session))
-                                compactInfo("Лоты", formatInt(trade.qtyLots))
-                                compactInfo("Итог", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 6) {
+                                SignalPill(text: displaySignal(trade.side), raw: trade.side)
+                                Text(formatTradePnl(trade.netPnlRub ?? trade.pnlRub))
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
                             }
-
-                            Divider().overlay(Color.white.opacity(0.08))
-
-                            compactBlock(title: "Вход", value: shortText(trade.entryContextDisplay ?? trade.entryReason ?? "-"))
-                            compactBlock(title: "Выход", value: shortText(trade.exitReason))
-                            compactBlock(title: "Детали", value: "До комиссии: \(formatTradePnl(trade.grossPnlRub)) · Комиссия: \(formatTradePnl(trade.commissionRub))")
-                            compactBlock(title: "Вердикт", value: trade.verdict)
                         }
+
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                            compactInfo("Вход → выход", "\(trade.entryTime) → \(trade.exitTime)")
+                            compactInfo("Режим", displaySession(trade.session))
+                            compactInfo("Лоты", formatInt(trade.qtyLots))
+                            compactInfo("Итог", formatTradePnl(trade.netPnlRub ?? trade.pnlRub), tone: statusTone(forString: trade.netPnlRub ?? trade.pnlRub))
+                        }
+
+                        Divider().overlay(Color.white.opacity(0.08))
+
+                        compactBlock(title: "Вход", value: shortText(trade.entryContextDisplay ?? trade.entryReason ?? "-"))
+                        compactBlock(title: "Выход", value: shortText(trade.exitReason))
+                        compactBlock(title: "Детали", value: "До комиссии: \(formatTradePnl(trade.grossPnlRub)) · Комиссия: \(formatTradePnl(trade.commissionRub))")
+                        compactBlock(title: "Вердикт", value: trade.verdict)
                     }
                 }
             }
@@ -344,135 +338,45 @@ struct TradesScreen: View {
     }
 
     @ViewBuilder
-    private func signalObservationsBlock(payload: DashboardPayload) -> some View {
-        let summary = payload.signalObservations
-        let items = Array((summary?.items ?? []).prefix(5))
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Сигналы за день")
-                .font(.headline)
+    private func strategyDiagnosticsContent(payload: DashboardPayload) -> some View {
+        let states = sortedSignalStates(payload)
+        let active = activePositionStates(states)
+        let actionable = actionableSignalStates(states)
+        let blocked = allocatorBlockedStates(states)
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                MetricGlassTile(title: "Проверено", value: "\(summary?.evaluated ?? 0)/\(summary?.total ?? 0)")
-                MetricGlassTile(title: "Подтвердились", value: "\(summary?.favorable ?? 0)", tone: .green)
-                MetricGlassTile(title: "Упущенные шансы", value: "\(summary?.deferredFavorable ?? 0)", tone: .orange)
-                MetricGlassTile(title: "Слабые выбранные", value: "\(summary?.selectedUnfavorable ?? 0)", tone: .red)
-                MetricGlassTile(title: "Ждут проверки", value: "\(summary?.pending ?? 0)")
-            }
+        VStack(spacing: 16) {
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    reviewInfoBlock(
+                        title: "Сводка стратегии",
+                        rows: [
+                            ("Инструментов", "\(states.count)"),
+                            ("Держим позиции", active.isEmpty ? "нет открытых позиций" : active.map { $0.id }.prefix(4).joined(separator: " · ")),
+                            ("Есть вход", actionable.isEmpty ? "нет свободных входов" : actionable.map { "\($0.id): \(displaySignal($0.lastSignal))" }.prefix(4).joined(separator: " · ")),
+                            ("HOLD", "\(states.filter { normalizedSignal($0.lastSignal) == "HOLD" }.count)"),
+                        ]
+                    )
 
-            Text("Точность короткой проверки: \(String(format: "%.1f%%", summary?.favorableRate ?? 0)). Ждут проверки: \(summary?.pending ?? 0).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            signalObservationCombosBlock(
-                title: "Лучшие связки",
-                emptyText: "Нужно больше проверенных сигналов.",
-                items: Array((summary?.combos?.strongest ?? []).prefix(3))
-            )
-            signalObservationCombosBlock(
-                title: "Слабые связки",
-                emptyText: "Пока нет проверенных слабых связок.",
-                items: Array((summary?.combos?.weakest ?? []).prefix(3))
-            )
-            reviewInfoBlock(
-                title: "Что делать сейчас",
-                rows: Array((summary?.actions ?? ["Явных шагов по сигналам пока нет."]).prefix(3)).enumerated().map {
-                    ("Шаг \($0.offset + 1)", $0.element.replacingOccurrences(of: "- ", with: "", options: .anchored))
-                }
-            )
-
-            if items.isEmpty {
-                Text("Новые строки появятся после выбранных и отложенных сигналов.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(alignment: .top, spacing: 10) {
-                                Text(signalObservationTitle(item))
-                                    .font(.subheadline.weight(.semibold))
-                                Spacer()
-                                Text(item.timeDisplay ?? "-")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(signalObservationDetails(item))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 9)
-                        if index < items.count - 1 {
-                            Divider().overlay(Color.white.opacity(0.08))
-                        }
-                    }
+                    reviewInfoBlock(
+                        title: "Текущие решения",
+                        rows: [
+                            ("Главное", actionable.isEmpty ? (active.isEmpty ? "ждать новый MACD-сигнал" : "контролировать сопровождение позиции") : "проверить свободные сигналы"),
+                            ("Если нет входа", blocked.isEmpty ? "смотреть блокер стратегии" : "смотреть аллокатор"),
+                            ("Выход", active.isEmpty ? "нет позиции для сопровождения" : "закрывать только по реальному развороту или стопу"),
+                        ]
+                    )
                 }
             }
-        }
-    }
 
-    @ViewBuilder
-    private func signalObservationCombosBlock(title: String, emptyText: String, items: [SignalObservationCombo]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            if items.isEmpty {
-                Text(emptyText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            if states.isEmpty {
+                EmptyGlassState(
+                    title: "Диагностики пока нет",
+                    subtitle: "После следующего цикла здесь появятся решения стратегии по инструментам.",
+                    systemImage: "waveform.path.ecg"
+                )
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.label)
-                                .font(.caption.weight(.semibold))
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(signalObservationComboDetails(item))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 7)
-                        if index < items.count - 1 {
-                            Divider().overlay(Color.white.opacity(0.08))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func signalObservationLearningCombosBlock(
-        title: String,
-        emptyText: String,
-        items: [SignalObservationLearningCombo]
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            if items.isEmpty {
-                Text(emptyText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.label)
-                                .font(.caption.weight(.semibold))
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(signalObservationLearningComboDetails(item))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 7)
-                        if index < items.count - 1 {
-                            Divider().overlay(Color.white.opacity(0.08))
-                        }
-                    }
+                ForEach(states) { state in
+                    strategyDiagnosticCard(state)
                 }
             }
         }
@@ -517,44 +421,6 @@ struct TradesScreen: View {
         }
     }
 
-    private func bestStrategyText(_ bestStrategy: NamedStrategyPnl?) -> String {
-        guard let bestStrategy else { return "-" }
-        return "\(formatStrategyLabel(bestStrategy.strategy)) (\(String(format: "%.2f", bestStrategy.pnlRub)))"
-    }
-
-    private func worstStrategyText(_ worstStrategy: NamedStrategyPnl?) -> String {
-        guard let worstStrategy else { return "-" }
-        return "\(formatStrategyLabel(worstStrategy.strategy)) (\(String(format: "%.2f", worstStrategy.pnlRub)))"
-    }
-
-    private func regimeText(_ regime: NamedRegimePnl?) -> String {
-        guard let regime else { return "-" }
-        return "\(formatRegimeLabel(regime.regime)) (\(String(format: "%.2f", regime.pnlRub)))"
-    }
-
-    private func labelPnlText(_ item: NamedLabelPnl?) -> String {
-        guard let item else { return "-" }
-        return "\(strategyRegimeText(item.label)) (\(String(format: "%.2f", item.pnlRub)))"
-    }
-
-    private func focusText(_ item: StrategyFocusItem?) -> String {
-        guard let item else { return "-" }
-        if let count = item.count {
-            return "\(strategyRegimeText(item.label)) (\(String(format: "%.2f", item.pnlRub)); \(count) сд.)"
-        }
-        return "\(strategyRegimeText(item.label)) (\(String(format: "%.2f", item.pnlRub)))"
-    }
-
-    private func bestSymbolText(_ bestSymbol: NamedPnl?) -> String {
-        guard let bestSymbol else { return "-" }
-        return "\(displayName(for: bestSymbol.symbol)) (\(String(format: "%.2f", bestSymbol.pnlRub)))"
-    }
-
-    private func worstSymbolText(_ worstSymbol: NamedPnl?) -> String {
-        guard let worstSymbol else { return "-" }
-        return "\(displayName(for: worstSymbol.symbol)) (\(String(format: "%.2f", worstSymbol.pnlRub)))"
-    }
-
     private func allocatorDecisionTitle(_ decision: AllocatorDecision) -> String {
         let decisionText = decision.decisionDisplay ?? "решение"
         let symbolText = decision.symbol.map { displayName(for: $0) } ?? "-"
@@ -585,43 +451,113 @@ struct TradesScreen: View {
         return parts.isEmpty ? "подробности появятся после следующего цикла" : parts.joined(separator: " · ")
     }
 
-    private func signalObservationTitle(_ item: SignalObservationItem) -> String {
-        let decision = item.decisionDisplay ?? "наблюдение"
-        let symbol = item.displayName ?? item.symbol ?? "-"
-        let signal = displaySignal(item.signal)
-        return "\(decision): \(symbol) \(signal)"
+    private func sortedSignalStates(_ payload: DashboardPayload) -> [InstrumentSignalState] {
+        payload.states.values.sorted { $0.id.localizedCompare($1.id) == .orderedAscending }
     }
 
-    private func signalObservationDetails(_ item: SignalObservationItem) -> String {
-        var parts: [String] = []
-        if let outcome = item.outcomeDisplay, !outcome.isEmpty {
-            parts.append(outcome)
-        }
-        if let move = item.movePct {
-            parts.append("движение \(String(format: "%.2f%%", move))")
-        }
-        if let priority = item.priorityScore {
-            parts.append("приоритет \(String(format: "%.2f", priority))")
-        }
-        if let edge = item.entryEdgeScore {
-            parts.append("качество входа \(String(format: "%.2f", edge))")
-        }
-        if let reason = item.decisionReason, !reason.isEmpty {
-            parts.append(humanizeAllocatorText(reason))
-        }
-        return parts.isEmpty ? "подробности появятся после проверки сигнала" : parts.joined(separator: " · ")
+    private func activePositionStates(_ states: [InstrumentSignalState]) -> [InstrumentSignalState] {
+        states.filter { normalizedSide($0.positionSide) != "FLAT" && ($0.positionQty ?? 0) > 0 }
     }
 
-    private func signalObservationComboDetails(_ item: SignalObservationCombo) -> String {
-        let sampleText = item.sampleWarning ? "\(item.evaluated) пров., мало данных" : "\(item.evaluated) пров."
-        return "\(String(format: "%.1f%%", item.confirmationRate)) · \(sampleText) · среднее движение \(String(format: "%.2f%%", item.avgMovePct)) · выбрано \(item.selected) · отложено \(item.deferred)"
+    private func actionableSignalStates(_ states: [InstrumentSignalState]) -> [InstrumentSignalState] {
+        states.filter { state in
+            let signal = normalizedSignal(state.lastSignal)
+            let side = normalizedSide(state.positionSide)
+            return signal != "HOLD" && (side == "FLAT" || side != signal)
+        }
     }
 
-    private func signalObservationLearningComboDetails(_ item: SignalObservationLearningCombo) -> String {
-        let adjustmentText = item.avgAdjustment > 0
-            ? "+\(String(format: "%.2f", item.avgAdjustment))"
-            : String(format: "%.2f", item.avgAdjustment)
-        return "\(item.count) корр. · бонусов \(item.bonusCount) · штрафов \(item.penaltyCount) · средняя поправка \(adjustmentText) · подтверждение \(String(format: "%.1f%%", item.confirmationRate))"
+    private func allocatorBlockedStates(_ states: [InstrumentSignalState]) -> [InstrumentSignalState] {
+        states.filter { state in
+            let summary = (state.lastAllocatorSummary ?? "").lowercased()
+            return summary.contains("не хватает") || summary.contains("отложен") || summary.contains("0 лот")
+        }
+    }
+
+    private func reviewNowRows(payload: DashboardPayload) -> [(String, String)] {
+        let states = sortedSignalStates(payload)
+        let active = activePositionStates(states)
+        let actionable = actionableSignalStates(states)
+        let blocked = allocatorBlockedStates(states)
+        return [
+            ("Активные позиции", active.isEmpty ? "открытых позиций нет" : active.map { "\($0.id): \(positionText($0))" }.prefix(3).joined(separator: " · ")),
+            ("Сигналы без позиции", actionable.isEmpty ? "нет явных сигналов без позиции" : actionable.map { "\($0.id): \(displaySignal($0.lastSignal))" }.prefix(3).joined(separator: " · ")),
+            ("Ограничения", blocked.isEmpty ? "аллокатор не показывает явных блокировок" : blocked.map(\.id).prefix(4).joined(separator: " · ")),
+        ]
+    }
+
+    @ViewBuilder
+    private func strategyDiagnosticCard(_ state: InstrumentSignalState) -> some View {
+        let parts = diagnosticParts(from: state.signalSummary)
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(state.id)
+                            .font(.title3.weight(.semibold))
+                        Text("\(formatStrategyLabel(state.strategyName ?? state.entryStrategy ?? "-")) · \(positionText(state))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    SignalPill(text: displaySignal(state.lastSignal), raw: state.lastSignal)
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    compactInfo("MACD", shortText(parts.macd, limit: 90))
+                    compactInfo("RSI", shortText(parts.rsi, limit: 90))
+                    compactInfo("AO / поток", shortText(parts.ao, limit: 90))
+                    compactInfo("Объём", shortText(parts.volume, limit: 90))
+                }
+
+                compactBlock(title: "Блокер", value: shortText(parts.blocker, limit: 150))
+                compactBlock(title: "Аллокатор", value: shortText(state.lastAllocatorSummary ?? "аллокатор: нет свежего ограничения", limit: 150))
+            }
+        }
+    }
+
+    private func diagnosticParts(from summary: [String]) -> (macd: String, rsi: String, ao: String, volume: String, blocker: String) {
+        let parts = summary
+            .flatMap { $0.components(separatedBy: ";") }
+            .map(cleanDiagnosticText)
+            .filter { !$0.isEmpty }
+        func find(_ needles: [String]) -> String? {
+            parts.first { part in
+                let lower = part.lowercased()
+                return needles.contains { lower.contains($0) }
+            }
+        }
+        return (
+            macd: find(["macd"]) ?? "MACD: нет данных",
+            rsi: find(["rsi="]) ?? "RSI: нет данных",
+            ao: find(["ao="]) ?? find(["поток чайкина"]) ?? "AO/поток: нет данных",
+            volume: find(["объём", "объем"]) ?? "Объём: нет данных",
+            blocker: find(["главные блокеры", "late entry", "не подтверждён", "не подтвержден", "слишком"]) ?? parts.first ?? "нет явного блокера"
+        )
+    }
+
+    private func cleanDiagnosticText(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "Сигнал ", with: "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedSignal(_ value: String?) -> String {
+        let signal = (value ?? "HOLD").uppercased()
+        return ["LONG", "SHORT"].contains(signal) ? signal : "HOLD"
+    }
+
+    private func normalizedSide(_ value: String?) -> String {
+        let side = (value ?? "FLAT").uppercased()
+        return ["LONG", "SHORT"].contains(side) ? side : "FLAT"
+    }
+
+    private func positionText(_ state: InstrumentSignalState) -> String {
+        let side = normalizedSide(state.positionSide)
+        let qty = state.positionQty ?? 0
+        guard side != "FLAT", qty > 0 else { return "позиции нет" }
+        return "\(displaySignal(side)) · \(qty) лот."
     }
 
     private func displayName(for symbol: String) -> String {
