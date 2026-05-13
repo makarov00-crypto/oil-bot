@@ -3627,6 +3627,66 @@ def build_dashboard_html() -> str:
     .review-scroll.tall {
       max-height: 420px;
     }
+    .review-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    .review-tab {
+      border: 1px solid rgba(102, 174, 255, 0.16);
+      background: rgba(10, 18, 34, 0.60);
+      color: #dbe9f8;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font: 700 13px/1 "Manrope", sans-serif;
+      cursor: pointer;
+    }
+    .review-tab.active {
+      background: rgba(67, 197, 255, 0.18);
+      border-color: rgba(67, 197, 255, 0.36);
+      color: #ffffff;
+    }
+    .review-tab-panel {
+      display: none;
+      margin-top: 14px;
+    }
+    .review-tab-panel.active {
+      display: block;
+    }
+    .strategy-diagnostics-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    }
+    .strategy-diagnostic-card {
+      background: rgba(10, 18, 34, 0.62);
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .strategy-diagnostic-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+    .strategy-diagnostic-title {
+      font-weight: 800;
+      color: #eef6ff;
+    }
+    .strategy-diagnostic-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    .strategy-diagnostic-line {
+      color: #d8e6f6;
+      font-size: 13px;
+      line-height: 1.4;
+      margin-top: 6px;
+    }
     .trade-review-summary {
       display: grid;
       gap: 10px;
@@ -4219,47 +4279,57 @@ def build_dashboard_html() -> str:
           <div class="value compact" id="reviewWinRate">-</div>
         </div>
       </div>
-      <div class="review-layout">
-        <div class="review-block">
-          <h3>Что помогло и что мешало</h3>
-          <table class="review-summary-table">
-            <tbody id="reviewPerformanceBody"></tbody>
-          </table>
-        </div>
-        <div class="review-block">
-          <h3>Что делать сейчас</h3>
-          <table class="review-summary-table">
-            <tbody id="reviewActionBody"></tbody>
-          </table>
-        </div>
-      </div>
       <div class="review-block" style="margin-top:16px;">
-        <h3>Последние решения аллокатора</h3>
-        <div class="review-scroll">
-          <table class="review-summary-table compact">
-            <tbody id="allocatorDecisionsBody"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="review-block" style="margin-top:16px;">
-        <h3>Сигналы за день</h3>
-        <div class="review-scroll">
-          <table class="review-summary-table compact">
-            <tbody id="signalObservationsBody"></tbody>
-          </table>
-        </div>
-      </div>
-      <div id="reviewTradeSummary" class="trade-review-summary"></div>
-      <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
-      <div class="table-scroll desktop-table">
-        <table id="reviewTable" style="margin-top:16px;">
-          <thead>
-            <tr>
-              <th>Инструмент</th><th>Сторона</th><th>Вход → выход</th><th class="right">Итог</th><th>Вход</th><th>Выход</th><th>Режим</th><th>Стратегия</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
+        <h3>Сейчас важно</h3>
+        <table class="review-summary-table">
+          <tbody id="reviewNowBody"></tbody>
         </table>
+      </div>
+      <div class="review-tabs" role="tablist" aria-label="Разделы обзора сделок">
+        <button class="review-tab active" type="button" data-review-tab="trades">Сделки</button>
+        <button class="review-tab" type="button" data-review-tab="strategy">Стратегия</button>
+        <button class="review-tab" type="button" data-review-tab="allocator">Аллокатор</button>
+      </div>
+      <div id="reviewTabTrades" class="review-tab-panel active">
+        <div id="reviewTradeSummary" class="trade-review-summary"></div>
+        <div id="reviewCards" class="mobile-cards" style="margin-top:16px;"></div>
+        <div class="table-scroll desktop-table">
+          <table id="reviewTable" style="margin-top:16px;">
+            <thead>
+              <tr>
+                <th>Инструмент</th><th>Сторона</th><th>Вход → выход</th><th class="right">Итог</th><th>Вход</th><th>Выход</th><th>Режим</th><th>Стратегия</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="reviewTabStrategy" class="review-tab-panel">
+        <div class="review-layout">
+          <div class="review-block">
+            <h3>Сводка стратегии</h3>
+            <table class="review-summary-table">
+              <tbody id="strategyDiagnosticsSummaryBody"></tbody>
+            </table>
+          </div>
+          <div class="review-block">
+            <h3>Текущие решения</h3>
+            <table class="review-summary-table">
+              <tbody id="strategyDiagnosticsActionBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="strategy-diagnostics-grid" id="strategyDiagnosticsCards" style="margin-top:16px;"></div>
+      </div>
+      <div id="reviewTabAllocator" class="review-tab-panel">
+        <div class="review-block">
+          <h3>Последние решения аллокатора</h3>
+          <div class="review-scroll tall">
+            <table class="review-summary-table compact">
+              <tbody id="allocatorDecisionsBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -4714,6 +4784,99 @@ def build_dashboard_html() -> str:
 
     function buildReviewRow(label, main, sub = '') {
       return `<tr><td class="review-summary-label">${escapeHtml(label)}</td><td class="review-summary-value">${reviewValueHtml(main, sub)}</td></tr>`;
+    }
+
+    function cleanDiagnosticText(value) {
+      return String(value || '')
+        .replace(/^Сигнал\s+/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function shortDiagnosticText(value, maxLength = 190) {
+      const text = cleanDiagnosticText(value);
+      return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+    }
+
+    function extractDiagnosticParts(summary) {
+      const text = Array.isArray(summary) ? summary.join('; ') : String(summary || '');
+      const parts = text.split(';').map((item) => cleanDiagnosticText(item)).filter(Boolean);
+      const findPart = (patterns) => parts.find((part) => patterns.some((pattern) => part.toLowerCase().includes(pattern)));
+      return {
+        macd: findPart(['macd']) || 'MACD: нет данных',
+        rsi: findPart(['rsi=']) || 'RSI: нет данных',
+        ao: findPart(['ao=']) || findPart(['поток чайкина']) || 'AO/поток: нет данных',
+        volume: findPart(['объём', 'объем']) || 'Объём: нет данных',
+        blocker: findPart(['главные блокеры', 'late entry', 'не подтверждён', 'не подтвержден', 'слишком']) || parts[0] || 'нет явного блокера',
+      };
+    }
+
+    function positionText(state) {
+      const side = String(state.position_side || 'FLAT').toUpperCase();
+      const qty = Number(state.position_qty || 0);
+      if (side === 'FLAT' || qty <= 0) return 'позиции нет';
+      return `${displaySignal(side)} · ${qty} лот.`;
+    }
+
+    function buildStrategyDiagnostics(data) {
+      const states = data.states || {};
+      const entries = Object.entries(states)
+        .filter(([, state]) => !state._state_stale)
+        .sort(([a], [b]) => (instrumentNames[a] || a).localeCompare(instrumentNames[b] || b, 'ru'));
+      const activePositions = entries.filter(([, state]) => String(state.position_side || 'FLAT').toUpperCase() !== 'FLAT' && Number(state.position_qty || 0) > 0);
+      const actionableSignals = entries.filter(([, state]) => {
+        const signal = String(state.last_signal || 'HOLD').toUpperCase();
+        const side = String(state.position_side || 'FLAT').toUpperCase();
+        return signal !== 'HOLD' && (side === 'FLAT' || side !== signal);
+      });
+      const holds = entries.filter(([, state]) => String(state.last_signal || 'HOLD').toUpperCase() === 'HOLD');
+      const allocatorBlocked = entries.filter(([, state]) => {
+        const summary = String(state.last_allocator_summary || '').toLowerCase();
+        return summary.includes('не хватает') || summary.includes('отложен') || summary.includes('0 лот');
+      });
+
+      const nowRows = [
+        buildReviewRow('Активные позиции', `${activePositions.length}`, activePositions.length ? activePositions.map(([symbol, state]) => `${instrumentNames[symbol] || symbol}: ${positionText(state)}`).slice(0, 3).join(' · ') : 'открытых позиций нет'),
+        buildReviewRow('Сигналы без позиции', `${actionableSignals.length}`, actionableSignals.length ? actionableSignals.map(([symbol, state]) => `${instrumentNames[symbol] || symbol}: ${displaySignal(state.last_signal)}`).slice(0, 3).join(' · ') : 'нет явных сигналов без позиции'),
+        buildReviewRow('Ограничения', `${allocatorBlocked.length}`, allocatorBlocked.length ? allocatorBlocked.map(([symbol]) => instrumentNames[symbol] || symbol).slice(0, 4).join(' · ') : 'аллокатор не показывает явных блокировок'),
+      ];
+
+      const summaryRows = [
+        buildReviewRow('Инструментов', `${entries.length}`, 'актуальные состояния стратегии'),
+        buildReviewRow('Держим позиции', `${activePositions.length}`, activePositions.length ? activePositions.map(([symbol]) => instrumentNames[symbol] || symbol).slice(0, 4).join(' · ') : 'нет открытых позиций'),
+        buildReviewRow('Есть вход', `${actionableSignals.length}`, actionableSignals.length ? actionableSignals.map(([symbol, state]) => `${instrumentNames[symbol] || symbol}: ${displaySignal(state.last_signal)}`).slice(0, 4).join(' · ') : 'нет свободных входов'),
+        buildReviewRow('HOLD', `${holds.length}`, 'инструменты без входа сейчас'),
+      ];
+
+      const actionRows = [
+        buildReviewRow('Главное', actionableSignals.length ? 'проверить свободные сигналы' : activePositions.length ? 'контролировать сопровождение позиции' : 'ждать новый MACD-сигнал', actionableSignals.length ? actionableSignals.map(([symbol]) => instrumentNames[symbol] || symbol).slice(0, 3).join(' · ') : ''),
+        buildReviewRow('Если нет входа', allocatorBlocked.length ? 'смотреть аллокатор' : 'смотреть блокер стратегии', allocatorBlocked.length ? 'есть ограничения по размеру/ГО/приоритету' : 'причина должна быть в карточке инструмента'),
+        buildReviewRow('Выход', activePositions.length ? 'закрывать только по реальному развороту или стопу' : 'нет позиции для сопровождения', 'RSI сам по себе не должен выбивать новый 15м режим'),
+      ];
+
+      const cards = entries.map(([symbol, state]) => {
+        const signal = String(state.last_signal || 'HOLD').toUpperCase();
+        const parts = extractDiagnosticParts(state.last_signal_summary || []);
+        const strategy = formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-');
+        const allocator = shortDiagnosticText(state.last_allocator_summary || 'аллокатор: нет свежего ограничения', 150);
+        return `<article class="strategy-diagnostic-card">
+          <div class="strategy-diagnostic-head">
+            <div>
+              <div class="strategy-diagnostic-title">${renderInstrumentLabel(symbol, state.display_name || '')}</div>
+              <div class="strategy-diagnostic-meta">${escapeHtml(strategy)} · ${escapeHtml(positionText(state))}</div>
+            </div>
+            ${signalBadge(signal)}
+          </div>
+          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.macd, 130))}</div>
+          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.rsi, 130))}</div>
+          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.ao, 130))}</div>
+          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.volume, 130))}</div>
+          <div class="strategy-diagnostic-line"><span class="muted">Блокер:</span> ${escapeHtml(shortDiagnosticText(parts.blocker, 150))}</div>
+          <div class="strategy-diagnostic-line"><span class="muted">Аллокатор:</span> ${escapeHtml(allocator)}</div>
+        </article>`;
+      }).join('');
+
+      return { nowRows, summaryRows, actionRows, cards };
     }
 
     function buildFocusItem(item, formatter = (value) => value) {
@@ -5258,62 +5421,11 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewLosses').textContent = review.losses ?? 0;
       document.getElementById('reviewPnl').textContent = formatRub(review.closed_total_pnl_rub);
       document.getElementById('reviewWinRate').textContent = `${Number(review.win_rate || 0).toFixed(1)}%`;
-      const reviewPerformanceBody = document.getElementById('reviewPerformanceBody');
-      reviewPerformanceBody.innerHTML = [
-        buildReviewRow(
-          'Лучший инструмент',
-          review.best_symbol ? (instrumentNames[review.best_symbol.symbol] || review.best_symbol.symbol) : 'нет данных',
-          review.best_symbol ? formatSignedRub(review.best_symbol.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Худший инструмент',
-          review.worst_symbol ? (instrumentNames[review.worst_symbol.symbol] || review.worst_symbol.symbol) : 'нет данных',
-          review.worst_symbol ? formatSignedRub(review.worst_symbol.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Лучшая стратегия',
-          review.best_strategy ? formatStrategyLabel(review.best_strategy.strategy) : 'нет данных',
-          review.best_strategy ? formatSignedRub(review.best_strategy.pnl_rub) : ''
-        ),
-        buildReviewRow(
-          'Худшая стратегия',
-          review.worst_strategy ? formatStrategyLabel(review.worst_strategy.strategy) : 'нет данных',
-          review.worst_strategy ? formatSignedRub(review.worst_strategy.pnl_rub) : ''
-        ),
-      ].join('');
-      const reviewActionBody = document.getElementById('reviewActionBody');
-      reviewActionBody.innerHTML = [
-        buildReviewRow(
-          'Что работало сегодня',
-          review.focus_today?.strongest?.length ? formatStrategyRegimeLabel(review.focus_today.strongest[0].label) : 'нет данных',
-          review.focus_today?.strongest?.length ? [formatSignedRub(review.focus_today.strongest[0].pnl_rub), `${review.focus_today.strongest[0].count || 0} сделки`].join(' · ') : ''
-        ),
-        buildReviewRow(
-          'Что мешало сегодня',
-          review.focus_today?.toxic?.length ? formatStrategyRegimeLabel(review.focus_today.toxic[0].label) : 'нет данных',
-          review.focus_today?.toxic?.length ? [formatSignedRub(review.focus_today.toxic[0].pnl_rub), `${review.focus_today.toxic[0].count || 0} сделки`].join(' · ') : ''
-        ),
-        buildReviewRow(
-          'Сейчас можно усиливать',
-          review.release1_summary?.working ? formatStrategyRegimeLabel(review.release1_summary.working) : 'нет явной рабочей зоны',
-          review.best_regime ? `лучший режим дня: ${formatRegimeLabel(review.best_regime.regime)}` : ''
-        ),
-        buildReviewRow(
-          'Пока только смотреть',
-          review.release1_summary?.watch ? formatStrategyRegimeLabel(review.release1_summary.watch) : 'нет отдельной зоны ожидания',
-          review.focus_3d?.strongest?.length ? `за 3 дня лучше всего: ${formatStrategyRegimeLabel(review.focus_3d.strongest[0].label)}` : ''
-        ),
-        buildReviewRow(
-          'Чего избегать',
-          review.release1_summary?.toxic ? formatStrategyRegimeLabel(review.release1_summary.toxic) : 'явно токсичной зоны нет',
-          review.focus_3d?.toxic?.length ? `за 3 дня хуже всего: ${formatStrategyRegimeLabel(review.focus_3d.toxic[0].label)}` : ''
-        ),
-        buildReviewRow(
-          'Качество входа',
-          review.edge_focus_3d?.strongest?.length ? formatEdgeLabel(review.edge_focus_3d.strongest[0].label) : 'нет данных',
-          review.edge_focus_3d?.toxic?.length ? `слабое место: ${formatEdgeLabel(review.edge_focus_3d.toxic[0].label)}` : ''
-        ),
-      ].join('');
+      const diagnostics = buildStrategyDiagnostics(data);
+      document.getElementById('reviewNowBody').innerHTML = diagnostics.nowRows.join('');
+      document.getElementById('strategyDiagnosticsSummaryBody').innerHTML = diagnostics.summaryRows.join('');
+      document.getElementById('strategyDiagnosticsActionBody').innerHTML = diagnostics.actionRows.join('');
+      document.getElementById('strategyDiagnosticsCards').innerHTML = diagnostics.cards || '<div class="muted">Нет актуальных состояний стратегии.</div>';
 
       const allocatorDecisionsBody = document.getElementById('allocatorDecisionsBody');
       const allocatorDecisions = Array.isArray(data.allocator_decisions) ? data.allocator_decisions : [];
@@ -5334,71 +5446,6 @@ def build_dashboard_html() -> str:
             );
           }).join('')
         : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не перераспределял сигналы');
-
-      const signalObservationsBody = document.getElementById('signalObservationsBody');
-      const signalObservations = data.signal_observations || {};
-      const observationItems = Array.isArray(signalObservations.items) ? signalObservations.items : [];
-      const observationActions = Array.isArray(signalObservations.actions) ? signalObservations.actions : [];
-      const observationCombos = signalObservations.combos || {};
-      const strongestCombos = Array.isArray(observationCombos.strongest) ? observationCombos.strongest : [];
-      const weakestCombos = Array.isArray(observationCombos.weakest) ? observationCombos.weakest : [];
-      const formatObservationCombo = (item) => {
-        const rate = Number(item.confirmation_rate || 0);
-        const avgMove = Number(item.avg_move_pct || 0);
-        const sample = Number(item.evaluated || 0);
-        const sampleText = item.sample_warning ? `${sample} пров., мало данных` : `${sample} пров.`;
-        return `${rate.toFixed(1)}% · ${sampleText} · среднее движение ${avgMove.toFixed(2)}%`;
-      };
-      const observationSummaryRows = [
-        buildReviewRow(
-          'Проверено сигналов',
-          `${signalObservations.evaluated || 0} из ${signalObservations.total || 0}`,
-          `подтвердились ${signalObservations.favorable || 0} · точность ${Number(signalObservations.favorable_rate || 0).toFixed(1)}% · ждут проверки ${signalObservations.pending || 0}`
-        ),
-        buildReviewRow(
-          'Упущенные шансы',
-          `${signalObservations.deferred_favorable || 0}`,
-          'отложенные сигналы, которые потом пошли в нужную сторону'
-        ),
-        buildReviewRow(
-          'Слабые выбранные',
-          `${signalObservations.selected_unfavorable || 0}`,
-          'выбранные сигналы, которые через горизонт не подтвердились'
-        ),
-        buildReviewRow(
-          'Что менять первым',
-          observationActions.length ? observationActions[0] : 'действий пока нет',
-          observationActions.length > 1 ? observationActions.slice(1, 3).join(' | ') : 'нужно накопить ещё наблюдения'
-        ),
-        buildReviewRow(
-          'Лучшие связки',
-          strongestCombos.length ? strongestCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
-          strongestCombos.length ? strongestCombos.slice(0, 2).map(formatObservationCombo).join(' | ') : 'нужно больше проверенных сигналов'
-        ),
-        buildReviewRow(
-          'Слабые связки',
-          weakestCombos.length ? weakestCombos.slice(0, 2).map((item) => item.label || '-').join(' | ') : 'нет данных',
-          weakestCombos.length ? weakestCombos.slice(0, 2).map(formatObservationCombo).join(' | ') : 'нужно больше проверенных сигналов'
-        ),
-      ];
-      signalObservationsBody.innerHTML = observationItems.length
-        ? observationSummaryRows.concat(observationItems.slice(0, 6).map((item) => {
-            const symbol = item.symbol ? (instrumentNames[item.symbol] || item.display_name || item.symbol) : '-';
-            const signal = item.signal ? ` ${displaySignal(item.signal)}` : '';
-            const move = Number(item.move_pct);
-            const moveText = Number.isFinite(move) ? `движение ${move.toFixed(2)}%` : '';
-            const priority = Number(item.priority_score);
-            const priorityText = Number.isFinite(priority) && priority > 0 ? `приоритет ${priority.toFixed(2)}` : '';
-            const meta = [item.outcome_display || '', moveText, priorityText].filter(Boolean).join(' · ');
-            return buildReviewRow(
-              `${item.time_display || '-'} · ${item.decision_display || '-'}`,
-              `${symbol}${signal}`,
-              [meta, humanizeAllocatorText(item.decision_reason || '')].filter(Boolean).join(' · ')
-            );
-          })).join('')
-        : observationSummaryRows.concat([
-            buildReviewRow('Сегодня', 'наблюдений пока нет', 'появятся после новых выбранных и отложенных сигналов')
-          ]).join('');
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');
@@ -5678,6 +5725,15 @@ const aiReview = data.ai_review || {};
       if (manualInstrumentAddBtn) {
         manualInstrumentAddBtn.addEventListener('click', addManualInstrument);
       }
+      document.querySelectorAll('.review-tab').forEach((button) => {
+        button.addEventListener('click', () => {
+          const target = button.dataset.reviewTab;
+          document.querySelectorAll('.review-tab').forEach((item) => item.classList.toggle('active', item === button));
+          document.querySelectorAll('.review-tab-panel').forEach((panel) => {
+            panel.classList.toggle('active', panel.id === `reviewTab${target.charAt(0).toUpperCase()}${target.slice(1)}`);
+          });
+        });
+      });
       document.addEventListener('click', (event) => {
         const trigger = event.target.closest('.js-news-popover');
         if (trigger) {
