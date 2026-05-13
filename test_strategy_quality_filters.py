@@ -17,6 +17,7 @@ from strategies.macd_stoch_reversal import evaluate_signal as evaluate_macd_stoc
 from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
 from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range
 from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
+from strategies.reversal_15m import get_profile as get_reversal_profile
 from strategies.trend_pullback import get_strategy_profile
 from strategies.trend_rollover import evaluate_signal as evaluate_trend_rollover
 
@@ -694,6 +695,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "CNYRUBF"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "UCM6"), 15)
         self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "VBM6"), 15)
+
+    def test_ngk6_uses_shared_unified_reversal_profile(self) -> None:
+        self.assertEqual(get_reversal_profile("NGK6"), get_reversal_profile("USDRUBF"))
+        self.assertEqual(get_reversal_profile("NGJ6"), get_reversal_profile("SRM6"))
 
     def test_unified_reversal_symbols_use_longer_bootstrap_lookback(self) -> None:
         self.assertGreaterEqual(

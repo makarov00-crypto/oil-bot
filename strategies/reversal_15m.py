@@ -49,28 +49,6 @@ def get_profile(symbol: str) -> Reversal15mProfile:
             expansion_range_pct=0.018,
             min_atr_pct=0.0010,
         )
-    if symbol in {"NGJ6", "NGK6"}:
-        return Reversal15mProfile(
-            min_volume_ratio=1.00,
-            strong_volume_ratio=1.22,
-            min_body_ratio=0.85,
-            strong_body_ratio=1.20,
-            rsi_long_min=45.0,
-            rsi_long_max=69.0,
-            rsi_short_min=31.0,
-            rsi_short_max=55.0,
-            late_rsi_long=66.0,
-            late_rsi_short=34.0,
-            late_stoch_high=85.0,
-            late_stoch_low=15.0,
-            max_distance_to_ema20_pct=0.010,
-            compression_atr_pct=0.0014,
-            compression_range_pct=0.012,
-            compression_bb_width_pct=0.014,
-            chop_range_pct=0.018,
-            expansion_range_pct=0.020,
-            min_atr_pct=0.0011,
-        )
     return Reversal15mProfile(
         min_volume_ratio=0.95,
         strong_volume_ratio=1.18,
