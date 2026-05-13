@@ -2853,9 +2853,8 @@ def add_indicators(df: pd.DataFrame, *, include_ema200: bool = True) -> pd.DataF
     macd = ta.trend.MACD(result["close"], window_slow=26, window_fast=12, window_sign=9)
     result["macd"] = macd.macd()
     result["macd_signal"] = macd.macd_signal()
-    stoch = ta.momentum.StochasticOscillator(result["high"], result["low"], result["close"], window=14, smooth_window=3)
-    result["stoch_k"] = stoch.stoch()
-    result["stoch_d"] = stoch.stoch_signal()
+    median_price = (result["high"] + result["low"]) / 2
+    result["ao"] = median_price.rolling(5).mean() - median_price.rolling(20).mean()
     bb = ta.volatility.BollingerBands(result["close"], window=20, window_dev=2)
     result["bb_upper"] = bb.bollinger_hband()
     result["bb_lower"] = bb.bollinger_lband()

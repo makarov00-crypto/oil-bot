@@ -86,6 +86,7 @@ def candle_rows(rows: list[dict]) -> pd.DataFrame:
             "rsi": row.get("rsi", 50.0),
             "macd": row.get("macd", 0.1),
             "macd_signal": row.get("macd_signal", 0.0),
+            "ao": row.get("ao", row.get("macd", 0.1) - row.get("macd_signal", 0.0)),
             "stoch_k": row.get("stoch_k", 50.0),
             "stoch_d": row.get("stoch_d", 50.0),
             "atr": row.get("atr", 0.1),
@@ -888,7 +889,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "LONG")
         self.assertIn("MACD cross вверх: да", reason)
 
-    def test_reversal_15m_treats_high_stochastic_as_strength_when_macd_and_rsi_confirm(self) -> None:
+    def test_reversal_15m_treats_rising_ao_as_strength_when_macd_and_rsi_confirm(self) -> None:
         df = candle_rows(
             [
                 {"open": 10.84, "close": 10.83, "high": 10.85, "low": 10.82, "ema20": 10.87, "ema50": 10.90, "rsi": 41.0, "macd": -0.030, "macd_signal": -0.025, "volume": 88, "volume_avg": 100, "body": 0.01, "body_avg": 0.02, "stoch_k": 22.0, "stoch_d": 28.0, "atr": 0.02, "bb_upper": 10.90, "bb_lower": 10.77},
@@ -897,8 +898,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
                 {"open": 10.80, "close": 10.82, "high": 10.83, "low": 10.79, "ema20": 10.84, "ema50": 10.87, "rsi": 39.0, "macd": -0.028, "macd_signal": -0.026, "volume": 94, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 26.0, "stoch_d": 22.0, "atr": 0.02, "bb_upper": 10.87, "bb_lower": 10.75},
                 {"open": 10.82, "close": 10.84, "high": 10.85, "low": 10.81, "ema20": 10.83, "ema50": 10.86, "rsi": 44.0, "macd": -0.024, "macd_signal": -0.025, "volume": 95, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 42.0, "stoch_d": 28.0, "atr": 0.02, "bb_upper": 10.86, "bb_lower": 10.75},
                 {"open": 10.84, "close": 10.86, "high": 10.87, "low": 10.83, "ema20": 10.83, "ema50": 10.85, "rsi": 48.0, "macd": -0.018, "macd_signal": -0.022, "volume": 90, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 58.0, "stoch_d": 38.0, "atr": 0.02, "bb_upper": 10.86, "bb_lower": 10.76},
-                {"open": 10.86, "close": 10.89, "high": 10.90, "low": 10.85, "ema20": 10.84, "ema50": 10.85, "rsi": 51.0, "macd": -0.011, "macd_signal": -0.017, "volume": 84, "volume_avg": 100, "body": 0.03, "body_avg": 0.02, "stoch_k": 73.0, "stoch_d": 49.0, "atr": 0.02, "bb_upper": 10.87, "bb_lower": 10.76},
-                {"open": 10.89, "close": 10.91, "high": 10.92, "low": 10.88, "ema20": 10.85, "ema50": 10.85, "rsi": 53.0, "macd": -0.006, "macd_signal": -0.012, "volume": 80, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 89.0, "stoch_d": 68.0, "atr": 0.02, "bb_upper": 10.88, "bb_lower": 10.77},
+                {"open": 10.86, "close": 10.89, "high": 10.90, "low": 10.85, "ema20": 10.84, "ema50": 10.85, "rsi": 51.0, "macd": -0.011, "macd_signal": -0.017, "volume": 84, "volume_avg": 100, "body": 0.03, "body_avg": 0.02, "stoch_k": 73.0, "stoch_d": 49.0, "ao": 0.004, "atr": 0.02, "bb_upper": 10.87, "bb_lower": 10.76},
+                {"open": 10.89, "close": 10.91, "high": 10.92, "low": 10.88, "ema20": 10.85, "ema50": 10.85, "rsi": 53.0, "macd": -0.006, "macd_signal": -0.012, "volume": 80, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 89.0, "stoch_d": 68.0, "ao": 0.008, "atr": 0.02, "bb_upper": 10.88, "bb_lower": 10.77},
             ]
         )
         instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
@@ -906,7 +907,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
 
         self.assertEqual(signal, "LONG")
-        self.assertIn("Stochastic K/D=89.0/68.0", reason)
+        self.assertIn("AO=", reason)
 
     def test_reversal_15m_allows_short_in_mixed_regime_when_macd_rsi_and_stoch_align(self) -> None:
         df = candle_rows(

@@ -165,6 +165,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     recent_short_cross = short_cross_age is not None and short_cross_age <= 6
     macd_hist = macd - macd_signal
     prev_hist = prev_macd - prev_macd_signal
+    ao = float(last.get("ao", macd_hist))
+    prev_ao = float(prev.get("ao", prev_hist))
     macd_flip_count = _macd_flip_count(macd_series, macd_signal_series)
 
     trend_up = close > ema20 and ema20 >= ema50 and ema20 >= prev_ema20
@@ -237,6 +239,8 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
             and stoch_k <= 32.0
         )
     )
+    ao_long_ok = ao >= prev_ao and (ao > 0 or macd_hist > 0)
+    ao_short_ok = ao <= prev_ao and (ao < 0 or macd_hist < 0)
     volume_ok = volume_ratio >= profile.min_volume_ratio
     soft_volume_ok = volume_ratio >= soft_volume_floor
     impulse_ok = body_ratio >= profile.min_body_ratio
@@ -267,7 +271,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and ema20 >= prev_ema20
         and close >= prev_close
         and rsi >= prev_rsi
-        and (stoch_long_ok or (stoch_k >= 68.0 and stoch_d >= 55.0))
+        and ao_long_ok
         and soft_volume_ok
         and evening_volume_ok
         and (soft_impulse_ok or volume_ratio >= profile.strong_volume_ratio)
@@ -281,7 +285,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and ema20 <= prev_ema20
         and close <= prev_close
         and (rsi <= prev_rsi or rsi <= profile.late_rsi_short)
-        and (stoch_short_ok or (stoch_k <= 32.0 and stoch_d <= 36.0))
+        and ao_short_ok
         and soft_volume_ok
         and evening_volume_ok
         and (soft_impulse_ok or volume_ratio >= profile.strong_volume_ratio)
@@ -313,6 +317,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"режим={regime}",
         f"MACD cross вверх: {'да' if recent_long_cross else 'нет'}",
         f"RSI={rsi:.2f} и {'растёт' if rsi >= prev_rsi else 'падает'}",
+        f"AO={ao:.4f} и {'растёт' if ao >= prev_ao else 'падает'}",
         f"Stochastic K/D={stoch_k:.1f}/{stoch_d:.1f}",
         f"объём x{volume_ratio:.2f}",
         f"импульс x{body_ratio:.2f}",
@@ -324,6 +329,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         f"режим={regime}",
         f"MACD cross вниз: {'да' if recent_short_cross else 'нет'}",
         f"RSI={rsi:.2f} и {'падает' if rsi <= prev_rsi else 'растёт'}",
+        f"AO={ao:.4f} и {'падает' if ao <= prev_ao else 'растёт'}",
         f"Stochastic K/D={stoch_k:.1f}/{stoch_d:.1f}",
         f"объём x{volume_ratio:.2f}",
         f"импульс x{body_ratio:.2f}",
@@ -345,10 +351,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         long_blockers.append("RSI не подтверждает рост")
     if not rsi_short_ok and not slow_short_continuation_ok:
         short_blockers.append("RSI не подтверждает снижение")
-    if not stoch_long_ok and not slow_long_continuation_ok:
-        long_blockers.append("stochastic не подтверждает рост")
-    if not stoch_short_ok and not slow_short_continuation_ok:
-        short_blockers.append("stochastic не подтверждает снижение")
+    if not ao_long_ok and not slow_long_continuation_ok:
+        long_blockers.append("AO не подтверждает рост")
+    if not ao_short_ok and not slow_short_continuation_ok:
+        short_blockers.append("AO не подтверждает снижение")
     if not soft_volume_ok:
         long_blockers.append("объём слишком слабый")
         short_blockers.append("объём слишком слабый")
@@ -371,7 +377,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and recent_long_cross
         and macd_long_ok
         and rsi_long_ok
-        and stoch_long_ok
+        and ao_long_ok
         and soft_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok
@@ -383,7 +389,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         and recent_short_cross
         and macd_short_ok
         and rsi_short_ok
-        and stoch_short_ok
+        and ao_short_ok
         and soft_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok
