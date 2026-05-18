@@ -484,7 +484,7 @@ class PositionSizingTests(unittest.TestCase):
         self.assertAlmostEqual(sizing["target_trade_margin_rub"], 7150.0)
         self.assertLess(sizing["quantity"], 16)
 
-    def test_reversal_high_edge_uses_broker_limit_without_internal_lot_cap(self) -> None:
+    def test_reversal_high_edge_keeps_reserve_for_other_signals(self) -> None:
         state = mod.InstrumentState(
             last_signal="SHORT",
             last_entry_edge_score=0.84,
@@ -522,8 +522,8 @@ class PositionSizingTests(unittest.TestCase):
             )
 
         self.assertEqual(sizing["broker_limit"], 12)
-        self.assertEqual(sizing["broker_leverage_target_lots"], 12)
-        self.assertEqual(sizing["quantity"], 12)
+        self.assertEqual(sizing["broker_leverage_target_lots"], 9)
+        self.assertEqual(sizing["quantity"], 9)
 
     def test_reversal_confirmed_edge_uses_part_of_broker_limit(self) -> None:
         state = mod.InstrumentState(
@@ -561,8 +561,8 @@ class PositionSizingTests(unittest.TestCase):
             )
 
         self.assertEqual(sizing["broker_limit"], 9)
-        self.assertEqual(sizing["broker_leverage_target_lots"], 6)
-        self.assertEqual(sizing["quantity"], 6)
+        self.assertEqual(sizing["broker_leverage_target_lots"], 5)
+        self.assertEqual(sizing["quantity"], 5)
 
 
 if __name__ == "__main__":

@@ -5325,10 +5325,11 @@ def get_reversal_broker_lot_target(
 
     normalized_edge_label = entry_edge_label.strip().lower()
     if entry_edge_score >= 0.78 or normalized_edge_label == "high":
-        return broker_limit, "сильный вход: размер берём от лимита брокера"
+        target = max(1, (broker_limit * 7 + 9) // 10)
+        return min(broker_limit, target), "сильный вход: используем до 70% лимита брокера, остальное держим под новые сигналы"
     if entry_edge_score >= 0.62 or normalized_edge_label == "confirmed":
-        target = max(1, (broker_limit * 2 + 2) // 3)
-        return min(broker_limit, target), "подтверждённый вход: используем часть лимита брокера"
+        target = max(1, (broker_limit + 1) // 2)
+        return min(broker_limit, target), "подтверждённый вход: используем до 50% лимита брокера"
     if entry_edge_score >= 0.45 or normalized_edge_label == "moderate":
         return 1, "умеренный вход: разрешён минимум 1 лот по лимиту брокера"
     return 0, "плечо отключено: качество входа слабое"
