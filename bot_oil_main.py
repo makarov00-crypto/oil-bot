@@ -5302,6 +5302,38 @@ def get_entry_edge_cap_multiplier(state: InstrumentState) -> tuple[float, str]:
     return 0.35, "слабое качество входа: минимальный потолок участия"
 
 
+def get_reversal_broker_lot_target(
+    *,
+    broker_limit: int,
+    signal: str,
+    entry_edge_score: float,
+    entry_edge_label: str,
+    conviction_weight: float,
+    strategy_health_score: float,
+    strategy_regime_health_score: float,
+    recovery_mode_active: bool,
+    daily_loss_recovery_active: bool,
+) -> tuple[int, str]:
+    if broker_limit <= 0 or signal not in {"LONG", "SHORT"}:
+        return 0, ""
+    if recovery_mode_active or daily_loss_recovery_active:
+        return 0, "плечо отключено в режиме восстановления"
+    if strategy_health_score < 0.95 or strategy_regime_health_score < 0.90:
+        return 0, "плечо отключено: связка или режим пока слабые"
+    if conviction_weight < 1.05:
+        return 0, "плечо отключено: вес сигнала ниже порога"
+
+    normalized_edge_label = entry_edge_label.strip().lower()
+    if entry_edge_score >= 0.78 or normalized_edge_label == "high":
+        return broker_limit, "сильный вход: размер берём от лимита брокера"
+    if entry_edge_score >= 0.62 or normalized_edge_label == "confirmed":
+        target = max(1, (broker_limit * 2 + 2) // 3)
+        return min(broker_limit, target), "подтверждённый вход: используем часть лимита брокера"
+    if entry_edge_score >= 0.45 or normalized_edge_label == "moderate":
+        return 1, "умеренный вход: разрешён минимум 1 лот по лимиту брокера"
+    return 0, "плечо отключено: качество входа слабое"
+
+
 def select_capital_rotation_plan(
     watchlist: Sequence[InstrumentConfig],
     candidates: list[dict[str, Any]],
@@ -5585,10 +5617,25 @@ def calculate_position_sizing_context(
         raw_qty = 1
         broker_min_lot_override = True
 
+    broker_leverage_target_lots = 0
+    broker_leverage_reason = ""
+    if strategy_name == "reversal_15m":
+        broker_leverage_target_lots, broker_leverage_reason = get_reversal_broker_lot_target(
+            broker_limit=broker_limit,
+            signal=signal,
+            entry_edge_score=entry_edge_score,
+            entry_edge_label=entry_edge_label,
+            conviction_weight=conviction_weight,
+            strategy_health_score=strategy_health_score,
+            strategy_regime_health_score=strategy_regime_health_score,
+            recovery_mode_active=bool(recovery_status["active"]),
+            daily_loss_recovery_active=daily_loss_recovery_active,
+        )
+        if broker_leverage_target_lots > raw_qty:
+            raw_qty = broker_leverage_target_lots
+
     if broker_limit > 0:
         raw_qty = min(raw_qty, broker_limit)
-    if config.max_order_quantity > 0:
-        raw_qty = min(raw_qty, config.max_order_quantity)
 
     return {
         "session_name": session_name,
@@ -5628,6 +5675,8 @@ def calculate_position_sizing_context(
         "qty_by_headroom": qty_by_headroom,
         "broker_limit": broker_limit,
         "broker_min_lot_override": broker_min_lot_override,
+        "broker_leverage_target_lots": broker_leverage_target_lots,
+        "broker_leverage_reason": broker_leverage_reason,
         "money_risk_per_contract_rub": money_risk_per_contract,
         "risk_budget_rub": risk_budget,
         "quantity": max(0, raw_qty),
@@ -5684,6 +5733,11 @@ def build_position_sizing_lines(
         lines.append(f"Риск на 1 контракт (справочно): {sizing['money_risk_per_contract_rub']:.2f} RUB")
     if sizing["broker_limit"] > 0:
         lines.append(f"Максимум у брокера: {sizing['broker_limit']} лотов")
+    if int(sizing.get("broker_leverage_target_lots") or 0) > 0:
+        lines.append(
+            f"Размер по брокерскому лимиту: {int(sizing['broker_leverage_target_lots'])} лот(а) — "
+            f"{sizing['broker_leverage_reason']}"
+        )
     return lines
 
 
@@ -5696,6 +5750,8 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     target_trade_margin = float(sizing.get("target_trade_margin_rub") or 0.0)
     margin_per_lot = float(sizing.get("margin_per_lot_rub") or 0.0)
     broker_limit = int(sizing.get("broker_limit") or 0)
+    broker_leverage_target_lots = int(sizing.get("broker_leverage_target_lots") or 0)
+    broker_leverage_reason = str(sizing.get("broker_leverage_reason") or "").strip()
     qty_by_headroom = int(sizing.get("qty_by_headroom") or 0)
     strategy_health_score = float(sizing.get("strategy_health_score") or 1.0)
     edge_score = float(sizing.get("entry_edge_score") or 0.0)
@@ -5709,17 +5765,23 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     edge_hint = f", edge {edge_label} {edge_score:.2f}" if edge_score > 0.0 else ""
     edge_cap_hint = f", потолок качества {edge_cap_multiplier:.2f}" if edge_cap_multiplier < 1.0 else ""
     broker_override_hint = ", 1 лот разрешён по лимиту брокера" if broker_min_lot_override else ""
+    broker_leverage_hint = (
+        f", брокерский размер {broker_leverage_target_lots} лот(а)"
+        if broker_leverage_target_lots > 0
+        else ""
+    )
+    broker_leverage_reason_hint = f", {broker_leverage_reason}" if broker_leverage_reason and quantity > 0 else ""
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
-            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}, запас {margin_headroom:.0f} RUB, "
+            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}, запас {margin_headroom:.0f} RUB, "
             f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
             f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}, "
+        f"health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."

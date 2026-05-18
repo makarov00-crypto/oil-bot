@@ -105,7 +105,7 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(sizing["target_trade_margin_rub"], 3740.0)
         self.assertEqual(sizing["qty_by_headroom"], 20)
 
-    def test_quantity_is_capped_by_allocatable_margin_and_config(self) -> None:
+    def test_quantity_uses_internal_budget_when_broker_limit_is_unavailable(self) -> None:
         snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
         with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
             mod, "get_margin_headroom_rub", return_value=20000.0
@@ -127,7 +127,7 @@ class PositionSizingTests(unittest.TestCase):
             )
 
         self.assertGreaterEqual(sizing["qty_by_target"], 3)
-        self.assertEqual(sizing["quantity"], 3)
+        self.assertEqual(sizing["quantity"], sizing["qty_by_target"])
 
     def test_srm6_short_can_use_single_lot_when_working_budget_is_almost_enough(self) -> None:
         instrument = mod.InstrumentConfig(
@@ -483,6 +483,86 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(sizing["entry_edge_cap_multiplier"], 0.55)
         self.assertAlmostEqual(sizing["target_trade_margin_rub"], 7150.0)
         self.assertLess(sizing["quantity"], 16)
+
+    def test_reversal_high_edge_uses_broker_limit_without_internal_lot_cap(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="SHORT",
+            last_entry_edge_score=0.84,
+            last_entry_edge_label="high",
+            last_market_regime="trend_expansion",
+        )
+        client = SimpleNamespace(
+            orders=SimpleNamespace(
+                get_max_lots=lambda request: SimpleNamespace(
+                    buy_limits=SimpleNamespace(buy_max_market_lots=0, buy_max_lots=0),
+                    buy_margin_limits=SimpleNamespace(buy_max_market_lots=0, buy_max_lots=0),
+                    sell_limits=SimpleNamespace(sell_max_lots=12),
+                    sell_margin_limits=SimpleNamespace(sell_max_lots=12),
+                )
+            )
+        )
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.25
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.05, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                client, self.config, self.instrument, state, 11.3, "SHORT", "reversal_15m"
+            )
+
+        self.assertEqual(sizing["broker_limit"], 12)
+        self.assertEqual(sizing["broker_leverage_target_lots"], 12)
+        self.assertEqual(sizing["quantity"], 12)
+
+    def test_reversal_confirmed_edge_uses_part_of_broker_limit(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="SHORT",
+            last_entry_edge_score=0.66,
+            last_entry_edge_label="confirmed",
+            last_market_regime="trend_expansion",
+        )
+        client = SimpleNamespace(
+            orders=SimpleNamespace(
+                get_max_lots=lambda request: SimpleNamespace(
+                    sell_limits=SimpleNamespace(sell_max_lots=9),
+                    sell_margin_limits=SimpleNamespace(sell_max_lots=9),
+                )
+            )
+        )
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.18
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                client, self.config, self.instrument, state, 11.3, "SHORT", "reversal_15m"
+            )
+
+        self.assertEqual(sizing["broker_limit"], 9)
+        self.assertEqual(sizing["broker_leverage_target_lots"], 6)
+        self.assertEqual(sizing["quantity"], 6)
 
 
 if __name__ == "__main__":
