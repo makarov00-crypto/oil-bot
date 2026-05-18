@@ -3469,6 +3469,12 @@ def build_dashboard_html() -> str:
       line-height: 1.35;
       color: #dbe9f8;
     }
+    .mobile-card-value.good {
+      color: var(--good);
+    }
+    .mobile-card-value.bad {
+      color: var(--bad);
+    }
     .mobile-card-footer {
       display: grid;
       gap: 8px;
@@ -3678,6 +3684,12 @@ def build_dashboard_html() -> str:
       font-weight: 600;
       color: #eff6ff;
       line-height: 1.35;
+    }
+    .trade-cell-main.good {
+      color: var(--good);
+    }
+    .trade-cell-main.bad {
+      color: var(--bad);
     }
     .trade-cell-sub {
       margin-top: 3px;
