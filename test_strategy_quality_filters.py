@@ -726,7 +726,12 @@ class StrategyQualityFilterTests(unittest.TestCase):
             last_market_regime_confidence=0.891,
         )
 
-        edge, label, reason = mod.get_entry_edge_profile(state, "VBM6", "reversal_15m", "LONG")
+        with patch.object(mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")), patch.object(
+            mod,
+            "get_strategy_regime_health_score",
+            return_value=(1.0, "режим compression нейтрален"),
+        ):
+            edge, label, reason = mod.get_entry_edge_profile(state, "VBM6", "reversal_15m", "LONG")
 
         self.assertGreaterEqual(edge, 0.60)
         self.assertEqual(label, "confirmed")
