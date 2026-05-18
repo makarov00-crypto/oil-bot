@@ -1,32 +1,21 @@
 from custom_instruments import get_custom_clone_source
-from instrument_groups import get_instrument_group
+from instrument_groups import GROUP_BY_SYMBOL
 
 PRIMARY_STRATEGIES_BY_SYMBOL = {
-    "BRK6": ["reversal_15m"],
-    "BMM6": ["reversal_15m"],
-    "CNYRUBF": ["reversal_15m"],
-    "GNM6": ["trend_pullback", "momentum_breakout", "trend_rollover"],
-    "IMOEXF": ["reversal_15m"],
-    "NGJ6": ["reversal_15m"],
-    "NGK6": ["reversal_15m"],
-    "RBM6": ["reversal_15m"],
-    "SRM6": ["reversal_15m"],
-    "UCM6": ["reversal_15m"],
-    "USDRUBF": ["reversal_15m"],
-    "VBM6": ["reversal_15m"],
+    symbol: ["reversal_15m"]
+    for symbol in GROUP_BY_SYMBOL
 }
 
 PRIMARY_STRATEGIES_BY_GROUP = {
-    "commodities": ["trend_pullback"],
-    "fx": ["opening_range_breakout", "range_break_continuation", "trend_pullback"],
-    "equity_index": ["range_break_continuation", "failed_breakout", "trend_pullback"],
-    "equity_futures": ["range_break_continuation", "failed_breakout", "trend_pullback"],
-    "bond_index": ["failed_breakout", "range_break_continuation", "trend_pullback"],
+    "commodities": ["reversal_15m"],
+    "fx": ["reversal_15m"],
+    "equity_index": ["reversal_15m"],
+    "equity_futures": ["reversal_15m"],
+    "bond_index": ["reversal_15m"],
 }
 
 
 SECONDARY_STRATEGIES_BY_GROUP = {
-    "fx": ["williams"],
 }
 
 
@@ -37,7 +26,7 @@ def get_primary_strategies(symbol: str) -> list[str]:
     template_symbol = get_custom_clone_source(normalized)
     if template_symbol:
         return get_primary_strategies(template_symbol)
-    return PRIMARY_STRATEGIES_BY_GROUP.get(get_instrument_group(normalized).name, ["trend_pullback"])
+    return ["reversal_15m"]
 
 
 def get_secondary_strategies(symbol: str) -> list[str]:
@@ -45,4 +34,4 @@ def get_secondary_strategies(symbol: str) -> list[str]:
     template_symbol = get_custom_clone_source(normalized)
     if template_symbol:
         return get_secondary_strategies(template_symbol)
-    return SECONDARY_STRATEGIES_BY_GROUP.get(get_instrument_group(normalized).name, [])
+    return []

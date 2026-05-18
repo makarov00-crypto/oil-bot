@@ -859,10 +859,10 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
         self.assertEqual(strategies, ["reversal_15m"])
 
-    def test_gnm6_uses_pullback_first_primary_strategy(self) -> None:
+    def test_gnm6_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("GNM6")
 
-        self.assertEqual(strategies, ["trend_pullback", "momentum_breakout", "trend_rollover"])
+        self.assertEqual(strategies, ["reversal_15m"])
 
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [

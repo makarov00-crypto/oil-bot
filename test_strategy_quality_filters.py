@@ -322,6 +322,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(get_primary_strategies("SRM6"), ["reversal_15m"])
         self.assertEqual(get_primary_strategies("VBM6"), ["reversal_15m"])
         self.assertEqual(get_primary_strategies("RBM6"), ["reversal_15m"])
+        self.assertEqual(get_primary_strategies("GNM6"), ["reversal_15m"])
 
     def test_active_brent_contract_uses_same_strategy_stack(self) -> None:
         self.assertEqual(
@@ -488,8 +489,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def test_brk6_uses_rollover_strategy_for_intraday_reversal(self) -> None:
         self.assertEqual(get_primary_strategies("BRK6")[:1], ["reversal_15m"])
 
-    def test_gnm6_prefers_pullback_before_breakout_and_rollover(self) -> None:
-        self.assertEqual(get_primary_strategies("GNM6")[:3], ["trend_pullback", "momentum_breakout", "trend_rollover"])
+    def test_gnm6_uses_unified_reversal_strategy(self) -> None:
+        self.assertEqual(get_primary_strategies("GNM6"), ["reversal_15m"])
 
     def test_gnm6_allows_higher_tf_long_pullback_on_15m_structure(self) -> None:
         from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback

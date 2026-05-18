@@ -20,6 +20,7 @@ BRENT_SYMBOLS = {"BRK6", "BMM6"}
 UNIFIED_REVERSAL_15M_SYMBOLS = {
     "BRK6",
     "BMM6",
+    "GNM6",
     "NGJ6",
     "NGK6",
     "USDRUBF",
