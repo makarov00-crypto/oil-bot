@@ -26,7 +26,6 @@ from instrument_groups import (
 )
 from news_bias import NewsBias, select_active_biases
 from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
-from strategy_registry import get_secondary_strategies
 from strategy_engine import evaluate_primary_signal_bundle
 from trade_storage import (
     append_signal_observation,
@@ -51,8 +50,6 @@ from tinkoff.invest import (
 )
 from tinkoff.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from strategies.base import StrategyProfile
-from strategies import evaluate_williams_currency_signal as evaluate_williams_signal
-from strategies import get_strategy_profile as get_primary_strategy_profile
 
 
 APP_NAME = "oil-bot-main"
@@ -63,15 +60,7 @@ RECENT_STRATEGY_GUARD_MAX_WIN_RATE = 25.0
 RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB = -250.0
 RECENT_STRATEGY_GUARD_HARD_LOSS_RUB = -500.0
 INTRADAY_CHOP_GUARD_STRATEGIES = {
-    "failed_breakout",
-    "opening_range_breakout",
-    "range_break_continuation",
-    "breakdown_continuation",
-    "macd_stoch_reversal",
-    "momentum_breakout",
     "reversal_15m",
-    "trend_pullback",
-    "trend_rollover",
 }
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
@@ -2574,7 +2563,135 @@ def apply_news_bias_to_signal(signal: str, reason: str, news_bias: NewsBias | No
 
 
 def get_strategy_profile(config: BotConfig, instrument: InstrumentConfig) -> StrategyProfile:
-    return get_primary_strategy_profile(config, instrument)
+    symbol = instrument.symbol
+    group = get_instrument_group(symbol).name
+
+    if group == "equity_index":
+        return StrategyProfile(
+            ema_slope_threshold=0.0003,
+            near_ema20_pct=0.0080,
+            volume_factor=0.95,
+            atr_min_pct=0.0004,
+            impulse_body_factor=0.80,
+            long_rsi_min=41.0,
+            long_rsi_max=60.0,
+            short_rsi_min=30.0,
+            short_rsi_max=59.0,
+            rsi_exit_long=68.0,
+            rsi_exit_short=32.0,
+            allow_short=True,
+        )
+
+    if symbol in NATURAL_GAS_SYMBOLS:
+        return StrategyProfile(
+            ema_slope_threshold=config.ema_slope_threshold,
+            near_ema20_pct=0.0062,
+            volume_factor=0.90,
+            atr_min_pct=0.0014,
+            impulse_body_factor=0.72,
+            long_rsi_min=39.0,
+            long_rsi_max=60.0,
+            short_rsi_min=38.0,
+            short_rsi_max=60.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
+    if is_brent_symbol(symbol):
+        return StrategyProfile(
+            ema_slope_threshold=config.ema_slope_threshold,
+            near_ema20_pct=0.0085,
+            volume_factor=0.82,
+            atr_min_pct=0.0010,
+            impulse_body_factor=0.70,
+            long_rsi_min=40.0,
+            long_rsi_max=66.0,
+            short_rsi_min=38.0,
+            short_rsi_max=64.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
+    if symbol == "GNM6":
+        return StrategyProfile(
+            ema_slope_threshold=0.0,
+            near_ema20_pct=0.0065,
+            volume_factor=0.82,
+            atr_min_pct=0.0010,
+            impulse_body_factor=0.60,
+            long_rsi_min=38.0,
+            long_rsi_max=62.0,
+            short_rsi_min=34.0,
+            short_rsi_max=58.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
+    if symbol == "UCM6":
+        return StrategyProfile(
+            ema_slope_threshold=0.0,
+            near_ema20_pct=0.0038,
+            volume_factor=0.80,
+            atr_min_pct=0.00045,
+            impulse_body_factor=0.55,
+            long_rsi_min=42.0,
+            long_rsi_max=64.0,
+            short_rsi_min=30.0,
+            short_rsi_max=58.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
+    if group == "fx":
+        return StrategyProfile(
+            ema_slope_threshold=config.ema_slope_threshold,
+            near_ema20_pct=0.0060,
+            volume_factor=0.95,
+            atr_min_pct=0.0007,
+            impulse_body_factor=0.80,
+            long_rsi_min=36.0,
+            long_rsi_max=54.0,
+            short_rsi_min=35.0,
+            short_rsi_max=64.0,
+            rsi_exit_long=config.rsi_exit_long,
+            rsi_exit_short=config.rsi_exit_short,
+            allow_short=True,
+        )
+
+    if group == "equity_futures":
+        return StrategyProfile(
+            ema_slope_threshold=0.00035,
+            near_ema20_pct=0.0070,
+            volume_factor=0.95,
+            atr_min_pct=0.0004,
+            impulse_body_factor=0.80,
+            long_rsi_min=39.0,
+            long_rsi_max=58.0,
+            short_rsi_min=30.0,
+            short_rsi_max=61.0,
+            rsi_exit_long=67.0,
+            rsi_exit_short=33.0,
+            allow_short=True,
+        )
+
+    return StrategyProfile(
+        ema_slope_threshold=config.ema_slope_threshold,
+        near_ema20_pct=0.0060,
+        volume_factor=max(config.volume_factor, 1.0),
+        atr_min_pct=config.atr_min_pct,
+        impulse_body_factor=0.80,
+        long_rsi_min=config.long_rsi_min,
+        long_rsi_max=config.long_rsi_max,
+        short_rsi_min=config.short_rsi_min,
+        short_rsi_max=config.short_rsi_max,
+        rsi_exit_long=config.rsi_exit_long,
+        rsi_exit_short=config.rsi_exit_short,
+        allow_short=True,
+    )
 
 
 def resolve_instruments(client: Client, config: BotConfig) -> list[InstrumentConfig]:
@@ -2877,43 +2994,6 @@ def add_indicators(df: pd.DataFrame, *, include_ema200: bool = True) -> pd.DataF
     return result
 
 
-def add_williams_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    result = df.copy()
-    if "time" in result.columns:
-        result["time"] = pd.to_datetime(result["time"], utc=True, errors="coerce")
-        result = result.sort_values("time").reset_index(drop=True)
-    if "is_complete" in result.columns:
-        result = result[result["is_complete"]].reset_index(drop=True)
-
-    median_price = (result["high"] + result["low"]) / 2
-    result["median_price"] = median_price
-
-    # Smoothed averages approximating Williams Alligator lines.
-    result["alligator_lips"] = median_price.ewm(alpha=1 / 5, adjust=False).mean().shift(3)
-    result["alligator_teeth"] = median_price.ewm(alpha=1 / 8, adjust=False).mean().shift(5)
-    result["alligator_jaws"] = median_price.ewm(alpha=1 / 13, adjust=False).mean().shift(8)
-
-    ao_fast = median_price.rolling(5).mean()
-    ao_slow = median_price.rolling(20).mean()
-    result["ao"] = ao_fast - ao_slow
-
-    high_low_range = (result["high"] - result["low"]).astype(float).replace(0.0, float("nan"))
-    money_flow_multiplier = ((result["close"] - result["low"]) - (result["high"] - result["close"])) / high_low_range
-    money_flow_multiplier = money_flow_multiplier.fillna(0.0).astype(float)
-    money_flow_volume = money_flow_multiplier * result["volume"]
-    adl = money_flow_volume.cumsum()
-    result["chaikin"] = adl.ewm(span=5, adjust=False).mean() - adl.ewm(span=20, adjust=False).mean()
-
-    line_max = result[["alligator_lips", "alligator_teeth", "alligator_jaws"]].max(axis=1)
-    line_min = result[["alligator_lips", "alligator_teeth", "alligator_jaws"]].min(axis=1)
-    result["alligator_spread_pct"] = (line_max - line_min) / result["close"]
-
-    result = result.dropna().reset_index(drop=True)
-    if len(result) < 3:
-        raise RuntimeError("Недостаточно данных для стратегии Williams")
-    return result
-
-
 def get_higher_tf_bias(client: Client, config: BotConfig, instrument: InstrumentConfig) -> str:
     tf_specs = [
         (15, CandleInterval.CANDLE_INTERVAL_15_MIN, 1),
@@ -3039,13 +3119,6 @@ def evaluate_signal(
     higher_tf_bias: str,
 ) -> tuple[str, str, str]:
     return evaluate_primary_signal_bundle(df, config, instrument, higher_tf_bias)
-
-
-def evaluate_williams_currency_signal(
-    df: pd.DataFrame,
-    higher_tf_bias: str,
-) -> tuple[str, str]:
-    return evaluate_williams_signal(df, higher_tf_bias)
 
 
 def build_market_view_lines(
@@ -3272,55 +3345,9 @@ def regime_entry_block_reason(
     if signal not in {"LONG", "SHORT"}:
         return ""
 
-    atr_pct = float(metrics.get("atr_pct") or 0.0)
-    volume_ratio = float(metrics.get("volume_ratio") or 0.0)
-    body_ratio = float(metrics.get("body_ratio") or 0.0)
-    regime_confidence = float(metrics.get("regime_confidence") or 0.0)
-
-    fx_fresh_impulse_override = (
-        group_name == "fx"
-        and strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}
-        and volume_ratio >= 1.15
-        and body_ratio >= 0.95
-        and regime_confidence >= 0.46
-    )
-
-    if fx_fresh_impulse_override and market_regime in {"trend_pullback", "mixed"}:
-        return ""
-
     if strategy == "reversal_15m":
         return ""
-
-    if market_regime == "compression":
-        if strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}:
-            return f"режим {market_regime} не подходит для стратегии {strategy}: рынок слишком сжат"
-
-    if market_regime == "chop":
-        if strategy in {"opening_range_breakout", "momentum_breakout", "range_break_continuation", "breakdown_continuation"}:
-            return f"режим {market_regime} не подходит для стратегии {strategy}: слишком высокий риск ложного пробоя"
-
-    if strategy == "trend_pullback" and market_regime not in {"trend_pullback", "trend_expansion"}:
-        return f"режим {market_regime} не подходит для стратегии {strategy}: нет направленного отката в тренде"
-
-    if strategy in {"opening_range_breakout", "momentum_breakout"} and market_regime not in {"trend_expansion", "impulse"}:
-        return f"режим {market_regime} не подходит для стратегии {strategy}: нужен импульсный или расширяющийся рынок"
-    if strategy in {"opening_range_breakout", "momentum_breakout"} and regime_confidence < 0.54:
-        return f"режим {market_regime} пока не подтверждён для стратегии {strategy}: уверенность режима слишком низкая"
-
-    if strategy in {"range_break_continuation", "breakdown_continuation"}:
-        if market_regime not in {"trend_expansion", "impulse"}:
-            return f"режим {market_regime} не подходит для стратегии {strategy}: нужен зрелый направленный пробой"
-        if regime_confidence < 0.52:
-            return f"режим {market_regime} пока не подтверждён для стратегии {strategy}: уверенность режима слишком низкая"
-        if atr_pct < 0.00045 and volume_ratio < 0.95:
-            return f"режим {market_regime} не подходит для стратегии {strategy}: не хватает волатильности и объёма"
-
-    if strategy == "failed_breakout" and market_regime == "impulse" and body_ratio >= 1.15:
-        return f"режим {market_regime} не подходит для стратегии {strategy}: движение слишком импульсное против контртрендового входа"
-    if strategy == "trend_pullback" and regime_confidence < 0.50:
-        return f"режим {market_regime} пока не подтверждён для стратегии {strategy}: откат недостаточно чистый"
-
-    return ""
+    return f"стратегия {strategy or '-'} больше не используется в живом контуре."
 
 
 def build_periodic_status_message(
@@ -4536,7 +4563,7 @@ def recovery_mode_block_reason(
     if not status["active"] or signal not in {"LONG", "SHORT"}:
         return ""
 
-    allowed_strategies = {"trend_pullback", "failed_breakout", "trend_rollover", "reversal_15m", "macd_stoch_reversal"}
+    allowed_strategies = {"reversal_15m"}
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     regime = str(state.last_market_regime or "").strip().lower()
     higher_tf_bias = str(state.last_higher_tf_bias or "").strip().upper()
@@ -4845,11 +4872,7 @@ def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_n
             weight += 0.18
         elif news_strength == "LOW":
             weight += 0.08
-    if strategy_name in {"momentum_breakout", "opening_range_breakout"}:
-        weight += 0.10
-    elif strategy_name == "range_break_continuation":
-        weight += 0.05
-    elif strategy_name == "reversal_15m":
+    if strategy_name == "reversal_15m":
         weight += 0.12
     return min(weight, 1.65)
 
@@ -5763,41 +5786,11 @@ def refresh_position_snapshot(state: InstrumentState, instrument: InstrumentConf
 
 def get_exit_profile(config: BotConfig, strategy_name: str) -> ExitProfile:
     strategy = (strategy_name or "").strip()
-    if strategy == "opening_range_breakout":
-        return ExitProfile(
-            min_hold_minutes=max(config.min_hold_minutes, 25),
-            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0075),
-            trailing_stop_pct=max(config.trailing_stop_pct, 0.0055),
-        )
-    if strategy in {"range_break_continuation", "breakdown_continuation"}:
-        return ExitProfile(
-            min_hold_minutes=max(config.min_hold_minutes, 25),
-            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0080),
-            trailing_stop_pct=max(config.trailing_stop_pct, 0.0060),
-        )
-    if strategy == "momentum_breakout":
-        return ExitProfile(
-            min_hold_minutes=max(config.min_hold_minutes, 25),
-            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0090),
-            trailing_stop_pct=max(config.trailing_stop_pct, 0.0070),
-        )
     if strategy == "reversal_15m":
         return ExitProfile(
             min_hold_minutes=max(config.min_hold_minutes, 20),
             breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0075),
             trailing_stop_pct=max(config.trailing_stop_pct, 0.0060),
-        )
-    if strategy == "trend_rollover":
-        return ExitProfile(
-            min_hold_minutes=max(config.min_hold_minutes, 35),
-            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0100),
-            trailing_stop_pct=max(config.trailing_stop_pct, 0.0075),
-        )
-    if strategy == "trend_pullback":
-        return ExitProfile(
-            min_hold_minutes=max(config.min_hold_minutes, 30),
-            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0090),
-            trailing_stop_pct=max(config.trailing_stop_pct, 0.0065),
         )
     return ExitProfile(
         min_hold_minutes=config.min_hold_minutes,
@@ -6106,7 +6099,7 @@ def position_reentry_allowed(
         edge_score = float(state.last_entry_edge_score or 0.0)
         volume_ratio = float(state.last_volume_ratio or 0.0)
         strategy_name = str(state.last_strategy_name or "").strip().lower()
-        if strategy_name not in {"momentum_breakout", "opening_range_breakout", "range_break_continuation", "reversal_15m"}:
+        if strategy_name != "reversal_15m":
             return False
         if regime in {"compression", "chop"}:
             return False
@@ -7004,8 +6997,6 @@ def check_exit(
             state.entry_strategy,
             adaptive_exit_reason,
         )
-    is_trend_rollover = state.entry_strategy == "trend_rollover"
-    is_macd_stoch_reversal = state.entry_strategy == "macd_stoch_reversal"
     is_unified_reversal = state.entry_strategy == "reversal_15m"
     prev = exit_df.iloc[-2]
     prev2 = exit_df.iloc[-3]
@@ -7039,12 +7030,6 @@ def check_exit(
             )
         opposite_signal_confirmed = fresh_signal == "SHORT" and close < ema20 and close <= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
-        if is_macd_stoch_reversal:
-            if price <= stop_price:
-                close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
-            elif fresh_signal == "SHORT":
-                close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал SHORT")
-            return
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if instrument.symbol == "RBM6" and higher_tf_df is not None:
             profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)
@@ -7062,7 +7047,6 @@ def check_exit(
             min_hold_passed
             and state.breakeven_armed
             and rsi >= profile.rsi_exit_long
-            and not is_trend_rollover
             and not (is_unified_reversal and reversal_15m_pressure_intact(exit_df, "LONG"))
         ):
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
@@ -7089,12 +7073,6 @@ def check_exit(
             )
         opposite_signal_confirmed = fresh_signal == "LONG" and close > ema20 and close >= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
-        if is_macd_stoch_reversal:
-            if price >= stop_price:
-                close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
-            elif fresh_signal == "LONG":
-                close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал LONG")
-            return
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if instrument.symbol == "RBM6" and higher_tf_df is not None:
             profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)
@@ -7112,7 +7090,6 @@ def check_exit(
             min_hold_passed
             and state.breakeven_armed
             and rsi <= profile.rsi_exit_short
-            and not is_trend_rollover
             and not (is_unified_reversal and reversal_15m_pressure_intact(exit_df, "SHORT"))
             and (
                 instrument.symbol not in {"VBM6", "USDRUBF"}
@@ -7227,37 +7204,8 @@ def process_instrument(
     signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
     signal_summary = summarize_signal_reason(signal, reason)
     compare_lines: list[str] = []
-    secondary_strategies = set(get_secondary_strategies(instrument.symbol))
     compare_lines.append(f"Основная: {signal_emoji(signal)} {signal} ({primary_strategy_name})")
     compare_lines.append(f"News bias: {format_news_bias_label(news_bias)}")
-    if "williams" in secondary_strategies:
-        try:
-            williams_df = add_williams_indicators(
-                get_candles(
-                    client,
-                    config,
-                    instrument,
-                    signal_interval,
-                    lookback_hours=get_lower_tf_lookback_hours(
-                        config,
-                        instrument.symbol,
-                        interval_minutes=signal_interval_minutes,
-                    ),
-                )
-            )
-        except RuntimeError as error:
-            if "Недостаточно данных для стратегии Williams" in str(error) or "API не вернул свечи" in str(error):
-                williams_df = None
-            else:
-                raise
-        if williams_df is not None:
-            williams_signal, williams_reason = evaluate_williams_currency_signal(williams_df, higher_tf_bias)
-            compare_lines.extend(
-                [
-                f"Тест Williams: {signal_emoji(williams_signal)} {williams_signal}",
-                compact_reason(williams_reason),
-                ]
-            )
     current_price = float(lower_df.iloc[-1]["close"])
     refresh_position_snapshot(state, instrument, current_price)
     candle_time_value = lower_df.iloc[-1].get("time")

@@ -789,7 +789,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             last_exit_pnl_rub=-42.0,
             last_exit_price=10.938,
             last_exit_reason="MACD подтверждённо развернулся вниз и цена потеряла EMA20",
-            last_strategy_name="momentum_breakout",
+            last_strategy_name="reversal_15m",
             last_setup_quality_label="strong",
             last_market_regime="impulse",
             last_market_regime_confidence=0.61,

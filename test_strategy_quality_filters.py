@@ -1,5 +1,4 @@
 import unittest
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -7,717 +6,181 @@ import pandas as pd
 
 import bot_oil_main as mod
 import strategy_engine
-from bot_oil_main import BotConfig, InstrumentConfig
-from instrument_groups import DEFAULT_SYMBOLS
-from news_rules import NEWS_RULES
-from strategy_registry import get_primary_strategies
-from strategies.breakdown_continuation import evaluate_signal as evaluate_range_break
-from strategies.failed_breakout import evaluate_signal as evaluate_failed_breakout
-from strategies.macd_stoch_reversal import evaluate_signal as evaluate_macd_stoch_reversal
-from strategies.momentum_breakout import evaluate_signal as evaluate_momentum_breakout
-from strategies.opening_range_breakout import evaluate_signal as evaluate_opening_range
+from bot_oil_main import InstrumentConfig
+from instrument_groups import DEFAULT_SYMBOLS, uses_unified_reversal_15m
+from strategy_registry import get_primary_strategies, get_secondary_strategies
 from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
 from strategies.reversal_15m import get_profile as get_reversal_profile
-from strategies.trend_pullback import get_strategy_profile
-from strategies.trend_rollover import evaluate_signal as evaluate_trend_rollover
 
 
-def make_config() -> BotConfig:
-    return BotConfig(
+def make_config() -> SimpleNamespace:
+    return SimpleNamespace(
         token="",
         account_id="",
         target="",
         symbols=[],
-        tg_token="",
-        tg_chat_id="",
         dry_run=True,
         allow_orders=False,
+        tg_token="",
+        tg_chat_id="",
         order_quantity=1,
         max_order_quantity=1,
-        risk_per_trade_pct=0.0,
-        max_margin_usage_pct=0.0,
-        portfolio_usage_pct=0.0,
-        capital_reserve_pct=0.0,
-        base_trade_allocation_pct=0.0,
+        risk_per_trade_pct=0.05,
+        max_margin_usage_pct=0.85,
+        portfolio_usage_pct=0.85,
+        capital_reserve_pct=0.05,
+        base_trade_allocation_pct=0.25,
         poll_seconds=1,
         startup_retry_seconds=1,
-        candle_hours=1,
-        candle_interval=SimpleNamespace(),
-        candle_interval_minutes=5,
-        higher_tf_interval=SimpleNamespace(),
-        higher_tf_interval_minutes=15,
-        max_daily_loss=0.0,
-        max_consecutive_errors=1,
+        candle_hours=120,
+        candle_interval=None,
+        candle_interval_minutes=15,
+        higher_tf_interval=None,
+        higher_tf_interval_minutes=60,
+        max_daily_loss=2500.0,
+        max_consecutive_errors=3,
         max_cycles=1,
-        stop_loss_pct=0.0,
-        trailing_stop_pct=0.0,
-        breakeven_profit_pct=0.0,
-        min_hold_minutes=0,
-        ema_slope_threshold=0.0,
-        near_ema20_pct=0.0,
+        min_hold_minutes=15,
+        stop_loss_pct=0.006,
+        breakeven_profit_pct=0.004,
+        trailing_stop_pct=0.005,
+        ema_slope_threshold=0.0002,
+        near_ema20_pct=0.006,
         volume_factor=1.0,
-        atr_min_pct=0.0,
-        long_rsi_min=0.0,
-        long_rsi_max=100.0,
-        short_rsi_min=0.0,
-        short_rsi_max=100.0,
-        rsi_exit_long=70.0,
-        rsi_exit_short=30.0,
+        atr_min_pct=0.0005,
+        long_rsi_min=36.0,
+        long_rsi_max=64.0,
+        short_rsi_min=35.0,
+        short_rsi_max=64.0,
+        rsi_exit_long=68.0,
+        rsi_exit_short=32.0,
     )
 
 
 def candle_rows(rows: list[dict]) -> pd.DataFrame:
-    base_time = datetime(2026, 4, 15, 6, 0, tzinfo=timezone.utc)
-    result = []
+    defaults = {
+        "time": pd.Timestamp("2026-05-01T10:00:00Z"),
+        "is_complete": True,
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.0,
+        "close": 100.0,
+        "ema20": 100.0,
+        "ema50": 100.0,
+        "rsi": 50.0,
+        "macd": 0.0,
+        "macd_signal": 0.0,
+        "atr": 0.2,
+        "volume": 100.0,
+        "volume_avg": 100.0,
+        "body": 0.5,
+        "body_avg": 0.5,
+        "bb_upper": 102.0,
+        "bb_lower": 98.0,
+        "stoch_k": 50.0,
+        "stoch_d": 50.0,
+        "ao": 0.0,
+        "chaikin": 0.0,
+    }
+    normalized = []
     for index, row in enumerate(rows):
-        item = {
-            "time": pd.Timestamp(base_time + pd.Timedelta(minutes=5 * index)),
-            "open": row.get("open", row["close"]),
-            "high": row.get("high", row["close"]),
-            "low": row.get("low", row["close"]),
-            "close": row["close"],
-            "ema20": row.get("ema20", row["close"]),
-            "ema50": row.get("ema50", row["close"]),
-            "ema200": row.get("ema200", row.get("ema50", row["close"])),
-            "ema50_slope": row.get("ema50_slope", 0.0),
-            "bb_upper": row.get("bb_upper", row["close"] * 1.01),
-            "bb_mid": row.get("bb_mid", row.get("ema20", row["close"])),
-            "bb_lower": row.get("bb_lower", row["close"] * 0.99),
-            "rsi": row.get("rsi", 50.0),
-            "macd": row.get("macd", 0.1),
-            "macd_signal": row.get("macd_signal", 0.0),
-            "ao": row.get("ao", row.get("macd", 0.1) - row.get("macd_signal", 0.0)),
-            "chaikin": row.get("chaikin", 0.0),
-            "stoch_k": row.get("stoch_k", 50.0),
-            "stoch_d": row.get("stoch_d", 50.0),
-            "atr": row.get("atr", 0.1),
-            "volume": row.get("volume", 100.0),
-            "volume_avg": row.get("volume_avg", 100.0),
-            "body": row.get("body", abs(row.get("close", 0.0) - row.get("open", row.get("close", 0.0)))),
-            "body_avg": row.get("body_avg", 0.1),
-            "stoch_k": row.get("stoch_k", 50.0),
-            "stoch_d": row.get("stoch_d", 50.0),
-        }
-        result.append(item)
-    return pd.DataFrame(result)
+        item = dict(defaults)
+        item["time"] = defaults["time"] + pd.Timedelta(minutes=15 * index)
+        item.update(row)
+        normalized.append(item)
+    return pd.DataFrame(normalized)
 
 
 class StrategyQualityFilterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = make_config()
 
-    def test_regime_filter_blocks_breakout_in_compression(self) -> None:
-        reason = mod.regime_entry_block_reason(
-            "CNYRUBF",
-            "opening_range_breakout",
-            "LONG",
-            "compression",
-            {"atr_pct": 0.0003, "volume_ratio": 0.8, "body_ratio": 0.6},
-        )
+    def test_all_default_symbols_use_unified_reversal_only(self) -> None:
+        for symbol in DEFAULT_SYMBOLS.split(","):
+            self.assertTrue(uses_unified_reversal_15m(symbol), symbol)
+            self.assertEqual(get_primary_strategies(symbol), ["reversal_15m"])
+            self.assertEqual(get_secondary_strategies(symbol), [])
 
-        self.assertIn("режим compression", reason)
-        self.assertIn("слишком сжат", reason)
-
-    def test_regime_filter_blocks_pullback_outside_trend_context(self) -> None:
-        reason = mod.regime_entry_block_reason(
-            "BRK6",
-            "trend_pullback",
-            "LONG",
-            "mixed",
-            {"atr_pct": 0.0007, "volume_ratio": 1.0, "body_ratio": 0.9},
-        )
-
-        self.assertIn("режим mixed", reason)
-        self.assertIn("нет направленного отката", reason)
-
-    def test_regime_filter_allows_failed_breakout_in_chop(self) -> None:
-        reason = mod.regime_entry_block_reason(
-            "IMOEXF",
-            "failed_breakout",
-            "LONG",
-            "chop",
-            {"atr_pct": 0.0005, "volume_ratio": 0.9, "body_ratio": 0.8, "regime_confidence": 0.61},
-        )
-
-        self.assertEqual(reason, "")
-
-    def test_regime_filter_blocks_breakout_when_regime_confidence_is_low(self) -> None:
-        reason = mod.regime_entry_block_reason(
-            "CNYRUBF",
-            "opening_range_breakout",
-            "LONG",
-            "trend_expansion",
-            {"atr_pct": 0.0010, "volume_ratio": 1.15, "body_ratio": 1.1, "regime_confidence": 0.42},
-        )
-
-        self.assertIn("уверенность режима слишком низкая", reason)
-
-    def test_regime_filter_allows_fx_fresh_impulse_inside_trend_pullback(self) -> None:
-        reason = mod.regime_entry_block_reason(
-            "CNYRUBF",
-            "range_break_continuation",
-            "LONG",
-            "trend_pullback",
-            {"atr_pct": 0.0008, "volume_ratio": 1.32, "body_ratio": 1.10, "regime_confidence": 0.49},
-        )
-
-        self.assertEqual(reason, "")
-
-    def test_classify_market_regime_returns_confidence_and_reason(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 100.0, "close": 100.4, "high": 100.5, "low": 99.9, "ema20": 99.9, "ema50": 99.5, "atr": 0.25, "volume": 140, "volume_avg": 100, "body": 0.4, "body_avg": 0.22},
-                {"open": 100.4, "close": 100.9, "high": 101.0, "low": 100.3, "ema20": 100.1, "ema50": 99.7, "atr": 0.27, "volume": 145, "volume_avg": 100, "body": 0.5, "body_avg": 0.24},
-                {"open": 100.9, "close": 101.3, "high": 101.4, "low": 100.8, "ema20": 100.4, "ema50": 100.0, "atr": 0.28, "volume": 150, "volume_avg": 100, "body": 0.4, "body_avg": 0.24},
-                {"open": 101.3, "close": 101.7, "high": 101.8, "low": 101.2, "ema20": 100.8, "ema50": 100.3, "atr": 0.30, "volume": 155, "volume_avg": 100, "body": 0.4, "body_avg": 0.25},
-                {"open": 101.7, "close": 102.1, "high": 102.2, "low": 101.6, "ema20": 101.2, "ema50": 100.7, "atr": 0.32, "volume": 160, "volume_avg": 100, "body": 0.4, "body_avg": 0.25},
-            ]
-        )
-
-        regime, metrics = mod.classify_market_regime(df, "LONG")
-
-        self.assertIn(regime, {"trend_expansion", "impulse"})
-        self.assertGreater(float(metrics["regime_confidence"]), 0.55)
-        self.assertTrue(str(metrics["regime_reason"]))
-
-    def test_fx_higher_tf_bias_can_turn_long_before_ema50_trend_fully_catches_up(self) -> None:
-        base_time = datetime(2026, 4, 15, 6, 0, tzinfo=timezone.utc)
-
-        def make_raw_fx_df() -> pd.DataFrame:
-            closes = [
-                10.980, 10.976, 10.972, 10.968, 10.964, 10.960,
-                10.956, 10.952, 10.949, 10.946, 10.944, 10.942,
-                10.941, 10.940, 10.941, 10.943, 10.947, 10.952,
-                10.958, 10.966, 10.975, 10.984, 10.992, 10.999,
-            ]
-            rows = []
-            for index, close in enumerate(closes):
-                open_price = closes[index - 1] if index > 0 else close + 0.002
-                rows.append(
-                    {
-                        "time": pd.Timestamp(base_time + pd.Timedelta(minutes=15 * index)),
-                        "is_complete": True,
-                        "open": open_price,
-                        "high": max(open_price, close) + 0.003,
-                        "low": min(open_price, close) - 0.003,
-                        "close": close,
-                        "volume": 110.0 if index < len(closes) - 4 else 145.0 + index,
-                    }
-                )
-            return pd.DataFrame(rows)
-
-        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
-        client = object()
-
-        with patch.object(mod, "get_candles", side_effect=lambda *_args, **_kwargs: make_raw_fx_df()):
-            bias = mod.get_higher_tf_bias(client, self.config, instrument)
-
-        self.assertEqual(bias, "LONG")
-
-    def test_opening_range_blocks_expensive_fx_without_commission_room(self) -> None:
-        df = candle_rows(
-            [
-                {"close": 75.00, "high": 75.01, "low": 74.99, "ema20": 75.00, "ema50": 75.00},
-                {"close": 75.01, "high": 75.02, "low": 75.00, "ema20": 75.00, "ema50": 75.00},
-                {"close": 75.02, "high": 75.03, "low": 75.01, "ema20": 75.00, "ema50": 75.00},
-                {"close": 75.03, "high": 75.04, "low": 75.02, "ema20": 75.00, "ema50": 75.00},
-                {"close": 75.04, "high": 75.05, "low": 75.03, "ema20": 75.00, "ema50": 75.00},
-                {"close": 75.05, "high": 75.06, "low": 75.04, "ema20": 75.00, "ema50": 75.00},
-                {
-                    "open": 75.05,
-                    "close": 75.07,
-                    "high": 75.08,
-                    "low": 75.05,
-                    "ema20": 75.03,
-                    "ema50": 75.02,
-                    "rsi": 55.0,
-                    "macd": 0.20,
-                    "macd_signal": 0.10,
-                    "atr": 0.03,
-                    "volume": 120.0,
-                    "volume_avg": 100.0,
-                    "body": 0.02,
-                    "body_avg": 0.02,
-                },
-            ]
-        )
-        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
-
-        signal, reason = evaluate_opening_range(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("ожидаемое движение мало относительно комиссии", reason)
-
-    def test_opening_range_hands_fx_to_continuation_after_mature_breakout(self) -> None:
-        df = candle_rows(
-            [
-                {"close": 11.100, "high": 11.105, "low": 11.095, "ema20": 11.100, "ema50": 11.100},
-                {"close": 11.098, "high": 11.102, "low": 11.094, "ema20": 11.099, "ema50": 11.100},
-                {"close": 11.095, "high": 11.100, "low": 11.093, "ema20": 11.098, "ema50": 11.100},
-                {"close": 11.092, "high": 11.096, "low": 11.090, "ema20": 11.097, "ema50": 11.099},
-                {"close": 11.089, "high": 11.093, "low": 11.086, "ema20": 11.096, "ema50": 11.098},
-                {"close": 11.086, "high": 11.090, "low": 11.083, "ema20": 11.094, "ema50": 11.097},
-                {"close": 11.080, "high": 11.084, "low": 11.078, "ema20": 11.091, "ema50": 11.096, "rsi": 46.0, "macd": -0.016, "macd_signal": -0.013, "atr": 0.012, "volume": 130.0, "volume_avg": 100.0, "body": 0.006, "body_avg": 0.006},
-                {"close": 11.078, "high": 11.082, "low": 11.074, "ema20": 11.089, "ema50": 11.095, "rsi": 45.0, "macd": -0.017, "macd_signal": -0.014, "atr": 0.012, "volume": 130.0, "volume_avg": 100.0, "body": 0.006, "body_avg": 0.006},
-                {"close": 11.076, "high": 11.080, "low": 11.072, "ema20": 11.087, "ema50": 11.094, "rsi": 44.0, "macd": -0.018, "macd_signal": -0.015, "atr": 0.012, "volume": 130.0, "volume_avg": 100.0, "body": 0.006, "body_avg": 0.006},
-                {"close": 11.074, "high": 11.078, "low": 11.070, "ema20": 11.085, "ema50": 11.093, "rsi": 43.0, "macd": -0.019, "macd_signal": -0.016, "atr": 0.012, "volume": 130.0, "volume_avg": 100.0, "body": 0.006, "body_avg": 0.006},
-                {"close": 11.073, "high": 11.077, "low": 11.069, "ema20": 11.083, "ema50": 11.092, "rsi": 42.0, "macd": -0.020, "macd_signal": -0.017, "atr": 0.012, "volume": 130.0, "volume_avg": 100.0, "body": 0.006, "body_avg": 0.006},
-                {"close": 11.072, "high": 11.076, "low": 11.068, "ema20": 11.081, "ema50": 11.091, "rsi": 42.0, "macd": -0.021, "macd_signal": -0.018, "atr": 0.012, "volume": 130.0, "volume_avg": 100.0, "body": 0.006, "body_avg": 0.006},
-                {"close": 11.071, "high": 11.075, "low": 11.067, "ema20": 11.079, "ema50": 11.090, "rsi": 42.0, "macd": -0.022, "macd_signal": -0.019, "atr": 0.012, "volume": 130.0, "volume_avg": 100.0, "body": 0.006, "body_avg": 0.006},
-                {
-                    "open": 11.085,
-                    "close": 11.075,
-                    "high": 11.086,
-                    "low": 11.070,
-                    "ema20": 11.090,
-                    "ema50": 11.095,
-                    "rsi": 45.0,
-                    "macd": -0.020,
-                    "macd_signal": -0.015,
-                    "atr": 0.012,
-                    "volume": 140.0,
-                    "volume_avg": 100.0,
-                    "body": 0.010,
-                    "body_avg": 0.008,
-                },
-            ]
-        )
-        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
-
-        signal, reason = evaluate_opening_range(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("пробой вниз opening range уже зрелый", reason)
-
-    def test_usdrubf_mature_trend_short_continuation_allows_soft_volume(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 75.62, "close": 75.58, "high": 75.64, "low": 75.56, "ema20": 75.70, "ema50": 75.82, "macd": -0.04, "macd_signal": -0.02, "atr": 0.05, "volume": 95, "volume_avg": 100, "body": 0.04, "body_avg": 0.05},
-                {"open": 75.58, "close": 75.54, "high": 75.60, "low": 75.52, "ema20": 75.68, "ema50": 75.80, "macd": -0.05, "macd_signal": -0.03, "atr": 0.05, "volume": 94, "volume_avg": 100, "body": 0.04, "body_avg": 0.05},
-                {"open": 75.54, "close": 75.50, "high": 75.56, "low": 75.48, "ema20": 75.65, "ema50": 75.78, "macd": -0.06, "macd_signal": -0.04, "atr": 0.05, "volume": 92, "volume_avg": 100, "body": 0.04, "body_avg": 0.05},
-                {"open": 75.50, "close": 75.48, "high": 75.53, "low": 75.46, "ema20": 75.62, "ema50": 75.75, "macd": -0.07, "macd_signal": -0.05, "atr": 0.05, "volume": 91, "volume_avg": 100, "body": 0.02, "body_avg": 0.05},
-                {"open": 75.48, "close": 75.45, "high": 75.50, "low": 75.43, "ema20": 75.59, "ema50": 75.72, "macd": -0.08, "macd_signal": -0.06, "atr": 0.05, "volume": 90, "volume_avg": 100, "body": 0.03, "body_avg": 0.05},
-                {"open": 75.45, "close": 75.42, "high": 75.47, "low": 75.40, "ema20": 75.56, "ema50": 75.69, "macd": -0.09, "macd_signal": -0.07, "atr": 0.05, "volume": 90, "volume_avg": 100, "body": 0.03, "body_avg": 0.05},
-                {"open": 75.42, "close": 75.39, "high": 75.44, "low": 75.37, "ema20": 75.53, "ema50": 75.66, "rsi": 39.0, "macd": -0.10, "macd_signal": -0.08, "atr": 0.05, "volume": 88, "volume_avg": 100, "body": 0.03, "body_avg": 0.05},
-                {"open": 75.39, "close": 75.36, "high": 75.42, "low": 75.34, "ema20": 75.50, "ema50": 75.63, "rsi": 38.0, "macd": -0.11, "macd_signal": -0.09, "atr": 0.05, "volume": 86, "volume_avg": 100, "body": 0.03, "body_avg": 0.05},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
-
-        signal, reason = evaluate_range_break(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("старший ТФ=SHORT", reason)
-
-    def test_fx_prefers_momentum_breakout_before_older_breakout_filters(self) -> None:
-        self.assertEqual(
-            get_primary_strategies("CNYRUBF")[:4],
-            ["reversal_15m"],
-        )
-        self.assertEqual(
-            get_primary_strategies("USDRUBF")[:4],
-            ["reversal_15m"],
-        )
-        self.assertEqual(get_primary_strategies("IMOEXF"), ["reversal_15m"])
-        self.assertEqual(get_primary_strategies("SRM6"), ["reversal_15m"])
-        self.assertEqual(get_primary_strategies("VBM6"), ["reversal_15m"])
-        self.assertEqual(get_primary_strategies("RBM6"), ["reversal_15m"])
-        self.assertEqual(get_primary_strategies("GNM6"), ["reversal_15m"])
-
-    def test_active_brent_contract_uses_same_strategy_stack(self) -> None:
-        self.assertEqual(
-            get_primary_strategies("BMM6")[:3],
-            ["reversal_15m"],
-        )
-        self.assertIn("BMM6", DEFAULT_SYMBOLS.split(","))
-
-    def test_opening_range_allows_fx_fresh_macd_volume_breakout_against_lagging_higher_tf(self) -> None:
-        df = candle_rows(
-            [
-                {"close": 10.955, "high": 10.958, "low": 10.952, "ema20": 10.950, "ema50": 10.958, "macd": -0.010, "macd_signal": -0.006, "atr": 0.009, "volume": 90, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {"close": 10.951, "high": 10.954, "low": 10.948, "ema20": 10.949, "ema50": 10.957, "macd": -0.011, "macd_signal": -0.007, "atr": 0.009, "volume": 92, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {"close": 10.948, "high": 10.950, "low": 10.944, "ema20": 10.948, "ema50": 10.956, "macd": -0.012, "macd_signal": -0.008, "atr": 0.009, "volume": 94, "volume_avg": 100, "body": 0.003, "body_avg": 0.004},
-                {"close": 10.946, "high": 10.948, "low": 10.942, "ema20": 10.947, "ema50": 10.955, "macd": -0.013, "macd_signal": -0.009, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {"close": 10.944, "high": 10.946, "low": 10.940, "ema20": 10.946, "ema50": 10.954, "macd": -0.014, "macd_signal": -0.010, "atr": 0.009, "volume": 96, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {"close": 10.943, "high": 10.945, "low": 10.939, "ema20": 10.945, "ema50": 10.953, "macd": -0.015, "macd_signal": -0.011, "atr": 0.009, "volume": 97, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {
-                    "open": 10.943,
-                    "close": 10.970,
-                    "high": 10.975,
-                    "low": 10.942,
-                    "ema20": 10.952,
-                    "ema50": 10.950,
-                    "rsi": 57.0,
-                    "macd": -0.001,
-                    "macd_signal": -0.008,
-                    "atr": 0.010,
-                    "volume": 145.0,
-                    "volume_avg": 100.0,
-                    "body": 0.027,
-                    "body_avg": 0.010,
-                },
-            ]
-        )
-        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
-
-        signal, reason = evaluate_opening_range(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("MACD только что пересёкся вверх", reason)
-
-    def test_range_break_allows_fx_fresh_macd_volume_breakout_against_lagging_higher_tf(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 10.940, "close": 10.938, "high": 10.942, "low": 10.936, "ema20": 10.944, "ema50": 10.950, "macd": -0.014, "macd_signal": -0.010, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {"open": 10.938, "close": 10.936, "high": 10.940, "low": 10.934, "ema20": 10.943, "ema50": 10.949, "macd": -0.015, "macd_signal": -0.011, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {"open": 10.936, "close": 10.934, "high": 10.938, "low": 10.932, "ema20": 10.942, "ema50": 10.948, "macd": -0.016, "macd_signal": -0.012, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {"open": 10.934, "close": 10.933, "high": 10.936, "low": 10.931, "ema20": 10.941, "ema50": 10.947, "macd": -0.017, "macd_signal": -0.013, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004},
-                {"open": 10.933, "close": 10.934, "high": 10.936, "low": 10.932, "ema20": 10.940, "ema50": 10.946, "macd": -0.016, "macd_signal": -0.013, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004},
-                {"open": 10.934, "close": 10.935, "high": 10.937, "low": 10.933, "ema20": 10.939, "ema50": 10.945, "macd": -0.015, "macd_signal": -0.013, "atr": 0.009, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004},
-                {"open": 10.935, "close": 10.937, "high": 10.938, "low": 10.934, "ema20": 10.938, "ema50": 10.944, "rsi": 49.0, "macd": -0.014, "macd_signal": -0.013, "atr": 0.009, "volume": 96, "volume_avg": 100, "body": 0.002, "body_avg": 0.004},
-                {
-                    "open": 10.937,
-                    "close": 10.965,
-                    "high": 10.968,
-                    "low": 10.936,
-                    "ema20": 10.946,
-                    "ema50": 10.944,
-                    "rsi": 58.0,
-                    "macd": -0.002,
-                    "macd_signal": -0.010,
-                    "atr": 0.010,
-                    "volume": 148,
-                    "volume_avg": 100,
-                    "body": 0.028,
-                    "body_avg": 0.010,
-                },
-            ]
-        )
-        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
-
-        signal, reason = evaluate_range_break(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("MACD только что пересёкся вверх", reason)
-
-    def test_ucm6_prefers_pullback_before_breakout_chase(self) -> None:
-        self.assertEqual(get_primary_strategies("UCM6")[:1], ["reversal_15m"])
-
-    def test_ucm6_allows_higher_tf_long_pullback_reclaim(self) -> None:
-        from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
-
-        df = candle_rows(
-            [
-                {"open": 6.798, "close": 6.800, "high": 6.802, "low": 6.796, "ema20": 6.795, "ema50": 6.792, "ema50_slope": 0.00001, "macd": 0.0003, "macd_signal": 0.0001, "atr": 0.004, "volume": 85, "volume_avg": 100, "body": 0.002, "body_avg": 0.003, "bb_mid": 6.795, "bb_upper": 6.815},
-                {"open": 6.800, "close": 6.803, "high": 6.806, "low": 6.799, "ema20": 6.797, "ema50": 6.793, "ema50_slope": 0.00001, "macd": 0.0006, "macd_signal": 0.0002, "atr": 0.004, "volume": 88, "volume_avg": 100, "body": 0.003, "body_avg": 0.003, "bb_mid": 6.797, "bb_upper": 6.817},
-                {"open": 6.803, "close": 6.807, "high": 6.810, "low": 6.801, "ema20": 6.799, "ema50": 6.794, "ema50_slope": 0.00001, "macd": 0.0009, "macd_signal": 0.0003, "atr": 0.004, "volume": 90, "volume_avg": 100, "body": 0.004, "body_avg": 0.003, "bb_mid": 6.799, "bb_upper": 6.819},
-                {"open": 6.807, "close": 6.805, "high": 6.811, "low": 6.802, "ema20": 6.801, "ema50": 6.795, "ema50_slope": 0.00001, "macd": 0.0010, "macd_signal": 0.0004, "atr": 0.004, "volume": 82, "volume_avg": 100, "body": 0.002, "body_avg": 0.003, "bb_mid": 6.801, "bb_upper": 6.820},
-                {"open": 6.805, "close": 6.802, "high": 6.807, "low": 6.800, "ema20": 6.802, "ema50": 6.796, "ema50_slope": 0.00001, "macd": 0.0008, "macd_signal": 0.0005, "atr": 0.004, "volume": 78, "volume_avg": 100, "body": 0.003, "body_avg": 0.003, "bb_mid": 6.802, "bb_upper": 6.820},
-                {"open": 6.802, "close": 6.804, "high": 6.806, "low": 6.800, "ema20": 6.803, "ema50": 6.797, "ema50_slope": 0.00001, "macd": 0.0007, "macd_signal": 0.0005, "atr": 0.004, "volume": 78, "volume_avg": 100, "body": 0.002, "body_avg": 0.003, "bb_mid": 6.803, "bb_upper": 6.820},
-                {"open": 6.804, "close": 6.809, "high": 6.812, "low": 6.803, "ema20": 6.804, "ema50": 6.798, "ema50_slope": 0.00001, "rsi": 58.0, "macd": 0.0010, "macd_signal": 0.0006, "atr": 0.004, "volume": 86, "volume_avg": 100, "body": 0.005, "body_avg": 0.003, "bb_mid": 6.804, "bb_upper": 6.821},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="UCM6", figi="FIGI", display_name="CNY/USD")
-
-        signal, reason = evaluate_trend_pullback(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("старший ТФ=LONG", reason)
-
-    def test_ucm6_allows_fast_short_reversal_before_full_ema50_rollover(self) -> None:
-        from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
-
-        df = candle_rows(
-            [
-                {"open": 6.812, "close": 6.814, "high": 6.815, "low": 6.810, "ema20": 6.809, "ema50": 6.804, "ema50_slope": 0.00001, "macd": 0.004, "macd_signal": 0.002, "atr": 0.004, "volume": 90, "volume_avg": 100, "body": 0.002, "body_avg": 0.003, "bb_mid": 6.809, "bb_upper": 6.818, "bb_lower": 6.800},
-                {"open": 6.814, "close": 6.813, "high": 6.815, "low": 6.811, "ema20": 6.810, "ema50": 6.805, "ema50_slope": 0.00001, "macd": 0.003, "macd_signal": 0.002, "atr": 0.004, "volume": 92, "volume_avg": 100, "body": 0.001, "body_avg": 0.003, "bb_mid": 6.810, "bb_upper": 6.818, "bb_lower": 6.801},
-                {"open": 6.813, "close": 6.811, "high": 6.814, "low": 6.809, "ema20": 6.810, "ema50": 6.806, "ema50_slope": 0.00001, "macd": 0.002, "macd_signal": 0.002, "atr": 0.004, "volume": 95, "volume_avg": 100, "body": 0.002, "body_avg": 0.003, "bb_mid": 6.810, "bb_upper": 6.818, "bb_lower": 6.801},
-                {"open": 6.811, "close": 6.808, "high": 6.812, "low": 6.806, "ema20": 6.809, "ema50": 6.806, "ema50_slope": 0.00001, "macd": 0.000, "macd_signal": 0.001, "atr": 0.004, "volume": 98, "volume_avg": 100, "body": 0.003, "body_avg": 0.003, "bb_mid": 6.809, "bb_upper": 6.817, "bb_lower": 6.800},
-                {"open": 6.808, "close": 6.804, "high": 6.809, "low": 6.801, "ema20": 6.808, "ema50": 6.806, "ema50_slope": 0.00000, "macd": -0.002, "macd_signal": 0.000, "atr": 0.004, "volume": 110, "volume_avg": 100, "body": 0.004, "body_avg": 0.003, "bb_mid": 6.808, "bb_upper": 6.816, "bb_lower": 6.799},
-                {"open": 6.804, "close": 6.799, "high": 6.805, "low": 6.796, "ema20": 6.806, "ema50": 6.805, "ema50_slope": 0.00000, "macd": -0.004, "macd_signal": -0.001, "atr": 0.004, "volume": 120, "volume_avg": 100, "body": 0.005, "body_avg": 0.003, "bb_mid": 6.806, "bb_upper": 6.815, "bb_lower": 6.796},
-                {"open": 6.799, "close": 6.794, "high": 6.800, "low": 6.790, "ema20": 6.803, "ema50": 6.804, "ema50_slope": 0.00000, "rsi": 44.0, "macd": -0.006, "macd_signal": -0.002, "atr": 0.004, "volume": 128, "volume_avg": 100, "body": 0.005, "body_avg": 0.003, "bb_mid": 6.803, "bb_upper": 6.813, "bb_lower": 6.792},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="UCM6", figi="FIGI", display_name="CNY/USD")
-
-        signal, reason = evaluate_trend_pullback(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("старший ТФ=SHORT", reason)
-
-    def test_imoexf_short_requires_hard_breakdown(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 100.0, "close": 99.8, "high": 100.0, "low": 99.5, "ema20": 100.5, "ema50": 101.0, "macd": -0.20, "macd_signal": -0.10, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.2, "body_avg": 0.2},
-                {"open": 99.8, "close": 99.6, "high": 99.9, "low": 99.4, "ema20": 100.3, "ema50": 100.8, "macd": -0.22, "macd_signal": -0.12, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.2, "body_avg": 0.2},
-                {"open": 99.6, "close": 99.4, "high": 99.7, "low": 99.3, "ema20": 100.1, "ema50": 100.6, "macd": -0.24, "macd_signal": -0.14, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.2, "body_avg": 0.2},
-                {"open": 99.4, "close": 99.2, "high": 99.5, "low": 99.1, "ema20": 99.9, "ema50": 100.4, "macd": -0.26, "macd_signal": -0.16, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.2, "body_avg": 0.2},
-                {"open": 99.2, "close": 99.0, "high": 99.3, "low": 98.9, "ema20": 99.7, "ema50": 100.2, "macd": -0.28, "macd_signal": -0.18, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.2, "body_avg": 0.2},
-                {"open": 99.0, "close": 98.9, "high": 99.1, "low": 98.8, "ema20": 99.5, "ema50": 100.0, "macd": -0.30, "macd_signal": -0.20, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.1, "body_avg": 0.2},
-                {"open": 98.9, "close": 98.82, "high": 98.95, "low": 98.81, "ema20": 99.3, "ema50": 99.9, "macd": -0.32, "macd_signal": -0.22, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.08, "body_avg": 0.2},
-                {"open": 98.82, "close": 98.81, "high": 98.9, "low": 98.8, "ema20": 99.2, "ema50": 99.8, "macd": -0.34, "macd_signal": -0.24, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.01, "body_avg": 0.2},
-                {"open": 98.81, "close": 98.79, "high": 98.85, "low": 98.78, "ema20": 99.0, "ema50": 99.7, "macd": -0.36, "macd_signal": -0.26, "atr": 2.0, "volume": 160, "volume_avg": 100, "body": 0.02, "body_avg": 0.2},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
-
-        signal, reason = evaluate_range_break(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("пробой вниз диапазона", reason)
-
-    def test_imoexf_failed_breakout_allows_reversal_long_against_higher_tf_short(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2739.0, "close": 2738.0, "high": 2740.0, "low": 2737.0, "ema20": 2738.0, "ema50": 2740.0, "macd": -1.8, "macd_signal": -1.5, "atr": 4.0, "volume": 140, "volume_avg": 100, "body": 1.0, "body_avg": 1.0},
-                {"open": 2738.0, "close": 2737.0, "high": 2739.0, "low": 2736.0, "ema20": 2737.5, "ema50": 2739.5, "macd": -1.9, "macd_signal": -1.6, "atr": 4.0, "volume": 140, "volume_avg": 100, "body": 1.0, "body_avg": 1.0},
-                {"open": 2737.0, "close": 2736.0, "high": 2738.0, "low": 2735.0, "ema20": 2737.0, "ema50": 2739.0, "macd": -2.0, "macd_signal": -1.7, "atr": 4.0, "volume": 140, "volume_avg": 100, "body": 1.0, "body_avg": 1.0},
-                {"open": 2736.0, "close": 2735.0, "high": 2737.0, "low": 2734.0, "ema20": 2736.5, "ema50": 2738.5, "macd": -2.1, "macd_signal": -1.8, "atr": 4.0, "volume": 140, "volume_avg": 100, "body": 1.0, "body_avg": 1.0},
-                {"open": 2735.0, "close": 2734.0, "high": 2736.0, "low": 2733.0, "ema20": 2736.0, "ema50": 2738.0, "macd": -2.2, "macd_signal": -1.9, "atr": 4.0, "volume": 140, "volume_avg": 100, "body": 1.0, "body_avg": 1.0},
-                {"open": 2734.0, "close": 2733.5, "high": 2735.0, "low": 2732.0, "ema20": 2735.0, "ema50": 2737.0, "macd": -2.3, "macd_signal": -2.0, "atr": 4.0, "volume": 140, "volume_avg": 100, "body": 0.5, "body_avg": 1.0},
-                {"open": 2733.5, "close": 2732.5, "high": 2734.0, "low": 2728.0, "ema20": 2734.0, "ema50": 2736.0, "rsi": 39.0, "macd": -2.2, "macd_signal": -2.1, "atr": 4.0, "volume": 170, "volume_avg": 100, "body": 1.0, "body_avg": 1.0},
-                {"open": 2732.5, "close": 2735.2, "high": 2736.0, "low": 2732.0, "ema20": 2734.0, "ema50": 2736.0, "rsi": 50.0, "macd": -1.8, "macd_signal": -2.0, "atr": 4.0, "volume": 180, "volume_avg": 100, "body": 2.7, "body_avg": 1.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
-
-        signal, reason = evaluate_failed_breakout(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("ложный пробой вниз", reason)
-
-    def test_brk6_uses_rollover_strategy_for_intraday_reversal(self) -> None:
-        self.assertEqual(get_primary_strategies("BRK6")[:1], ["reversal_15m"])
-
-    def test_gnm6_uses_unified_reversal_strategy(self) -> None:
-        self.assertEqual(get_primary_strategies("GNM6"), ["reversal_15m"])
-
-    def test_gnm6_allows_higher_tf_long_pullback_on_15m_structure(self) -> None:
-        from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
-
-        df = candle_rows(
-            [
-                {"open": 4818.0, "close": 4822.0, "high": 4828.0, "low": 4814.0, "ema20": 4816.0, "ema50": 4808.0, "ema200": 4790.0, "ema50_slope": 0.20, "macd": 1.0, "macd_signal": 0.4, "atr": 7.0, "volume": 82, "volume_avg": 100, "body": 4.0, "body_avg": 5.0, "bb_mid": 4816.0, "bb_upper": 4865.0},
-                {"open": 4822.0, "close": 4832.0, "high": 4836.0, "low": 4820.0, "ema20": 4820.0, "ema50": 4811.0, "ema200": 4792.0, "ema50_slope": 0.20, "macd": 1.5, "macd_signal": 0.6, "atr": 7.0, "volume": 86, "volume_avg": 100, "body": 10.0, "body_avg": 5.0, "bb_mid": 4820.0, "bb_upper": 4868.0},
-                {"open": 4832.0, "close": 4844.0, "high": 4848.0, "low": 4828.0, "ema20": 4824.0, "ema50": 4814.0, "ema200": 4794.0, "ema50_slope": 0.20, "macd": 2.2, "macd_signal": 0.9, "atr": 7.0, "volume": 100, "volume_avg": 100, "body": 12.0, "body_avg": 5.0, "bb_mid": 4824.0, "bb_upper": 4870.0},
-                {"open": 4844.0, "close": 4835.0, "high": 4846.0, "low": 4828.0, "ema20": 4828.0, "ema50": 4817.0, "ema200": 4796.0, "ema50_slope": 0.20, "macd": 2.0, "macd_signal": 1.0, "atr": 7.0, "volume": 78, "volume_avg": 100, "body": 9.0, "body_avg": 5.0, "bb_mid": 4828.0, "bb_upper": 4870.0},
-                {"open": 4835.0, "close": 4829.0, "high": 4838.0, "low": 4825.0, "ema20": 4829.0, "ema50": 4820.0, "ema200": 4798.0, "ema50_slope": 0.20, "macd": 1.7, "macd_signal": 1.1, "atr": 7.0, "volume": 76, "volume_avg": 100, "body": 6.0, "body_avg": 5.0, "bb_mid": 4829.0, "bb_upper": 4868.0},
-                {"open": 4829.0, "close": 4831.0, "high": 4836.0, "low": 4824.0, "ema20": 4830.0, "ema50": 4822.0, "ema200": 4800.0, "ema50_slope": 0.20, "macd": 1.8, "macd_signal": 1.2, "atr": 7.0, "volume": 78, "volume_avg": 100, "body": 2.0, "body_avg": 5.0, "bb_mid": 4830.0, "bb_upper": 4868.0},
-                {"open": 4831.0, "close": 4842.0, "high": 4848.0, "low": 4830.0, "ema20": 4832.0, "ema50": 4825.0, "ema200": 4802.0, "ema50_slope": 0.20, "rsi": 58.0, "macd": 2.4, "macd_signal": 1.4, "atr": 7.0, "volume": 90, "volume_avg": 100, "body": 11.0, "body_avg": 5.0, "bb_mid": 4832.0, "bb_upper": 4868.0},
-            ]
-        )
+    def test_legacy_strategy_name_is_not_evaluated_live(self) -> None:
         instrument = InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
+        df = candle_rows([{}, {}, {}, {}, {}, {}, {}, {}])
 
-        signal, reason = evaluate_trend_pullback(df, self.config, instrument, "LONG")
+        with patch("strategy_engine.get_primary_strategies", return_value=["trend_pullback"]):
+            signal, reason, strategy_name = strategy_engine.evaluate_primary_signal_bundle(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "LONG")
-        self.assertIn("старший ТФ=LONG", reason)
+        self.assertEqual(signal, "HOLD")
+        self.assertEqual(strategy_name, "trend_pullback")
+        self.assertIn("больше не поддерживается", reason)
 
-    def test_imoexf_uses_unified_reversal_strategy(self) -> None:
-        self.assertEqual(get_primary_strategies("IMOEXF"), ["reversal_15m"])
+    def test_unified_reversal_symbols_use_longer_bootstrap_lookback(self) -> None:
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "BMM6", interval_minutes=15), 120)
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "USDRUBF", interval_minutes=15), 120)
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "NGK6", interval_minutes=15), 168)
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "GNM6", interval_minutes=15), 120)
 
-    def test_rbm6_is_bond_index_with_unified_reversal_strategy(self) -> None:
-        self.assertEqual(mod.get_instrument_group("RBM6").name, "bond_index")
-        self.assertEqual(get_primary_strategies("RBM6"), ["reversal_15m"])
+    def test_add_indicators_can_skip_ema200_for_unified_reversal(self) -> None:
+        rows = []
+        price = 10.0
+        for index in range(80):
+            price += 0.01
+            rows.append(
+                {
+                    "time": pd.Timestamp("2026-05-01T00:00:00Z") + pd.Timedelta(minutes=15 * index),
+                    "is_complete": True,
+                    "open": price - 0.02,
+                    "high": price + 0.03,
+                    "low": price - 0.03,
+                    "close": price,
+                    "volume": 100 + index,
+                }
+            )
 
-    def test_rbm6_primary_bundle_no_longer_falls_back_to_legacy_stack(self) -> None:
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
+        result = mod.add_indicators(pd.DataFrame(rows), include_ema200=False)
+
+        self.assertIn("ema20", result.columns)
+        self.assertIn("ema50", result.columns)
+        self.assertNotIn("ema200", result.columns)
+
+    def test_unified_reversal_allows_short_when_macd_rsi_stoch_and_volume_align(self) -> None:
         df = candle_rows(
             [
-                {"open": 12000.0, "close": 11998.0, "high": 12002.0, "low": 11996.0, "ema20": 12001.0, "ema50": 12003.0, "rsi": 55.0, "macd": 0.004, "macd_signal": 0.003, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 4.0, "stoch_k": 62.0, "stoch_d": 58.0, "atr": 8.0, "bb_upper": 12008.0, "bb_lower": 11992.0},
-                {"open": 11998.0, "close": 11995.0, "high": 12000.0, "low": 11992.0, "ema20": 11999.0, "ema50": 12002.0, "rsi": 49.0, "macd": -0.002, "macd_signal": 0.001, "volume": 145, "volume_avg": 100, "body": 3.0, "body_avg": 4.0, "stoch_k": 41.0, "stoch_d": 53.0, "atr": 10.0, "bb_upper": 12006.0, "bb_lower": 11991.0},
-                {"open": 11995.0, "close": 11990.0, "high": 11996.0, "low": 11988.0, "ema20": 11997.0, "ema50": 12001.0, "rsi": 43.0, "macd": -0.008, "macd_signal": -0.002, "volume": 160, "volume_avg": 100, "body": 5.0, "body_avg": 4.0, "stoch_k": 29.0, "stoch_d": 44.0, "atr": 11.0, "bb_upper": 12003.0, "bb_lower": 11987.0},
-                {"open": 11990.0, "close": 11986.0, "high": 11991.0, "low": 11984.0, "ema20": 11994.0, "ema50": 12000.0, "rsi": 38.0, "macd": -0.013, "macd_signal": -0.006, "volume": 170, "volume_avg": 100, "body": 4.0, "body_avg": 4.0, "stoch_k": 22.0, "stoch_d": 35.0, "atr": 11.0, "bb_upper": 12001.0, "bb_lower": 11983.0},
-                {"open": 11986.0, "close": 11985.0, "high": 11988.0, "low": 11984.0, "ema20": 11992.0, "ema50": 11998.0, "rsi": 37.0, "macd": -0.014, "macd_signal": -0.009, "volume": 150, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 21.0, "stoch_d": 30.0, "atr": 10.0, "bb_upper": 11999.0, "bb_lower": 11982.0},
-                {"open": 11985.0, "close": 11984.0, "high": 11986.0, "low": 11983.0, "ema20": 11990.0, "ema50": 11997.0, "rsi": 36.0, "macd": -0.015, "macd_signal": -0.011, "volume": 140, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 20.0, "stoch_d": 27.0, "atr": 10.0, "bb_upper": 11997.0, "bb_lower": 11981.0},
-                {"open": 11984.0, "close": 11983.0, "high": 11985.0, "low": 11982.0, "ema20": 11988.0, "ema50": 11996.0, "rsi": 35.0, "macd": -0.016, "macd_signal": -0.012, "volume": 135, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 19.0, "stoch_d": 24.0, "atr": 10.0, "bb_upper": 11995.0, "bb_lower": 11980.0},
-                {"open": 11983.0, "close": 11982.0, "high": 11984.0, "low": 11981.0, "ema20": 11986.0, "ema50": 11995.0, "rsi": 34.0, "macd": -0.017, "macd_signal": -0.013, "volume": 130, "volume_avg": 100, "body": 1.0, "body_avg": 4.0, "stoch_k": 18.0, "stoch_d": 22.0, "atr": 10.0, "bb_upper": 11994.0, "bb_lower": 11979.0},
+                {"close": 100.5, "ema20": 100.4, "ema50": 100.2, "rsi": 58.0, "macd": 0.08, "macd_signal": 0.03, "stoch_k": 70.0, "stoch_d": 65.0, "ao": 0.04},
+                {"close": 100.4, "ema20": 100.4, "ema50": 100.2, "rsi": 56.0, "macd": 0.07, "macd_signal": 0.04, "stoch_k": 66.0, "stoch_d": 63.0, "ao": 0.03},
+                {"close": 100.3, "ema20": 100.35, "ema50": 100.25, "rsi": 54.0, "macd": 0.05, "macd_signal": 0.04, "stoch_k": 61.0, "stoch_d": 60.0, "ao": 0.02},
+                {"close": 100.1, "ema20": 100.30, "ema50": 100.24, "rsi": 51.0, "macd": 0.02, "macd_signal": 0.03, "stoch_k": 53.0, "stoch_d": 56.0, "ao": -0.01},
+                {"close": 99.9, "ema20": 100.20, "ema50": 100.22, "rsi": 48.0, "macd": -0.01, "macd_signal": 0.02, "stoch_k": 44.0, "stoch_d": 50.0, "ao": -0.03},
+                {"close": 99.6, "ema20": 100.05, "ema50": 100.18, "rsi": 44.0, "macd": -0.04, "macd_signal": 0.00, "stoch_k": 34.0, "stoch_d": 43.0, "ao": -0.06},
+                {"close": 99.3, "ema20": 99.90, "ema50": 100.10, "rsi": 40.0, "macd": -0.07, "macd_signal": -0.02, "stoch_k": 25.0, "stoch_d": 35.0, "ao": -0.09},
+                {
+                    "open": 99.3,
+                    "close": 98.8,
+                    "high": 99.35,
+                    "low": 98.7,
+                    "ema20": 99.70,
+                    "ema50": 100.00,
+                    "rsi": 37.0,
+                    "macd": -0.10,
+                    "macd_signal": -0.04,
+                    "stoch_k": 18.0,
+                    "stoch_d": 28.0,
+                    "volume": 155.0,
+                    "volume_avg": 100.0,
+                    "body": 0.50,
+                    "body_avg": 0.35,
+                    "atr": 0.35,
+                    "bb_upper": 101.0,
+                    "bb_lower": 98.6,
+                    "ao": -0.12,
+                    "chaikin": -5.0,
+                },
             ]
         )
+        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
 
-        signal, reason, strategy_name = strategy_engine.evaluate_primary_signal_bundle(df, self.config, instrument, "LONG")
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "")
 
-        self.assertEqual(strategy_name, "reversal_15m")
+        self.assertEqual(signal, "SHORT")
         self.assertIn("reversal_15m", reason)
-
-    def test_rbm6_failed_breakout_allows_morning_reversal_long(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 12110.0, "close": 12108.0, "high": 12112.0, "low": 12102.0, "ema20": 12110.0, "ema50": 12108.0, "macd": -2.4, "macd_signal": -1.7, "atr": 20.0, "volume": 80, "volume_avg": 100, "body": 2.0, "body_avg": 4.0},
-                {"open": 12108.0, "close": 12106.0, "high": 12110.0, "low": 12101.0, "ema20": 12109.0, "ema50": 12108.0, "macd": -2.5, "macd_signal": -1.8, "atr": 20.0, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 4.0},
-                {"open": 12106.0, "close": 12105.0, "high": 12109.0, "low": 12100.0, "ema20": 12108.0, "ema50": 12107.0, "macd": -2.6, "macd_signal": -1.9, "atr": 20.0, "volume": 95, "volume_avg": 100, "body": 1.0, "body_avg": 4.0},
-                {"open": 12105.0, "close": 12104.0, "high": 12108.0, "low": 12100.0, "ema20": 12107.0, "ema50": 12107.0, "macd": -2.7, "macd_signal": -2.0, "atr": 20.0, "volume": 100, "volume_avg": 100, "body": 1.0, "body_avg": 4.0},
-                {"open": 12104.0, "close": 12103.0, "high": 12107.0, "low": 12100.0, "ema20": 12106.0, "ema50": 12106.0, "macd": -2.8, "macd_signal": -2.1, "atr": 20.0, "volume": 105, "volume_avg": 100, "body": 1.0, "body_avg": 4.0},
-                {"open": 12103.0, "close": 12101.0, "high": 12105.0, "low": 12100.0, "ema20": 12105.0, "ema50": 12106.0, "macd": -2.9, "macd_signal": -2.2, "atr": 20.0, "volume": 110, "volume_avg": 100, "body": 2.0, "body_avg": 4.0},
-                {"open": 12101.0, "close": 12095.0, "high": 12102.0, "low": 12088.0, "ema20": 12100.0, "ema50": 12104.0, "macd": -2.4, "macd_signal": -2.3, "atr": 20.0, "volume": 180, "volume_avg": 100, "body": 6.0, "body_avg": 4.0},
-                {"open": 12095.0, "close": 12118.0, "high": 12121.0, "low": 12094.0, "ema20": 12105.0, "ema50": 12108.0, "rsi": 42.0, "macd": -1.7, "macd_signal": -2.0, "atr": 20.0, "volume": 190, "volume_avg": 100, "body": 23.0, "body_avg": 4.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-
-        signal, reason = evaluate_failed_breakout(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("ложный пробой вниз", reason)
-
-    def test_rbm6_volume_reversal_short_can_override_lagging_higher_tf_long(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 12145.0, "close": 12148.0, "high": 12150.0, "low": 12142.0, "ema20": 12138.0, "ema50": 12130.0, "macd": 4.0, "macd_signal": 2.0, "atr": 18.0, "volume": 90, "volume_avg": 100, "body": 3.0, "body_avg": 6.0},
-                {"open": 12148.0, "close": 12146.0, "high": 12152.0, "low": 12144.0, "ema20": 12139.0, "ema50": 12131.0, "macd": 4.2, "macd_signal": 2.4, "atr": 18.0, "volume": 95, "volume_avg": 100, "body": 2.0, "body_avg": 6.0},
-                {"open": 12146.0, "close": 12143.0, "high": 12149.0, "low": 12140.0, "ema20": 12140.0, "ema50": 12132.0, "macd": 4.0, "macd_signal": 2.8, "atr": 18.0, "volume": 100, "volume_avg": 100, "body": 3.0, "body_avg": 6.0},
-                {"open": 12143.0, "close": 12139.0, "high": 12145.0, "low": 12136.0, "ema20": 12141.0, "ema50": 12133.0, "macd": 3.2, "macd_signal": 3.0, "atr": 18.0, "volume": 105, "volume_avg": 100, "body": 4.0, "body_avg": 6.0},
-                {"open": 12139.0, "close": 12135.0, "high": 12142.0, "low": 12132.0, "ema20": 12141.0, "ema50": 12134.0, "macd": 2.0, "macd_signal": 3.0, "atr": 18.0, "volume": 110, "volume_avg": 100, "body": 4.0, "body_avg": 6.0},
-                {"open": 12135.0, "close": 12131.0, "high": 12138.0, "low": 12129.0, "ema20": 12140.0, "ema50": 12135.0, "macd": 1.0, "macd_signal": 2.5, "atr": 18.0, "volume": 115, "volume_avg": 100, "body": 4.0, "body_avg": 6.0},
-                {"open": 12131.0, "close": 12129.0, "high": 12134.0, "low": 12127.0, "ema20": 12138.0, "ema50": 12136.0, "macd": 0.2, "macd_signal": 1.8, "atr": 18.0, "volume": 120, "volume_avg": 100, "body": 2.0, "body_avg": 6.0},
-                {"open": 12129.0, "close": 12120.0, "high": 12130.0, "low": 12118.0, "ema20": 12135.0, "ema50": 12132.0, "rsi": 44.0, "macd": -1.4, "macd_signal": 0.2, "atr": 18.0, "volume": 180, "volume_avg": 100, "body": 9.0, "body_avg": 6.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-
-        signal, reason = evaluate_range_break(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("старший ТФ=LONG", reason)
-
-    def test_rbm6_allows_mature_trend_short_in_persistent_higher_tf_selloff(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 12130.0, "close": 12128.0, "high": 12131.0, "low": 12127.0, "ema20": 12127.0, "ema50": 12120.0, "macd": 2.0, "macd_signal": 1.0, "atr": 8.0, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-                {"open": 12128.0, "close": 12126.0, "high": 12129.0, "low": 12125.0, "ema20": 12127.5, "ema50": 12121.0, "macd": 1.6, "macd_signal": 1.1, "atr": 8.0, "volume": 92, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-                {"open": 12126.0, "close": 12124.0, "high": 12127.0, "low": 12123.0, "ema20": 12127.0, "ema50": 12122.0, "macd": 1.0, "macd_signal": 1.1, "atr": 8.0, "volume": 95, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-                {"open": 12124.0, "close": 12122.0, "high": 12125.0, "low": 12121.0, "ema20": 12126.0, "ema50": 12122.5, "macd": 0.4, "macd_signal": 1.0, "atr": 8.0, "volume": 96, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-                {"open": 12122.0, "close": 12120.0, "high": 12123.0, "low": 12119.0, "ema20": 12124.5, "ema50": 12122.8, "macd": -0.2, "macd_signal": 0.8, "atr": 8.0, "volume": 98, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-                {"open": 12120.0, "close": 12118.0, "high": 12121.0, "low": 12117.0, "ema20": 12123.0, "ema50": 12122.7, "macd": -0.8, "macd_signal": 0.5, "atr": 8.0, "volume": 102, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-                {"open": 12118.0, "close": 12116.0, "high": 12119.0, "low": 12115.0, "ema20": 12121.5, "ema50": 12122.4, "macd": -1.5, "macd_signal": 0.1, "atr": 8.0, "volume": 104, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-                {"open": 12116.0, "close": 12114.0, "high": 12117.0, "low": 12113.0, "ema20": 12120.0, "ema50": 12122.0, "rsi": 46.0, "macd": -2.0, "macd_signal": -0.3, "atr": 8.0, "volume": 106, "volume_avg": 100, "body": 2.0, "body_avg": 3.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-
-        signal, reason = evaluate_range_break(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("старший ТФ=SHORT", reason)
-
-    def test_srm6_failed_breakout_allows_reversal_short_against_flat_higher_tf(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 33240.0, "close": 33255.0, "high": 33265.0, "low": 33235.0, "ema20": 33235.0, "ema50": 33220.0, "macd": 18.0, "macd_signal": 14.0, "atr": 90.0, "volume": 130, "volume_avg": 100, "body": 15.0, "body_avg": 20.0},
-                {"open": 33255.0, "close": 33270.0, "high": 33290.0, "low": 33250.0, "ema20": 33240.0, "ema50": 33225.0, "macd": 20.0, "macd_signal": 15.0, "atr": 90.0, "volume": 140, "volume_avg": 100, "body": 15.0, "body_avg": 20.0},
-                {"open": 33270.0, "close": 33280.0, "high": 33300.0, "low": 33260.0, "ema20": 33245.0, "ema50": 33230.0, "macd": 22.0, "macd_signal": 16.0, "atr": 90.0, "volume": 150, "volume_avg": 100, "body": 10.0, "body_avg": 20.0},
-                {"open": 33280.0, "close": 33310.0, "high": 33335.0, "low": 33275.0, "ema20": 33255.0, "ema50": 33235.0, "macd": 24.0, "macd_signal": 17.0, "atr": 90.0, "volume": 180, "volume_avg": 100, "body": 30.0, "body_avg": 20.0},
-                {"open": 33310.0, "close": 33320.0, "high": 33350.0, "low": 33300.0, "ema20": 33270.0, "ema50": 33245.0, "macd": 25.0, "macd_signal": 18.0, "atr": 90.0, "volume": 210, "volume_avg": 100, "body": 10.0, "body_avg": 20.0},
-                {"open": 33320.0, "close": 33305.0, "high": 33360.0, "low": 33295.0, "ema20": 33285.0, "ema50": 33255.0, "macd": 24.0, "macd_signal": 19.0, "atr": 90.0, "volume": 220, "volume_avg": 100, "body": 15.0, "body_avg": 20.0},
-                {"open": 33305.0, "close": 33270.0, "high": 33310.0, "low": 33260.0, "ema20": 33290.0, "ema50": 33265.0, "rsi": 48.0, "macd": 18.0, "macd_signal": 19.0, "atr": 90.0, "volume": 190, "volume_avg": 100, "body": 35.0, "body_avg": 20.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="SRM6", figi="FIGI", display_name="SBER")
-
-        signal, reason = evaluate_failed_breakout(df, self.config, instrument, "FLAT")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("ложный пробой вверх", reason)
-
-    def test_vbm6_post_gap_chop_blocks_continuation(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 9760.0, "close": 9758.0, "high": 9765.0, "low": 9755.0, "ema20": 9760.0, "ema50": 9762.0, "macd": -1.0, "macd_signal": -0.6, "atr": 18.0, "volume": 80, "volume_avg": 100, "body": 2.0, "body_avg": 10.0},
-                {"open": 9758.0, "close": 9755.0, "high": 9761.0, "low": 9752.0, "ema20": 9758.0, "ema50": 9760.0, "macd": -1.2, "macd_signal": -0.7, "atr": 18.0, "volume": 85, "volume_avg": 100, "body": 3.0, "body_avg": 10.0},
-                {"open": 9755.0, "close": 9752.0, "high": 9758.0, "low": 9750.0, "ema20": 9756.0, "ema50": 9758.0, "macd": -1.4, "macd_signal": -0.8, "atr": 18.0, "volume": 90, "volume_avg": 100, "body": 3.0, "body_avg": 10.0},
-                {"open": 9860.0, "close": 9890.0, "high": 9915.0, "low": 9845.0, "ema20": 9780.0, "ema50": 9765.0, "macd": 7.0, "macd_signal": 1.0, "atr": 20.0, "volume": 230, "volume_avg": 100, "body": 30.0, "body_avg": 10.0},
-                {"open": 9890.0, "close": 9870.0, "high": 9905.0, "low": 9860.0, "ema20": 9800.0, "ema50": 9775.0, "macd": 8.0, "macd_signal": 2.0, "atr": 20.0, "volume": 180, "volume_avg": 100, "body": 20.0, "body_avg": 10.0},
-                {"open": 9870.0, "close": 9882.0, "high": 9900.0, "low": 9865.0, "ema20": 9820.0, "ema50": 9788.0, "macd": 8.2, "macd_signal": 3.0, "atr": 20.0, "volume": 140, "volume_avg": 100, "body": 12.0, "body_avg": 10.0},
-                {"open": 9882.0, "close": 9888.0, "high": 9902.0, "low": 9870.0, "ema20": 9840.0, "ema50": 9800.0, "rsi": 58.0, "macd": 7.0, "macd_signal": 4.0, "atr": 18.0, "volume": 80, "volume_avg": 100, "body": 6.0, "body_avg": 10.0},
-                {"open": 9888.0, "close": 9878.0, "high": 9898.0, "low": 9868.0, "ema20": 9855.0, "ema50": 9812.0, "rsi": 56.0, "macd": 6.0, "macd_signal": 4.2, "atr": 18.0, "volume": 78, "volume_avg": 100, "body": 10.0, "body_avg": 10.0},
-                {"open": 9878.0, "close": 9884.0, "high": 9894.0, "low": 9872.0, "ema20": 9865.0, "ema50": 9825.0, "rsi": 57.0, "macd": 5.0, "macd_signal": 4.0, "atr": 18.0, "volume": 75, "volume_avg": 100, "body": 6.0, "body_avg": 10.0},
-                {"open": 9884.0, "close": 9886.0, "high": 9896.0, "low": 9875.0, "ema20": 9875.0, "ema50": 9840.0, "rsi": 58.0, "macd": 4.5, "macd_signal": 3.9, "atr": 18.0, "volume": 72, "volume_avg": 100, "body": 2.0, "body_avg": 10.0},
-                {"open": 9886.0, "close": 9880.0, "high": 9892.0, "low": 9873.0, "ema20": 9880.0, "ema50": 9852.0, "rsi": 56.0, "macd": 4.0, "macd_signal": 3.8, "atr": 18.0, "volume": 70, "volume_avg": 100, "body": 6.0, "body_avg": 10.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
-
-        signal, reason = evaluate_range_break(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("VBM6 после гэпа", reason)
-
-    def test_vbm6_post_gap_chop_blocks_failed_breakout(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 9760.0, "close": 9758.0, "high": 9765.0, "low": 9755.0, "ema20": 9760.0, "ema50": 9762.0, "macd": -1.0, "macd_signal": -0.6, "atr": 18.0, "volume": 80, "volume_avg": 100, "body": 2.0, "body_avg": 10.0},
-                {"open": 9758.0, "close": 9755.0, "high": 9761.0, "low": 9752.0, "ema20": 9758.0, "ema50": 9760.0, "macd": -1.2, "macd_signal": -0.7, "atr": 18.0, "volume": 85, "volume_avg": 100, "body": 3.0, "body_avg": 10.0},
-                {"open": 9755.0, "close": 9752.0, "high": 9758.0, "low": 9750.0, "ema20": 9756.0, "ema50": 9758.0, "macd": -1.4, "macd_signal": -0.8, "atr": 18.0, "volume": 90, "volume_avg": 100, "body": 3.0, "body_avg": 10.0},
-                {"open": 9860.0, "close": 9890.0, "high": 9915.0, "low": 9845.0, "ema20": 9780.0, "ema50": 9765.0, "macd": 7.0, "macd_signal": 1.0, "atr": 20.0, "volume": 230, "volume_avg": 100, "body": 30.0, "body_avg": 10.0},
-                {"open": 9890.0, "close": 9870.0, "high": 9905.0, "low": 9860.0, "ema20": 9800.0, "ema50": 9775.0, "macd": 8.0, "macd_signal": 2.0, "atr": 20.0, "volume": 180, "volume_avg": 100, "body": 20.0, "body_avg": 10.0},
-                {"open": 9870.0, "close": 9882.0, "high": 9900.0, "low": 9865.0, "ema20": 9820.0, "ema50": 9788.0, "macd": 8.2, "macd_signal": 3.0, "atr": 20.0, "volume": 140, "volume_avg": 100, "body": 12.0, "body_avg": 10.0},
-                {"open": 9882.0, "close": 9868.0, "high": 9902.0, "low": 9862.0, "ema20": 9875.0, "ema50": 9840.0, "rsi": 52.0, "macd": 5.5, "macd_signal": 4.0, "atr": 18.0, "volume": 80, "volume_avg": 100, "body": 14.0, "body_avg": 10.0},
-                {"open": 9868.0, "close": 9882.0, "high": 9898.0, "low": 9865.0, "ema20": 9876.0, "ema50": 9845.0, "rsi": 55.0, "macd": 5.0, "macd_signal": 4.2, "atr": 18.0, "volume": 78, "volume_avg": 100, "body": 14.0, "body_avg": 10.0},
-                {"open": 9882.0, "close": 9876.0, "high": 9896.0, "low": 9868.0, "ema20": 9877.0, "ema50": 9850.0, "rsi": 54.0, "macd": 4.7, "macd_signal": 4.1, "atr": 18.0, "volume": 75, "volume_avg": 100, "body": 6.0, "body_avg": 10.0},
-                {"open": 9876.0, "close": 9880.0, "high": 9894.0, "low": 9870.0, "ema20": 9878.0, "ema50": 9855.0, "rsi": 55.0, "macd": 4.4, "macd_signal": 4.0, "atr": 18.0, "volume": 72, "volume_avg": 100, "body": 4.0, "body_avg": 10.0},
-                {"open": 9880.0, "close": 9874.0, "high": 9892.0, "low": 9871.0, "ema20": 9879.0, "ema50": 9860.0, "rsi": 53.0, "macd": 4.2, "macd_signal": 4.0, "atr": 18.0, "volume": 70, "volume_avg": 100, "body": 6.0, "body_avg": 10.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
-
-        signal, reason = evaluate_failed_breakout(df, self.config, instrument, "FLAT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("VBM6 после гэпа", reason)
-
-    def test_vbm6_failed_breakout_does_not_open_early_long_against_persistent_short_bias(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 9895.0, "close": 9880.0, "high": 9902.0, "low": 9876.0, "ema20": 9892.0, "ema50": 9870.0, "macd": -4.0, "macd_signal": -2.0, "atr": 18.0, "volume": 120, "volume_avg": 100, "body": 15.0, "body_avg": 12.0},
-                {"open": 9880.0, "close": 9868.0, "high": 9884.0, "low": 9862.0, "ema20": 9888.0, "ema50": 9868.0, "macd": -5.0, "macd_signal": -2.8, "atr": 18.0, "volume": 130, "volume_avg": 100, "body": 12.0, "body_avg": 12.0},
-                {"open": 9868.0, "close": 9852.0, "high": 9870.0, "low": 9848.0, "ema20": 9880.0, "ema50": 9865.0, "macd": -6.0, "macd_signal": -3.5, "atr": 18.0, "volume": 150, "volume_avg": 100, "body": 16.0, "body_avg": 12.0},
-                {"open": 9852.0, "close": 9835.0, "high": 9855.0, "low": 9828.0, "ema20": 9868.0, "ema50": 9860.0, "macd": -7.0, "macd_signal": -4.2, "atr": 18.0, "volume": 180, "volume_avg": 100, "body": 17.0, "body_avg": 12.0},
-                {"open": 9835.0, "close": 9820.0, "high": 9838.0, "low": 9816.0, "ema20": 9858.0, "ema50": 9854.0, "macd": -8.0, "macd_signal": -5.0, "atr": 18.0, "volume": 190, "volume_avg": 100, "body": 15.0, "body_avg": 12.0},
-                {"open": 9820.0, "close": 9810.0, "high": 9825.0, "low": 9808.0, "ema20": 9848.0, "ema50": 9848.0, "macd": -8.4, "macd_signal": -5.8, "atr": 18.0, "volume": 195, "volume_avg": 100, "body": 10.0, "body_avg": 12.0},
-                {"open": 9810.0, "close": 9867.0, "high": 9872.0, "low": 9806.0, "ema20": 9840.0, "ema50": 9846.0, "rsi": 49.8, "macd": -6.6, "macd_signal": -6.8, "atr": 20.0, "volume": 150, "volume_avg": 100, "body": 57.0, "body_avg": 12.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
-
-        signal, reason = evaluate_failed_breakout(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("старший ТФ не LONG, а SHORT", reason)
-
-    def test_ngj6_prefers_pullback_before_momentum_breakout(self) -> None:
-        self.assertEqual(get_primary_strategies("NGJ6")[:1], ["reversal_15m"])
-
-    def test_ngk6_uses_15m_working_interval_for_signal_processing(self) -> None:
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "NGK6"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "RBM6"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BRK6"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "BMM6"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "IMOEXF"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "SRM6"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "USDRUBF"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "CNYRUBF"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "UCM6"), 15)
-        self.assertEqual(mod.get_signal_interval_minutes_for_symbol(self.config, "VBM6"), 15)
-
-    def test_ngk6_uses_shared_unified_reversal_profile(self) -> None:
-        self.assertEqual(get_reversal_profile("NGK6"), get_reversal_profile("USDRUBF"))
-        self.assertEqual(get_reversal_profile("NGJ6"), get_reversal_profile("SRM6"))
-
-    def test_unified_reversal_setup_quality_promotes_early_reversal_without_higher_tf_bonus(self) -> None:
-        score, label = mod.estimate_setup_quality(
-            "LONG",
-            "SHORT",
-            "compression",
-            {
-                "volume_ratio": 0.51,
-                "body_ratio": 0.38,
-                "regime_confidence": 0.891,
-            },
-            strategy_name="reversal_15m",
-        )
-
-        self.assertEqual(score, 3)
-        self.assertEqual(label, "medium")
 
     def test_unified_reversal_entry_edge_is_not_crushed_by_early_compression(self) -> None:
         state = mod.InstrumentState(
@@ -737,645 +200,33 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(label, "confirmed")
         self.assertIn("локальный 15м", reason)
 
-    def test_unified_reversal_symbols_use_longer_bootstrap_lookback(self) -> None:
-        self.assertGreaterEqual(
-            mod.get_lower_tf_lookback_hours(self.config, "BMM6", interval_minutes=15),
-            120,
-        )
-        self.assertGreaterEqual(
-            mod.get_lower_tf_lookback_hours(self.config, "USDRUBF", interval_minutes=15),
-            120,
-        )
-        self.assertGreaterEqual(
-            mod.get_lower_tf_lookback_hours(self.config, "NGK6", interval_minutes=15),
-            168,
-        )
-
-    def test_add_indicators_can_skip_ema200_for_unified_reversal(self) -> None:
-        rows = []
-        price = 10.0
-        for idx in range(80):
-            price += 0.01
-            rows.append(
-                {
-                    "time": pd.Timestamp("2026-05-01T00:00:00Z") + pd.Timedelta(minutes=15 * idx),
-                    "is_complete": True,
-                    "open": price - 0.02,
-                    "high": price + 0.03,
-                    "low": price - 0.03,
-                    "close": price,
-                    "volume": 100 + idx,
-                }
-            )
-        df = pd.DataFrame(rows)
-
-        result = mod.add_indicators(df, include_ema200=False)
-
-        self.assertFalse(result.empty)
-        self.assertNotIn("ema200", result.columns)
-        self.assertIn("ema20", result.columns)
-        self.assertIn("ema50", result.columns)
-        self.assertIn("chaikin", result.columns)
-
-    def test_reversal_15m_allows_fx_long_on_fresh_cross_with_volume_and_stochastic(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 10.920, "close": 10.918, "high": 10.922, "low": 10.916, "ema20": 10.925, "ema50": 10.930, "rsi": 42.0, "macd": -0.015, "macd_signal": -0.010, "volume": 90, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 28.0, "stoch_d": 32.0, "atr": 0.006, "bb_upper": 10.935, "bb_lower": 10.905},
-                {"open": 10.918, "close": 10.919, "high": 10.921, "low": 10.917, "ema20": 10.923, "ema50": 10.929, "rsi": 43.0, "macd": -0.013, "macd_signal": -0.010, "volume": 94, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 32.0, "stoch_d": 31.0, "atr": 0.006, "bb_upper": 10.934, "bb_lower": 10.906},
-                {"open": 10.919, "close": 10.922, "high": 10.924, "low": 10.918, "ema20": 10.922, "ema50": 10.928, "rsi": 45.0, "macd": -0.011, "macd_signal": -0.009, "volume": 98, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 38.0, "stoch_d": 34.0, "atr": 0.006, "bb_upper": 10.933, "bb_lower": 10.907},
-                {"open": 10.922, "close": 10.925, "high": 10.927, "low": 10.921, "ema20": 10.922, "ema50": 10.927, "rsi": 47.0, "macd": -0.009, "macd_signal": -0.008, "volume": 102, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 44.0, "stoch_d": 38.0, "atr": 0.006, "bb_upper": 10.933, "bb_lower": 10.908},
-                {"open": 10.925, "close": 10.929, "high": 10.932, "low": 10.924, "ema20": 10.923, "ema50": 10.926, "rsi": 49.0, "macd": -0.0070, "macd_signal": -0.0068, "volume": 106, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 50.0, "stoch_d": 42.0, "atr": 0.007, "bb_upper": 10.934, "bb_lower": 10.909},
-                {"open": 10.929, "close": 10.934, "high": 10.937, "low": 10.928, "ema20": 10.925, "ema50": 10.926, "rsi": 52.0, "macd": -0.0062, "macd_signal": -0.0060, "volume": 110, "volume_avg": 100, "body": 0.005, "body_avg": 0.004, "stoch_k": 58.0, "stoch_d": 48.0, "atr": 0.007, "bb_upper": 10.936, "bb_lower": 10.910},
-                {"open": 10.934, "close": 10.941, "high": 10.944, "low": 10.933, "ema20": 10.928, "ema50": 10.927, "rsi": 55.0, "macd": -0.0030, "macd_signal": -0.0045, "volume": 118, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 66.0, "stoch_d": 56.0, "atr": 0.007, "bb_upper": 10.940, "bb_lower": 10.912},
-                {"open": 10.941, "close": 10.950, "high": 10.954, "low": 10.940, "ema20": 10.932, "ema50": 10.928, "rsi": 58.0, "macd": 0.0028, "macd_signal": -0.0015, "volume": 138, "volume_avg": 100, "body": 0.009, "body_avg": 0.004, "stoch_k": 74.0, "stoch_d": 61.0, "atr": 0.008, "bb_upper": 10.946, "bb_lower": 10.914},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("MACD cross вверх: да", reason)
-
-    def test_reversal_15m_blocks_fx_in_chop(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 10.950, "close": 10.952, "high": 10.954, "low": 10.948, "ema20": 10.950, "ema50": 10.949, "rsi": 51.0, "macd": 0.002, "macd_signal": 0.001, "volume": 96, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 54.0, "stoch_d": 52.0, "atr": 0.004, "bb_upper": 10.958, "bb_lower": 10.942},
-                {"open": 10.952, "close": 10.949, "high": 10.953, "low": 10.947, "ema20": 10.950, "ema50": 10.949, "rsi": 49.0, "macd": -0.001, "macd_signal": 0.000, "volume": 95, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 46.0, "stoch_d": 50.0, "atr": 0.004, "bb_upper": 10.957, "bb_lower": 10.943},
-                {"open": 10.949, "close": 10.953, "high": 10.955, "low": 10.948, "ema20": 10.950, "ema50": 10.949, "rsi": 50.0, "macd": 0.002, "macd_signal": 0.001, "volume": 94, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 55.0, "stoch_d": 49.0, "atr": 0.004, "bb_upper": 10.957, "bb_lower": 10.943},
-                {"open": 10.953, "close": 10.950, "high": 10.954, "low": 10.948, "ema20": 10.950, "ema50": 10.949, "rsi": 48.0, "macd": -0.001, "macd_signal": 0.000, "volume": 93, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 45.0, "stoch_d": 49.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
-                {"open": 10.950, "close": 10.954, "high": 10.956, "low": 10.949, "ema20": 10.950, "ema50": 10.949, "rsi": 51.0, "macd": 0.002, "macd_signal": 0.001, "volume": 92, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 56.0, "stoch_d": 48.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
-                {"open": 10.954, "close": 10.951, "high": 10.955, "low": 10.949, "ema20": 10.951, "ema50": 10.949, "rsi": 49.0, "macd": -0.001, "macd_signal": 0.000, "volume": 91, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 44.0, "stoch_d": 48.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
-                {"open": 10.951, "close": 10.955, "high": 10.957, "low": 10.950, "ema20": 10.951, "ema50": 10.949, "rsi": 50.0, "macd": 0.002, "macd_signal": 0.001, "volume": 90, "volume_avg": 100, "body": 0.004, "body_avg": 0.004, "stoch_k": 55.0, "stoch_d": 47.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
-                {"open": 10.955, "close": 10.952, "high": 10.956, "low": 10.950, "ema20": 10.951, "ema50": 10.949, "rsi": 48.0, "macd": -0.001, "macd_signal": 0.000, "volume": 89, "volume_avg": 100, "body": 0.003, "body_avg": 0.004, "stoch_k": 43.0, "stoch_d": 47.0, "atr": 0.004, "bb_upper": 10.956, "bb_lower": 10.944},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("режим compression", reason)
-
-    def test_reversal_15m_allows_fx_short_on_early_breakdown_before_ema_alignment(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 10.986, "close": 10.984, "high": 10.988, "low": 10.982, "ema20": 10.975, "ema50": 10.971, "rsi": 59.0, "macd": 0.005, "macd_signal": 0.0035, "volume": 90, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 74.0, "stoch_d": 68.0, "atr": 0.007, "bb_upper": 10.991, "bb_lower": 10.967},
-                {"open": 10.984, "close": 10.983, "high": 10.986, "low": 10.981, "ema20": 10.976, "ema50": 10.972, "rsi": 58.0, "macd": 0.0045, "macd_signal": 0.0034, "volume": 91, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 73.0, "stoch_d": 67.0, "atr": 0.007, "bb_upper": 10.990, "bb_lower": 10.967},
-                {"open": 10.983, "close": 10.982, "high": 10.985, "low": 10.980, "ema20": 10.976, "ema50": 10.972, "rsi": 57.5, "macd": 0.0042, "macd_signal": 0.0033, "volume": 92, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 72.0, "stoch_d": 66.5, "atr": 0.007, "bb_upper": 10.990, "bb_lower": 10.966},
-                {"open": 10.982, "close": 10.980, "high": 10.984, "low": 10.978, "ema20": 10.976, "ema50": 10.972, "rsi": 57.0, "macd": 0.004, "macd_signal": 0.003, "volume": 92, "volume_avg": 100, "body": 0.002, "body_avg": 0.004, "stoch_k": 71.0, "stoch_d": 66.0, "atr": 0.007, "bb_upper": 10.990, "bb_lower": 10.966},
-                {"open": 10.980, "close": 10.979, "high": 10.982, "low": 10.977, "ema20": 10.977, "ema50": 10.973, "rsi": 55.0, "macd": 0.003, "macd_signal": 0.0032, "volume": 95, "volume_avg": 100, "body": 0.001, "body_avg": 0.004, "stoch_k": 66.0, "stoch_d": 64.0, "atr": 0.007, "bb_upper": 10.989, "bb_lower": 10.968},
-                {"open": 10.979, "close": 10.972, "high": 10.980, "low": 10.970, "ema20": 10.976, "ema50": 10.974, "rsi": 48.0, "macd": 0.000, "macd_signal": 0.0026, "volume": 175, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 41.0, "stoch_d": 56.0, "atr": 0.009, "bb_upper": 10.988, "bb_lower": 10.967},
-                {"open": 10.972, "close": 10.965, "high": 10.973, "low": 10.962, "ema20": 10.974, "ema50": 10.973, "rsi": 42.0, "macd": 0.0008, "macd_signal": 0.0006, "volume": 210, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 24.0, "stoch_d": 39.0, "atr": 0.010, "bb_upper": 10.986, "bb_lower": 10.963},
-                {"open": 10.965, "close": 10.958, "high": 10.966, "low": 10.955, "ema20": 10.971, "ema50": 10.972, "rsi": 39.0, "macd": -0.006, "macd_signal": -0.0010, "volume": 205, "volume_avg": 100, "body": 0.007, "body_avg": 0.004, "stoch_k": 17.0, "stoch_d": 26.0, "atr": 0.010, "bb_upper": 10.984, "bb_lower": 10.959},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("MACD cross вниз: да", reason)
-
-    def test_reversal_15m_allows_long_up_to_third_bar_after_cross_when_indicators_still_rising(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2620.0, "close": 2618.0, "high": 2621.0, "low": 2617.0, "ema20": 2623.0, "ema50": 2627.0, "rsi": 41.0, "macd": -8.0, "macd_signal": -6.5, "volume": 900, "volume_avg": 1000, "body": 2.0, "body_avg": 3.0, "stoch_k": 20.0, "stoch_d": 28.0, "atr": 10.0, "bb_upper": 2635.0, "bb_lower": 2608.0},
-                {"open": 2618.0, "close": 2619.0, "high": 2620.0, "low": 2616.0, "ema20": 2622.0, "ema50": 2626.5, "rsi": 43.0, "macd": -7.2, "macd_signal": -6.4, "volume": 930, "volume_avg": 1000, "body": 1.0, "body_avg": 3.0, "stoch_k": 24.0, "stoch_d": 27.0, "atr": 10.0, "bb_upper": 2634.0, "bb_lower": 2609.0},
-                {"open": 2619.0, "close": 2621.0, "high": 2622.0, "low": 2618.0, "ema20": 2621.0, "ema50": 2626.0, "rsi": 46.0, "macd": -5.5, "macd_signal": -6.0, "volume": 1020, "volume_avg": 1000, "body": 2.0, "body_avg": 3.0, "stoch_k": 31.0, "stoch_d": 28.0, "atr": 10.0, "bb_upper": 2633.0, "bb_lower": 2610.0},
-                {"open": 2621.0, "close": 2624.0, "high": 2625.0, "low": 2620.0, "ema20": 2621.2, "ema50": 2625.5, "rsi": 50.0, "macd": -4.0, "macd_signal": -5.6, "volume": 1080, "volume_avg": 1000, "body": 3.0, "body_avg": 3.0, "stoch_k": 38.0, "stoch_d": 31.0, "atr": 10.5, "bb_upper": 2632.5, "bb_lower": 2611.0},
-                {"open": 2624.0, "close": 2627.0, "high": 2628.0, "low": 2623.0, "ema20": 2622.0, "ema50": 2625.0, "rsi": 54.0, "macd": -4.8, "macd_signal": -4.6, "volume": 1120, "volume_avg": 1000, "body": 3.0, "body_avg": 3.0, "stoch_k": 46.0, "stoch_d": 36.0, "atr": 11.0, "bb_upper": 2632.0, "bb_lower": 2612.0},
-                {"open": 2627.0, "close": 2630.0, "high": 2631.0, "low": 2626.0, "ema20": 2623.8, "ema50": 2624.8, "rsi": 58.0, "macd": -3.8, "macd_signal": -4.0, "volume": 1160, "volume_avg": 1000, "body": 3.0, "body_avg": 3.0, "stoch_k": 55.0, "stoch_d": 42.0, "atr": 11.0, "bb_upper": 2631.5, "bb_lower": 2613.0},
-                {"open": 2630.0, "close": 2634.0, "high": 2635.0, "low": 2629.0, "ema20": 2626.0, "ema50": 2624.9, "rsi": 61.0, "macd": -1.8, "macd_signal": -3.0, "volume": 1240, "volume_avg": 1000, "body": 4.0, "body_avg": 3.0, "stoch_k": 63.0, "stoch_d": 50.0, "atr": 11.5, "bb_upper": 2633.0, "bb_lower": 2614.0},
-                {"open": 2634.0, "close": 2637.0, "high": 2638.0, "low": 2633.0, "ema20": 2629.0, "ema50": 2625.2, "rsi": 63.0, "macd": 0.6, "macd_signal": -1.2, "volume": 1260, "volume_avg": 1000, "body": 3.0, "body_avg": 3.0, "stoch_k": 69.0, "stoch_d": 57.0, "atr": 11.5, "bb_upper": 2635.0, "bb_lower": 2615.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("MACD cross вверх: да", reason)
-
-    def test_reversal_15m_ignores_chop_when_fresh_cross_has_volume_and_strong_body(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 74.90, "close": 74.92, "high": 74.94, "low": 74.88, "ema20": 74.95, "ema50": 74.97, "rsi": 47.0, "macd": 0.002, "macd_signal": 0.001, "volume": 96, "volume_avg": 100, "body": 0.02, "body_avg": 0.03, "stoch_k": 52.0, "stoch_d": 49.0, "atr": 0.08, "bb_upper": 75.05, "bb_lower": 74.80},
-                {"open": 74.92, "close": 74.89, "high": 74.93, "low": 74.87, "ema20": 74.94, "ema50": 74.96, "rsi": 45.0, "macd": -0.001, "macd_signal": 0.000, "volume": 94, "volume_avg": 100, "body": 0.03, "body_avg": 0.03, "stoch_k": 46.0, "stoch_d": 48.0, "atr": 0.08, "bb_upper": 75.04, "bb_lower": 74.81},
-                {"open": 74.89, "close": 74.93, "high": 74.95, "low": 74.88, "ema20": 74.94, "ema50": 74.96, "rsi": 48.0, "macd": 0.002, "macd_signal": 0.001, "volume": 93, "volume_avg": 100, "body": 0.04, "body_avg": 0.03, "stoch_k": 54.0, "stoch_d": 49.0, "atr": 0.08, "bb_upper": 75.04, "bb_lower": 74.81},
-                {"open": 74.93, "close": 74.90, "high": 74.94, "low": 74.88, "ema20": 74.94, "ema50": 74.96, "rsi": 46.0, "macd": -0.001, "macd_signal": 0.000, "volume": 92, "volume_avg": 100, "body": 0.03, "body_avg": 0.03, "stoch_k": 45.0, "stoch_d": 48.0, "atr": 0.08, "bb_upper": 75.03, "bb_lower": 74.82},
-                {"open": 74.90, "close": 74.94, "high": 74.96, "low": 74.89, "ema20": 74.94, "ema50": 74.96, "rsi": 49.0, "macd": 0.002, "macd_signal": 0.001, "volume": 91, "volume_avg": 100, "body": 0.04, "body_avg": 0.03, "stoch_k": 55.0, "stoch_d": 48.0, "atr": 0.08, "bb_upper": 75.03, "bb_lower": 74.82},
-                {"open": 74.94, "close": 74.91, "high": 74.95, "low": 74.89, "ema20": 74.94, "ema50": 74.96, "rsi": 47.0, "macd": -0.001, "macd_signal": 0.000, "volume": 90, "volume_avg": 100, "body": 0.03, "body_avg": 0.03, "stoch_k": 44.0, "stoch_d": 47.0, "atr": 0.08, "bb_upper": 75.03, "bb_lower": 74.82},
-                {"open": 74.91, "close": 74.96, "high": 74.97, "low": 74.90, "ema20": 74.95, "ema50": 74.96, "rsi": 50.0, "macd": 0.002, "macd_signal": 0.001, "volume": 89, "volume_avg": 100, "body": 0.05, "body_avg": 0.03, "stoch_k": 56.0, "stoch_d": 47.0, "atr": 0.08, "bb_upper": 75.03, "bb_lower": 74.82},
-                {"open": 74.96, "close": 75.06, "high": 75.08, "low": 74.95, "ema20": 74.98, "ema50": 74.96, "rsi": 54.0, "macd": 0.012, "macd_signal": 0.004, "volume": 124, "volume_avg": 100, "body": 0.10, "body_avg": 0.03, "stoch_k": 66.0, "stoch_d": 54.0, "atr": 0.09, "bb_upper": 75.05, "bb_lower": 74.83},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("MACD cross вверх: да", reason)
-
-    def test_reversal_15m_allows_long_in_mixed_regime_when_macd_rsi_and_stoch_align(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 73.78, "close": 73.76, "high": 73.80, "low": 73.74, "ema20": 73.83, "ema50": 73.90, "rsi": 38.0, "macd": -0.22, "macd_signal": -0.18, "volume": 72, "volume_avg": 100, "body": 0.02, "body_avg": 0.05, "stoch_k": 18.0, "stoch_d": 26.0, "atr": 0.11, "bb_upper": 74.00, "bb_lower": 73.60},
-                {"open": 73.76, "close": 73.71, "high": 73.77, "low": 73.69, "ema20": 73.80, "ema50": 73.89, "rsi": 34.0, "macd": -0.24, "macd_signal": -0.19, "volume": 78, "volume_avg": 100, "body": 0.05, "body_avg": 0.05, "stoch_k": 14.0, "stoch_d": 22.0, "atr": 0.11, "bb_upper": 73.98, "bb_lower": 73.58},
-                {"open": 73.71, "close": 73.67, "high": 73.72, "low": 73.64, "ema20": 73.77, "ema50": 73.88, "rsi": 30.0, "macd": -0.25, "macd_signal": -0.20, "volume": 81, "volume_avg": 100, "body": 0.04, "body_avg": 0.05, "stoch_k": 10.0, "stoch_d": 18.0, "atr": 0.11, "bb_upper": 73.96, "bb_lower": 73.56},
-                {"open": 73.67, "close": 73.69, "high": 73.71, "low": 73.66, "ema20": 73.74, "ema50": 73.86, "rsi": 33.0, "macd": -0.23, "macd_signal": -0.20, "volume": 84, "volume_avg": 100, "body": 0.02, "body_avg": 0.05, "stoch_k": 16.0, "stoch_d": 16.0, "atr": 0.11, "bb_upper": 73.94, "bb_lower": 73.55},
-                {"open": 73.69, "close": 73.73, "high": 73.75, "low": 73.68, "ema20": 73.72, "ema50": 73.84, "rsi": 39.0, "macd": -0.19, "macd_signal": -0.19, "volume": 88, "volume_avg": 100, "body": 0.04, "body_avg": 0.05, "stoch_k": 28.0, "stoch_d": 20.0, "atr": 0.11, "bb_upper": 73.92, "bb_lower": 73.54},
-                {"open": 73.73, "close": 73.78, "high": 73.80, "low": 73.72, "ema20": 73.71, "ema50": 73.82, "rsi": 44.0, "macd": -0.15, "macd_signal": -0.17, "volume": 92, "volume_avg": 100, "body": 0.05, "body_avg": 0.05, "stoch_k": 44.0, "stoch_d": 28.0, "atr": 0.11, "bb_upper": 73.90, "bb_lower": 73.53},
-                {"open": 73.78, "close": 73.84, "high": 73.86, "low": 73.77, "ema20": 73.73, "ema50": 73.80, "rsi": 48.0, "macd": -0.12, "macd_signal": -0.15, "volume": 86, "volume_avg": 100, "body": 0.06, "body_avg": 0.05, "stoch_k": 68.0, "stoch_d": 42.0, "atr": 0.11, "bb_upper": 73.89, "bb_lower": 73.54},
-                {"open": 73.84, "close": 73.90, "high": 73.92, "low": 73.83, "ema20": 73.76, "ema50": 73.79, "rsi": 52.0, "macd": -0.10, "macd_signal": -0.13, "volume": 82, "volume_avg": 100, "body": 0.06, "body_avg": 0.05, "stoch_k": 83.0, "stoch_d": 56.0, "atr": 0.11, "bb_upper": 73.90, "bb_lower": 73.55},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("MACD cross вверх: да", reason)
-
-    def test_reversal_15m_treats_rising_ao_as_strength_when_macd_and_rsi_confirm(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 10.84, "close": 10.83, "high": 10.85, "low": 10.82, "ema20": 10.87, "ema50": 10.90, "rsi": 41.0, "macd": -0.030, "macd_signal": -0.025, "volume": 88, "volume_avg": 100, "body": 0.01, "body_avg": 0.02, "stoch_k": 22.0, "stoch_d": 28.0, "atr": 0.02, "bb_upper": 10.90, "bb_lower": 10.77},
-                {"open": 10.83, "close": 10.81, "high": 10.84, "low": 10.80, "ema20": 10.86, "ema50": 10.89, "rsi": 37.0, "macd": -0.032, "macd_signal": -0.026, "volume": 92, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 18.0, "stoch_d": 25.0, "atr": 0.02, "bb_upper": 10.89, "bb_lower": 10.76},
-                {"open": 10.81, "close": 10.80, "high": 10.82, "low": 10.79, "ema20": 10.85, "ema50": 10.88, "rsi": 35.0, "macd": -0.031, "macd_signal": -0.026, "volume": 96, "volume_avg": 100, "body": 0.01, "body_avg": 0.02, "stoch_k": 16.0, "stoch_d": 22.0, "atr": 0.02, "bb_upper": 10.88, "bb_lower": 10.75},
-                {"open": 10.80, "close": 10.82, "high": 10.83, "low": 10.79, "ema20": 10.84, "ema50": 10.87, "rsi": 39.0, "macd": -0.028, "macd_signal": -0.026, "volume": 94, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 26.0, "stoch_d": 22.0, "atr": 0.02, "bb_upper": 10.87, "bb_lower": 10.75},
-                {"open": 10.82, "close": 10.84, "high": 10.85, "low": 10.81, "ema20": 10.83, "ema50": 10.86, "rsi": 44.0, "macd": -0.024, "macd_signal": -0.025, "volume": 95, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 42.0, "stoch_d": 28.0, "atr": 0.02, "bb_upper": 10.86, "bb_lower": 10.75},
-                {"open": 10.84, "close": 10.86, "high": 10.87, "low": 10.83, "ema20": 10.83, "ema50": 10.85, "rsi": 48.0, "macd": -0.018, "macd_signal": -0.022, "volume": 90, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 58.0, "stoch_d": 38.0, "atr": 0.02, "bb_upper": 10.86, "bb_lower": 10.76},
-                {"open": 10.86, "close": 10.89, "high": 10.90, "low": 10.85, "ema20": 10.84, "ema50": 10.85, "rsi": 51.0, "macd": -0.011, "macd_signal": -0.017, "volume": 84, "volume_avg": 100, "body": 0.03, "body_avg": 0.02, "stoch_k": 73.0, "stoch_d": 49.0, "ao": 0.004, "atr": 0.02, "bb_upper": 10.87, "bb_lower": 10.76},
-                {"open": 10.89, "close": 10.91, "high": 10.92, "low": 10.88, "ema20": 10.85, "ema50": 10.85, "rsi": 53.0, "macd": -0.006, "macd_signal": -0.012, "volume": 80, "volume_avg": 100, "body": 0.02, "body_avg": 0.02, "stoch_k": 89.0, "stoch_d": 68.0, "ao": 0.008, "atr": 0.02, "bb_upper": 10.88, "bb_lower": 10.77},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("AO=", reason)
-
-    def test_reversal_15m_allows_short_in_mixed_regime_when_macd_rsi_and_stoch_align(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 33120.0, "close": 33132.0, "high": 33136.0, "low": 33118.0, "ema20": 33100.0, "ema50": 33080.0, "rsi": 66.0, "macd": 21.0, "macd_signal": 17.0, "volume": 76, "volume_avg": 100, "body": 12.0, "body_avg": 10.0, "stoch_k": 86.0, "stoch_d": 80.0, "atr": 48.0, "bb_upper": 33160.0, "bb_lower": 33020.0},
-                {"open": 33132.0, "close": 33136.0, "high": 33140.0, "low": 33128.0, "ema20": 33105.0, "ema50": 33084.0, "rsi": 68.0, "macd": 22.0, "macd_signal": 18.0, "volume": 80, "volume_avg": 100, "body": 4.0, "body_avg": 10.0, "stoch_k": 90.0, "stoch_d": 83.0, "atr": 48.0, "bb_upper": 33162.0, "bb_lower": 33024.0},
-                {"open": 33136.0, "close": 33130.0, "high": 33138.0, "low": 33126.0, "ema20": 33108.0, "ema50": 33088.0, "rsi": 63.0, "macd": 20.0, "macd_signal": 18.5, "volume": 85, "volume_avg": 100, "body": 6.0, "body_avg": 10.0, "stoch_k": 84.0, "stoch_d": 84.0, "atr": 48.0, "bb_upper": 33161.0, "bb_lower": 33028.0},
-                {"open": 33130.0, "close": 33118.0, "high": 33132.0, "low": 33116.0, "ema20": 33109.0, "ema50": 33091.0, "rsi": 58.0, "macd": 16.0, "macd_signal": 17.8, "volume": 88, "volume_avg": 100, "body": 12.0, "body_avg": 10.0, "stoch_k": 69.0, "stoch_d": 78.0, "atr": 48.0, "bb_upper": 33158.0, "bb_lower": 33032.0},
-                {"open": 33118.0, "close": 33108.0, "high": 33120.0, "low": 33105.0, "ema20": 33108.0, "ema50": 33094.0, "rsi": 54.0, "macd": 12.0, "macd_signal": 16.4, "volume": 90, "volume_avg": 100, "body": 10.0, "body_avg": 10.0, "stoch_k": 52.0, "stoch_d": 69.0, "atr": 48.0, "bb_upper": 33154.0, "bb_lower": 33036.0},
-                {"open": 33108.0, "close": 33098.0, "high": 33110.0, "low": 33095.0, "ema20": 33104.0, "ema50": 33096.0, "rsi": 49.0, "macd": 8.0, "macd_signal": 14.0, "volume": 92, "volume_avg": 100, "body": 10.0, "body_avg": 10.0, "stoch_k": 38.0, "stoch_d": 56.0, "atr": 48.0, "bb_upper": 33150.0, "bb_lower": 33040.0},
-                {"open": 33098.0, "close": 33090.0, "high": 33100.0, "low": 33088.0, "ema20": 33099.0, "ema50": 33097.0, "rsi": 45.0, "macd": 4.5, "macd_signal": 11.0, "volume": 87, "volume_avg": 100, "body": 8.0, "body_avg": 10.0, "stoch_k": 29.0, "stoch_d": 43.0, "atr": 48.0, "bb_upper": 33146.0, "bb_lower": 33044.0},
-                {"open": 33090.0, "close": 33082.0, "high": 33092.0, "low": 33079.0, "ema20": 33095.0, "ema50": 33097.0, "rsi": 41.0, "macd": 1.0, "macd_signal": 7.5, "volume": 82, "volume_avg": 100, "body": 8.0, "body_avg": 10.0, "stoch_k": 18.0, "stoch_d": 31.0, "atr": 48.0, "bb_upper": 33142.0, "bb_lower": 33048.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="SRM6", figi="FIGI", display_name="Sber")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("MACD cross вниз: да", reason)
-
-    def test_reversal_15m_allows_slow_evening_short_continuation_when_oscillators_are_oversold(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 11986.0, "close": 11984.0, "high": 11987.0, "low": 11983.0, "ema20": 11986.0, "ema50": 11988.0, "rsi": 45.0, "macd": 0.8, "macd_signal": 0.4, "volume": 80, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 58.0, "stoch_d": 52.0, "atr": 3.0, "bb_upper": 11994.0, "bb_lower": 11978.0},
-                {"open": 11984.0, "close": 11982.0, "high": 11985.0, "low": 11981.0, "ema20": 11985.0, "ema50": 11987.0, "rsi": 41.0, "macd": 0.5, "macd_signal": 0.4, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 42.0, "stoch_d": 44.0, "atr": 3.0, "bb_upper": 11993.0, "bb_lower": 11977.0},
-                {"open": 11982.0, "close": 11980.0, "high": 11983.0, "low": 11979.0, "ema20": 11984.0, "ema50": 11986.0, "rsi": 38.0, "macd": 0.2, "macd_signal": 0.3, "volume": 130, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 31.0, "stoch_d": 38.0, "atr": 3.0, "bb_upper": 11992.0, "bb_lower": 11976.0},
-                {"open": 11980.0, "close": 11978.0, "high": 11981.0, "low": 11977.0, "ema20": 11982.0, "ema50": 11985.0, "rsi": 35.0, "macd": -0.2, "macd_signal": 0.1, "volume": 348, "volume_avg": 100, "body": 0.8, "body_avg": 1.0, "stoch_k": 28.0, "stoch_d": 14.0, "atr": 3.0, "bb_upper": 11991.0, "bb_lower": 11975.0},
-                {"open": 11978.0, "close": 11976.0, "high": 11979.0, "low": 11975.0, "ema20": 11980.0, "ema50": 11984.0, "rsi": 32.0, "macd": -0.8, "macd_signal": -0.1, "volume": 180, "volume_avg": 100, "body": 0.6, "body_avg": 1.0, "stoch_k": 22.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11990.0, "bb_lower": 11974.0},
-                {"open": 11976.0, "close": 11975.0, "high": 11977.0, "low": 11974.0, "ema20": 11978.0, "ema50": 11983.0, "rsi": 30.0, "macd": -1.2, "macd_signal": -0.4, "volume": 150, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 20.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11989.0, "bb_lower": 11973.0},
-                {"open": 11975.0, "close": 11973.0, "high": 11976.0, "low": 11972.0, "ema20": 11976.0, "ema50": 11982.0, "rsi": 29.0, "macd": -1.6, "macd_signal": -0.7, "volume": 145, "volume_avg": 100, "body": 0.4, "body_avg": 1.0, "stoch_k": 19.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11988.0, "bb_lower": 11972.0},
-                {"open": 11973.0, "close": 11972.0, "high": 11974.0, "low": 11971.0, "ema20": 11975.0, "ema50": 11981.0, "rsi": 28.0, "macd": -2.0, "macd_signal": -1.0, "volume": 161, "volume_avg": 100, "body": 0.4, "body_avg": 1.0, "stoch_k": 18.8, "stoch_d": 18.2, "atr": 3.0, "bb_upper": 11987.0, "bb_lower": 11971.0},
-            ]
-        )
-        df["time"] = pd.date_range("2026-05-13 21:15", periods=len(df), freq="15min", tz="Europe/Moscow")
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("медленное продолжение вниз по MACD", reason)
-
-    def test_reversal_15m_blocks_slow_evening_short_when_volume_is_weak(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 11986.0, "close": 11984.0, "high": 11987.0, "low": 11983.0, "ema20": 11986.0, "ema50": 11988.0, "rsi": 45.0, "macd": 0.8, "macd_signal": 0.4, "volume": 80, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 58.0, "stoch_d": 52.0, "atr": 3.0, "bb_upper": 11994.0, "bb_lower": 11978.0},
-                {"open": 11984.0, "close": 11982.0, "high": 11985.0, "low": 11981.0, "ema20": 11985.0, "ema50": 11987.0, "rsi": 41.0, "macd": 0.5, "macd_signal": 0.4, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 42.0, "stoch_d": 44.0, "atr": 3.0, "bb_upper": 11993.0, "bb_lower": 11977.0},
-                {"open": 11982.0, "close": 11980.0, "high": 11983.0, "low": 11979.0, "ema20": 11984.0, "ema50": 11986.0, "rsi": 38.0, "macd": 0.2, "macd_signal": 0.3, "volume": 130, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 31.0, "stoch_d": 38.0, "atr": 3.0, "bb_upper": 11992.0, "bb_lower": 11976.0},
-                {"open": 11980.0, "close": 11978.0, "high": 11981.0, "low": 11977.0, "ema20": 11982.0, "ema50": 11985.0, "rsi": 35.0, "macd": -0.2, "macd_signal": 0.1, "volume": 80, "volume_avg": 100, "body": 0.8, "body_avg": 1.0, "stoch_k": 28.0, "stoch_d": 14.0, "atr": 3.0, "bb_upper": 11991.0, "bb_lower": 11975.0},
-                {"open": 11978.0, "close": 11976.0, "high": 11979.0, "low": 11975.0, "ema20": 11980.0, "ema50": 11984.0, "rsi": 32.0, "macd": -0.8, "macd_signal": -0.1, "volume": 75, "volume_avg": 100, "body": 0.6, "body_avg": 1.0, "stoch_k": 22.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11990.0, "bb_lower": 11974.0},
-                {"open": 11976.0, "close": 11975.0, "high": 11977.0, "low": 11974.0, "ema20": 11978.0, "ema50": 11983.0, "rsi": 30.0, "macd": -1.2, "macd_signal": -0.4, "volume": 70, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 20.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11989.0, "bb_lower": 11973.0},
-                {"open": 11975.0, "close": 11973.0, "high": 11976.0, "low": 11972.0, "ema20": 11976.0, "ema50": 11982.0, "rsi": 29.0, "macd": -1.6, "macd_signal": -0.7, "volume": 65, "volume_avg": 100, "body": 0.4, "body_avg": 1.0, "stoch_k": 19.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11988.0, "bb_lower": 11972.0},
-                {"open": 11973.0, "close": 11972.0, "high": 11974.0, "low": 11971.0, "ema20": 11975.0, "ema50": 11981.0, "rsi": 28.0, "macd": -2.0, "macd_signal": -1.0, "volume": 60, "volume_avg": 100, "body": 0.4, "body_avg": 1.0, "stoch_k": 18.8, "stoch_d": 18.2, "atr": 3.0, "bb_upper": 11987.0, "bb_lower": 11971.0},
-            ]
-        )
-        df["time"] = pd.date_range("2026-05-13 21:15", periods=len(df), freq="15min", tz="Europe/Moscow")
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("объём слишком слабый", reason)
-
-    def test_reversal_15m_allows_weak_evening_short_when_chaikin_confirms_pressure(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 11986.0, "close": 11984.0, "high": 11987.0, "low": 11983.0, "ema20": 11986.0, "ema50": 11988.0, "rsi": 45.0, "macd": 0.8, "macd_signal": 0.4, "volume": 80, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 58.0, "stoch_d": 52.0, "atr": 3.0, "bb_upper": 11994.0, "bb_lower": 11978.0, "chaikin": 90.0},
-                {"open": 11984.0, "close": 11982.0, "high": 11985.0, "low": 11981.0, "ema20": 11985.0, "ema50": 11987.0, "rsi": 41.0, "macd": 0.5, "macd_signal": 0.4, "volume": 90, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 42.0, "stoch_d": 44.0, "atr": 3.0, "bb_upper": 11993.0, "bb_lower": 11977.0, "chaikin": 75.0},
-                {"open": 11982.0, "close": 11980.0, "high": 11983.0, "low": 11979.0, "ema20": 11984.0, "ema50": 11986.0, "rsi": 38.0, "macd": 0.2, "macd_signal": 0.3, "volume": 60, "volume_avg": 100, "body": 2.0, "body_avg": 1.0, "stoch_k": 31.0, "stoch_d": 38.0, "atr": 3.0, "bb_upper": 11992.0, "bb_lower": 11976.0, "chaikin": 55.0},
-                {"open": 11980.0, "close": 11978.0, "high": 11981.0, "low": 11977.0, "ema20": 11982.0, "ema50": 11985.0, "rsi": 35.0, "macd": -0.2, "macd_signal": 0.1, "volume": 55, "volume_avg": 100, "body": 0.8, "body_avg": 1.0, "stoch_k": 28.0, "stoch_d": 14.0, "atr": 3.0, "bb_upper": 11991.0, "bb_lower": 11975.0, "chaikin": 25.0},
-                {"open": 11978.0, "close": 11976.0, "high": 11979.0, "low": 11975.0, "ema20": 11980.0, "ema50": 11984.0, "rsi": 32.0, "macd": -0.8, "macd_signal": -0.1, "volume": 50, "volume_avg": 100, "body": 0.6, "body_avg": 1.0, "stoch_k": 22.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11990.0, "bb_lower": 11974.0, "chaikin": -5.0},
-                {"open": 11976.0, "close": 11975.0, "high": 11977.0, "low": 11974.0, "ema20": 11978.0, "ema50": 11983.0, "rsi": 30.0, "macd": -1.2, "macd_signal": -0.4, "volume": 48, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 20.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11989.0, "bb_lower": 11973.0, "chaikin": -35.0},
-                {"open": 11975.0, "close": 11973.0, "high": 11976.0, "low": 11972.0, "ema20": 11976.0, "ema50": 11982.0, "rsi": 29.0, "macd": -1.6, "macd_signal": -0.7, "volume": 44, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 19.0, "stoch_d": 18.0, "atr": 3.0, "bb_upper": 11988.0, "bb_lower": 11972.0, "chaikin": -60.0},
-                {"open": 11973.0, "close": 11972.0, "high": 11974.0, "low": 11971.0, "ema20": 11975.0, "ema50": 11981.0, "rsi": 28.0, "macd": -2.0, "macd_signal": -1.0, "volume": 42, "volume_avg": 100, "body": 0.5, "body_avg": 1.0, "stoch_k": 18.8, "stoch_d": 18.2, "atr": 3.0, "bb_upper": 11987.0, "bb_lower": 11971.0, "chaikin": -95.0},
-            ]
-        )
-        df["time"] = pd.date_range("2026-05-13 21:15", periods=len(df), freq="15min", tz="Europe/Moscow")
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "-")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("поток Чайкина=", reason)
-
-    def test_bmm6_inherits_brent_news_rule(self) -> None:
-        brk6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BRK6")
-        bmm6_rule = next(rule for rule in NEWS_RULES if rule.symbol == "BMM6")
-
-        self.assertEqual(bmm6_rule.keywords, brk6_rule.keywords)
-        self.assertEqual(bmm6_rule.long_terms, brk6_rule.long_terms)
-        self.assertEqual(bmm6_rule.short_terms, brk6_rule.short_terms)
-
-    def test_bmm6_momentum_breakout_uses_brent_specific_short_filters(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 102.40, "close": 102.32, "high": 102.42, "low": 102.28, "ema20": 102.36, "ema50": 102.40, "macd": -0.10, "macd_signal": -0.06, "volume": 115, "volume_avg": 100, "body": 0.08, "body_avg": 0.10},
-                {"open": 102.32, "close": 102.20, "high": 102.34, "low": 102.18, "ema20": 102.30, "ema50": 102.36, "macd": -0.14, "macd_signal": -0.08, "volume": 118, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
-                {"open": 102.20, "close": 102.08, "high": 102.22, "low": 102.05, "ema20": 102.22, "ema50": 102.31, "macd": -0.18, "macd_signal": -0.10, "volume": 120, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
-                {"open": 102.08, "close": 101.96, "high": 102.10, "low": 101.94, "ema20": 102.14, "ema50": 102.25, "macd": -0.23, "macd_signal": -0.13, "volume": 122, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
-                {"open": 101.96, "close": 101.84, "high": 101.98, "low": 101.82, "ema20": 102.06, "ema50": 102.18, "macd": -0.28, "macd_signal": -0.17, "volume": 124, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
-                {"open": 101.84, "close": 101.72, "high": 101.86, "low": 101.70, "ema20": 101.98, "ema50": 102.10, "macd": -0.33, "macd_signal": -0.22, "volume": 126, "volume_avg": 100, "body": 0.12, "body_avg": 0.10},
-                {"open": 101.72, "close": 101.62, "high": 101.74, "low": 101.60, "ema20": 101.88, "ema50": 102.02, "macd": -0.38, "macd_signal": -0.28, "volume": 128, "volume_avg": 100, "body": 0.10, "body_avg": 0.10},
-                {"open": 101.62, "close": 101.58, "high": 101.64, "low": 101.56, "ema20": 101.78, "ema50": 101.94, "rsi": 42.0, "macd": -0.43, "macd_signal": -0.34, "atr": 0.09, "volume": 102, "volume_avg": 100, "body": 0.04, "body_avg": 0.10, "bb_mid": 101.78},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
-
-        signal, reason = evaluate_momentum_breakout(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("импульс свечи слишком слабый", reason)
-
-    def test_bmm6_uses_brent_pullback_profile(self) -> None:
-        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
-        profile = get_strategy_profile(self.config, instrument)
-
-        self.assertEqual(profile.volume_factor, 0.82)
-        self.assertEqual(profile.long_rsi_max, 66.0)
-
-    def test_imoexf_macd_stoch_reversal_gives_long_on_indicator_alignment(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2611.0, "close": 2612.0, "high": 2613.0, "low": 2610.0, "ema20": 2618.0, "ema50": 2622.0, "rsi": 38.0, "macd": -5.0, "macd_signal": -4.2, "stoch_k": 18.0, "stoch_d": 22.0, "volume": 900, "volume_avg": 1000},
-                {"open": 2612.0, "close": 2614.0, "high": 2615.0, "low": 2611.0, "ema20": 2617.0, "ema50": 2621.0, "rsi": 41.0, "macd": -4.6, "macd_signal": -4.1, "stoch_k": 24.0, "stoch_d": 23.0, "volume": 980, "volume_avg": 1000},
-                {"open": 2614.0, "close": 2620.0, "high": 2621.0, "low": 2613.0, "ema20": 2618.0, "ema50": 2621.0, "rsi": 48.0, "macd": -3.6, "macd_signal": -3.9, "stoch_k": 42.0, "stoch_d": 30.0, "volume": 1180, "volume_avg": 1000},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
-
-        signal, reason = evaluate_macd_stoch_reversal(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("RSI растёт: да", reason)
-        self.assertIn("Stochastic растёт: да", reason)
-        self.assertIn("MACD cross вверх: да", reason)
-
-    def test_imoexf_macd_stoch_reversal_gives_short_on_reverse_alignment(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2633.0, "close": 2631.0, "high": 2634.0, "low": 2630.0, "ema20": 2627.0, "ema50": 2624.0, "rsi": 63.0, "macd": 4.8, "macd_signal": 4.1, "stoch_k": 82.0, "stoch_d": 77.0, "volume": 950, "volume_avg": 1000},
-                {"open": 2631.0, "close": 2628.0, "high": 2632.0, "low": 2627.0, "ema20": 2627.5, "ema50": 2624.5, "rsi": 59.0, "macd": 4.3, "macd_signal": 4.0, "stoch_k": 74.0, "stoch_d": 76.0, "volume": 1010, "volume_avg": 1000},
-                {"open": 2628.0, "close": 2625.0, "high": 2629.0, "low": 2624.0, "ema20": 2626.5, "ema50": 2624.8, "rsi": 52.0, "macd": 3.5, "macd_signal": 3.9, "stoch_k": 58.0, "stoch_d": 68.0, "volume": 1250, "volume_avg": 1000},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
-
-        signal, reason = evaluate_macd_stoch_reversal(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("RSI падает: да", reason)
-        self.assertIn("Stochastic падает: да", reason)
-        self.assertIn("MACD cross вниз: да", reason)
-
-    def test_bmm6_trend_rollover_blocks_soft_short_without_macd_volume_and_impulse(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 101.50, "close": 101.44, "high": 101.52, "low": 101.42, "ema20": 101.46, "ema50": 101.50, "macd": -0.06, "macd_signal": -0.04, "volume": 108, "volume_avg": 100, "body": 0.06, "body_avg": 0.08},
-                {"open": 101.44, "close": 101.40, "high": 101.46, "low": 101.38, "ema20": 101.43, "ema50": 101.48, "macd": -0.07, "macd_signal": -0.05, "volume": 106, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
-                {"open": 101.40, "close": 101.36, "high": 101.42, "low": 101.34, "ema20": 101.40, "ema50": 101.46, "macd": -0.075, "macd_signal": -0.06, "volume": 104, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
-                {"open": 101.36, "close": 101.33, "high": 101.38, "low": 101.31, "ema20": 101.37, "ema50": 101.44, "macd": -0.074, "macd_signal": -0.065, "volume": 103, "volume_avg": 100, "body": 0.03, "body_avg": 0.08},
-                {"open": 101.33, "close": 101.31, "high": 101.35, "low": 101.29, "ema20": 101.35, "ema50": 101.42, "macd": -0.073, "macd_signal": -0.068, "volume": 102, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
-                {"open": 101.31, "close": 101.29, "high": 101.33, "low": 101.27, "ema20": 101.33, "ema50": 101.40, "macd": -0.072, "macd_signal": -0.069, "volume": 101, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
-                {"open": 101.29, "close": 101.27, "high": 101.31, "low": 101.25, "ema20": 101.31, "ema50": 101.38, "macd": -0.071, "macd_signal": -0.070, "volume": 100, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
-                {"open": 101.27, "close": 101.26, "high": 101.29, "low": 101.24, "ema20": 101.29, "ema50": 101.36, "rsi": 44.0, "macd": -0.0705, "macd_signal": -0.0702, "atr": 0.11, "volume": 99, "volume_avg": 100, "body": 0.01, "body_avg": 0.08},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
-
-        signal, reason = evaluate_trend_rollover(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("MACD не подтверждает снижение", reason)
-
-    def test_bmm6_trend_rollover_blocks_hard_breakdown_when_volume_and_impulse_are_weak(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 101.50, "close": 101.44, "high": 101.52, "low": 101.42, "ema20": 101.46, "ema50": 101.50, "macd": -0.04, "macd_signal": -0.02, "volume": 110, "volume_avg": 100, "body": 0.06, "body_avg": 0.08},
-                {"open": 101.44, "close": 101.40, "high": 101.46, "low": 101.38, "ema20": 101.43, "ema50": 101.48, "macd": -0.05, "macd_signal": -0.03, "volume": 108, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
-                {"open": 101.40, "close": 101.36, "high": 101.42, "low": 101.34, "ema20": 101.40, "ema50": 101.46, "macd": -0.06, "macd_signal": -0.04, "volume": 106, "volume_avg": 100, "body": 0.04, "body_avg": 0.08},
-                {"open": 101.36, "close": 101.33, "high": 101.38, "low": 101.31, "ema20": 101.37, "ema50": 101.44, "macd": -0.07, "macd_signal": -0.05, "volume": 105, "volume_avg": 100, "body": 0.03, "body_avg": 0.08},
-                {"open": 101.33, "close": 101.31, "high": 101.35, "low": 101.29, "ema20": 101.35, "ema50": 101.42, "macd": -0.08, "macd_signal": -0.06, "volume": 104, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
-                {"open": 101.31, "close": 101.29, "high": 101.33, "low": 101.27, "ema20": 101.33, "ema50": 101.40, "macd": -0.09, "macd_signal": -0.07, "volume": 103, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
-                {"open": 101.29, "close": 101.27, "high": 101.31, "low": 101.25, "ema20": 101.31, "ema50": 101.38, "macd": -0.10, "macd_signal": -0.08, "volume": 102, "volume_avg": 100, "body": 0.02, "body_avg": 0.08},
-                {"open": 101.27, "close": 101.22, "high": 101.28, "low": 101.20, "ema20": 101.29, "ema50": 101.36, "rsi": 44.0, "macd": -0.11, "macd_signal": -0.09, "atr": 0.11, "volume": 83, "volume_avg": 100, "body": 0.05, "body_avg": 0.08},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
-
-        signal, reason = evaluate_trend_rollover(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("объём слишком слабый", reason)
-
-    def test_ngj6_blocks_late_momentum_long_chase(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2.700, "close": 2.705, "high": 2.707, "low": 2.698, "ema20": 2.700, "ema50": 2.690, "macd": 0.001, "macd_signal": 0.000, "volume": 120, "volume_avg": 100, "body": 0.005, "body_avg": 0.004},
-                {"open": 2.705, "close": 2.712, "high": 2.714, "low": 2.704, "ema20": 2.703, "ema50": 2.692, "macd": 0.002, "macd_signal": 0.000, "volume": 125, "volume_avg": 100, "body": 0.007, "body_avg": 0.004},
-                {"open": 2.712, "close": 2.718, "high": 2.720, "low": 2.710, "ema20": 2.706, "ema50": 2.695, "macd": 0.003, "macd_signal": 0.001, "volume": 130, "volume_avg": 100, "body": 0.006, "body_avg": 0.004},
-                {"open": 2.718, "close": 2.724, "high": 2.726, "low": 2.716, "ema20": 2.710, "ema50": 2.698, "macd": 0.004, "macd_signal": 0.001, "volume": 132, "volume_avg": 100, "body": 0.006, "body_avg": 0.004},
-                {"open": 2.724, "close": 2.732, "high": 2.734, "low": 2.722, "ema20": 2.714, "ema50": 2.702, "macd": 0.006, "macd_signal": 0.002, "volume": 140, "volume_avg": 100, "body": 0.008, "body_avg": 0.004},
-                {"open": 2.732, "close": 2.741, "high": 2.743, "low": 2.730, "ema20": 2.720, "ema50": 2.708, "macd": 0.008, "macd_signal": 0.003, "volume": 145, "volume_avg": 100, "body": 0.009, "body_avg": 0.005},
-                {"open": 2.741, "close": 2.748, "high": 2.750, "low": 2.739, "ema20": 2.726, "ema50": 2.714, "macd": 0.010, "macd_signal": 0.004, "volume": 150, "volume_avg": 100, "body": 0.007, "body_avg": 0.005},
-                {"open": 2.748, "close": 2.754, "high": 2.756, "low": 2.746, "ema20": 2.732, "ema50": 2.720, "macd": 0.011, "macd_signal": 0.005, "volume": 155, "volume_avg": 100, "body": 0.006, "body_avg": 0.005},
-                {"open": 2.754, "close": 2.762, "high": 2.764, "low": 2.752, "ema20": 2.740, "ema50": 2.728, "rsi": 64.0, "macd": 0.012, "macd_signal": 0.006, "atr": 0.006, "volume": 170, "volume_avg": 100, "body": 0.008, "body_avg": 0.005, "bb_upper": 2.766, "bb_mid": 2.740},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Natural Gas")
-
-        signal, reason = evaluate_momentum_breakout(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("поздний breakout", reason)
-
-    def test_ngj6_allows_volume_reversal_short_against_lagging_higher_tf_long(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2.740, "close": 2.746, "high": 2.748, "low": 2.738, "ema20": 2.735, "ema50": 2.728, "macd": 0.008, "macd_signal": 0.004, "volume": 120, "volume_avg": 100, "body": 0.006, "body_avg": 0.005},
-                {"open": 2.746, "close": 2.752, "high": 2.754, "low": 2.744, "ema20": 2.738, "ema50": 2.730, "macd": 0.010, "macd_signal": 0.005, "volume": 125, "volume_avg": 100, "body": 0.006, "body_avg": 0.005},
-                {"open": 2.752, "close": 2.758, "high": 2.760, "low": 2.750, "ema20": 2.742, "ema50": 2.733, "macd": 0.011, "macd_signal": 0.006, "volume": 130, "volume_avg": 100, "body": 0.006, "body_avg": 0.005},
-                {"open": 2.758, "close": 2.762, "high": 2.764, "low": 2.756, "ema20": 2.746, "ema50": 2.736, "macd": 0.010, "macd_signal": 0.007, "volume": 135, "volume_avg": 100, "body": 0.004, "body_avg": 0.005},
-                {"open": 2.762, "close": 2.755, "high": 2.764, "low": 2.752, "ema20": 2.748, "ema50": 2.739, "macd": 0.006, "macd_signal": 0.007, "volume": 150, "volume_avg": 100, "body": 0.007, "body_avg": 0.005},
-                {"open": 2.755, "close": 2.748, "high": 2.756, "low": 2.746, "ema20": 2.749, "ema50": 2.741, "macd": 0.002, "macd_signal": 0.006, "volume": 160, "volume_avg": 100, "body": 0.007, "body_avg": 0.005},
-                {"open": 2.748, "close": 2.742, "high": 2.750, "low": 2.740, "ema20": 2.748, "ema50": 2.742, "macd": -0.002, "macd_signal": 0.004, "volume": 170, "volume_avg": 100, "body": 0.006, "body_avg": 0.005},
-                {"open": 2.742, "close": 2.736, "high": 2.744, "low": 2.734, "ema20": 2.746, "ema50": 2.743, "macd": -0.006, "macd_signal": 0.001, "volume": 180, "volume_avg": 100, "body": 0.006, "body_avg": 0.005},
-                {"open": 2.736, "close": 2.728, "high": 2.738, "low": 2.726, "ema20": 2.742, "ema50": 2.740, "rsi": 42.0, "macd": -0.012, "macd_signal": -0.002, "atr": 0.006, "volume": 210, "volume_avg": 100, "body": 0.008, "body_avg": 0.005, "bb_mid": 2.742},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Natural Gas")
-
-        signal, reason = evaluate_momentum_breakout(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("старший ТФ=LONG", reason)
-
-    def test_ngj6_allows_pullback_reclaim_long_against_lagging_higher_tf_short(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2.722, "close": 2.718, "high": 2.724, "low": 2.716, "ema20": 2.726, "ema50": 2.720, "macd": -0.006, "macd_signal": -0.003, "volume": 105, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.726, "bb_upper": 2.738},
-                {"open": 2.718, "close": 2.714, "high": 2.720, "low": 2.712, "ema20": 2.724, "ema50": 2.719, "macd": -0.008, "macd_signal": -0.004, "volume": 108, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.724, "bb_upper": 2.736},
-                {"open": 2.714, "close": 2.709, "high": 2.716, "low": 2.706, "ema20": 2.721, "ema50": 2.718, "macd": -0.010, "macd_signal": -0.005, "volume": 112, "volume_avg": 100, "body": 0.005, "body_avg": 0.005, "bb_mid": 2.721, "bb_upper": 2.734},
-                {"open": 2.709, "close": 2.704, "high": 2.711, "low": 2.700, "ema20": 2.718, "ema50": 2.716, "macd": -0.011, "macd_signal": -0.006, "volume": 118, "volume_avg": 100, "body": 0.005, "body_avg": 0.005, "bb_mid": 2.718, "bb_upper": 2.732},
-                {"open": 2.704, "close": 2.699, "high": 2.706, "low": 2.696, "ema20": 2.714, "ema50": 2.714, "macd": -0.012, "macd_signal": -0.007, "volume": 122, "volume_avg": 100, "body": 0.005, "body_avg": 0.005, "bb_mid": 2.714, "bb_upper": 2.730},
-                {"open": 2.699, "close": 2.703, "high": 2.705, "low": 2.697, "ema20": 2.710, "ema50": 2.712, "macd": -0.010, "macd_signal": -0.008, "volume": 110, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.710, "bb_upper": 2.728},
-                {"open": 2.703, "close": 2.711, "high": 2.713, "low": 2.701, "ema20": 2.708, "ema50": 2.711, "macd": -0.007, "macd_signal": -0.008, "volume": 118, "volume_avg": 100, "body": 0.008, "body_avg": 0.005, "bb_mid": 2.708, "bb_upper": 2.726},
-                {"open": 2.711, "close": 2.719, "high": 2.721, "low": 2.709, "ema20": 2.709, "ema50": 2.710, "rsi": 54.0, "macd": -0.003, "macd_signal": -0.007, "atr": 0.006, "volume": 122, "volume_avg": 100, "body": 0.008, "body_avg": 0.005, "bb_mid": 2.709, "bb_upper": 2.725},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Natural Gas")
-
-        signal, reason = evaluate_momentum_breakout(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("старший ТФ=SHORT", reason)
-
-    def test_ngk6_allows_15m_reclaim_long_after_profitable_short_style_reversal(self) -> None:
-        from strategies.trend_pullback import evaluate_signal as evaluate_trend_pullback
-
-        df = candle_rows(
-            [
-                {"open": 2.708, "close": 2.704, "high": 2.710, "low": 2.702, "ema20": 2.712, "ema50": 2.724, "ema200": 2.736, "macd": -0.012, "macd_signal": -0.008, "volume": 118, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.712, "bb_upper": 2.730},
-                {"open": 2.704, "close": 2.698, "high": 2.706, "low": 2.694, "ema20": 2.708, "ema50": 2.720, "ema200": 2.734, "macd": -0.014, "macd_signal": -0.009, "volume": 125, "volume_avg": 100, "body": 0.006, "body_avg": 0.005, "bb_mid": 2.708, "bb_upper": 2.726},
-                {"open": 2.698, "close": 2.691, "high": 2.700, "low": 2.688, "ema20": 2.704, "ema50": 2.716, "ema200": 2.731, "macd": -0.015, "macd_signal": -0.010, "volume": 132, "volume_avg": 100, "body": 0.007, "body_avg": 0.005, "bb_mid": 2.704, "bb_upper": 2.722},
-                {"open": 2.691, "close": 2.682, "high": 2.694, "low": 2.678, "ema20": 2.698, "ema50": 2.710, "ema200": 2.726, "macd": -0.017, "macd_signal": -0.012, "volume": 142, "volume_avg": 100, "body": 0.009, "body_avg": 0.006, "bb_mid": 2.698, "bb_upper": 2.717},
-                {"open": 2.682, "close": 2.639, "high": 2.684, "low": 2.632, "ema20": 2.676, "ema50": 2.690, "ema200": 2.712, "macd": -0.011, "macd_signal": -0.012, "volume": 190, "volume_avg": 120, "body": 0.043, "body_avg": 0.010, "bb_mid": 2.676, "bb_upper": 2.702},
-                {"open": 2.639, "close": 2.669, "high": 2.672, "low": 2.637, "ema20": 2.674, "ema50": 2.686, "ema200": 2.706, "macd": -0.006, "macd_signal": -0.011, "volume": 176, "volume_avg": 125, "body": 0.030, "body_avg": 0.012, "bb_mid": 2.674, "bb_upper": 2.704},
-                {"open": 2.669, "close": 2.684, "high": 2.688, "low": 2.666, "ema20": 2.674, "ema50": 2.679, "ema200": 2.699, "macd": 0.001, "macd_signal": -0.007, "volume": 168, "volume_avg": 130, "body": 0.015, "body_avg": 0.012, "bb_mid": 2.674, "bb_upper": 2.708},
-                {"open": 2.684, "close": 2.717, "high": 2.721, "low": 2.682, "ema20": 2.690, "ema50": 2.678, "ema200": 2.696, "rsi": 58.0, "macd": 0.007, "macd_signal": -0.001, "atr": 0.010, "volume": 182, "volume_avg": 135, "body": 0.033, "body_avg": 0.013, "bb_mid": 2.690, "bb_upper": 2.734},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="NGK6", figi="FIGI", display_name="Natural Gas")
-
-        signal, reason = evaluate_trend_pullback(df, self.config, instrument, "LONG")
-
-        self.assertEqual(signal, "LONG")
-        self.assertIn("старший ТФ=LONG", reason)
-
-    def test_ngj6_blocks_weak_short_when_price_reclaims_bollinger_mid(self) -> None:
-        df = candle_rows(
-            [
-                {"open": 2.716, "close": 2.713, "high": 2.718, "low": 2.711, "ema20": 2.720, "ema50": 2.717, "macd": -0.006, "macd_signal": -0.003, "volume": 108, "volume_avg": 100, "body": 0.003, "body_avg": 0.005, "bb_mid": 2.720, "bb_upper": 2.734},
-                {"open": 2.713, "close": 2.709, "high": 2.715, "low": 2.707, "ema20": 2.718, "ema50": 2.716, "macd": -0.008, "macd_signal": -0.004, "volume": 110, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.718, "bb_upper": 2.732},
-                {"open": 2.709, "close": 2.704, "high": 2.711, "low": 2.702, "ema20": 2.715, "ema50": 2.714, "macd": -0.010, "macd_signal": -0.005, "volume": 112, "volume_avg": 100, "body": 0.005, "body_avg": 0.005, "bb_mid": 2.715, "bb_upper": 2.730},
-                {"open": 2.704, "close": 2.700, "high": 2.706, "low": 2.698, "ema20": 2.712, "ema50": 2.712, "macd": -0.011, "macd_signal": -0.006, "volume": 116, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.712, "bb_upper": 2.728},
-                {"open": 2.700, "close": 2.696, "high": 2.702, "low": 2.694, "ema20": 2.709, "ema50": 2.710, "macd": -0.012, "macd_signal": -0.007, "volume": 120, "volume_avg": 100, "body": 0.004, "body_avg": 0.005, "bb_mid": 2.709, "bb_upper": 2.726},
-                {"open": 2.696, "close": 2.690, "high": 2.698, "low": 2.688, "ema20": 2.704, "ema50": 2.707, "macd": -0.014, "macd_signal": -0.008, "volume": 148, "volume_avg": 100, "body": 0.006, "body_avg": 0.005, "bb_mid": 2.704, "bb_upper": 2.722},
-                {"open": 2.690, "close": 2.695, "high": 2.699, "low": 2.689, "ema20": 2.700, "ema50": 2.704, "macd": -0.011, "macd_signal": -0.009, "volume": 138, "volume_avg": 100, "body": 0.005, "body_avg": 0.005, "bb_mid": 2.700, "bb_upper": 2.718},
-                {"open": 2.695, "close": 2.701, "high": 2.703, "low": 2.694, "ema20": 2.699, "ema50": 2.702, "rsi": 47.0, "macd": -0.005, "macd_signal": -0.008, "atr": 0.006, "volume": 150, "volume_avg": 100, "body": 0.006, "body_avg": 0.005, "bb_mid": 2.699, "bb_upper": 2.716},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Natural Gas")
-
-        signal, reason = evaluate_momentum_breakout(df, self.config, instrument, "SHORT")
-
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("Bollinger", reason)
-
-    def test_ngj6_exit_uses_higher_tf_indicator_context(self) -> None:
-        lower_df = candle_rows(
-            [
-                {"close": 2.740, "ema20": 2.735, "macd": 0.004, "macd_signal": 0.002},
-                {"close": 2.742, "ema20": 2.736, "macd": 0.005, "macd_signal": 0.002},
-                {"close": 2.744, "ema20": 2.737, "macd": 0.006, "macd_signal": 0.003},
-            ]
-        )
-        higher_df = candle_rows(
-            [
-                {"close": 2.760, "ema20": 2.742, "macd": 0.010, "macd_signal": 0.006},
-                {"close": 2.755, "ema20": 2.746, "macd": 0.007, "macd_signal": 0.007},
-                {"close": 2.736, "ema20": 2.744, "macd": 0.003, "macd_signal": 0.006},
-            ]
-        )
-        ngj6 = InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Natural Gas")
-        gnm6 = InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
-        brk6 = InstrumentConfig(symbol="BRK6", figi="FIGI", display_name="Brent")
-        rbm6 = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-        imoexf = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="IMOEX")
-        usdrubf = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
-
-        self.assertIs(mod.select_exit_indicator_df(ngj6, lower_df, higher_df), higher_df)
-        self.assertIs(mod.select_exit_indicator_df(gnm6, lower_df, higher_df), higher_df)
-        self.assertIs(mod.select_exit_indicator_df(rbm6, lower_df, higher_df), higher_df)
-        self.assertIs(mod.select_exit_indicator_df(imoexf, lower_df, higher_df), higher_df)
-        self.assertIs(mod.select_exit_indicator_df(usdrubf, lower_df, higher_df), higher_df)
-        self.assertIs(mod.select_exit_indicator_df(brk6, lower_df, higher_df), higher_df)
-        self.assertTrue(mod.macd_crossed_down_with_ema_loss(higher_df))
-
-    def test_imoexf_short_exit_detects_higher_tf_macd_reclaim(self) -> None:
-        higher_df = candle_rows(
-            [
-                {"close": 2741.0, "ema20": 2748.0, "macd": -2.6, "macd_signal": -1.9},
-                {"close": 2745.0, "ema20": 2747.0, "macd": -2.1, "macd_signal": -2.0},
-                {"close": 2750.0, "ema20": 2746.0, "macd": -1.4, "macd_signal": -1.9},
-            ]
-        )
-
-        self.assertTrue(mod.macd_crossed_up_with_ema_reclaim(higher_df))
-
-    def test_ngj6_short_exit_detects_higher_tf_macd_reclaim(self) -> None:
-        higher_df = candle_rows(
-            [
-                {"close": 2.730, "ema20": 2.742, "macd": -0.010, "macd_signal": -0.006},
-                {"close": 2.735, "ema20": 2.741, "macd": -0.007, "macd_signal": -0.007},
-                {"close": 2.748, "ema20": 2.740, "macd": -0.003, "macd_signal": -0.006},
-            ]
-        )
-
-        self.assertTrue(mod.macd_crossed_up_with_ema_reclaim(higher_df))
-
-    def test_vbm6_short_does_not_exit_only_on_rsi_oversold_without_reclaim(self) -> None:
-        lower_df = candle_rows(
-            [
-                {"close": 9738.0, "ema20": 9788.0, "macd": -5.8, "macd_signal": -4.9, "rsi": 28.0},
-                {"close": 9726.0, "ema20": 9782.0, "macd": -6.4, "macd_signal": -5.2, "rsi": 24.0},
-                {"close": 9719.0, "ema20": 9777.0, "macd": -7.1, "macd_signal": -5.4, "rsi": 22.0},
-            ]
-        )
-        higher_df = candle_rows(
-            [
-                {"close": 9795.0, "ema20": 9890.0, "macd": -32.0, "macd_signal": -22.0, "rsi": 33.0},
-                {"close": 9760.0, "ema20": 9868.0, "macd": -40.0, "macd_signal": -28.0, "rsi": 28.0},
-                {"close": 9719.0, "ema20": 9845.0, "macd": -51.0, "macd_signal": -34.0, "rsi": 22.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
-        state = mod.InstrumentState(
-            position_side="SHORT",
-            position_qty=1,
-            entry_price=9801.0,
-            min_price=9719.0,
-            breakeven_armed=True,
-            entry_strategy="range_break_continuation",
-            entry_time="2026-04-21T12:07:00+00:00",
-        )
-
-        with patch.object(mod, "get_last_price", return_value=9719.0), patch.object(mod, "close_position") as close_mock:
-            mod.check_exit(None, self.config, instrument, state, lower_df, "HOLD", higher_tf_df=higher_df)
-
-        close_mock.assert_not_called()
-
-    def test_usdrubf_short_does_not_exit_only_on_rsi_oversold_without_reclaim(self) -> None:
-        lower_df = candle_rows(
-            [
-                {"close": 74.78, "ema20": 74.93, "macd": -0.14, "macd_signal": -0.09, "rsi": 31.0},
-                {"close": 74.70, "ema20": 74.89, "macd": -0.17, "macd_signal": -0.10, "rsi": 28.0},
-                {"close": 74.64, "ema20": 74.86, "macd": -0.20, "macd_signal": -0.11, "rsi": 26.0},
-            ]
-        )
-        higher_df = candle_rows(
-            [
-                {"close": 74.86, "ema20": 75.02, "macd": -0.16, "macd_signal": -0.08, "rsi": 35.0},
-                {"close": 74.74, "ema20": 74.95, "macd": -0.19, "macd_signal": -0.10, "rsi": 30.0},
-                {"close": 74.64, "ema20": 74.88, "macd": -0.22, "macd_signal": -0.11, "rsi": 26.0},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
-        state = mod.InstrumentState(
-            position_side="SHORT",
-            position_qty=1,
-            entry_price=74.91,
-            min_price=74.64,
-            breakeven_armed=True,
-            entry_strategy="opening_range_breakout",
-            entry_time="2026-04-21T07:01:00+00:00",
-        )
-
-        with patch.object(mod, "get_last_price", return_value=74.64), patch.object(mod, "close_position") as close_mock:
-            mod.check_exit(None, self.config, instrument, state, lower_df, "HOLD", higher_tf_df=higher_df)
-
-        close_mock.assert_not_called()
+    def test_reversal_15m_profile_is_shared_for_gold_without_special_strategy(self) -> None:
+        self.assertEqual(get_reversal_profile("GNM6"), get_reversal_profile("USDRUBF"))
 
     def test_reversal_15m_short_does_not_exit_on_rsi_oversold_while_ao_confirms_trend(self) -> None:
-        lower_df = candle_rows(
-            [
-                {"close": 107.08, "ema20": 107.77, "macd": -0.0424, "macd_signal": 0.0496, "rsi": 38.91, "ao": -0.2135},
-                {"close": 106.80, "ema20": 107.61, "macd": -0.1532, "macd_signal": -0.0141, "rsi": 35.50, "ao": -0.4805},
-                {"close": 106.33, "ema20": 107.49, "macd": -0.2347, "macd_signal": -0.0582, "rsi": 30.60, "ao": -0.6735},
-            ]
-        )
-        instrument = InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent mini")
-        state = mod.InstrumentState(
-            position_side="SHORT",
-            position_qty=1,
-            entry_price=107.95,
-            min_price=106.33,
-            breakeven_armed=True,
-            entry_strategy="reversal_15m",
-            entry_time="2026-05-13T14:00:00+00:00",
-        )
-
-        with patch.object(mod, "get_last_price", return_value=106.33), patch.object(mod, "close_position") as close_mock:
-            mod.check_exit(None, self.config, instrument, state, lower_df, "HOLD", higher_tf_df=lower_df)
-
-        close_mock.assert_not_called()
-
-    def test_rbm6_sideways_exhaustion_locks_profit_after_impulse(self) -> None:
         df = candle_rows(
             [
-                {"close": 12118.0, "high": 12122.0, "low": 12112.0, "ema20": 12108.0, "macd": 1.0, "macd_signal": 0.2, "rsi": 52.0},
-                {"close": 12135.0, "high": 12142.0, "low": 12118.0, "ema20": 12115.0, "macd": 2.0, "macd_signal": 0.5, "rsi": 58.0},
-                {"close": 12155.0, "high": 12160.0, "low": 12134.0, "ema20": 12125.0, "macd": 3.0, "macd_signal": 0.8, "rsi": 63.0},
-                {"close": 12150.0, "high": 12158.0, "low": 12145.0, "ema20": 12132.0, "macd": 3.1, "macd_signal": 1.0, "rsi": 60.0},
-                {"close": 12147.0, "high": 12157.0, "low": 12142.0, "ema20": 12136.0, "macd": 3.0, "macd_signal": 1.1, "rsi": 59.0},
-                {"close": 12145.0, "high": 12156.0, "low": 12140.0, "ema20": 12139.0, "macd": 2.8, "macd_signal": 1.2, "rsi": 57.0},
-                {"close": 12139.0, "high": 12155.0, "low": 12134.0, "ema20": 12140.0, "macd": 2.5, "macd_signal": 1.3, "rsi": 56.0},
-                {"close": 12135.0, "high": 12154.0, "low": 12130.0, "ema20": 12141.0, "macd": 2.2, "macd_signal": 1.4, "rsi": 55.0},
+                {"close": 100.0, "ema20": 100.5, "macd": -0.10, "macd_signal": -0.05, "ao": -0.12, "rsi": 34.0},
+                {"close": 99.5, "ema20": 100.2, "macd": -0.12, "macd_signal": -0.07, "ao": -0.14, "rsi": 31.0},
             ]
         )
-        instrument = InstrumentConfig(symbol="RBM6", figi="FIGI", display_name="RGBI")
-        state = mod.InstrumentState(
-            position_side="LONG",
-            position_qty=1,
-            entry_price=12100.0,
-            max_price=12160.0,
-            entry_commission_rub=5.0,
-        )
 
-        reason = mod.rbm6_sideways_exhaustion_exit_reason(instrument, state, df, 12135.0)
+        self.assertTrue(mod.reversal_15m_pressure_intact(df, "SHORT"))
 
-        self.assertIn("RBM6 profit-lock", reason)
+    def test_recovery_mode_allows_only_unified_reversal(self) -> None:
+        state = mod.InstrumentState(last_setup_quality_label="strong", last_market_regime="trend_expansion")
+
+        with patch.object(mod, "get_recovery_mode_status", return_value={"active": True, "reason": "recovery"}):
+            old_reason = mod.recovery_mode_block_reason(state, "SRM6", "trend_pullback", "LONG")
+            unified_reason = mod.recovery_mode_block_reason(state, "SRM6", "reversal_15m", "LONG")
+
+        self.assertIn("Разрешены только", old_reason)
+        self.assertEqual(unified_reason, "")
+
+    def test_regime_entry_blocks_removed_legacy_strategy(self) -> None:
+        reason = mod.regime_entry_block_reason("SRM6", "trend_pullback", "LONG", "trend_expansion", {})
+
+        self.assertIn("больше не используется", reason)
 
 
 if __name__ == "__main__":

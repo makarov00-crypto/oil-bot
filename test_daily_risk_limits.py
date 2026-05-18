@@ -275,27 +275,27 @@ class DailyRiskLimitTests(unittest.TestCase):
                 "time": f"{today}T10:15:00+03:00",
                 "event": "CLOSE",
                 "symbol": "SRM6",
-                "strategy": "range_break_continuation",
+                "strategy": "reversal_15m",
                 "net_pnl_rub": -42.0,
             },
             {
                 "time": f"{today}T11:20:00+03:00",
                 "event": "CLOSE",
                 "symbol": "SRM6",
-                "strategy": "range_break_continuation",
+                "strategy": "reversal_15m",
                 "net_pnl_rub": -35.0,
             },
             {
                 "time": f"{today}T11:45:00+03:00",
                 "event": "CLOSE",
                 "symbol": "BRK6",
-                "strategy": "range_break_continuation",
+                "strategy": "reversal_15m",
                 "net_pnl_rub": -500.0,
             },
         ]
 
         with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
-            reason = mod.recent_strategy_performance_block_reason("SRM6", "range_break_continuation")
+            reason = mod.recent_strategy_performance_block_reason("SRM6", "reversal_15m")
 
         self.assertIn("anti-chop guard", reason)
         self.assertIn("SRM6", reason)
@@ -307,20 +307,20 @@ class DailyRiskLimitTests(unittest.TestCase):
                 "time": f"{today}T10:15:00+03:00",
                 "event": "CLOSE",
                 "symbol": "SRM6",
-                "strategy": "range_break_continuation",
+                "strategy": "reversal_15m",
                 "net_pnl_rub": -42.0,
             },
             {
                 "time": f"{today}T11:20:00+03:00",
                 "event": "CLOSE",
                 "symbol": "SRM6",
-                "strategy": "range_break_continuation",
+                "strategy": "reversal_15m",
                 "net_pnl_rub": 12.0,
             },
         ]
 
         with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
-            reason = mod.recent_strategy_performance_block_reason("SRM6", "range_break_continuation")
+            reason = mod.recent_strategy_performance_block_reason("SRM6", "reversal_15m")
 
         self.assertEqual(reason, "")
 
@@ -382,20 +382,20 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertIn("recovery mode", reason)
         self.assertIn("точечные стратегии", reason)
 
-    def test_recovery_mode_allows_strong_pullback_with_higher_tf_alignment(self) -> None:
+    def test_recovery_mode_allows_strong_unified_reversal(self) -> None:
         today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
         rows = [
-            {"time": f"{today}T10:00:00+03:00", "event": "CLOSE", "symbol": "GNM6", "strategy": "trend_pullback", "net_pnl_rub": -80.0},
-            {"time": f"{today}T11:00:00+03:00", "event": "CLOSE", "symbol": "GNM6", "strategy": "trend_pullback", "net_pnl_rub": -70.0},
+            {"time": f"{today}T10:00:00+03:00", "event": "CLOSE", "symbol": "GNM6", "strategy": "reversal_15m", "net_pnl_rub": -80.0},
+            {"time": f"{today}T11:00:00+03:00", "event": "CLOSE", "symbol": "GNM6", "strategy": "reversal_15m", "net_pnl_rub": -70.0},
         ]
         state = mod.InstrumentState(
             last_setup_quality_label="strong",
-            last_market_regime="trend_pullback",
+            last_market_regime="trend_expansion",
             last_higher_tf_bias="LONG",
         )
 
         with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
-            reason = mod.recovery_mode_block_reason(state, "GNM6", "trend_pullback", "LONG")
+            reason = mod.recovery_mode_block_reason(state, "GNM6", "reversal_15m", "LONG")
 
         self.assertEqual(reason, "")
 
