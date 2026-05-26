@@ -25,12 +25,12 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "_dt": base_dt,
                 "_date": "2026-04-24",
                 "time": "2026-04-24T12:00:00+03:00",
-                "symbol": "BRK6",
+                "symbol": "BMM6",
                 "side": "LONG",
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 80.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "open brk6",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             }
@@ -56,14 +56,14 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "_dt": base_dt + dashboard.timedelta(hours=5),
                 "_date": "2026-04-24",
                 "time": "2026-04-24T17:00:00+03:00",
-                "symbol": "BRK6",
+                "symbol": "BMM6",
                 "side": "LONG",
                 "event": "CLOSE",
                 "qty_lots": 1,
                 "price": 81.0,
                 "pnl_rub": 100.0,
                 "net_pnl_rub": 100.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "close brk6",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             }
@@ -72,8 +72,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
             review = dashboard.load_trade_review_for_day(date(2026, 4, 24), limit=20)
 
-        brk6 = next(item for item in review["closed_reviews"] if item["symbol"] == "BRK6")
-        self.assertEqual(brk6["entry_time"], "24.04 12:00:00")
+        bmm6 = next(item for item in review["closed_reviews"] if item["symbol"] == "BMM6")
+        self.assertEqual(bmm6["entry_time"], "24.04 12:00:00")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_uses_full_3day_window_for_focus(self) -> None:
@@ -90,7 +90,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "event": "OPEN",
                     "qty_lots": 1,
                     "price": 100.0,
-                    "strategy": "trend_rollover",
+                    "strategy": "reversal_15m",
                     "reason": "open",
                     "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
                 }
@@ -107,7 +107,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "price": 101.0,
                     "pnl_rub": 10.0,
                     "net_pnl_rub": 10.0,
-                    "strategy": "trend_rollover",
+                    "strategy": "reversal_15m",
                     "reason": "close",
                     "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
                 }
@@ -151,7 +151,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 105.0,
-                "strategy": "momentum_breakout",
+                "strategy": "reversal_15m",
                 "reason": "older open",
                 "context": {"market_regime": "old_regime", "setup_quality_label": "weak", "entry_edge_label": "fragile"},
             },
@@ -164,7 +164,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 100.0,
-                "strategy": "trend_pullback",
+                "strategy": "reversal_15m",
                 "reason": "newer open",
                 "context": {"market_regime": "entry_regime", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -179,7 +179,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "price": 99.0,
                 "pnl_rub": 10.0,
                 "net_pnl_rub": 10.0,
-                "strategy": "trend_pullback",
+                "strategy": "reversal_15m",
                 "reason": "close",
                 "context": {"market_regime": "exit_regime", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
             },
@@ -193,7 +193,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(review["best_regime"]["regime"], "entry_regime")
         self.assertEqual(review["best_setup_quality"]["label"], "strong")
         self.assertEqual(review["best_edge"]["label"], "high")
-        self.assertEqual(review["best_strategy_regime"]["label"], "trend_pullback @ режим entry_regime | сценарий сильный | качество входа высокое")
+        self.assertEqual(review["best_strategy_regime"]["label"], "reversal_15m @ режим entry_regime | сценарий сильный | качество входа высокое")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_trade_review_consumes_full_close_qty_from_open_stack(self) -> None:
@@ -207,7 +207,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 3,
                 "price": 10.95,
-                "strategy": "opening_range_breakout",
+                "strategy": "reversal_15m",
                 "reason": "open stack",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -222,7 +222,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "price": 10.93,
                 "pnl_rub": 30.0,
                 "net_pnl_rub": 30.0,
-                "strategy": "opening_range_breakout",
+                "strategy": "reversal_15m",
                 "reason": "close stack",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -235,7 +235,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 10.92,
-                "strategy": "opening_range_breakout",
+                "strategy": "reversal_15m",
                 "reason": "new open",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -250,7 +250,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "price": 10.91,
                 "pnl_rub": 10.0,
                 "net_pnl_rub": 10.0,
-                "strategy": "opening_range_breakout",
+                "strategy": "reversal_15m",
                 "reason": "close new",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -272,12 +272,12 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "_dt": base_dt,
                 "_date": "2026-04-24",
                 "time": "2026-04-24T12:00:00+03:00",
-                "symbol": "BRK6",
+                "symbol": "BMM6",
                 "side": "LONG",
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 80.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "open brk6",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             }
@@ -303,14 +303,14 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "_dt": base_dt + dashboard.timedelta(hours=5),
                 "_date": "2026-04-24",
                 "time": "2026-04-24T17:00:00+03:00",
-                "symbol": "BRK6",
+                "symbol": "BMM6",
                 "side": "LONG",
                 "event": "CLOSE",
                 "qty_lots": 1,
                 "price": 81.0,
                 "pnl_rub": 100.0,
                 "net_pnl_rub": 100.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "close brk6",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             }
@@ -319,8 +319,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
             review = dashboard.load_trade_review(limit=20)
 
-        brk6 = next(item for item in review["closed_reviews"] if item["symbol"] == "BRK6")
-        self.assertEqual(brk6["entry_time"], "24.04 12:00:00")
+        bmm6 = next(item for item in review["closed_reviews"] if item["symbol"] == "BMM6")
+        self.assertEqual(bmm6["entry_time"], "24.04 12:00:00")
         self.assertEqual(len(review["closed_reviews"]), 20)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
@@ -397,8 +397,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
             "bot_estimated_variation_margin_rub": 220.0,
             "open_positions_count": 2,
             "broker_open_positions": [
-                {"symbol": "BRK6", "expected_yield_rub": 120.0, "variation_margin_rub": 120.0},
-                {"symbol": "NGJ6", "expected_yield_rub": -20.0, "variation_margin_rub": -20.0},
+                {"symbol": "BMM6", "expected_yield_rub": 120.0, "variation_margin_rub": 120.0},
+                {"symbol": "NGK6", "expected_yield_rub": -20.0, "variation_margin_rub": -20.0},
             ],
         }
         rows = [
@@ -406,7 +406,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "_dt": datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc),
                 "_date": "2026-04-24",
                 "time": "2026-04-24T13:00:00+03:00",
-                "symbol": "BRK6",
+                "symbol": "BMM6",
                 "side": "LONG",
                 "event": "CLOSE",
                 "qty_lots": 1,
@@ -515,7 +515,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
         catalog = dashboard.build_instrument_catalog()
 
-        for symbol in ["BRK6", "NGJ6", "RBM6", "SRM6", "UCM6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
+        for symbol in ["BMM6", "NGK6", "RBM6", "SRM6", "UCM6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
             with self.subTest(symbol=symbol):
                 self.assertIn(symbol, catalog)
                 self.assertNotEqual(catalog[symbol], symbol)
@@ -772,7 +772,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 {
                     "time": "2026-04-24T10:15:00+03:00",
                     "decision": "deferred",
-                    "symbol": "BRK6",
+                    "symbol": "BMM6",
                     "signal": "LONG",
                     "reason": "недостаточно ГО",
                     "priority_score": 0.84,
@@ -792,7 +792,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 loaded = dashboard.load_allocator_decisions_for_day(date(2026, 4, 24))
 
         self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0]["symbol"], "BRK6")
+        self.assertEqual(loaded[0]["symbol"], "BMM6")
         self.assertEqual(loaded[0]["decision_display"], "отложен")
         self.assertEqual(loaded[0]["time_display"], "10:15:00")
         self.assertEqual(loaded[0]["learning_adjustment"], -0.08)
@@ -807,9 +807,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 {
                     "observed_at": "2026-04-24T10:15:00+03:00",
                     "evaluated_at": "2026-04-24T10:30:00+03:00",
-                    "symbol": "BRK6",
+                    "symbol": "BMM6",
                     "signal": "LONG",
-                    "strategy": "momentum_breakout",
+                    "strategy": "reversal_15m",
                     "decision": "deferred",
                     "decision_reason": "не хватило ГО",
                     "priority_score": 0.91,
@@ -856,9 +856,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 {
                     "observed_at": "2026-04-24T12:15:00+03:00",
                     "evaluated_at": "2026-04-24T12:30:00+03:00",
-                    "symbol": "BRK6",
+                    "symbol": "BMM6",
                     "signal": "LONG",
-                    "strategy": "momentum_breakout",
+                    "strategy": "reversal_15m",
                     "decision": "deferred",
                     "decision_reason": "ещё один хороший сигнал",
                     "priority_score": 0.88,
@@ -921,7 +921,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(summary["learning_combos"]["weakest"][0]["count"], 2)
         self.assertTrue(any("Снижать приоритет связки" in item for item in summary["actions"]))
         self.assertTrue(any("Быстрее пропускать связку" in item for item in summary["actions"]))
-        self.assertEqual(summary["combos"]["strongest"][0]["symbol"], "BRK6")
+        self.assertEqual(summary["combos"]["strongest"][0]["symbol"], "BMM6")
         self.assertEqual(summary["combos"]["strongest"][0]["confirmation_rate"], 100.0)
         self.assertEqual(summary["combos"]["weakest"][0]["symbol"], "UCM6")
         self.assertEqual(summary["combos"]["weakest"][0]["confirmation_rate"], 0.0)

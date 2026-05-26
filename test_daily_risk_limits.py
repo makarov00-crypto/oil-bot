@@ -144,7 +144,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(
             mod, "get_today_closed_net_pnl_rub", return_value=-1300.0
         ):
-            sizing = mod.calculate_position_sizing_context(None, config, instrument, state, 11.3, "LONG", "trend_pullback")
+            sizing = mod.calculate_position_sizing_context(None, config, instrument, state, 11.3, "LONG", "reversal_15m")
 
         self.assertTrue(sizing["daily_loss_recovery_active"])
         self.assertLess(sizing["target_trade_margin_rub"], 3000.0)
@@ -532,7 +532,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         with patch.object(mod, "get_strategy_health_score", return_value=(1.08, "связка сильна 3 дня")), patch.object(
             mod, "get_strategy_regime_health_score", return_value=(1.07, "режим рабочий")
         ), patch.object(mod, "get_recovery_mode_status", return_value={"active": False}):
-            score, reason = mod.calculate_entry_priority_score(state, "BRK6", "range_break_continuation")
+            score, reason = mod.calculate_entry_priority_score(state, "BMM6", "reversal_15m")
 
         self.assertGreater(score, 0.75)
         self.assertIn("высокое качество входа", reason)
@@ -560,9 +560,9 @@ class DailyRiskLimitTests(unittest.TestCase):
                     {
                         "observed_at": f"{today.isoformat()}T10:{index:02d}:00+03:00",
                         "evaluated_at": f"{today.isoformat()}T10:{index:02d}:15+03:00",
-                        "symbol": "BRK6",
+                        "symbol": "BMM6",
                         "signal": "LONG",
-                        "strategy": "trend_rollover",
+                        "strategy": "reversal_15m",
                         "decision": "selected",
                         "market_regime": "trend_expansion",
                         "setup_quality": "strong",
@@ -571,7 +571,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                         "context": {"entry_edge_label": "high", "candle_time": f"2026-04-24 10:{index:02d}"},
                     },
                 )
-            score, reason = mod.calculate_entry_priority_score(state, "BRK6", "trend_rollover")
+            score, reason = mod.calculate_entry_priority_score(state, "BMM6", "reversal_15m")
 
         self.assertLess(score, 0.72)
         self.assertIn("обучение связки: штраф", reason)
@@ -601,7 +601,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                         "evaluated_at": f"{today.isoformat()}T10:{index:02d}:15+03:00",
                         "symbol": "UCM6",
                         "signal": "SHORT",
-                        "strategy": "opening_range_breakout",
+                        "strategy": "reversal_15m",
                         "decision": "selected",
                         "market_regime": "trend_expansion",
                         "setup_quality": "strong",
@@ -610,7 +610,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                         "context": {"entry_edge_label": "confirmed", "candle_time": f"2026-04-24 10:{index:02d}"},
                     },
                 )
-            score, reason = mod.calculate_entry_priority_score(state, "UCM6", "opening_range_breakout")
+            score, reason = mod.calculate_entry_priority_score(state, "UCM6", "reversal_15m")
 
         self.assertGreater(score, 0.76)
         self.assertIn("обучение связки: бонус", reason)
@@ -638,9 +638,9 @@ class DailyRiskLimitTests(unittest.TestCase):
                     {
                         "observed_at": f"{today.isoformat()}T10:{index:02d}:00+03:00",
                         "evaluated_at": f"{today.isoformat()}T10:{index:02d}:15+03:00",
-                        "symbol": "BRK6",
+                        "symbol": "BMM6",
                         "signal": "LONG",
-                        "strategy": "trend_rollover",
+                        "strategy": "reversal_15m",
                         "decision": "selected",
                         "market_regime": "trend_expansion",
                         "setup_quality": "strong",
@@ -649,7 +649,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                         "context": {"entry_edge_label": "high", "candle_time": f"2026-04-24 10:{index:02d}"},
                     },
                 )
-            score, reason = mod.calculate_entry_priority_score(state, "BRK6", "trend_rollover")
+            score, reason = mod.calculate_entry_priority_score(state, "BMM6", "reversal_15m")
 
         self.assertGreater(score, 0.72)
         self.assertIn("мало данных", reason)
@@ -768,9 +768,9 @@ class DailyRiskLimitTests(unittest.TestCase):
 
     def test_append_signal_observation_decision_persists_candidate(self) -> None:
         candidate = {
-            "symbol": "BRK6",
+            "symbol": "BMM6",
             "signal": "LONG",
-            "strategy_name": "range_break_continuation",
+            "strategy_name": "reversal_15m",
             "observed_at": "2026-04-24T10:00:00+03:00",
             "candle_time": "2026-04-24 10:00",
             "observed_price": 80.0,
@@ -798,9 +798,9 @@ class DailyRiskLimitTests(unittest.TestCase):
 
     def test_append_signal_observation_decision_dedupes_same_candle(self) -> None:
         candidate = {
-            "symbol": "BRK6",
+            "symbol": "BMM6",
             "signal": "LONG",
-            "strategy_name": "range_break_continuation",
+            "strategy_name": "reversal_15m",
             "observed_price": 80.0,
             "priority_score": 0.83,
             "entry_edge_score": 0.86,
@@ -867,7 +867,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         ), patch.object(mod, "save_state"):
             mod.mark_cycle_deferred_candidate(
                 {
-                    "symbol": "BRK6",
+                    "symbol": "BMM6",
                     "signal": "LONG",
                     "priority_score": 0.64,
                     "entry_edge_score": 0.82,
@@ -946,11 +946,11 @@ class DailyRiskLimitTests(unittest.TestCase):
 
     def test_capital_rotation_selects_strong_margin_blocked_candidate_over_weak_open_position(self) -> None:
         watchlist = [
-            mod.InstrumentConfig(symbol="BRK6", figi="1", display_name="Brent"),
+            mod.InstrumentConfig(symbol="BMM6", figi="1", display_name="Brent"),
             mod.InstrumentConfig(symbol="VBM6", figi="2", display_name="Bonds"),
         ]
         candidate = {
-            "symbol": "BRK6",
+            "symbol": "BMM6",
             "signal": "LONG",
             "priority_score": 0.88,
             "priority_reason": "высокое качество входа, режим подтверждён",
@@ -960,7 +960,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         weak_open_state = mod.InstrumentState(
             position_qty=2,
             position_side="SHORT",
-            entry_strategy="range_break_continuation",
+            entry_strategy="reversal_15m",
             entry_time=(mod.datetime.now(mod.UTC) - mod.timedelta(minutes=25)).isoformat(),
             last_signal="HOLD",
             last_market_regime="chop",
@@ -980,16 +980,16 @@ class DailyRiskLimitTests(unittest.TestCase):
             plan = mod.select_capital_rotation_plan(watchlist, [candidate])
 
         self.assertIsNotNone(plan)
-        self.assertEqual(plan["candidate"]["symbol"], "BRK6")
+        self.assertEqual(plan["candidate"]["symbol"], "BMM6")
         self.assertEqual(plan["position"]["instrument"].symbol, "VBM6")
 
     def test_capital_rotation_does_not_replace_strong_profitable_position(self) -> None:
         watchlist = [
-            mod.InstrumentConfig(symbol="BRK6", figi="1", display_name="Brent"),
+            mod.InstrumentConfig(symbol="BMM6", figi="1", display_name="Brent"),
             mod.InstrumentConfig(symbol="GNM6", figi="2", display_name="Gold"),
         ]
         candidate = {
-            "symbol": "BRK6",
+            "symbol": "BMM6",
             "signal": "LONG",
             "priority_score": 0.86,
             "priority_reason": "высокое качество входа, режим подтверждён",
@@ -999,7 +999,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         strong_open_state = mod.InstrumentState(
             position_qty=1,
             position_side="SHORT",
-            entry_strategy="trend_pullback",
+            entry_strategy="reversal_15m",
             entry_time=(mod.datetime.now(mod.UTC) - mod.timedelta(minutes=40)).isoformat(),
             last_signal="SHORT",
             last_market_regime="trend_pullback",
@@ -1022,7 +1022,7 @@ class DailyRiskLimitTests(unittest.TestCase):
 
     def test_execute_capital_rotation_plan_aborts_when_close_not_submitted(self) -> None:
         candidate = {
-            "symbol": "BRK6",
+            "symbol": "BMM6",
             "signal": "LONG",
             "priority_score": 0.88,
             "priority_reason": "высокое качество входа, режим подтверждён",
@@ -1064,9 +1064,9 @@ class DailyRiskLimitTests(unittest.TestCase):
             breakeven_profit_pct=0.008,
             trailing_stop_pct=0.006,
         )
-        instrument = mod.InstrumentConfig(symbol="NGJ6", figi="FIGI", display_name="Gas")
+        instrument = mod.InstrumentConfig(symbol="NGK6", figi="FIGI", display_name="Gas")
         state = mod.InstrumentState(
-            entry_strategy="trend_pullback",
+            entry_strategy="reversal_15m",
             last_market_regime="chop",
             last_setup_quality_label="medium",
         )
@@ -1085,9 +1085,9 @@ class DailyRiskLimitTests(unittest.TestCase):
             breakeven_profit_pct=0.004,
             trailing_stop_pct=0.0045,
         )
-        instrument = mod.InstrumentConfig(symbol="BRK6", figi="FIGI", display_name="Brent")
+        instrument = mod.InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
         state = mod.InstrumentState(
-            entry_strategy="range_break_continuation",
+            entry_strategy="reversal_15m",
             last_market_regime="trend_expansion",
             last_setup_quality_label="strong",
         )
@@ -1108,7 +1108,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         )
         instrument = mod.InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="Index")
         state = mod.InstrumentState(
-            entry_strategy="failed_breakout",
+            entry_strategy="reversal_15m",
             last_market_regime="mixed",
             last_setup_quality_label="medium",
             last_entry_edge_score=0.34,
@@ -1129,9 +1129,9 @@ class DailyRiskLimitTests(unittest.TestCase):
             breakeven_profit_pct=0.0045,
             trailing_stop_pct=0.0050,
         )
-        instrument = mod.InstrumentConfig(symbol="BRK6", figi="FIGI", display_name="Brent")
+        instrument = mod.InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
         state = mod.InstrumentState(
-            entry_strategy="range_break_continuation",
+            entry_strategy="reversal_15m",
             last_market_regime="trend_expansion",
             last_setup_quality_label="strong",
             last_entry_edge_score=0.84,

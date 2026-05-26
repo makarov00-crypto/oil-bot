@@ -7,6 +7,7 @@ import bot_oil_main as mod
 
 class PositionSizingTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.live_strategy = "reversal_15m"
         self.instrument = mod.InstrumentConfig(
             symbol="CNYRUBF",
             figi="FIGI",
@@ -46,7 +47,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertGreater(sizing["adaptive_size_multiplier"], 1.0)
@@ -72,7 +73,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
@@ -96,7 +97,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertEqual(sizing["working_margin_budget_rub"], 20000.0)
@@ -123,7 +124,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "opening_range_breakout"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertGreaterEqual(sizing["qty_by_target"], 3)
@@ -155,7 +156,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, instrument, state, 33000.0, "SHORT", "range_break_continuation"
+                None, self.config, instrument, state, 33000.0, "SHORT", self.live_strategy
             )
 
         self.assertEqual(sizing["qty_by_working"], 0)
@@ -182,7 +183,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": True}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "trend_pullback"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
@@ -190,7 +191,7 @@ class PositionSizingTests(unittest.TestCase):
 
     def test_broker_margin_limit_can_unlock_one_lot_for_strong_long(self) -> None:
         instrument = mod.InstrumentConfig(
-            symbol="BRK6",
+            symbol="BMM6",
             figi="FIGI",
             display_name="Brent",
             initial_margin_on_buy=17305.0,
@@ -229,7 +230,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                client, self.config, instrument, state, 119.61, "LONG", "trend_rollover"
+                client, self.config, instrument, state, 119.61, "LONG", self.live_strategy
             )
 
         self.assertEqual(sizing["broker_limit"], 1)
@@ -238,7 +239,7 @@ class PositionSizingTests(unittest.TestCase):
 
     def test_broker_margin_limit_can_unlock_one_lot_for_moderately_confirmed_strong_signal(self) -> None:
         instrument = mod.InstrumentConfig(
-            symbol="BRK6",
+            symbol="BMM6",
             figi="FIGI",
             display_name="Brent",
             initial_margin_on_buy=17305.0,
@@ -277,7 +278,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                client, self.config, instrument, state, 119.61, "LONG", "trend_rollover"
+                client, self.config, instrument, state, 119.61, "LONG", self.live_strategy
             )
 
         self.assertEqual(sizing["broker_limit"], 1)
@@ -304,7 +305,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "failed_breakout"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertGreater(sizing["strategy_health_score"], 1.0)
@@ -330,7 +331,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "failed_breakout"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertLess(sizing["adaptive_size_multiplier"], 1.0)
@@ -359,7 +360,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertGreater(sizing["adaptive_size_multiplier"], 1.15)
@@ -388,7 +389,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, self.config, self.instrument, self.state, 11.3, "SHORT", "failed_breakout"
+                None, self.config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
             )
 
         self.assertLess(sizing["adaptive_size_multiplier"], 0.8)
@@ -396,7 +397,7 @@ class PositionSizingTests(unittest.TestCase):
 
     def test_strong_signal_can_use_one_lot_when_broker_allows_it(self) -> None:
         instrument = mod.InstrumentConfig(
-            symbol="BRK6",
+            symbol="BMM6",
             figi="FIGI",
             display_name="Brent",
             initial_margin_on_buy=17305.0,
@@ -436,7 +437,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                client, self.config, instrument, state, 119.6, "LONG", "momentum_breakout"
+                client, self.config, instrument, state, 119.6, "LONG", self.live_strategy
             )
 
         self.assertEqual(sizing["qty_by_headroom"], 0)
@@ -477,7 +478,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                None, aggressive_config, self.instrument, self.state, 11.3, "SHORT", "range_break_continuation"
+                None, aggressive_config, self.instrument, self.state, 11.3, "SHORT", self.live_strategy
         )
 
         self.assertEqual(sizing["entry_edge_cap_multiplier"], 0.55)

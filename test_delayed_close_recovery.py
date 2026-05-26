@@ -122,9 +122,9 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             pending_order_qty=1,
             pending_order_action="OPEN",
             pending_order_id="oid",
-            pending_entry_reason="Сигнал SHORT (momentum_breakout): старший ТФ=SHORT; цена ниже EMA20 и EMA50: да.",
+            pending_entry_reason="Сигнал SHORT (reversal_15m): MACD вниз, AO подтверждает, рынок разворачивается.",
             entry_price=2.772,
-            entry_strategy="momentum_breakout",
+            entry_strategy="reversal_15m",
         )
         config = SimpleNamespace(dry_run=False)
         recorded: list[dict] = []
@@ -155,7 +155,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(len(recorded), 1)
         self.assertEqual(recorded[0]["reason"], state.entry_reason)
         self.assertEqual(recorded[0]["source"], "portfolio_confirmation")
-        self.assertEqual(recorded[0]["strategy"], "momentum_breakout")
+        self.assertEqual(recorded[0]["strategy"], "reversal_15m")
 
     def test_reconcile_delayed_close_clears_item_when_close_already_in_journal(self) -> None:
         state = mod.InstrumentState(
@@ -230,7 +230,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             pending_order_id="oid",
             pending_entry_reason="short setup",
             entry_price=100.0,
-            entry_strategy="range_break_continuation",
+            entry_strategy="reversal_15m",
         )
         config = SimpleNamespace(dry_run=False)
         recorded: list[tuple[tuple, dict]] = []
@@ -271,7 +271,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             pending_order_id="oid",
             pending_entry_reason="short setup",
             entry_price=100.0,
-            entry_strategy="range_break_continuation",
+            entry_strategy="reversal_15m",
         )
         config = SimpleNamespace(dry_run=False)
         recorded: list[tuple[tuple, dict]] = []
@@ -715,7 +715,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
     def test_old_reentry_exit_from_previous_trading_day_does_not_block_brk6(self) -> None:
         instrument = mod.InstrumentConfig(
-            symbol="BRK6",
+            symbol="BMM6",
             figi="FIGI",
             display_name="Brent",
             min_price_increment=0.01,
@@ -804,7 +804,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
     def test_ngj6_rsi_profit_reentry_requires_new_extreme(self) -> None:
         instrument = mod.InstrumentConfig(
-            symbol="NGJ6",
+            symbol="NGK6",
             figi="FIGI",
             display_name="Natural Gas",
             min_price_increment=0.001,

@@ -26,7 +26,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (base_dir / "bot_state" / "LIVEONLY.json").write_text(
-                '{"position_side":"LONG","position_qty":2,"last_signal":"BUY","last_strategy_name":"momentum_breakout","last_news_bias":"LONG_HIGH","last_signal_summary":["live state"]}',
+                '{"position_side":"LONG","position_qty":2,"last_signal":"BUY","last_strategy_name":"reversal_15m","last_news_bias":"LONG_HIGH","last_signal_summary":["live state"]}',
                 encoding="utf-8",
             )
             (base_dir / "bot_state" / "_accounting_history.json").write_text(
@@ -45,9 +45,9 @@ class DailyAiReviewTests(unittest.TestCase):
     def test_summarize_closed_trades_tracks_regimes_and_setup_quality(self) -> None:
         trades = [
             review.ClosedTrade(
-                symbol="NGJ6",
+                symbol="NGK6",
                 side="LONG",
-                strategy="trend_pullback",
+                strategy="reversal_15m",
                 entry_time="22.04 10:00:00",
                 exit_time="22.04 10:30:00",
                 entry_price=2.1,
@@ -60,9 +60,9 @@ class DailyAiReviewTests(unittest.TestCase):
                 entry_edge_label="high",
             ),
             review.ClosedTrade(
-                symbol="NGJ6",
+                symbol="NGK6",
                 side="LONG",
-                strategy="trend_pullback",
+                strategy="reversal_15m",
                 entry_time="22.04 11:00:00",
                 exit_time="22.04 11:20:00",
                 entry_price=2.2,
@@ -84,18 +84,18 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertEqual(summary["by_setup_quality"]["weak"], -50.0)
         self.assertEqual(summary["by_edge"]["high"], 150.0)
         self.assertEqual(summary["by_edge"]["fragile"], -50.0)
-        self.assertEqual(summary["by_strategy_regime"]["trend_pullback @ trend_expansion"], 150.0)
-        self.assertEqual(summary["by_strategy_regime"]["trend_pullback @ chop"], -50.0)
+        self.assertEqual(summary["by_strategy_regime"]["reversal_15m @ trend_expansion"], 150.0)
+        self.assertEqual(summary["by_strategy_regime"]["reversal_15m @ chop"], -50.0)
         self.assertEqual(summary["best_regime"]["name"], "trend_expansion")
         self.assertEqual(summary["worst_regime"]["name"], "chop")
         self.assertEqual(summary["best_setup_quality"]["name"], "strong")
         self.assertEqual(summary["worst_setup_quality"]["name"], "weak")
         self.assertEqual(summary["best_edge"]["name"], "high")
         self.assertEqual(summary["worst_edge"]["name"], "fragile")
-        self.assertEqual(summary["best_strategy_regime"]["name"], "trend_pullback @ trend_expansion")
-        self.assertEqual(summary["worst_strategy_regime"]["name"], "trend_pullback @ chop")
-        self.assertEqual(summary["top_positive_strategy_regimes"][0]["name"], "trend_pullback @ trend_expansion")
-        self.assertEqual(summary["top_negative_strategy_regimes"][0]["name"], "trend_pullback @ chop")
+        self.assertEqual(summary["best_strategy_regime"]["name"], "reversal_15m @ trend_expansion")
+        self.assertEqual(summary["worst_strategy_regime"]["name"], "reversal_15m @ chop")
+        self.assertEqual(summary["top_positive_strategy_regimes"][0]["name"], "reversal_15m @ trend_expansion")
+        self.assertEqual(summary["top_negative_strategy_regimes"][0]["name"], "reversal_15m @ chop")
 
     def test_pair_closed_trades_uses_latest_open_and_entry_context(self) -> None:
         rows = [
@@ -107,7 +107,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 105.0,
-                "strategy": "momentum_breakout",
+                "strategy": "reversal_15m",
                 "reason": "older open",
                 "context": {"market_regime": "old_regime", "setup_quality_label": "weak", "entry_edge_label": "fragile"},
             },
@@ -119,7 +119,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 100.0,
-                "strategy": "trend_pullback",
+                "strategy": "reversal_15m",
                 "reason": "newer open",
                 "context": {"market_regime": "entry_regime", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -132,7 +132,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 "qty_lots": 1,
                 "price": 99.0,
                 "pnl_rub": 10.0,
-                "strategy": "trend_pullback",
+                "strategy": "reversal_15m",
                 "reason": "close",
                 "context": {"market_regime": "exit_regime", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
             },
@@ -142,7 +142,7 @@ class DailyAiReviewTests(unittest.TestCase):
 
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0].entry_time, "24.04 10:05:00")
-        self.assertEqual(trades[0].strategy, "trend_pullback")
+        self.assertEqual(trades[0].strategy, "reversal_15m")
         self.assertEqual(trades[0].market_regime, "entry_regime")
         self.assertEqual(trades[0].setup_quality_label, "strong")
         self.assertEqual(trades[0].entry_edge_label, "high")
@@ -157,7 +157,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 3,
                 "price": 10.95,
-                "strategy": "opening_range_breakout",
+                "strategy": "reversal_15m",
                 "reason": "open stack",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -170,7 +170,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 "qty_lots": 3,
                 "price": 10.93,
                 "pnl_rub": 30.0,
-                "strategy": "opening_range_breakout",
+                "strategy": "reversal_15m",
                 "reason": "close stack",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -182,7 +182,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 10.92,
-                "strategy": "trend_pullback",
+                "strategy": "reversal_15m",
                 "reason": "new open",
                 "context": {"market_regime": "pullback", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
             },
@@ -195,7 +195,7 @@ class DailyAiReviewTests(unittest.TestCase):
                 "qty_lots": 1,
                 "price": 10.91,
                 "pnl_rub": 10.0,
-                "strategy": "trend_pullback",
+                "strategy": "reversal_15m",
                 "reason": "close new",
                 "context": {"market_regime": "pullback", "setup_quality_label": "medium", "entry_edge_label": "confirmed"},
             },
@@ -205,7 +205,7 @@ class DailyAiReviewTests(unittest.TestCase):
 
         self.assertEqual(len(trades), 2)
         self.assertEqual(trades[-1].entry_time, "24.04 11:00:00")
-        self.assertEqual(trades[-1].strategy, "trend_pullback")
+        self.assertEqual(trades[-1].strategy, "reversal_15m")
 
     def test_pair_closed_trades_sorts_rows_and_skips_duplicate_orphan_close(self) -> None:
         rows = [
@@ -218,18 +218,18 @@ class DailyAiReviewTests(unittest.TestCase):
                 "qty_lots": 1,
                 "price": 2720.0,
                 "pnl_rub": -20.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "duplicate orphan",
             },
             {
                 "time": "2026-04-24T10:00:00+03:00",
                 "_dt": review.datetime.fromisoformat("2026-04-24T10:00:00+03:00"),
-                "symbol": "BRK6",
+                "symbol": "BMM6",
                 "side": "LONG",
                 "event": "OPEN",
                 "qty_lots": 1,
                 "price": 80.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "open",
                 "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
             },
@@ -242,19 +242,19 @@ class DailyAiReviewTests(unittest.TestCase):
                 "qty_lots": 1,
                 "price": 2720.0,
                 "pnl_rub": -20.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "orphan",
             },
             {
                 "time": "2026-04-24T10:30:00+03:00",
                 "_dt": review.datetime.fromisoformat("2026-04-24T10:30:00+03:00"),
-                "symbol": "BRK6",
+                "symbol": "BMM6",
                 "side": "LONG",
                 "event": "CLOSE",
                 "qty_lots": 1,
                 "price": 81.0,
                 "pnl_rub": 100.0,
-                "strategy": "trend_rollover",
+                "strategy": "reversal_15m",
                 "reason": "close",
             },
         ]
