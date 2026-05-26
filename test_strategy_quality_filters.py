@@ -182,6 +182,46 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "SHORT")
         self.assertIn("reversal_15m", reason)
 
+    def test_unified_reversal_allows_short_when_ao_confirms_even_with_oversold_rsi(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.8, "ema20": 100.6, "ema50": 100.35, "rsi": 60.0, "macd": 0.08, "macd_signal": 0.05, "ao": 0.06, "stoch_k": 74.0, "stoch_d": 68.0},
+                {"close": 100.7, "ema20": 100.55, "ema50": 100.33, "rsi": 59.0, "macd": 0.07, "macd_signal": 0.05, "ao": 0.05, "stoch_k": 72.0, "stoch_d": 66.0},
+                {"close": 100.6, "ema20": 100.5, "ema50": 100.3, "rsi": 58.0, "macd": 0.06, "macd_signal": 0.04, "ao": 0.05, "stoch_k": 70.0, "stoch_d": 64.0},
+                {"close": 100.4, "ema20": 100.45, "ema50": 100.3, "rsi": 54.0, "macd": 0.03, "macd_signal": 0.04, "ao": 0.01, "stoch_k": 58.0, "stoch_d": 60.0},
+                {"close": 100.1, "ema20": 100.35, "ema50": 100.28, "rsi": 46.0, "macd": -0.01, "macd_signal": 0.02, "ao": -0.04, "stoch_k": 42.0, "stoch_d": 50.0},
+                {"close": 99.8, "ema20": 100.18, "ema50": 100.20, "rsi": 34.0, "macd": -0.05, "macd_signal": 0.00, "ao": -0.08, "stoch_k": 18.0, "stoch_d": 34.0},
+                {"close": 99.4, "ema20": 99.95, "ema50": 100.08, "rsi": 26.0, "macd": -0.09, "macd_signal": -0.03, "ao": -0.13, "stoch_k": 8.0, "stoch_d": 20.0},
+                {"close": 99.0, "ema20": 99.65, "ema50": 99.92, "rsi": 24.0, "macd": -0.13, "macd_signal": -0.06, "ao": -0.18, "stoch_k": 5.0, "stoch_d": 12.0, "volume": 160.0, "volume_avg": 100.0, "body": 0.50, "body_avg": 0.30, "atr": 0.35, "bb_upper": 101.0, "bb_lower": 98.5},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("AO=", reason)
+
+    def test_unified_reversal_allows_long_with_high_stochastic_when_macd_and_ao_confirm(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 99.8, "ema20": 100.2, "ema50": 100.35, "rsi": 35.0, "macd": -0.12, "macd_signal": -0.08, "ao": -0.15, "stoch_k": 16.0, "stoch_d": 24.0},
+                {"close": 99.9, "ema20": 100.15, "ema50": 100.32, "rsi": 37.0, "macd": -0.11, "macd_signal": -0.08, "ao": -0.13, "stoch_k": 18.0, "stoch_d": 22.0},
+                {"close": 100.0, "ema20": 100.1, "ema50": 100.3, "rsi": 39.0, "macd": -0.10, "macd_signal": -0.06, "ao": -0.12, "stoch_k": 20.0, "stoch_d": 28.0},
+                {"close": 100.1, "ema20": 100.05, "ema50": 100.25, "rsi": 42.0, "macd": -0.07, "macd_signal": -0.06, "ao": -0.10, "stoch_k": 36.0, "stoch_d": 30.0},
+                {"close": 100.3, "ema20": 100.08, "ema50": 100.20, "rsi": 46.0, "macd": -0.02, "macd_signal": -0.04, "ao": -0.05, "stoch_k": 58.0, "stoch_d": 42.0},
+                {"close": 100.6, "ema20": 100.18, "ema50": 100.18, "rsi": 52.0, "macd": 0.03, "macd_signal": -0.01, "ao": 0.01, "stoch_k": 76.0, "stoch_d": 58.0},
+                {"close": 100.9, "ema20": 100.34, "ema50": 100.20, "rsi": 56.0, "macd": 0.07, "macd_signal": 0.01, "ao": 0.08, "stoch_k": 88.0, "stoch_d": 70.0},
+                {"close": 101.2, "ema20": 100.55, "ema50": 100.28, "rsi": 59.0, "macd": 0.11, "macd_signal": 0.04, "ao": 0.14, "stoch_k": 92.0, "stoch_d": 82.0, "volume": 140.0, "volume_avg": 100.0, "body": 0.45, "body_avg": 0.30, "atr": 0.30, "bb_upper": 101.5, "bb_lower": 99.0},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
+
+        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("Stochastic", reason)
+
     def test_unified_reversal_entry_edge_is_not_crushed_by_early_compression(self) -> None:
         state = mod.InstrumentState(
             last_setup_quality_label="medium",
