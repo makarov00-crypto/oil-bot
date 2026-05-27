@@ -143,10 +143,9 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
 
         cleaned_rows, removed = audit_mod.cleanup_safe_rows(enriched, audit)
 
-        self.assertEqual(removed, 3)
-        self.assertEqual(len(cleaned_rows), 2)
-        self.assertEqual(cleaned_rows[0]["source"], "portfolio_confirmation")
-        self.assertEqual(cleaned_rows[1]["source"], "delayed_broker_ops_recovery")
+        self.assertEqual(removed, 4)
+        self.assertEqual(len(cleaned_rows), 1)
+        self.assertEqual(cleaned_rows[0]["source"], "delayed_broker_ops_recovery")
 
     def test_classify_journal_separates_live_and_stale_unmatched_opens(self) -> None:
         rows = [
@@ -184,6 +183,83 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
 
         self.assertEqual(audit.live_unmatched_open_counts, {"CNYRUBF": 1})
         self.assertEqual(audit.stale_unmatched_open_counts, {"SRM6": 1})
+        self.assertEqual(len(audit.stale_legacy_unmatched_opens), 1)
+        self.assertEqual(audit.stale_legacy_unmatched_opens[0]["symbol"], "SRM6")
+
+    def test_cleanup_safe_rows_removes_stale_legacy_open_and_merges_recovery_close(self) -> None:
+        rows = [
+            {
+                "time": "2026-05-27T08:00:00+03:00",
+                "symbol": "CNYRUBF",
+                "event": "OPEN",
+                "side": "SHORT",
+                "price": 10.5,
+                "qty_lots": 2,
+                "strategy": "momentum_breakout",
+                "source": "portfolio_confirmation",
+                "reason": "legacy 1",
+            },
+            {
+                "time": "2026-05-27T08:01:00+03:00",
+                "symbol": "CNYRUBF",
+                "event": "OPEN",
+                "side": "SHORT",
+                "price": 10.5,
+                "qty_lots": 1,
+                "strategy": "range_break_continuation",
+                "source": "portfolio_confirmation",
+                "reason": "legacy 2",
+            },
+            {
+                "time": "2026-05-27T11:30:59+03:00",
+                "symbol": "CNYRUBF",
+                "event": "CLOSE",
+                "side": "SHORT",
+                "price": 10.46,
+                "qty_lots": 2,
+                "strategy": "momentum_breakout",
+                "source": "broker_ops_auto_recovery",
+                "reason": "recovered",
+                "broker_op_id": "op-1",
+                "commission_rub": 10.0,
+                "gross_pnl_rub": 20.0,
+                "net_pnl_rub": 10.0,
+                "pnl_rub": 10.0,
+            },
+            {
+                "time": "2026-05-27T11:30:59+03:00",
+                "symbol": "CNYRUBF",
+                "event": "CLOSE",
+                "side": "SHORT",
+                "price": 10.46,
+                "qty_lots": 1,
+                "strategy": "range_break_continuation",
+                "source": "broker_ops_auto_recovery",
+                "reason": "recovered",
+                "broker_op_id": "op-1",
+                "commission_rub": 5.0,
+                "gross_pnl_rub": 10.0,
+                "net_pnl_rub": 5.0,
+                "pnl_rub": 5.0,
+            },
+        ]
+        enriched = []
+        for row in rows:
+            item = dict(row)
+            item["_dt"] = audit_mod.parse_state_datetime(item["time"])
+            enriched.append(item)
+
+        with patch.object(audit_mod, "load_live_position_map", return_value={}):
+            audit = audit_mod.classify_journal(enriched)
+
+        cleaned_rows, removed = audit_mod.cleanup_safe_rows(enriched, audit)
+        self.assertEqual(removed, 1)
+        self.assertEqual(len(cleaned_rows), 3)
+        closes = [row for row in cleaned_rows if row["event"] == "CLOSE"]
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0]["qty_lots"], 3)
+        self.assertEqual(closes[0]["commission_rub"], 15.0)
+        self.assertEqual(closes[0]["strategy"], "")
 
     def test_classify_journal_includes_broker_alignment_issues_when_day_requested(self) -> None:
         rows = [

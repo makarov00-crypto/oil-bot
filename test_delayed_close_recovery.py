@@ -369,12 +369,65 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
                 target_day=datetime(2026, 4, 9, tzinfo=timezone.utc).date(),
             )
 
-        self.assertEqual(recovered, 2)
+        self.assertEqual(recovered, 1)
         closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
-        self.assertEqual(len(closes), 2)
-        self.assertEqual([row["qty_lots"] for row in closes], [1, 1])
-        self.assertEqual([row["commission_rub"] for row in closes], [11.0, 11.0])
-        self.assertEqual([row["broker_op_unit"] for row in closes], [0, 1])
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0]["qty_lots"], 2)
+        self.assertEqual(closes[0]["commission_rub"], 22.0)
+
+    def test_auto_recovery_skips_previous_day_legacy_open_rows(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-07T10:00:00+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "lot_size": 1,
+                "price": 120.0,
+                "commission_rub": 5.0,
+                "strategy": "momentum_breakout",
+                "mode": "LIVE",
+                "session": "DAY",
+            }
+        ]
+        saved = {}
+        config = SimpleNamespace(account_id="acc", dry_run=False)
+        trade_ops = [
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="close-op",
+                parent_id="parent",
+                op_type=mod.OperationType.OPERATION_TYPE_BUY,
+                side="LONG",
+                qty=1,
+                price=119.0,
+                dt=datetime(2026, 4, 9, 10, 5, tzinfo=timezone.utc),
+            )
+        ]
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", return_value=list(rows)), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ), patch.object(
+            mod, "fetch_trade_operations_for_day", return_value=(trade_ops, {"close-op": 5.0})
+        ), patch.object(
+            mod, "infer_close_reason_for_recovery", return_value="legacy reason"
+        ):
+            recovered = mod.reconcile_missing_trade_closes_from_broker(
+                None,
+                config,
+                [self.instrument],
+                target_day=datetime(2026, 4, 9, tzinfo=timezone.utc).date(),
+            )
+
+        self.assertEqual(recovered, 0)
+        self.assertEqual(saved, {})
 
     def test_auto_recovery_matches_previous_day_open_closed_after_midnight(self) -> None:
         rows = [

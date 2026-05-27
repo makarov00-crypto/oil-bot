@@ -1958,6 +1958,21 @@ def reconcile_missing_trade_closes_from_broker(
 
     rows = load_trade_journal()
     unmatched_opens, existing_close_signatures = build_trade_journal_queues_for_day(rows, target_day)
+    filtered_unmatched_opens: list[dict[str, Any]] = []
+    skipped_legacy_unmatched = 0
+    for open_row in unmatched_opens:
+        open_dt = parse_state_datetime(str(open_row.get("time") or ""))
+        strategy_name = str(open_row.get("strategy") or "").strip().lower()
+        open_day = open_dt.astimezone(MOSCOW_TZ).date() if open_dt is not None else None
+        if (
+            open_day is not None
+            and open_day < (target_day - timedelta(days=1))
+            and strategy_name not in {"", "reversal_15m"}
+        ):
+            skipped_legacy_unmatched += 1
+            continue
+        filtered_unmatched_opens.append(open_row)
+    unmatched_opens = filtered_unmatched_opens
     instruments_by_symbol = {item.symbol: item for item in watchlist}
     open_claim_entries = build_open_broker_claim_entries(rows, target_day, instruments_by_symbol)
     matches: list[dict[str, Any]] = []
@@ -2058,14 +2073,11 @@ def reconcile_missing_trade_closes_from_broker(
             str(row.get("side") or "").upper(),
             round(float(row.get("price") or 0.0), 6),
             str(row.get("broker_op_id") or ""),
-            str(row.get("strategy") or ""),
             str(row.get("reason") or ""),
             str(row.get("source") or ""),
             str(row.get("mode") or ""),
             str(row.get("session") or ""),
             str(row.get("display_name") or ""),
-            round(float(row.get("_entry_price") or 0.0), 6),
-            str(row.get("_entry_time") or ""),
         )
         existing_idx = aggregate_index.get(aggregate_key)
         if existing_idx is None:
@@ -2079,14 +2091,19 @@ def reconcile_missing_trade_closes_from_broker(
         target["qty_lots"] = int(target.get("qty_lots") or 0) + int(row.get("qty_lots") or 0)
         for money_key in ("pnl_rub", "gross_pnl_rub", "commission_rub", "net_pnl_rub"):
             target[money_key] = round(float(target.get(money_key) or 0.0) + float(row.get(money_key) or 0.0), 2)
+        existing_strategy = str(target.get("strategy") or "").strip()
+        incoming_strategy = str(row.get("strategy") or "").strip()
+        if existing_strategy and incoming_strategy and existing_strategy != incoming_strategy:
+            target["strategy"] = ""
 
     rows.extend(aggregated_matches)
     rows.sort(key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC))
     save_trade_journal(rows)
     logging.warning(
-        "journal_auto_recovery recovered_closes=%s symbols=%s",
+        "journal_auto_recovery recovered_closes=%s symbols=%s skipped_legacy_unmatched=%s",
         len(aggregated_matches),
         [row["symbol"] for row in aggregated_matches],
+        skipped_legacy_unmatched,
     )
     return len(aggregated_matches)
 

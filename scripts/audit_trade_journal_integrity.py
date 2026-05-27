@@ -28,6 +28,7 @@ class AuditResult:
     duplicate_portfolio_recovery_opens: list[dict[str, Any]]
     duplicate_orphan_closes: list[dict[str, Any]]
     orphan_closes: list[dict[str, Any]]
+    stale_legacy_unmatched_opens: list[dict[str, Any]]
     stale_unmatched_open_counts: dict[str, int]
     live_unmatched_open_counts: dict[str, int]
     broker_alignment_issues: list[dict[str, Any]]
@@ -364,6 +365,7 @@ def classify_journal(rows: list[dict[str, Any]], *, broker_day: date | None = No
             close_history[key].append(row)
 
     live_positions = load_live_position_map()
+    stale_legacy_unmatched_opens: list[dict[str, Any]] = []
     stale_unmatched_open_counts: dict[str, int] = {}
     live_unmatched_open_counts: dict[str, int] = {}
     for (symbol, _side), items in queues.items():
@@ -376,6 +378,9 @@ def classify_journal(rows: list[dict[str, Any]], *, broker_day: date | None = No
                 live_unmatched_open_counts[symbol] = live_unmatched_open_counts.get(symbol, 0) + live_matched
             if stale_qty:
                 stale_unmatched_open_counts[symbol] = stale_unmatched_open_counts.get(symbol, 0) + stale_qty
+                for row in items[:stale_qty]:
+                    if not is_live_strategy_name(str(row.get("strategy") or "")):
+                        stale_legacy_unmatched_opens.append(row)
 
     broker_alignment_issues = load_broker_alignment_issues(broker_day, rows) if broker_day is not None else []
 
@@ -384,6 +389,7 @@ def classify_journal(rows: list[dict[str, Any]], *, broker_day: date | None = No
         duplicate_portfolio_recovery_opens=duplicate_portfolio_recovery_opens,
         duplicate_orphan_closes=duplicate_orphan_closes,
         orphan_closes=orphan_closes,
+        stale_legacy_unmatched_opens=stale_legacy_unmatched_opens,
         stale_unmatched_open_counts=dict(sorted(stale_unmatched_open_counts.items())),
         live_unmatched_open_counts=dict(sorted(live_unmatched_open_counts.items())),
         broker_alignment_issues=broker_alignment_issues,
@@ -404,6 +410,58 @@ def make_row_key(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def is_live_strategy_name(strategy_name: str) -> bool:
+    return str(strategy_name or "").strip().lower() == "reversal_15m"
+
+
+def merge_recovery_close_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    merged_rows: list[dict[str, Any]] = []
+    merged_count = 0
+    aggregate_index: dict[tuple[Any, ...], int] = {}
+    aggregate_strategies: dict[int, set[str]] = {}
+    for row in rows:
+        event = str(row.get("event") or "").upper()
+        source = str(row.get("source") or "")
+        broker_op_id = str(row.get("broker_op_id") or "").strip()
+        if event != "CLOSE" or source not in {"broker_ops_auto_recovery", "delayed_broker_ops_recovery"} or not broker_op_id:
+            clean_row = dict(row)
+            clean_row.pop("_dt", None)
+            merged_rows.append(clean_row)
+            continue
+        key = (
+            str(row.get("time") or ""),
+            str(row.get("symbol") or "").upper(),
+            str(row.get("side") or "").upper(),
+            round(float(row.get("price") or 0.0), 6),
+            broker_op_id,
+            source,
+            str(row.get("reason") or ""),
+            str(row.get("mode") or ""),
+            str(row.get("session") or ""),
+            str(row.get("display_name") or ""),
+        )
+        existing_idx = aggregate_index.get(key)
+        if existing_idx is None:
+            clean_row = dict(row)
+            clean_row.pop("_dt", None)
+            merged_rows.append(clean_row)
+            existing_idx = len(merged_rows) - 1
+            aggregate_index[key] = existing_idx
+            aggregate_strategies[existing_idx] = {str(clean_row.get("strategy") or "").strip()}
+            continue
+        target = merged_rows[existing_idx]
+        target["qty_lots"] = int(target.get("qty_lots") or 0) + int(row.get("qty_lots") or 0)
+        for money_key in ("pnl_rub", "gross_pnl_rub", "commission_rub", "net_pnl_rub"):
+            target[money_key] = round(float(target.get(money_key) or 0.0) + float(row.get(money_key) or 0.0), 2)
+        aggregate_strategies[existing_idx].add(str(row.get("strategy") or "").strip())
+        merged_count += 1
+    for idx, strategies in aggregate_strategies.items():
+        strategy_names = {item for item in strategies if item}
+        if len(strategy_names) > 1:
+            merged_rows[idx]["strategy"] = ""
+    return merged_rows, merged_count
+
+
 def cleanup_safe_rows(rows: list[dict[str, Any]], audit: AuditResult) -> tuple[list[dict[str, Any]], int]:
     removable_keys = {
         make_row_key(row)
@@ -411,6 +469,7 @@ def cleanup_safe_rows(rows: list[dict[str, Any]], audit: AuditResult) -> tuple[l
             *audit.bogus_rebuild_opens,
             *audit.duplicate_portfolio_recovery_opens,
             *audit.duplicate_orphan_closes,
+            *audit.stale_legacy_unmatched_opens,
         ]
     }
     kept: list[dict[str, Any]] = []
@@ -422,7 +481,8 @@ def cleanup_safe_rows(rows: list[dict[str, Any]], audit: AuditResult) -> tuple[l
         clean_row = dict(row)
         clean_row.pop("_dt", None)
         kept.append(clean_row)
-    return kept, removed
+    merged_rows, merged_removed = merge_recovery_close_rows(kept)
+    return merged_rows, removed + merged_removed
 
 
 def payload_from_audit(audit: AuditResult) -> dict[str, Any]:
@@ -432,6 +492,7 @@ def payload_from_audit(audit: AuditResult) -> dict[str, Any]:
         "duplicate_portfolio_recovery_open_count": len(audit.duplicate_portfolio_recovery_opens),
         "duplicate_orphan_close_count": len(audit.duplicate_orphan_closes),
         "orphan_close_count": len(audit.orphan_closes),
+        "stale_legacy_unmatched_open_count": len(audit.stale_legacy_unmatched_opens),
         "stale_unmatched_open_counts": audit.stale_unmatched_open_counts,
         "live_unmatched_open_counts": audit.live_unmatched_open_counts,
         "bogus_rebuild_opens": [
@@ -449,6 +510,10 @@ def payload_from_audit(audit: AuditResult) -> dict[str, Any]:
         "orphan_closes": [
             {key: row.get(key) for key in ("time", "symbol", "side", "price", "strategy", "source", "reason")}
             for row in audit.orphan_closes
+        ],
+        "stale_legacy_unmatched_opens": [
+            {key: row.get(key) for key in ("time", "symbol", "side", "price", "qty_lots", "strategy", "source", "reason")}
+            for row in audit.stale_legacy_unmatched_opens
         ],
         "broker_alignment_issue_count": len(audit.broker_alignment_issues),
         "broker_alignment_issues": audit.broker_alignment_issues,
