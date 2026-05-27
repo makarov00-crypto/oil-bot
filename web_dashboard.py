@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from dotenv import load_dotenv
+from active_contracts import list_active_contracts, replace_with_active_symbols
 from custom_instruments import (
     list_custom_instruments,
     merge_with_custom_symbols,
@@ -61,13 +62,16 @@ app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
 INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
     "BRK6": "BR-5.26 Нефть Brent",
     "BMM6": "BR-6.26 Нефть Brent",
+    "BMN6": "BR-7.26 Нефть Brent",
     "USDRUBF": "USDRUBF Доллар - Рубль",
     "CNYRUBF": "CNYRUBF Юань - Рубль",
     "IMOEXF": "IMOEXF Индекс МосБиржи",
+    "RNM6": "ROSN-6.26 Роснефть",
     "SRM6": "SBRF-6.26 Сбер Банк",
     "GNM6": "GOLDM-6.26 Золото (мини)",
     "NGJ6": "NG-4.26 Природный газ",
     "NGK6": "NG-5.26 Природный газ",
+    "NGM6": "NG-6.26 Природный газ",
     "RBM6": "RGBI-6.26 Индекс гос. облигаций",
     "UCM6": "UCNY-6.26 Доллар США - Юань",
     "VBM6": "VTBR-6.26 Банк ВТБ",
@@ -77,7 +81,7 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
 STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "reversal_15m": {
         "title": "Локальный переворот 15м",
-        "summary": "Единый локальный движок без старшего ТФ: вход строится на пересечении MACD, подтверждении RSI и Stochastic, силе объёма, режиме рынка и защите от late entry и пилы.",
+        "summary": "Единый локальный движок без старшего ТФ: вход строится на пересечении MACD, подтверждении AO, силе объёма и импульса, режиме рынка и защите от late entry и пилы.",
         "when": "Это единственная основная живая стратегия для всех текущих инструментов: валюты, нефть, газ, золото, индексы и банки.",
     },
 }
@@ -110,7 +114,8 @@ def build_site_nav(active: str) -> str:
 
 def load_base_symbols_from_env() -> list[str]:
     raw = os.getenv("T_INVEST_SYMBOLS", DEFAULT_SYMBOLS)
-    return [item.strip().upper() for item in raw.split(",") if item.strip()]
+    base_symbols = [item.strip().upper() for item in raw.split(",") if item.strip()]
+    return replace_with_active_symbols(base_symbols)
 
 
 def build_manual_instruments_payload() -> dict:
@@ -134,6 +139,7 @@ def build_manual_instruments_payload() -> dict:
     return {
         "templates": templates,
         "custom_instruments": list_custom_instruments(),
+        "active_contracts": list_active_contracts(),
         "watchlist_refresh_seconds": 300,
     }
 
@@ -4373,13 +4379,16 @@ def build_dashboard_html() -> str:
     let instrumentNames = {
       BRK6: 'BR-5.26 Нефть Brent',
       BMM6: 'BR-6.26 Нефть Brent',
+      BMN6: 'BR-7.26 Нефть Brent',
       USDRUBF: 'USDRUBF Доллар - Рубль',
       CNYRUBF: 'CNYRUBF Юань - Рубль',
       IMOEXF: 'IMOEXF Индекс МосБиржи',
+      RNM6: 'ROSN-6.26 Роснефть',
       SRM6: 'SBRF-6.26 Сбер Банк',
       GNM6: 'GOLDM-6.26 Золото (мини)',
       NGJ6: 'NG-4.26 Природный газ',
       NGK6: 'NG-5.26 Природный газ',
+      NGM6: 'NG-6.26 Природный газ',
       RBM6: 'RGBI-6.26 Индекс гос. облигаций',
       UCM6: 'UCNY-6.26 Доллар США - Юань',
       VBM6: 'VTBR-6.26 Банк ВТБ',

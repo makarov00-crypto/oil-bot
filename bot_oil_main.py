@@ -16,12 +16,14 @@ import pandas as pd
 import requests
 import ta
 from dotenv import load_dotenv
+from active_contracts import replace_with_active_symbols
 from custom_instruments import merge_with_custom_symbols
 from instrument_groups import (
     DEFAULT_SYMBOLS,
     get_instrument_group,
     is_brent_symbol,
     is_currency_instrument as is_currency_symbol,
+    is_natural_gas_symbol,
     uses_unified_reversal_15m,
 )
 from news_bias import NewsBias, select_active_biases
@@ -96,8 +98,6 @@ FEE_OPERATION_TYPES = {
     OperationType.OPERATION_TYPE_SERVICE_FEE,
     OperationType.OPERATION_TYPE_MARGIN_FEE,
 }
-
-NATURAL_GAS_SYMBOLS = {"NGJ6", "NGK6"}
 
 if hasattr(CandleInterval, "CANDLE_INTERVAL_HOUR"):
     SUPPORTED_INTERVALS[60] = CandleInterval.CANDLE_INTERVAL_HOUR
@@ -281,7 +281,7 @@ def parse_bool_env(name: str, default: bool) -> bool:
 def parse_symbols_env() -> list[str]:
     raw = os.getenv("T_INVEST_SYMBOLS", DEFAULT_SYMBOLS)
     base_symbols = [item.strip().upper() for item in raw.split(",") if item.strip()]
-    return merge_with_custom_symbols(base_symbols)
+    return merge_with_custom_symbols(replace_with_active_symbols(base_symbols))
 
 
 def state_path_for(symbol: str) -> Path:
@@ -2599,7 +2599,7 @@ def get_strategy_profile(config: BotConfig, instrument: InstrumentConfig) -> Str
             allow_short=True,
         )
 
-    if symbol in NATURAL_GAS_SYMBOLS:
+    if is_natural_gas_symbol(symbol):
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
             near_ema20_pct=0.0062,
@@ -2948,7 +2948,7 @@ def get_lower_tf_lookback_hours(
         # commodity bootstrap window can still be too short after holidays or
         # contract rollovers even when the API returns candles correctly.
         lookback_hours = max(lookback_hours, 120)
-    if symbol and symbol in NATURAL_GAS_SYMBOLS:
+    if symbol and is_natural_gas_symbol(symbol):
         # Natural gas sessions are more prone to sparse recent history around
         # rollovers and holiday windows, so keep an extra cushion.
         lookback_hours = max(lookback_hours, 168)
@@ -4868,7 +4868,7 @@ def get_margin_headroom_rub(client: Client, config: BotConfig, snapshot: Account
 
 
 def get_instrument_allocation_weight(symbol: str) -> tuple[str, float]:
-    if is_brent_symbol(symbol) or symbol in {"USDRUBF", *NATURAL_GAS_SYMBOLS}:
+    if is_brent_symbol(symbol) or is_natural_gas_symbol(symbol) or symbol == "USDRUBF":
         return "тяжёлый", 0.85
     if symbol in {"GNM6", "SRM6"}:
         return "средний", 1.0
@@ -5133,13 +5133,13 @@ def get_candidate_correlation_bucket(candidate: dict[str, Any]) -> str:
     signal = str(candidate.get("signal") or "").strip().upper()
     if not symbol or signal not in {"LONG", "SHORT"}:
         return ""
-    if is_brent_symbol(symbol) or symbol in NATURAL_GAS_SYMBOLS:
+    if is_brent_symbol(symbol) or is_natural_gas_symbol(symbol):
         family = "energy"
     elif symbol == "GNM6":
         family = "gold"
     elif symbol in {"USDRUBF", "CNYRUBF", "UCM6"}:
         family = "fx"
-    elif symbol in {"IMOEXF", "SRM6", "VBM6"}:
+    elif symbol in {"IMOEXF", "SRM6", "VBM6", "RNM6"}:
         family = "equity"
     elif symbol == "RBM6":
         family = "bond"
@@ -5980,12 +5980,13 @@ def select_exit_indicator_df(
 ) -> pd.DataFrame:
     if str(strategy_name or "").strip().lower() == "reversal_15m":
         return lower_df
-    higher_tf_exit_symbols = {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS}
+    higher_tf_exit_symbols = {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
     if (
         (
             instrument.symbol in higher_tf_exit_symbols
             or get_instrument_group(instrument.symbol).name == "fx"
             or is_brent_symbol(instrument.symbol)
+            or is_natural_gas_symbol(instrument.symbol)
         )
         and higher_tf_df is not None
         and len(higher_tf_df) >= 3
@@ -6194,8 +6195,8 @@ def position_reentry_allowed(
         return False
 
     group_name = get_instrument_group(instrument.symbol).name
-    guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "IMOEXF", "CNYRUBF", "UCM6", "VBM6", *NATURAL_GAS_SYMBOLS}
-    if instrument.symbol not in guarded_symbols and not is_brent_symbol(instrument.symbol) and group_name not in {"fx", "equity_index", "equity_futures"}:
+    guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "RNM6", "IMOEXF", "CNYRUBF", "UCM6", "VBM6"}
+    if instrument.symbol not in guarded_symbols and not is_brent_symbol(instrument.symbol) and not is_natural_gas_symbol(instrument.symbol) and group_name not in {"fx", "equity_index", "equity_futures"}:
         return True, ""
     if not state.last_exit_time:
         return True, ""
@@ -6219,7 +6220,7 @@ def position_reentry_allowed(
         min_steps = 2
         if instrument.symbol == "CNYRUBF":
             min_steps = 1
-        elif instrument.symbol in NATURAL_GAS_SYMBOLS:
+        elif is_natural_gas_symbol(instrument.symbol):
             min_steps = 3
         if not strong_same_side_reentry_confirmed(min_steps):
             return (
@@ -6254,7 +6255,7 @@ def position_reentry_allowed(
         )
 
     if (
-        instrument.symbol in NATURAL_GAS_SYMBOLS
+        is_natural_gas_symbol(instrument.symbol)
         and state.last_exit_side == signal
         and state.last_exit_pnl_rub > 0
         and "RSI вышел" in state.last_exit_reason
@@ -6270,14 +6271,14 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 45)
         if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             cooldown_minutes = max(cooldown_minutes, 60)
-        if instrument.symbol in NATURAL_GAS_SYMBOLS:
+        if is_natural_gas_symbol(instrument.symbol):
             if state.last_exit_pnl_rub < 0:
                 cooldown_minutes = max(cooldown_minutes, 60)
             if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
                 cooldown_minutes = max(cooldown_minutes, 90)
         if "Трейлинг-стоп" in state.last_exit_reason or "Стоп-лосс" in state.last_exit_reason:
             cooldown_minutes = max(cooldown_minutes, 60)
-        if instrument.symbol in NATURAL_GAS_SYMBOLS and "Трейлинг-стоп" in state.last_exit_reason:
+        if is_natural_gas_symbol(instrument.symbol) and "Трейлинг-стоп" in state.last_exit_reason:
             cooldown_minutes = max(cooldown_minutes, 90)
     elif instrument.symbol == "GNM6":
         if state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
@@ -6319,7 +6320,7 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 60)
         if "Трейлинг-стоп" in state.last_exit_reason or "Стоп-лосс" in state.last_exit_reason:
             cooldown_minutes = max(cooldown_minutes, 60)
-    elif instrument.symbol in NATURAL_GAS_SYMBOLS:
+    elif is_natural_gas_symbol(instrument.symbol):
         if state.last_exit_pnl_rub < 0:
             cooldown_minutes = 60
         if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
@@ -6336,7 +6337,7 @@ def position_reentry_allowed(
 
     if cooldown_minutes <= 0:
         if is_unified_reversal and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
-            min_steps = 2 if instrument.symbol not in NATURAL_GAS_SYMBOLS else 3
+            min_steps = 2 if not is_natural_gas_symbol(instrument.symbol) else 3
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=min_steps):
                 return False, f"для {instrument.symbol} повторный вход после фиксации прибыли разрешён только после нового экстремума."
         if not is_unified_reversal and instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
@@ -6350,7 +6351,7 @@ def position_reentry_allowed(
         if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после обновления экстремума."
-        if instrument.symbol in NATURAL_GAS_SYMBOLS and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if is_natural_gas_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после нового экстремума."
         if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
@@ -6367,7 +6368,7 @@ def position_reentry_allowed(
         return True, ""
     if now >= next_allowed:
         if is_unified_reversal and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
-            min_steps = 2 if instrument.symbol not in NATURAL_GAS_SYMBOLS else 3
+            min_steps = 2 if not is_natural_gas_symbol(instrument.symbol) else 3
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=min_steps):
                 return False, f"для {instrument.symbol} повторный вход после фиксации прибыли разрешён только после нового экстремума."
         if not is_unified_reversal and instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
@@ -6379,7 +6380,7 @@ def position_reentry_allowed(
         if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после обновления экстремума."
-        if instrument.symbol in NATURAL_GAS_SYMBOLS and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if is_natural_gas_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после нового экстремума."
         if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
@@ -7051,7 +7052,7 @@ def check_exit(
             breakeven_profit_pct=min(exit_profile.breakeven_profit_pct, 0.0035),
             trailing_stop_pct=min(exit_profile.trailing_stop_pct, 0.0035),
         )
-    if instrument.symbol in NATURAL_GAS_SYMBOLS:
+    if is_natural_gas_symbol(instrument.symbol):
         exit_profile = ExitProfile(
             min_hold_minutes=max(exit_profile.min_hold_minutes, 30),
             breakeven_profit_pct=max(exit_profile.breakeven_profit_pct, 0.0060),
@@ -7099,7 +7100,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = max(stop_price, state.entry_price)
         trailing_price = (state.max_price or price) * (1 - exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (instrument.symbol in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_down = macd_crossed_down_with_ema_loss(exit_df)
         else:
             macd_down = (
@@ -7118,7 +7119,8 @@ def check_exit(
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
-            instrument.symbol not in {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS}
+            instrument.symbol not in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
+            and not is_natural_gas_symbol(instrument.symbol)
             and get_instrument_group(instrument.symbol).name != "fx"
             or state.breakeven_armed
         ) and price <= trailing_price:
@@ -7142,7 +7144,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = min(stop_price, state.entry_price)
         trailing_price = (state.min_price or price) * (1 + exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS} or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (instrument.symbol in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_up = macd_crossed_up_with_ema_reclaim(exit_df)
         else:
             macd_up = (
@@ -7161,7 +7163,8 @@ def check_exit(
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
-            instrument.symbol not in {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS}
+            instrument.symbol not in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
+            and not is_natural_gas_symbol(instrument.symbol)
             and get_instrument_group(instrument.symbol).name != "fx"
             or state.breakeven_armed
         ) and price >= trailing_price:
@@ -7267,7 +7270,8 @@ def process_instrument(
     if (
         not uses_unified_reversal_15m(instrument.symbol)
         and (
-            instrument.symbol in {"GNM6", "RBM6", "SRM6", "VBM6", "IMOEXF", *NATURAL_GAS_SYMBOLS}
+            instrument.symbol in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
+            or is_natural_gas_symbol(instrument.symbol)
             or get_instrument_group(instrument.symbol).name == "fx"
         )
     ):

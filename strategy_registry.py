@@ -1,5 +1,4 @@
-from custom_instruments import get_custom_clone_source
-from instrument_groups import GROUP_BY_SYMBOL
+from instrument_groups import GROUP_BY_SYMBOL, get_symbol_template
 
 PRIMARY_STRATEGIES_BY_SYMBOL = {
     symbol: ["reversal_15m"]
@@ -20,18 +19,14 @@ SECONDARY_STRATEGIES_BY_GROUP = {
 
 
 def get_primary_strategies(symbol: str) -> list[str]:
-    normalized = str(symbol or "").strip().upper()
-    if normalized in PRIMARY_STRATEGIES_BY_SYMBOL:
-        return PRIMARY_STRATEGIES_BY_SYMBOL[normalized]
-    template_symbol = get_custom_clone_source(normalized)
-    if template_symbol:
-        return get_primary_strategies(template_symbol)
+    template_symbol = get_symbol_template(symbol)
+    if template_symbol in PRIMARY_STRATEGIES_BY_SYMBOL:
+        return PRIMARY_STRATEGIES_BY_SYMBOL[template_symbol]
     return ["reversal_15m"]
 
 
 def get_secondary_strategies(symbol: str) -> list[str]:
-    normalized = str(symbol or "").strip().upper()
-    template_symbol = get_custom_clone_source(normalized)
-    if template_symbol:
+    template_symbol = get_symbol_template(symbol)
+    if template_symbol != str(symbol or "").strip().upper():
         return get_secondary_strategies(template_symbol)
     return []

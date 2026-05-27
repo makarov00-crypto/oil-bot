@@ -1,0 +1,28 @@
+{
+  "contracts": [
+    {
+      "template_symbol": "BRK6",
+      "active_symbol": "BMN6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "BMM6",
+      "active_symbol": "BMN6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "NGJ6",
+      "active_symbol": "NGM6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "NGK6",
+      "active_symbol": "NGM6",
+      "disabled": false,
+      "updated_at": ""
+    }
+  ]
+}

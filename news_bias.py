@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from active_contracts import get_active_contract_symbol
 from news_rules import CHANNEL_RULES, COMMON_BLOCK_TERMS, MOEX_DERIVATIVES, NEWS_RULES
 
 
@@ -200,16 +201,17 @@ def detect_news_bias(message: NewsMessage) -> list[NewsBias]:
         strength = classify_strength(score, channel_rule.source_weight)
         horizon = classify_horizon(text, bias, strength, message.channel, block_hits)
         ttl = timedelta(minutes=channel_rule.default_ttl_minutes)
+        target_symbol = get_active_contract_symbol(rule.symbol) or rule.symbol
         results.append(
             NewsBias(
-                symbol=rule.symbol,
+                symbol=target_symbol,
                 category=rule.category,
                 bias=bias,
                 strength=strength,
                 source=message.channel,
                 reason=build_reason(bias, keyword_hits, long_hits, short_hits, block_hits),
                 summary=build_summary(
-                    rule.symbol,
+                    target_symbol,
                     rule.category,
                     bias,
                     strength,

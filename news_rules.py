@@ -216,6 +216,15 @@ NEWS_RULES: tuple[NewsRule, ...] = (
         priority=2,
     ),
     NewsRule(
+        symbol="RNM6",
+        category="нефтянка",
+        keywords=("роснефть", "rosneft", "акции роснефти", "rosn", "нефтяной сектор", "экспорт нефти"),
+        long_terms=COMMON_LONG_TERMS + ("сильная отчетность", "дивиденды", "рост цен на нефть", "налоговые льготы", "экспорт", "байбэк"),
+        short_terms=COMMON_SHORT_TERMS + ("слабая отчетность", "падение нефти", "санкции", "давление на нефтяной сектор", "снижение экспорта"),
+        block_terms=COMMON_BLOCK_TERMS,
+        priority=2,
+    ),
+    NewsRule(
         symbol="SRM6",
         category="банки",
         keywords=("сбер", "sber", "сбербанк", "sberbank", "акции сбера", "акции сбербанка"),

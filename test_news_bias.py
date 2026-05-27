@@ -17,7 +17,7 @@ class NewsBiasTests(unittest.TestCase):
         )
 
         items = detect_news_bias(message)
-        brent = next(item for item in items if item.symbol == "BMM6")
+        brent = next(item for item in items if item.symbol == "BMN6")
 
         self.assertEqual(brent.bias, "BLOCK")
         self.assertEqual(brent.horizon, "NOW")
