@@ -94,31 +94,6 @@ COMMON_BLOCK_TERMS = (
 
 NEWS_RULES: tuple[NewsRule, ...] = (
     NewsRule(
-        symbol="BRK6",
-        category="нефть",
-        keywords=(
-            "нефть",
-            "brent",
-            "brent crude",
-            "ice brent",
-            "марка brent",
-            "цена нефти",
-            "рынок нефти",
-            "opec",
-            "опек",
-            "опек+",
-            "запасы нефти",
-            "экспорт нефти",
-            "$103",
-            "$104",
-            "$105",
-        ),
-        long_terms=COMMON_LONG_TERMS + ("сокращение добычи", "рост нефти", "дефицит нефти", "танкеры", "иран", "хуситы", "красное море", "ближний восток", "израиль", "военная операция", "удары", "превысила", "превысил", "выше"),
-        short_terms=COMMON_SHORT_TERMS + ("рост запасов", "увеличение добычи", "избыток нефти", "добыча", "снизилась до", "ниже"),
-        block_terms=COMMON_BLOCK_TERMS,
-        priority=2,
-    ),
-    NewsRule(
         symbol="BMM6",
         category="нефть",
         keywords=(
@@ -140,15 +115,6 @@ NEWS_RULES: tuple[NewsRule, ...] = (
         ),
         long_terms=COMMON_LONG_TERMS + ("сокращение добычи", "рост нефти", "дефицит нефти", "танкеры", "иран", "хуситы", "красное море", "ближний восток", "израиль", "военная операция", "удары", "превысила", "превысил", "выше"),
         short_terms=COMMON_SHORT_TERMS + ("рост запасов", "увеличение добычи", "избыток нефти", "добыча", "снизилась до", "ниже"),
-        block_terms=COMMON_BLOCK_TERMS,
-        priority=2,
-    ),
-    NewsRule(
-        symbol="NGJ6",
-        category="газ",
-        keywords=("природный газ", "natural gas", "natgas", "lng", "спг", "ttf", "поставки газа", "рынок газа", "газовые хранилища"),
-        long_terms=COMMON_LONG_TERMS + ("холод", "жара", "дефицит газа", "снижение запасов", "европа", "погода", "превысила", "превысил"),
-        short_terms=COMMON_SHORT_TERMS + ("тёплая погода", "рост запасов газа", "слабый спрос", "европа", "погода", "снизилась до", "ниже"),
         block_terms=COMMON_BLOCK_TERMS,
         priority=2,
     ),
