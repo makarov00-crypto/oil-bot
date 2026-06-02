@@ -7,8 +7,9 @@ import pandas as pd
 import bot_oil_main as mod
 import strategy_engine
 from bot_oil_main import InstrumentConfig
-from instrument_groups import DEFAULT_SYMBOLS, uses_unified_reversal_15m
+from instrument_groups import DEFAULT_SYMBOLS, uses_unified_reversal_1h, uses_unified_reversal_15m
 from strategy_registry import get_primary_strategies, get_secondary_strategies
+from strategies.reversal_1h import evaluate_signal as evaluate_reversal_1h
 from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
 from strategies.reversal_15m import get_profile as get_reversal_profile
 
@@ -97,8 +98,12 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_all_default_symbols_use_unified_reversal_only(self) -> None:
         for symbol in DEFAULT_SYMBOLS.split(","):
-            self.assertTrue(uses_unified_reversal_15m(symbol), symbol)
-            self.assertEqual(get_primary_strategies(symbol), ["reversal_15m"])
+            if symbol in {"USDRUBF", "CNYRUBF", "UCM6"}:
+                self.assertTrue(uses_unified_reversal_15m(symbol), symbol)
+                self.assertEqual(get_primary_strategies(symbol), ["reversal_15m"])
+            else:
+                self.assertTrue(uses_unified_reversal_1h(symbol), symbol)
+                self.assertEqual(get_primary_strategies(symbol), ["reversal_1h"])
             self.assertEqual(get_secondary_strategies(symbol), [])
 
     def test_legacy_strategy_name_is_not_evaluated_live(self) -> None:
@@ -113,10 +118,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertIn("больше не поддерживается", reason)
 
     def test_unified_reversal_symbols_use_longer_bootstrap_lookback(self) -> None:
-        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "BMM6", interval_minutes=15), 120)
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "BMM6", interval_minutes=60), 240)
         self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "USDRUBF", interval_minutes=15), 120)
-        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "NGK6", interval_minutes=15), 168)
-        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "GNM6", interval_minutes=15), 120)
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "NGK6", interval_minutes=60), 240)
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "GNM6", interval_minutes=60), 240)
 
     def test_add_indicators_can_skip_ema200_for_unified_reversal(self) -> None:
         rows = []
@@ -182,6 +187,26 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "SHORT")
         self.assertIn("reversal_15m", reason)
 
+    def test_unified_reversal_1h_allows_short_when_macd_ao_and_volume_align(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.5, "ema20": 100.4, "ema50": 100.2, "rsi": 58.0, "macd": 0.08, "macd_signal": 0.03, "ao": 0.04},
+                {"close": 100.4, "ema20": 100.4, "ema50": 100.2, "rsi": 56.0, "macd": 0.07, "macd_signal": 0.04, "ao": 0.03},
+                {"close": 100.3, "ema20": 100.35, "ema50": 100.25, "rsi": 54.0, "macd": 0.05, "macd_signal": 0.04, "ao": 0.02},
+                {"close": 100.1, "ema20": 100.30, "ema50": 100.24, "rsi": 51.0, "macd": 0.02, "macd_signal": 0.03, "ao": -0.01},
+                {"close": 99.9, "ema20": 100.20, "ema50": 100.22, "rsi": 48.0, "macd": -0.01, "macd_signal": 0.02, "ao": -0.03},
+                {"close": 99.6, "ema20": 100.05, "ema50": 100.18, "rsi": 44.0, "macd": -0.04, "macd_signal": 0.00, "ao": -0.06},
+                {"close": 99.3, "ema20": 99.90, "ema50": 100.10, "rsi": 40.0, "macd": -0.07, "macd_signal": -0.02, "ao": -0.09},
+                {"open": 99.3, "close": 98.8, "high": 99.35, "low": 98.7, "ema20": 99.70, "ema50": 100.00, "rsi": 37.0, "macd": -0.10, "macd_signal": -0.04, "volume": 155.0, "volume_avg": 100.0, "body": 0.50, "body_avg": 0.35, "atr": 0.35, "bb_upper": 101.0, "bb_lower": 98.6, "ao": -0.12, "chaikin": -5.0},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="MOEX")
+
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("reversal_1h", reason)
+
     def test_unified_reversal_allows_short_when_ao_confirms_even_with_oversold_rsi(self) -> None:
         df = candle_rows(
             [
@@ -234,14 +259,14 @@ class StrategyQualityFilterTests(unittest.TestCase):
             "get_strategy_regime_health_score",
             return_value=(1.0, "режим compression нейтрален"),
         ):
-            edge, label, reason = mod.get_entry_edge_profile(state, "VBM6", "reversal_15m", "LONG")
+            edge, label, reason = mod.get_entry_edge_profile(state, "VBM6", "reversal_1h", "LONG")
 
         self.assertGreaterEqual(edge, 0.60)
         self.assertEqual(label, "confirmed")
-        self.assertIn("локальный 15м", reason)
+        self.assertIn("локальный 1ч", reason)
 
     def test_reversal_15m_profile_is_shared_for_gold_without_special_strategy(self) -> None:
-        self.assertEqual(get_reversal_profile("GNM6"), get_reversal_profile("USDRUBF"))
+        self.assertEqual(get_reversal_profile("GNM6", 60), get_reversal_profile("RNM6", 60))
 
     def test_reversal_15m_short_does_not_exit_on_rsi_oversold_while_ao_confirms_trend(self) -> None:
         df = candle_rows(
@@ -258,7 +283,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         with patch.object(mod, "get_recovery_mode_status", return_value={"active": True, "reason": "recovery"}):
             old_reason = mod.recovery_mode_block_reason(state, "SRM6", "trend_pullback", "LONG")
-            unified_reason = mod.recovery_mode_block_reason(state, "SRM6", "reversal_15m", "LONG")
+            unified_reason = mod.recovery_mode_block_reason(state, "SRM6", "reversal_1h", "LONG")
 
         self.assertIn("Разрешены только", old_reason)
         self.assertEqual(unified_reason, "")

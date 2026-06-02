@@ -8,7 +8,7 @@ from active_contracts import (
     replace_with_active_symbols,
     upsert_active_contract,
 )
-from instrument_groups import get_instrument_group, uses_unified_reversal_15m
+from instrument_groups import get_instrument_group, uses_unified_reversal_1h
 from strategy_registry import get_primary_strategies
 
 
@@ -41,7 +41,7 @@ class ActiveContractsTest(unittest.TestCase):
         self.assertEqual(get_active_contract_template("BMN6"), "BMM6")
         self.assertEqual(get_instrument_group("BMN6").name, get_instrument_group("BMM6").name)
         self.assertEqual(get_primary_strategies("BMN6"), get_primary_strategies("BMM6"))
-        self.assertTrue(uses_unified_reversal_15m("BMN6"))
+        self.assertTrue(uses_unified_reversal_1h("BMN6"))
 
     def test_disabled_template_is_removed_from_watchlist(self) -> None:
         upsert_active_contract("RBM6", None, disabled=True)

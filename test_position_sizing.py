@@ -7,7 +7,7 @@ import bot_oil_main as mod
 
 class PositionSizingTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.live_strategy = "reversal_15m"
+        self.live_strategy = "reversal_1h"
         self.instrument = mod.InstrumentConfig(
             symbol="CNYRUBF",
             figi="FIGI",
@@ -519,7 +519,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                client, self.config, self.instrument, state, 11.3, "SHORT", "reversal_15m"
+                client, self.config, self.instrument, state, 11.3, "SHORT", "reversal_1h"
             )
 
         self.assertEqual(sizing["broker_limit"], 12)
@@ -558,7 +558,7 @@ class PositionSizingTests(unittest.TestCase):
             mod, "get_recovery_mode_status", return_value={"active": False}
         ):
             sizing = mod.calculate_position_sizing_context(
-                client, self.config, self.instrument, state, 11.3, "SHORT", "reversal_15m"
+                client, self.config, self.instrument, state, 11.3, "SHORT", "reversal_1h"
             )
 
         self.assertEqual(sizing["broker_limit"], 9)

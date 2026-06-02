@@ -1,9 +1,11 @@
 from strategy_registry import get_primary_strategies
+from strategies.reversal_1h import evaluate_signal as evaluate_reversal_1h
 from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
 
 
 PRIMARY_EVALUATORS = {
     "reversal_15m": evaluate_reversal_15m,
+    "reversal_1h": evaluate_reversal_1h,
 }
 
 

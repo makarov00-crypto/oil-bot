@@ -30,7 +30,51 @@ class Reversal15mProfile:
     min_atr_pct: float
 
 
-def get_profile(symbol: str) -> Reversal15mProfile:
+def get_profile(symbol: str, timeframe_minutes: int = 15) -> Reversal15mProfile:
+    if timeframe_minutes >= 60 and is_brent_symbol(symbol):
+        return Reversal15mProfile(
+            min_volume_ratio=0.72,
+            strong_volume_ratio=0.96,
+            min_body_ratio=0.52,
+            strong_body_ratio=0.88,
+            rsi_long_min=43.0,
+            rsi_long_max=74.0,
+            rsi_short_min=26.0,
+            rsi_short_max=58.0,
+            late_rsi_long=72.0,
+            late_rsi_short=28.0,
+            late_stoch_high=92.0,
+            late_stoch_low=8.0,
+            max_distance_to_ema20_pct=0.022,
+            compression_atr_pct=0.0020,
+            compression_range_pct=0.016,
+            compression_bb_width_pct=0.018,
+            chop_range_pct=0.020,
+            expansion_range_pct=0.024,
+            min_atr_pct=0.0010,
+        )
+    if timeframe_minutes >= 60:
+        return Reversal15mProfile(
+            min_volume_ratio=0.75,
+            strong_volume_ratio=1.00,
+            min_body_ratio=0.55,
+            strong_body_ratio=0.90,
+            rsi_long_min=42.0,
+            rsi_long_max=72.0,
+            rsi_short_min=28.0,
+            rsi_short_max=58.0,
+            late_rsi_long=70.0,
+            late_rsi_short=30.0,
+            late_stoch_high=90.0,
+            late_stoch_low=10.0,
+            max_distance_to_ema20_pct=0.018,
+            compression_atr_pct=0.0015,
+            compression_range_pct=0.012,
+            compression_bb_width_pct=0.015,
+            chop_range_pct=0.016,
+            expansion_range_pct=0.020,
+            min_atr_pct=0.0008,
+        )
     if is_brent_symbol(symbol):
         return Reversal15mProfile(
             min_volume_ratio=0.90,
@@ -118,10 +162,19 @@ def _is_late_evening_candle(value) -> bool:
     return local_time.hour >= 21
 
 
-def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
-    profile = get_profile(instrument.symbol)
+def evaluate_signal_core(
+    df,
+    config,
+    instrument,
+    higher_tf_bias: str,
+    *,
+    timeframe_minutes: int,
+    strategy_label: str,
+    timeframe_label: str,
+) -> tuple[str, str]:
+    profile = get_profile(instrument.symbol, timeframe_minutes)
     if len(df) < 8:
-        return "HOLD", "Сигнал HOLD (reversal_15m): недостаточно свечей для разворотной логики."
+        return "HOLD", f"Сигнал HOLD ({strategy_label}): недостаточно свечей для разворотной логики."
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -161,8 +214,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     macd_signal_series = [float(value) for value in recent["macd_signal"].tolist()]
     long_cross_age = _bars_since_cross(macd_series, macd_signal_series, "LONG")
     short_cross_age = _bars_since_cross(macd_series, macd_signal_series, "SHORT")
-    recent_long_cross = long_cross_age is not None and long_cross_age <= 6
-    recent_short_cross = short_cross_age is not None and short_cross_age <= 6
+    recent_cross_age_limit = 4 if timeframe_minutes >= 60 else 6
+    late_cross_age_limit = 6 if timeframe_minutes >= 60 else 8
+    recent_long_cross = long_cross_age is not None and long_cross_age <= recent_cross_age_limit
+    recent_short_cross = short_cross_age is not None and short_cross_age <= recent_cross_age_limit
     macd_hist = macd - macd_signal
     prev_hist = prev_macd - prev_macd_signal
     ao = float(last.get("ao", macd_hist))
@@ -244,13 +299,13 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         macd >= macd_signal
         and macd_hist >= (prev_hist - 1e-9)
         and long_cross_age is not None
-        and long_cross_age <= 6
+        and long_cross_age <= recent_cross_age_limit
     )
     macd_short_ok = (
         macd <= macd_signal
         and macd_hist <= (prev_hist + 1e-9)
         and short_cross_age is not None
-        and short_cross_age <= 6
+        and short_cross_age <= recent_cross_age_limit
     )
     early_long_ok = close >= ema20 and ema20 >= prev_ema20
     early_short_ok = close <= ema20 and ema20 <= prev_ema20
@@ -284,7 +339,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
 
     late_long = (
         long_cross_age is None
-        or long_cross_age > 8
+        or long_cross_age > late_cross_age_limit
         or (
             distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
             and not strong_impulse_override
@@ -294,7 +349,7 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     )
     late_short = (
         short_cross_age is None
-        or short_cross_age > 8
+        or short_cross_age > late_cross_age_limit
         or (
             distance_to_ema20_pct >= profile.max_distance_to_ema20_pct
             and not strong_impulse_override
@@ -402,12 +457,12 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         short_reasons.append("медленное продолжение вниз по MACD")
 
     if long_ok:
-        return "LONG", "Сигнал LONG (reversal_15m): " + "; ".join(long_reasons) + "."
+        return "LONG", f"Сигнал LONG ({strategy_label}): " + "; ".join(long_reasons) + "."
     if short_ok:
-        return "SHORT", "Сигнал SHORT (reversal_15m): " + "; ".join(short_reasons) + "."
+        return "SHORT", f"Сигнал SHORT ({strategy_label}): " + "; ".join(short_reasons) + "."
     return (
         "HOLD",
-        "Сигнал HOLD (reversal_15m): long не подтверждён ["
+        f"Сигнал HOLD ({strategy_label}): long не подтверждён ["
         + "; ".join(long_reasons)
         + "] short не подтверждён ["
         + "; ".join(short_reasons)
@@ -416,4 +471,16 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
         + ". Главные блокеры short: "
         + "; ".join(short_blockers[:3])
         + ".",
+    )
+
+
+def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
+    return evaluate_signal_core(
+        df,
+        config,
+        instrument,
+        higher_tf_bias,
+        timeframe_minutes=15,
+        strategy_label="reversal_15m",
+        timeframe_label="15м",
     )

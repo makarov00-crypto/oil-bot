@@ -24,6 +24,8 @@ from instrument_groups import (
     is_brent_symbol,
     is_currency_instrument as is_currency_symbol,
     is_natural_gas_symbol,
+    uses_unified_reversal,
+    uses_unified_reversal_1h,
     uses_unified_reversal_15m,
 )
 from news_bias import NewsBias, select_active_biases
@@ -63,6 +65,7 @@ RECENT_STRATEGY_GUARD_MAX_NET_PNL_RUB = -250.0
 RECENT_STRATEGY_GUARD_HARD_LOSS_RUB = -500.0
 INTRADAY_CHOP_GUARD_STRATEGIES = {
     "reversal_15m",
+    "reversal_1h",
 }
 STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
@@ -101,6 +104,8 @@ FEE_OPERATION_TYPES = {
 
 if hasattr(CandleInterval, "CANDLE_INTERVAL_HOUR"):
     SUPPORTED_INTERVALS[60] = CandleInterval.CANDLE_INTERVAL_HOUR
+
+UNIFIED_REVERSAL_STRATEGIES = {"reversal_15m", "reversal_1h"}
 
 
 load_dotenv()
@@ -1967,7 +1972,7 @@ def reconcile_missing_trade_closes_from_broker(
         if (
             open_day is not None
             and open_day < (target_day - timedelta(days=1))
-            and strategy_name not in {"", "reversal_15m"}
+            and strategy_name not in {"", "reversal_15m", "reversal_1h"}
         ):
             skipped_legacy_unmatched += 1
             continue
@@ -2912,12 +2917,16 @@ def get_candles(
 
 
 def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
+    if uses_unified_reversal_1h(symbol):
+        return SUPPORTED_INTERVALS[60]
     if uses_unified_reversal_15m(symbol):
         return config.higher_tf_interval
     return config.candle_interval
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
+    if uses_unified_reversal_1h(symbol):
+        return 60
     if uses_unified_reversal_15m(symbol):
         return config.higher_tf_interval_minutes
     return config.candle_interval_minutes
@@ -2942,12 +2951,12 @@ def get_lower_tf_lookback_hours(
         # Currency futures can start the week with a shorter effective trading history
         # inside the same wall-clock window, so we keep a longer bootstrap window.
         lookback_hours = max(lookback_hours, 120)
-    if symbol and uses_unified_reversal_15m(symbol):
+    if symbol and uses_unified_reversal(symbol):
         # The unified 15m reversal engine needs a stable rolling window for MACD,
         # RSI, stochastic, Bollinger, ATR and volume baselines, so the default
         # commodity bootstrap window can still be too short after holidays or
         # contract rollovers even when the API returns candles correctly.
-        lookback_hours = max(lookback_hours, 120)
+        lookback_hours = max(lookback_hours, 240 if uses_unified_reversal_1h(symbol) else 120)
     if symbol and is_natural_gas_symbol(symbol):
         # Natural gas sessions are more prone to sparse recent history around
         # rollovers and holiday windows, so keep an extra cushion.
@@ -2962,6 +2971,19 @@ def get_higher_tf_lookback_hours(config: BotConfig, symbol: str | None = None) -
     if symbol and get_instrument_group(symbol).name == "fx":
         return max(base_hours, 168)
     return base_hours
+
+
+def is_unified_reversal_strategy(strategy_name: str | None) -> bool:
+    return str(strategy_name or "").strip().lower() in UNIFIED_REVERSAL_STRATEGIES
+
+
+def get_unified_reversal_timeframe_label(strategy_name: str | None) -> str:
+    strategy = str(strategy_name or "").strip().lower()
+    if strategy == "reversal_1h":
+        return "локальный 1ч"
+    if strategy == "reversal_15m":
+        return "локальный 15м"
+    return ""
 
 
 def add_indicators(df: pd.DataFrame, *, include_ema200: bool = True) -> pd.DataFrame:
@@ -3322,7 +3344,7 @@ def estimate_setup_quality(
     if signal not in {"LONG", "SHORT"}:
         return 0, "none"
     score = 1
-    is_unified_reversal = str(strategy_name or "").strip().lower() == "reversal_15m"
+    is_unified_reversal = is_unified_reversal_strategy(strategy_name)
     volume_ratio = float(metrics.get("volume_ratio") or 0.0)
     body_ratio = float(metrics.get("body_ratio") or 0.0)
     regime_confidence = float(metrics.get("regime_confidence") or 0.0)
@@ -3362,7 +3384,7 @@ def regime_entry_block_reason(
     if signal not in {"LONG", "SHORT"}:
         return ""
 
-    if strategy == "reversal_15m":
+    if is_unified_reversal_strategy(strategy):
         return ""
     return f"стратегия {strategy or '-'} больше не используется в живом контуре."
 
@@ -3483,13 +3505,13 @@ def build_global_diagnostic_message(
                         interval_minutes=signal_interval_minutes,
                     ),
                 ),
-                include_ema200=not uses_unified_reversal_15m(instrument.symbol),
+                include_ema200=not uses_unified_reversal(instrument.symbol),
             )
-            higher_tf_bias = "" if uses_unified_reversal_15m(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
+            higher_tf_bias = "" if uses_unified_reversal(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
             signal, reason, strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
             signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
             summary = summarize_signal_reason(signal, reason)
-            higher_tf_label = "локальный 15м" if strategy_name == "reversal_15m" else higher_tf_bias
+            higher_tf_label = get_unified_reversal_timeframe_label(strategy_name) or higher_tf_bias
             lines.extend(
                 [
                     f"{signal_emoji(signal)} {instrument.symbol}: {signal}",
@@ -4184,7 +4206,7 @@ def get_daily_loss_recovery_entry_reason(
             "мягкий дневной стоп: нужен подтверждённый режим рынка, "
             "текущая уверенность режима слишком низкая."
         )
-    if str(state.last_strategy_name or "").strip().lower() == "reversal_15m":
+    if is_unified_reversal_strategy(state.last_strategy_name):
         return ""
     if str(state.last_higher_tf_bias or "").strip().upper() != signal:
         return "мягкий дневной стоп: вход разрешён только по направлению старшего ТФ."
@@ -4473,7 +4495,7 @@ def get_entry_edge_profile(
 
     edge = 0.50
     reasons: list[str] = []
-    is_unified_reversal = str(strategy_name or "").strip().lower() == "reversal_15m"
+    is_unified_reversal = is_unified_reversal_strategy(strategy_name)
 
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     if setup_label == "strong":
@@ -4502,8 +4524,9 @@ def get_entry_edge_profile(
         edge -= 0.12
         reasons.append("режим неустойчив")
 
-    if strategy_name == "reversal_15m":
-        reasons.append("локальный 15м")
+    timeframe_label = get_unified_reversal_timeframe_label(strategy_name)
+    if timeframe_label:
+        reasons.append(timeframe_label)
     elif str(state.last_higher_tf_bias or "").strip().upper() == signal:
         edge += 0.06
         reasons.append("по старшему ТФ")
@@ -4580,7 +4603,7 @@ def recovery_mode_block_reason(
     if not status["active"] or signal not in {"LONG", "SHORT"}:
         return ""
 
-    allowed_strategies = {"reversal_15m"}
+    allowed_strategies = UNIFIED_REVERSAL_STRATEGIES
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     regime = str(state.last_market_regime or "").strip().lower()
     higher_tf_bias = str(state.last_higher_tf_bias or "").strip().upper()
@@ -4591,7 +4614,7 @@ def recovery_mode_block_reason(
         return f"{status['reason']} Нужен только strong setup."
     if regime not in {"trend_pullback", "trend_expansion", "impulse"}:
         return f"{status['reason']} Текущий режим {regime or '-'} слишком слабый для recovery mode."
-    if strategy_name != "reversal_15m" and higher_tf_bias != signal:
+    if not is_unified_reversal_strategy(strategy_name) and higher_tf_bias != signal:
         return f"{status['reason']} Нужен вход только по направлению старшего ТФ."
     return ""
 
@@ -4879,7 +4902,7 @@ def get_instrument_allocation_weight(symbol: str) -> tuple[str, float]:
 
 def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_name: str) -> float:
     weight = 1.0
-    if strategy_name != "reversal_15m" and state.last_higher_tf_bias == signal:
+    if not is_unified_reversal_strategy(strategy_name) and state.last_higher_tf_bias == signal:
         weight += 0.15
     news_bias, news_strength = parse_bias_label(state.last_news_bias)
     if news_bias == signal:
@@ -4889,7 +4912,7 @@ def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_n
             weight += 0.18
         elif news_strength == "LOW":
             weight += 0.08
-    if strategy_name == "reversal_15m":
+    if is_unified_reversal_strategy(strategy_name):
         weight += 0.12
     return min(weight, 1.65)
 
@@ -5637,7 +5660,7 @@ def calculate_position_sizing_context(
 
     broker_leverage_target_lots = 0
     broker_leverage_reason = ""
-    if strategy_name == "reversal_15m":
+    if is_unified_reversal_strategy(strategy_name):
         broker_leverage_target_lots, broker_leverage_reason = get_reversal_broker_lot_target(
             broker_limit=broker_limit,
             signal=signal,
@@ -5865,7 +5888,13 @@ def refresh_position_snapshot(state: InstrumentState, instrument: InstrumentConf
 
 
 def get_exit_profile(config: BotConfig, strategy_name: str) -> ExitProfile:
-    strategy = (strategy_name or "").strip()
+    strategy = (strategy_name or "").strip().lower()
+    if strategy == "reversal_1h":
+        return ExitProfile(
+            min_hold_minutes=max(config.min_hold_minutes, 90),
+            breakeven_profit_pct=max(config.breakeven_profit_pct, 0.0100),
+            trailing_stop_pct=max(config.trailing_stop_pct, 0.0100),
+        )
     if strategy == "reversal_15m":
         return ExitProfile(
             min_hold_minutes=max(config.min_hold_minutes, 20),
@@ -5978,7 +6007,7 @@ def select_exit_indicator_df(
     higher_tf_df: pd.DataFrame | None = None,
     strategy_name: str = "",
 ) -> pd.DataFrame:
-    if str(strategy_name or "").strip().lower() == "reversal_15m":
+    if str(strategy_name or "").strip().lower() in UNIFIED_REVERSAL_STRATEGIES:
         return lower_df
     higher_tf_exit_symbols = {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
     if (
@@ -6033,7 +6062,7 @@ def macd_crossed_up_with_ema_reclaim(df: pd.DataFrame) -> bool:
     return close > ema20 and (crossed or confirmed)
 
 
-def reversal_15m_pressure_intact(df: pd.DataFrame, side: str) -> bool:
+def unified_reversal_pressure_intact(df: pd.DataFrame, side: str) -> bool:
     if len(df) < 2:
         return False
     last = df.iloc[-1]
@@ -6048,6 +6077,10 @@ def reversal_15m_pressure_intact(df: pd.DataFrame, side: str) -> bool:
     if side == "SHORT":
         return close < ema20 and macd < macd_signal and ao < 0
     return False
+
+
+def reversal_15m_pressure_intact(df: pd.DataFrame, side: str) -> bool:
+    return unified_reversal_pressure_intact(df, side)
 
 
 def rbm6_sideways_exhaustion_exit_reason(
@@ -6129,7 +6162,7 @@ def position_reentry_allowed(
     signal: str,
     current_price: float,
 ) -> tuple[bool, str]:
-    is_unified_reversal = uses_unified_reversal_15m(instrument.symbol)
+    is_unified_reversal = uses_unified_reversal(instrument.symbol)
 
     def exit_reason_has_macd_ema_reversal() -> bool:
         reason = str(state.last_exit_reason or "").lower()
@@ -6180,7 +6213,7 @@ def position_reentry_allowed(
         edge_score = float(state.last_entry_edge_score or 0.0)
         volume_ratio = float(state.last_volume_ratio or 0.0)
         strategy_name = str(state.last_strategy_name or "").strip().lower()
-        if strategy_name != "reversal_15m":
+        if not is_unified_reversal_strategy(strategy_name):
             return False
         if regime in {"compression", "chop"}:
             return False
@@ -6225,7 +6258,7 @@ def position_reentry_allowed(
         if not strong_same_side_reentry_confirmed(min_steps):
             return (
                 False,
-                f"для {instrument.symbol} повторный вход по reversal_15m разрешён только после нового экстремума цены.",
+                f"для {instrument.symbol} повторный вход по unified reversal разрешён только после нового экстремума цены.",
             )
 
     if (
@@ -7078,7 +7111,7 @@ def check_exit(
             state.entry_strategy,
             adaptive_exit_reason,
         )
-    is_unified_reversal = state.entry_strategy == "reversal_15m"
+    is_unified_reversal = is_unified_reversal_strategy(state.entry_strategy)
     prev = exit_df.iloc[-2]
     prev2 = exit_df.iloc[-3]
     macd = float(last["macd"])
@@ -7129,7 +7162,7 @@ def check_exit(
             min_hold_passed
             and state.breakeven_armed
             and rsi >= profile.rsi_exit_long
-            and not (is_unified_reversal and reversal_15m_pressure_intact(exit_df, "LONG"))
+            and not (is_unified_reversal and unified_reversal_pressure_intact(exit_df, "LONG"))
         ):
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
         elif min_hold_passed and macd_down:
@@ -7173,7 +7206,7 @@ def check_exit(
             min_hold_passed
             and state.breakeven_armed
             and rsi <= profile.rsi_exit_short
-            and not (is_unified_reversal and reversal_15m_pressure_intact(exit_df, "SHORT"))
+            and not (is_unified_reversal and unified_reversal_pressure_intact(exit_df, "SHORT"))
             and (
                 instrument.symbol not in {"VBM6", "USDRUBF"}
                 or macd_up
@@ -7203,7 +7236,7 @@ def process_instrument(
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
         return None
     higher_tf_cleared = False
-    if uses_unified_reversal_15m(instrument.symbol) and state.last_higher_tf_bias:
+    if uses_unified_reversal(instrument.symbol) and state.last_higher_tf_bias:
         state.last_higher_tf_bias = ""
         higher_tf_cleared = True
     session_name = get_market_session()
@@ -7255,7 +7288,7 @@ def process_instrument(
                     interval_minutes=signal_interval_minutes,
                 ),
             ),
-            include_ema200=not uses_unified_reversal_15m(instrument.symbol),
+            include_ema200=not uses_unified_reversal(instrument.symbol),
         )
     except RuntimeError as error:
         if "Недостаточно данных для стратегии" in str(error) or "API не вернул свечи" in str(error):
@@ -7268,7 +7301,7 @@ def process_instrument(
 
     higher_tf_df: pd.DataFrame | None = None
     if (
-        not uses_unified_reversal_15m(instrument.symbol)
+        not uses_unified_reversal(instrument.symbol)
         and (
             instrument.symbol in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
             or is_natural_gas_symbol(instrument.symbol)
@@ -7280,10 +7313,10 @@ def process_instrument(
         except RuntimeError as error:
             logging.info("symbol=%s status=waiting_for_higher_tf_exit_context reason=%s", instrument.symbol, error)
 
-    higher_tf_bias = "" if uses_unified_reversal_15m(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
+    higher_tf_bias = "" if uses_unified_reversal(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
-    context_higher_tf_bias = "" if primary_strategy_name == "reversal_15m" else higher_tf_bias
-    display_higher_tf_bias = "локальный 15м" if primary_strategy_name == "reversal_15m" else higher_tf_bias
+    context_higher_tf_bias = "" if is_unified_reversal_strategy(primary_strategy_name) else higher_tf_bias
+    display_higher_tf_bias = get_unified_reversal_timeframe_label(primary_strategy_name) or higher_tf_bias
     news_bias = get_active_news_biases().get(instrument.symbol)
     signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
     signal_summary = summarize_signal_reason(signal, reason)
@@ -7358,7 +7391,7 @@ def process_instrument(
     state.last_range_width_pct = float(regime_metrics.get("range_width_pct") or 0.0)
     state.last_signal_summary = signal_summary
     if (
-        primary_strategy_name == "reversal_15m"
+        is_unified_reversal_strategy(primary_strategy_name)
         and signal == "HOLD"
         and state.position_side == "FLAT"
         and not has_pending_order(state)

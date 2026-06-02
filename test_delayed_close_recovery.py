@@ -900,22 +900,22 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
     def test_imoexf_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("IMOEXF")
 
-        self.assertEqual(strategies, ["reversal_15m"])
+        self.assertEqual(strategies, ["reversal_1h"])
 
     def test_srm6_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("SRM6")
 
-        self.assertEqual(strategies, ["reversal_15m"])
+        self.assertEqual(strategies, ["reversal_1h"])
 
     def test_rbm6_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("RBM6")
 
-        self.assertEqual(strategies, ["reversal_15m"])
+        self.assertEqual(strategies, ["reversal_1h"])
 
     def test_gnm6_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("GNM6")
 
-        self.assertEqual(strategies, ["reversal_15m"])
+        self.assertEqual(strategies, ["reversal_1h"])
 
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [
