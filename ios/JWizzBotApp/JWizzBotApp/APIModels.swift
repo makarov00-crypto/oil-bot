@@ -235,6 +235,7 @@ struct SignalCounts: Decodable {
 
 struct OpenPosition: Decodable, Identifiable {
     let symbol: String
+    let displayName: String?
     let side: String
     let qty: Int
     let entryPrice: Double?
@@ -249,6 +250,7 @@ struct OpenPosition: Decodable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case symbol
+        case displayName = "display_name"
         case side
         case qty
         case entryPrice = "entry_price"
@@ -263,6 +265,7 @@ struct OpenPosition: Decodable, Identifiable {
 
 struct InstrumentSignalState: Decodable, Identifiable {
     let id: String
+    let displayName: String?
     let lastSignal: String?
     let strategyName: String?
     let entryStrategy: String?
@@ -278,6 +281,7 @@ struct InstrumentSignalState: Decodable, Identifiable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = decoder.codingPath.last?.stringValue ?? UUID().uuidString
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         lastSignal = try container.decodeIfPresent(String.self, forKey: .lastSignal)
         strategyName = try container.decodeIfPresent(String.self, forKey: .strategyName)
         entryStrategy = try container.decodeIfPresent(String.self, forKey: .entryStrategy)
@@ -292,6 +296,7 @@ struct InstrumentSignalState: Decodable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
         case lastSignal = "last_signal"
         case strategyName = "last_strategy_name"
         case entryStrategy = "entry_strategy"
@@ -866,6 +871,7 @@ struct TradeEvent: Decodable, Identifiable {
     let id: String
     let time: String?
     let symbol: String
+    let displayName: String?
     let event: String?
     let eventStatus: String?
     let side: String?
@@ -884,6 +890,7 @@ struct TradeEvent: Decodable, Identifiable {
         id = UUID().uuidString
         time = try container.decodeIfPresent(String.self, forKey: .time)
         symbol = try container.decode(String.self, forKey: .symbol)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         event = try container.decodeIfPresent(String.self, forKey: .event)
         eventStatus = try container.decodeIfPresent(String.self, forKey: .eventStatus)
         side = try container.decodeIfPresent(String.self, forKey: .side)
@@ -901,6 +908,7 @@ struct TradeEvent: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case time
         case symbol
+        case displayName = "display_name"
         case event
         case eventStatus = "event_status"
         case side

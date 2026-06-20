@@ -21,8 +21,7 @@ struct PositionsScreen: View {
                                 VStack(alignment: .leading, spacing: 12) {
                                     HStack(alignment: .top) {
                                         VStack(alignment: .leading, spacing: 4) {
-                                            Text(position.symbol)
-                                                .font(.title3.weight(.semibold))
+                                            instrumentTitle(position.symbol, explicitName: position.displayName)
                                             Text(position.strategy)
                                                 .font(.subheadline)
                                                 .foregroundStyle(.secondary)
@@ -84,6 +83,26 @@ struct PositionsScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func instrumentTitle(_ symbol: String, explicitName: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(symbol)
+                .font(.title3.weight(.semibold))
+            let name = instrumentName(symbol, explicitName: explicitName)
+            if let name {
+                Text(name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func instrumentName(_ symbol: String, explicitName: String? = nil) -> String? {
+        let name = (explicitName ?? store.payload?.instrumentCatalog?[symbol] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != symbol else { return nil }
+        return name
     }
 
     private func formatStrategyLabel(_ value: String) -> String {

@@ -117,8 +117,7 @@ struct TradesScreen: View {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(trade.symbol)
-                                        .font(.title3.weight(.semibold))
+                                    instrumentTitle(trade.symbol, payload: payload, explicitName: trade.displayName)
                                     Text(trade.time ?? "-")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -207,8 +206,7 @@ struct TradesScreen: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack(alignment: .top) {
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(trade.symbol)
-                                            .font(.title3.weight(.semibold))
+                                        instrumentTitle(trade.symbol, payload: payload)
                                         Text(formatStrategyLabel(trade.strategy ?? "-"))
                                             .font(.subheadline)
                                             .foregroundStyle(.secondary)
@@ -236,8 +234,7 @@ struct TradesScreen: View {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(trade.symbol)
-                                    .font(.title3.weight(.semibold))
+                                instrumentTitle(trade.symbol, payload: payload)
                                 Text(formatStrategyLabel(trade.strategy))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
@@ -351,8 +348,8 @@ struct TradesScreen: View {
                         title: "Сводка стратегии",
                         rows: [
                             ("Инструментов", "\(states.count)"),
-                            ("Держим позиции", active.isEmpty ? "нет открытых позиций" : active.map { $0.id }.prefix(4).joined(separator: " · ")),
-                            ("Есть вход", actionable.isEmpty ? "нет свободных входов" : actionable.map { "\($0.id): \(displaySignal($0.lastSignal))" }.prefix(4).joined(separator: " · ")),
+                            ("Держим позиции", active.isEmpty ? "нет открытых позиций" : active.map { displayName(for: $0.id, payload: payload) }.prefix(4).joined(separator: " · ")),
+                            ("Есть вход", actionable.isEmpty ? "нет свободных входов" : actionable.map { "\(displayName(for: $0.id, payload: payload)): \(displaySignal($0.lastSignal))" }.prefix(4).joined(separator: " · ")),
                             ("HOLD", "\(states.filter { normalizedSignal($0.lastSignal) == "HOLD" }.count)"),
                         ]
                     )
@@ -376,7 +373,7 @@ struct TradesScreen: View {
                 )
             } else {
                 ForEach(states) { state in
-                    strategyDiagnosticCard(state)
+                    strategyDiagnosticCard(state, payload: payload)
                 }
             }
         }
@@ -423,7 +420,7 @@ struct TradesScreen: View {
 
     private func allocatorDecisionTitle(_ decision: AllocatorDecision) -> String {
         let decisionText = decision.decisionDisplay ?? "решение"
-        let symbolText = decision.symbol.map { displayName(for: $0) } ?? "-"
+        let symbolText = decision.symbol.map { displayName(for: $0, payload: store.payload) } ?? "-"
         let signalText = displaySignal(decision.signal)
         return "\(decisionText): \(symbolText) \(signalText)"
     }
@@ -443,7 +440,7 @@ struct TradesScreen: View {
             parts.append("доступно ГО \(formatRub(allocatable))")
         }
         if let replaced = decision.replacedSymbol, !replaced.isEmpty {
-            parts.append("вытеснил \(displayName(for: replaced))")
+            parts.append("вытеснил \(displayName(for: replaced, payload: store.payload))")
         }
         if let reason = decision.reason, !reason.isEmpty {
             parts.append(humanizeAllocatorText(reason))
@@ -480,21 +477,20 @@ struct TradesScreen: View {
         let actionable = actionableSignalStates(states)
         let blocked = allocatorBlockedStates(states)
         return [
-            ("Активные позиции", active.isEmpty ? "открытых позиций нет" : active.map { "\($0.id): \(positionText($0))" }.prefix(3).joined(separator: " · ")),
-            ("Сигналы без позиции", actionable.isEmpty ? "нет явных сигналов без позиции" : actionable.map { "\($0.id): \(displaySignal($0.lastSignal))" }.prefix(3).joined(separator: " · ")),
-            ("Ограничения", blocked.isEmpty ? "аллокатор не показывает явных блокировок" : blocked.map(\.id).prefix(4).joined(separator: " · ")),
+            ("Активные позиции", active.isEmpty ? "открытых позиций нет" : active.map { "\(displayName(for: $0.id, payload: payload)): \(positionText($0))" }.prefix(3).joined(separator: " · ")),
+            ("Сигналы без позиции", actionable.isEmpty ? "нет явных сигналов без позиции" : actionable.map { "\(displayName(for: $0.id, payload: payload)): \(displaySignal($0.lastSignal))" }.prefix(3).joined(separator: " · ")),
+            ("Ограничения", blocked.isEmpty ? "аллокатор не показывает явных блокировок" : blocked.map { displayName(for: $0.id, payload: payload) }.prefix(4).joined(separator: " · ")),
         ]
     }
 
     @ViewBuilder
-    private func strategyDiagnosticCard(_ state: InstrumentSignalState) -> some View {
+    private func strategyDiagnosticCard(_ state: InstrumentSignalState, payload: DashboardPayload) -> some View {
         let parts = diagnosticParts(from: state.signalSummary)
         GlassCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(state.id)
-                            .font(.title3.weight(.semibold))
+                        instrumentTitle(state.id, payload: payload, explicitName: state.displayName)
                         Text("\(formatStrategyLabel(state.strategyName ?? state.entryStrategy ?? "-")) · \(positionText(state))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -560,8 +556,29 @@ struct TradesScreen: View {
         return "\(displaySignal(side)) · \(qty) лот."
     }
 
-    private func displayName(for symbol: String) -> String {
-        symbol
+    private func instrumentTitle(_ symbol: String, payload: DashboardPayload, explicitName: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(symbol)
+                .font(.title3.weight(.semibold))
+            let name = instrumentName(for: symbol, payload: payload, explicitName: explicitName)
+            if let name {
+                Text(name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func instrumentName(for symbol: String, payload: DashboardPayload?, explicitName: String? = nil) -> String? {
+        let name = (explicitName ?? payload?.instrumentCatalog?[symbol] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != symbol else { return nil }
+        return name
+    }
+
+    private func displayName(for symbol: String, payload: DashboardPayload?) -> String {
+        guard let name = instrumentName(for: symbol, payload: payload) else { return symbol }
+        return "\(symbol) — \(name)"
     }
 
     private func formatStrategyLabel(_ value: String) -> String {

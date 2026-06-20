@@ -46,8 +46,7 @@ struct SignalsScreen: View {
                                 VStack(alignment: .leading, spacing: 12) {
                                     HStack(alignment: .top) {
                                         VStack(alignment: .leading, spacing: 4) {
-                                            Text(symbol)
-                                                .font(.title3.weight(.semibold))
+                                            instrumentTitle(symbol, explicitName: state.displayName)
                                             Text(state.strategyName ?? state.entryStrategy ?? "-")
                                                 .font(.subheadline)
                                                 .foregroundStyle(.secondary)
@@ -128,6 +127,26 @@ struct SignalsScreen: View {
         case "HOLD": return 1
         default: return 2
         }
+    }
+
+    private func instrumentTitle(_ symbol: String, explicitName: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(symbol)
+                .font(.title3.weight(.semibold))
+            let name = instrumentName(symbol, explicitName: explicitName)
+            if let name {
+                Text(name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func instrumentName(_ symbol: String, explicitName: String? = nil) -> String? {
+        let name = (explicitName ?? store.payload?.instrumentCatalog?[symbol] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != symbol else { return nil }
+        return name
     }
 
     private func firstSummary(for state: InstrumentSignalState) -> String {

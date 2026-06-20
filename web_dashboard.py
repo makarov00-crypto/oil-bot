@@ -164,13 +164,26 @@ def build_manual_instruments_payload() -> dict:
     }
 
 
-def build_instrument_catalog(portfolio: dict | None = None, trades: list[dict] | None = None) -> dict[str, str]:
-    catalog = dict(INSTRUMENT_DISPLAY_NAMES)
+def build_instrument_catalog(
+    portfolio: dict | None = None,
+    trades: list[dict] | None = None,
+    states: dict[str, dict] | None = None,
+) -> dict[str, str]:
+    catalog = {
+        symbol: INSTRUMENT_DISPLAY_NAMES.get(symbol, symbol)
+        for symbol in current_watchlist_symbols()
+    }
+    catalog.update(INSTRUMENT_DISPLAY_NAMES)
     for item in (portfolio or {}).get("broker_open_positions", []) or []:
         symbol = str(item.get("symbol") or "").strip().upper()
         display_name = str(item.get("display_name") or "").strip()
         if symbol and display_name:
             catalog[symbol] = display_name
+    for symbol, state in (states or {}).items():
+        normalized_symbol = str(symbol or "").strip().upper()
+        display_name = str((state or {}).get("display_name") or "").strip()
+        if normalized_symbol and display_name:
+            catalog[normalized_symbol] = display_name
     for row in trades or []:
         symbol = str(row.get("symbol") or "").strip().upper()
         display_name = str(row.get("display_name") or "").strip()
@@ -4452,6 +4465,13 @@ def build_dashboard_html() -> str:
       return `<div class="mono">${escapeHtml(ticker)}</div><div class="muted">${escapeHtml(displayName)}</div>`;
     }
 
+    function instrumentText(symbol, explicitName = '') {
+      const ticker = String(symbol || '-');
+      const displayName = String(explicitName || instrumentNames[ticker] || '').trim();
+      if (!displayName || displayName === ticker) return ticker;
+      return `${ticker} — ${displayName}`;
+    }
+
     function signalBadge(value) {
       const raw = String(value || '-').toUpperCase();
       const css = raw === 'LONG' || raw === 'ACTIVE' ? 'long' : raw === 'SHORT' || raw === 'FAILED' ? 'short' : 'hold';
@@ -4873,20 +4893,20 @@ def build_dashboard_html() -> str:
       });
 
       const nowRows = [
-        buildReviewRow('Активные позиции', `${activePositions.length}`, activePositions.length ? activePositions.map(([symbol, state]) => `${instrumentNames[symbol] || symbol}: ${positionText(state)}`).slice(0, 3).join(' · ') : 'открытых позиций нет'),
-        buildReviewRow('Сигналы без позиции', `${actionableSignals.length}`, actionableSignals.length ? actionableSignals.map(([symbol, state]) => `${instrumentNames[symbol] || symbol}: ${displaySignal(state.last_signal)}`).slice(0, 3).join(' · ') : 'нет явных сигналов без позиции'),
-        buildReviewRow('Ограничения', `${allocatorBlocked.length}`, allocatorBlocked.length ? allocatorBlocked.map(([symbol]) => instrumentNames[symbol] || symbol).slice(0, 4).join(' · ') : 'аллокатор не показывает явных блокировок'),
+        buildReviewRow('Активные позиции', `${activePositions.length}`, activePositions.length ? activePositions.map(([symbol, state]) => `${instrumentText(symbol)}: ${positionText(state)}`).slice(0, 3).join(' · ') : 'открытых позиций нет'),
+        buildReviewRow('Сигналы без позиции', `${actionableSignals.length}`, actionableSignals.length ? actionableSignals.map(([symbol, state]) => `${instrumentText(symbol)}: ${displaySignal(state.last_signal)}`).slice(0, 3).join(' · ') : 'нет явных сигналов без позиции'),
+        buildReviewRow('Ограничения', `${allocatorBlocked.length}`, allocatorBlocked.length ? allocatorBlocked.map(([symbol]) => instrumentText(symbol)).slice(0, 4).join(' · ') : 'аллокатор не показывает явных блокировок'),
       ];
 
       const summaryRows = [
         buildReviewRow('Инструментов', `${entries.length}`, 'актуальные состояния стратегии'),
-        buildReviewRow('Держим позиции', `${activePositions.length}`, activePositions.length ? activePositions.map(([symbol]) => instrumentNames[symbol] || symbol).slice(0, 4).join(' · ') : 'нет открытых позиций'),
-        buildReviewRow('Есть вход', `${actionableSignals.length}`, actionableSignals.length ? actionableSignals.map(([symbol, state]) => `${instrumentNames[symbol] || symbol}: ${displaySignal(state.last_signal)}`).slice(0, 4).join(' · ') : 'нет свободных входов'),
+        buildReviewRow('Держим позиции', `${activePositions.length}`, activePositions.length ? activePositions.map(([symbol]) => instrumentText(symbol)).slice(0, 4).join(' · ') : 'нет открытых позиций'),
+        buildReviewRow('Есть вход', `${actionableSignals.length}`, actionableSignals.length ? actionableSignals.map(([symbol, state]) => `${instrumentText(symbol)}: ${displaySignal(state.last_signal)}`).slice(0, 4).join(' · ') : 'нет свободных входов'),
         buildReviewRow('HOLD', `${holds.length}`, 'инструменты без входа сейчас'),
       ];
 
       const actionRows = [
-        buildReviewRow('Главное', actionableSignals.length ? 'проверить свободные сигналы' : activePositions.length ? 'контролировать сопровождение позиции' : 'ждать новый MACD-сигнал', actionableSignals.length ? actionableSignals.map(([symbol]) => instrumentNames[symbol] || symbol).slice(0, 3).join(' · ') : ''),
+        buildReviewRow('Главное', actionableSignals.length ? 'проверить свободные сигналы' : activePositions.length ? 'контролировать сопровождение позиции' : 'ждать новый MACD-сигнал', actionableSignals.length ? actionableSignals.map(([symbol]) => instrumentText(symbol)).slice(0, 3).join(' · ') : ''),
         buildReviewRow('Если нет входа', allocatorBlocked.length ? 'смотреть аллокатор' : 'смотреть блокер стратегии', allocatorBlocked.length ? 'есть ограничения по размеру/ГО/приоритету' : 'причина должна быть в карточке инструмента'),
         buildReviewRow('Выход', activePositions.length ? 'закрывать только по реальному развороту или стопу' : 'нет позиции для сопровождения', 'RSI сам по себе не должен выбивать новый 15м режим'),
       ];
@@ -5468,9 +5488,9 @@ def build_dashboard_html() -> str:
       const allocatorDecisions = Array.isArray(data.allocator_decisions) ? data.allocator_decisions : [];
       allocatorDecisionsBody.innerHTML = allocatorDecisions.length
         ? allocatorDecisions.slice(0, 8).map((item) => {
-            const symbol = item.symbol ? (instrumentNames[item.symbol] || item.symbol) : '-';
+            const symbol = item.symbol ? instrumentText(item.symbol) : '-';
             const signal = item.signal ? ` ${displaySignal(item.signal)}` : '';
-            const replaced = item.replaced_symbol ? ` вместо ${instrumentNames[item.replaced_symbol] || item.replaced_symbol}` : '';
+            const replaced = item.replaced_symbol ? ` вместо ${instrumentText(item.replaced_symbol)}` : '';
             const score = Number(item.priority_score || 0);
             const scoreText = score > 0 ? `приоритет ${score.toFixed(2)}` : '';
             const margin = Number(item.requested_margin_rub || 0);
@@ -5489,8 +5509,8 @@ def build_dashboard_html() -> str:
       const reviewTradeSummary = document.getElementById('reviewTradeSummary');
       reviewBody.innerHTML = '';
       reviewCards.innerHTML = '';
-      const bestSymbolLabel = review.best_symbol ? (instrumentNames[review.best_symbol.symbol] || review.best_symbol.symbol || '-') : 'нет данных';
-      const worstSymbolLabel = review.worst_symbol ? (instrumentNames[review.worst_symbol.symbol] || review.worst_symbol.symbol || '-') : 'нет данных';
+      const bestSymbolLabel = review.best_symbol ? instrumentText(review.best_symbol.symbol || '-') : 'нет данных';
+      const worstSymbolLabel = review.worst_symbol ? instrumentText(review.worst_symbol.symbol || '-') : 'нет данных';
       if (reviewTradeSummary) {
         reviewTradeSummary.innerHTML = [
           buildTradeSummaryCard('Сделок', String(review.closed_count ?? 0), `в плюс ${review.wins ?? 0} · win rate ${Number(review.win_rate ?? 0).toFixed(1)}%`),
@@ -5838,7 +5858,7 @@ def api_dashboard(date: str | None = None) -> dict:
             pass
     portfolio_view = build_portfolio_view_for_day(portfolio, target_day, accounting_history)
     trades = annotate_trade_rows(load_trade_rows_for_day(target_day, None), display_states, broker_positions)
-    instrument_catalog = build_instrument_catalog(portfolio, trades)
+    instrument_catalog = build_instrument_catalog(portfolio, trades, display_states)
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(display_states),
