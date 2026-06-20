@@ -32,11 +32,11 @@ class NewsBiasTests(unittest.TestCase):
         )
 
         items = detect_news_bias(message)
-        ucny = next(item for item in items if item.symbol == "UCM6")
+        ucny = next(item for item in items if item.symbol == "UCU6")
 
         self.assertEqual(ucny.bias, "LONG")
         self.assertEqual(ucny.category, "валюта")
-        self.assertTrue(ucny.summary.startswith("UCM6:"))
+        self.assertTrue(ucny.summary.startswith("UCU6:"))
         self.assertTrue(len(ucny.topics) >= 1)
 
     def test_weak_background_conflict_does_not_block_signal(self) -> None:

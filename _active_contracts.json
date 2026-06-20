@@ -14,13 +14,49 @@
     },
     {
       "template_symbol": "NGJ6",
-      "active_symbol": "NGM6",
+      "active_symbol": "NGN6",
       "disabled": false,
       "updated_at": ""
     },
     {
       "template_symbol": "NGK6",
-      "active_symbol": "NGM6",
+      "active_symbol": "NGN6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "GNM6",
+      "active_symbol": "GNU6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "RBM6",
+      "active_symbol": "RBU6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "RNM6",
+      "active_symbol": "RNU6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "SRM6",
+      "active_symbol": "SRU6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "UCM6",
+      "active_symbol": "UCU6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
+      "template_symbol": "VBM6",
+      "active_symbol": "VBU6",
       "disabled": false,
       "updated_at": ""
     }
