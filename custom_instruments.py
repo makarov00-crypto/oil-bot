@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from active_contracts import get_active_contract_symbol
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CUSTOM_INSTRUMENTS_PATH = BASE_DIR / "bot_state" / "_custom_instruments.json"
@@ -88,10 +90,13 @@ def merge_with_custom_symbols(base_symbols: list[str]) -> list[str]:
     seen: set[str] = set()
     for symbol in list(base_symbols) + [item["symbol"] for item in list_custom_instruments()]:
         normalized = _normalize_symbol(symbol)
-        if not normalized or normalized in seen:
+        if not normalized:
             continue
-        seen.add(normalized)
-        merged.append(normalized)
+        active_symbol = get_active_contract_symbol(normalized) or normalized
+        if active_symbol in seen:
+            continue
+        seen.add(active_symbol)
+        merged.append(active_symbol)
     return merged
 
 
