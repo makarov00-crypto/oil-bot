@@ -11,7 +11,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from dotenv import load_dotenv
 from active_contracts import list_active_contracts, replace_with_active_symbols
 from custom_instruments import (
@@ -42,6 +42,7 @@ from trade_storage import (
 
 
 BASE_DIR = Path(__file__).resolve().parent
+FAVICON_PATH = BASE_DIR / "static" / "favicon.svg"
 load_dotenv(BASE_DIR / ".env")
 
 STATE_DIR = BASE_DIR / "bot_state"
@@ -257,6 +258,7 @@ def build_docs_html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
   <title>Документация Oil Bot</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -805,6 +807,7 @@ def build_contracts_html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
   <title>Параметры контрактов Oil Bot</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -3102,6 +3105,7 @@ def build_dashboard_html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
   <title>Панель Oil Bot</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -5941,5 +5945,5 @@ def robots_txt() -> str:
 
 
 @app.get("/favicon.ico")
-def favicon() -> Response:
-    return Response(status_code=204)
+def favicon() -> FileResponse:
+    return FileResponse(FAVICON_PATH, media_type="image/svg+xml")
