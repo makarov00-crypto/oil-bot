@@ -11,7 +11,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from dotenv import load_dotenv
 from active_contracts import list_active_contracts, replace_with_active_symbols
 from custom_instruments import (
@@ -20,7 +20,14 @@ from custom_instruments import (
     upsert_custom_instrument,
     validate_custom_symbol,
 )
-from instrument_groups import DEFAULT_SYMBOLS, GROUP_BY_SYMBOL, get_instrument_group, uses_unified_reversal_15m
+from instrument_groups import (
+    DEFAULT_SYMBOLS,
+    GROUP_BY_SYMBOL,
+    get_instrument_group,
+    uses_unified_reversal,
+    uses_unified_reversal_1h,
+    uses_unified_reversal_15m,
+)
 from strategy_registry import get_primary_strategies, get_secondary_strategies
 from daily_ai_review import (
     FOLLOWUP_SYSTEM_INSTRUCTIONS,
@@ -67,14 +74,21 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
     "CNYRUBF": "CNYRUBF Юань - Рубль",
     "IMOEXF": "IMOEXF Индекс МосБиржи",
     "RNM6": "ROSN-6.26 Роснефть",
+    "RNU6": "ROSN-9.26 Роснефть",
     "SRM6": "SBRF-6.26 Сбер Банк",
+    "SRU6": "SBRF-9.26 Сбер Банк",
     "GNM6": "GOLDM-6.26 Золото (мини)",
+    "GNU6": "GOLDM-9.26 Золото (мини)",
     "NGJ6": "NG-4.26 Природный газ",
     "NGK6": "NG-5.26 Природный газ",
     "NGM6": "NG-6.26 Природный газ",
+    "NGN6": "NG-7.26 Природный газ",
     "RBM6": "RGBI-6.26 Индекс гос. облигаций",
+    "RBU6": "RGBI-9.26 Индекс гос. облигаций",
     "UCM6": "UCNY-6.26 Доллар США - Юань",
+    "UCU6": "UCNY-9.26 Доллар США - Юань",
     "VBM6": "VTBR-6.26 Банк ВТБ",
+    "VBU6": "VTBR-9.26 Банк ВТБ",
 }
 
 
@@ -82,7 +96,12 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "reversal_15m": {
         "title": "Локальный переворот 15м",
         "summary": "Единый локальный движок без старшего ТФ: вход строится на пересечении MACD, подтверждении AO, силе объёма и импульса, режиме рынка и защите от late entry и пилы.",
-        "when": "Это единственная основная живая стратегия для всех текущих инструментов: валюты, нефть, газ, золото, индексы и банки.",
+        "when": "Используется для валютных инструментов, где нужна быстрая реакция на локальный 15-минутный график.",
+    },
+    "reversal_1h": {
+        "title": "Часовой переворот 1ч",
+        "summary": "Тот же unified-подход на часовом графике: MACD, AO, объём, импульс и режим рынка, но с меньшей чувствительностью к 15-минутной пиле.",
+        "when": "Используется для нефти, газа, золота, индексов, банков и Роснефти.",
     },
 }
 
@@ -194,14 +213,25 @@ def build_strategy_docs_rows() -> tuple[str, str, list[str], list[str]]:
             """
         )
 
-    unified_symbols = [symbol for symbol in sorted(GROUP_BY_SYMBOL) if uses_unified_reversal_15m(symbol)]
-    legacy_symbols = [symbol for symbol in sorted(GROUP_BY_SYMBOL) if not uses_unified_reversal_15m(symbol)]
+    documentation_symbols = replace_with_active_symbols(sorted(GROUP_BY_SYMBOL))
+    unified_15m_symbols = [symbol for symbol in documentation_symbols if uses_unified_reversal_15m(symbol)]
+    unified_1h_symbols = [symbol for symbol in documentation_symbols if uses_unified_reversal_1h(symbol)]
+    legacy_symbols = [
+        symbol
+        for symbol in documentation_symbols
+        if not uses_unified_reversal_15m(symbol) and not uses_unified_reversal_1h(symbol)
+    ]
 
-    for symbol in sorted(GROUP_BY_SYMBOL):
+    for symbol in documentation_symbols:
         group = get_instrument_group(symbol)
         primary = ", ".join(get_primary_strategies(symbol))
         secondary = ", ".join(get_secondary_strategies(symbol)) or "—"
-        mode = "unified 15м" if uses_unified_reversal_15m(symbol) else "legacy"
+        if uses_unified_reversal_15m(symbol):
+            mode = "unified 15м"
+        elif uses_unified_reversal_1h(symbol):
+            mode = "unified 1ч"
+        else:
+            mode = "legacy"
         rows.append(
             f"""
             <tr>
@@ -214,11 +244,11 @@ def build_strategy_docs_rows() -> tuple[str, str, list[str], list[str]]:
             </tr>
             """
         )
-    return "".join(cards), "".join(rows), unified_symbols, legacy_symbols
+    return "".join(cards), "".join(rows), unified_15m_symbols, unified_1h_symbols, legacy_symbols
 
 
 def build_docs_html() -> str:
-    strategy_cards, strategy_rows, unified_symbols, legacy_symbols = build_strategy_docs_rows()
+    strategy_cards, strategy_rows, unified_15m_symbols, unified_1h_symbols, legacy_symbols = build_strategy_docs_rows()
     return f"""
 <!doctype html>
 <html lang="ru">
@@ -448,21 +478,26 @@ def build_docs_html() -> str:
     <section class="panel hero">
       <h1>Документация стратегий</h1>
       <p>
-        Здесь собрана актуальная живая карта стратегий бота. Сейчас основная архитектура — unified `reversal_15m`
-        для локальной торговли на 15-минутном графике. Старые стратегии больше не используются как живой контур для текущих инструментов.
-        Последнее обновление: unified-контур стал быстрее видеть свежий импульс, а причины `HOLD` теперь сохраняются отдельно,
-        чтобы было проще разбирать упущенные движения.
+        Здесь собрана актуальная живая карта стратегий бота. Сейчас рабочая архитектура разделена на unified `reversal_15m`
+        для валют и unified `reversal_1h` для нефти, газа, золота, индексов и акций.
+        Старые стратегии больше не используются как живой контур для текущих инструментов.
       </p>
     </section>
     <section class="panel">
       <h2>Что сейчас реально работает</h2>
       <div class="overview-grid">
         <article class="overview-card">
-          <h3>Unified-группа</h3>
+          <h3>Unified 15м</h3>
           <p>
-            Новая стратегия `reversal_15m` работает локально на `15m` и не ждёт подтверждения от старшего ТФ.
-            Она опирается на `MACD`, `RSI`, `Stochastic`, объём, режим рынка, защиту от late entry и пилы.
-            Сейчас в unified-контур входят валюты, нефть, газ, золото, индекс Мосбиржи, банки и облигационный индекс.
+            `reversal_15m` работает локально на `15m` и не ждёт подтверждения от старшего ТФ.
+            Сейчас этот режим используется для валютных инструментов.
+          </p>
+        </article>
+        <article class="overview-card">
+          <h3>Unified 1ч</h3>
+          <p>
+            `reversal_1h` использует тот же принцип разворота, но на часовом графике.
+            Этот режим снижает чувствительность к 15-минутной пиле и используется для нефти, газа, золота, индексов и акций.
           </p>
         </article>
         <article class="overview-card">
@@ -475,9 +510,8 @@ def build_docs_html() -> str:
         <article class="overview-card">
           <h3>Что важно не путать</h3>
           <p>
-            Если в интерфейсе у unified-инструмента снова всплывает логика старшего ТФ как часть сигнала, это уже считается хвостом.
-            Для unified-группы рабочая модель должна быть локальной и однородной. `HOLD` по unified-инструменту теперь тоже
-            логируется отдельно, но в торговых summary учитываются только реальные `LONG/SHORT` кандидаты.
+            Если в интерфейсе у unified-инструмента всплывает legacy-режим как часть сигнала, это хвост.
+            Для unified-группы рабочая модель должна быть локальной: 15м для валют, 1ч для остальных основных инструментов.
           </p>
         </article>
       </div>
@@ -487,7 +521,11 @@ def build_docs_html() -> str:
       <div class="overview-grid">
         <article class="overview-card">
           <h3>Unified `reversal_15m`</h3>
-          <p>{", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_symbols)}</p>
+          <p>{", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_15m_symbols)}</p>
+        </article>
+        <article class="overview-card">
+          <h3>Unified `reversal_1h`</h3>
+          <p>{", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_1h_symbols)}</p>
         </article>
         <article class="overview-card">
           <h3>Оставшиеся legacy-инструменты</h3>
@@ -2087,7 +2125,7 @@ def format_trade_review_row(
         edge_label = trade_context_value(close_row, "entry_edge_label")
     exit_reason = summarize_trade_reason_text(close_row.get("reason") or "-")
     entry_reason = summarize_trade_reason_text(open_row.get("reason") if open_row else "-")
-    is_unified = uses_unified_reversal_15m(str(close_row.get("symbol", "")))
+    is_unified = uses_unified_reversal(str(close_row.get("symbol", "")))
     is_signal_flip = (
         "противоположный сигнал" in exit_reason.lower()
         or "смене режима" in verdict.lower()
@@ -4142,7 +4180,7 @@ def build_dashboard_html() -> str:
       <div class="section-title">
         <h2>Сигналы по инструментам</h2>
         <div class="toolbar-inline">
-          <input id="manualInstrumentTicker" type="text" placeholder="Новый тикер, например VBM6" />
+          <input id="manualInstrumentTicker" type="text" placeholder="Новый тикер, например VBU6" />
           <select id="manualInstrumentTemplate"></select>
           <button id="manualInstrumentAddBtn" class="btn-secondary" type="button">Добавить инструмент</button>
         </div>
@@ -4384,14 +4422,21 @@ def build_dashboard_html() -> str:
       CNYRUBF: 'CNYRUBF Юань - Рубль',
       IMOEXF: 'IMOEXF Индекс МосБиржи',
       RNM6: 'ROSN-6.26 Роснефть',
+      RNU6: 'ROSN-9.26 Роснефть',
       SRM6: 'SBRF-6.26 Сбер Банк',
+      SRU6: 'SBRF-9.26 Сбер Банк',
       GNM6: 'GOLDM-6.26 Золото (мини)',
+      GNU6: 'GOLDM-9.26 Золото (мини)',
       NGJ6: 'NG-4.26 Природный газ',
       NGK6: 'NG-5.26 Природный газ',
       NGM6: 'NG-6.26 Природный газ',
+      NGN6: 'NG-7.26 Природный газ',
       RBM6: 'RGBI-6.26 Индекс гос. облигаций',
+      RBU6: 'RGBI-9.26 Индекс гос. облигаций',
       UCM6: 'UCNY-6.26 Доллар США - Юань',
+      UCU6: 'UCNY-9.26 Доллар США - Юань',
       VBM6: 'VTBR-6.26 Банк ВТБ',
+      VBU6: 'VTBR-9.26 Банк ВТБ',
     };
 
     function renderInstrumentLabel(symbol, explicitName = '') {
@@ -4424,6 +4469,9 @@ def build_dashboard_html() -> str:
       if (strategy === 'reversal_15m') {
         return `<span class="badge hold">ЛОКАЛЬНЫЙ 15М</span>`;
       }
+      if (strategy === 'reversal_1h') {
+        return `<span class="badge hold">ЛОКАЛЬНЫЙ 1Ч</span>`;
+      }
       return signalBadge(state.last_higher_tf_bias || '-');
     }
 
@@ -4431,6 +4479,9 @@ def build_dashboard_html() -> str:
       const strategy = String(state.last_strategy_name || state.entry_strategy || '').trim().toLowerCase();
       if (strategy === 'reversal_15m') {
         return `<span class="badge hold">UNIFIED 15М</span>`;
+      }
+      if (strategy === 'reversal_1h') {
+        return `<span class="badge hold">UNIFIED 1Ч</span>`;
       }
       return `<span class="badge short">LEGACY</span>`;
     }
@@ -4615,6 +4666,7 @@ def build_dashboard_html() -> str:
       if (!raw || raw === '-') return 'не определена';
       const map = {
         reversal_15m: '15м разворот',
+        reversal_1h: '1ч разворот',
         momentum_breakout: 'Импульсный пробой',
         trend_pullback: 'Откат по тренду',
         trend_rollover: 'Разворот тренда',
@@ -4685,7 +4737,7 @@ def build_dashboard_html() -> str:
     }
 
     function isUnifiedReversalTrade(row) {
-      return String(row.strategy || '').trim().toLowerCase() === 'reversal_15m';
+      return ['reversal_15m', 'reversal_1h'].includes(String(row.strategy || '').trim().toLowerCase());
     }
 
     function isSignalFlipTrade(row) {
@@ -5886,3 +5938,8 @@ def api_health() -> dict:
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots_txt() -> str:
     return "User-agent: *\nDisallow: /\n"
+
+
+@app.get("/favicon.ico")
+def favicon() -> Response:
+    return Response(status_code=204)

@@ -142,12 +142,15 @@ struct SignalsScreen: View {
         if strategy == "reversal_15m" {
             return "UNIFIED 15М"
         }
+        if strategy == "reversal_1h" {
+            return "UNIFIED 1Ч"
+        }
         return "LEGACY"
     }
 
     private func scopeRaw(for state: InstrumentSignalState) -> String? {
         let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if strategy == "reversal_15m" {
+        if strategy == "reversal_15m" || strategy == "reversal_1h" {
             return "UNIFIED"
         }
         return "LEGACY"
@@ -189,7 +192,7 @@ struct SignalsScreen: View {
                         .foregroundStyle(message.contains("Не удалось") || message.contains("Сначала") || message.contains("ошиб") ? .orange : .secondary)
                 }
 
-                TextField("Новый тикер, например VBM6", text: $newTicker)
+                TextField("Новый тикер, например VBU6", text: $newTicker)
                     .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
                     .padding(.horizontal, 12)
