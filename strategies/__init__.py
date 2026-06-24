@@ -1,4 +1,4 @@
-from strategies.reversal_15m import evaluate_signal
+from strategies.reversal_1h import evaluate_signal
 
 __all__ = [
     "evaluate_signal",

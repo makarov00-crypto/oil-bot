@@ -1,10 +1,8 @@
 from strategy_registry import get_primary_strategies
 from strategies.reversal_1h import evaluate_signal as evaluate_reversal_1h
-from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
 
 
 PRIMARY_EVALUATORS = {
-    "reversal_15m": evaluate_reversal_15m,
     "reversal_1h": evaluate_reversal_1h,
 }
 
@@ -24,4 +22,4 @@ def evaluate_primary_signal_bundle(df, config, instrument, higher_tf_bias: str) 
         hold_reasons.append(f"{strategy_name}: {reason}")
 
     combined_reason = " | ".join(hold_reasons) if hold_reasons else "Нет доступных стратегий для инструмента."
-    return "HOLD", combined_reason, strategy_names[0] if strategy_names else "reversal_15m"
+    return "HOLD", combined_reason, strategy_names[0] if strategy_names else "reversal_1h"

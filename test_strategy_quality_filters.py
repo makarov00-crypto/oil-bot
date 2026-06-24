@@ -7,11 +7,10 @@ import pandas as pd
 import bot_oil_main as mod
 import strategy_engine
 from bot_oil_main import InstrumentConfig
-from instrument_groups import DEFAULT_SYMBOLS, uses_unified_reversal_1h, uses_unified_reversal_15m
+from instrument_groups import DEFAULT_SYMBOLS, uses_unified_reversal_1h
 from strategy_registry import get_primary_strategies, get_secondary_strategies
 from strategies.reversal_1h import evaluate_signal as evaluate_reversal_1h
-from strategies.reversal_15m import evaluate_signal as evaluate_reversal_15m
-from strategies.reversal_15m import get_profile as get_reversal_profile
+from strategies.reversal_core import get_profile as get_reversal_profile
 
 
 def make_config() -> SimpleNamespace:
@@ -98,7 +97,6 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_all_default_symbols_use_unified_reversal_only(self) -> None:
         for symbol in DEFAULT_SYMBOLS.split(","):
-            self.assertFalse(uses_unified_reversal_15m(symbol), symbol)
             self.assertTrue(uses_unified_reversal_1h(symbol), symbol)
             self.assertEqual(get_primary_strategies(symbol), ["reversal_1h"])
             self.assertEqual(get_secondary_strategies(symbol), [])
@@ -179,10 +177,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
         )
         instrument = InstrumentConfig(symbol="CNYRUBF", figi="FIGI", display_name="CNY/RUB")
 
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "")
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
         self.assertEqual(signal, "SHORT")
-        self.assertIn("reversal_15m", reason)
+        self.assertIn("reversal_1h", reason)
 
     def test_unified_reversal_1h_allows_short_when_macd_ao_and_volume_align(self) -> None:
         df = candle_rows(
@@ -219,7 +217,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         )
         instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
 
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "")
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
         self.assertEqual(signal, "SHORT")
         self.assertIn("AO=", reason)
@@ -239,7 +237,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         )
         instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
 
-        signal, reason = evaluate_reversal_15m(df, self.config, instrument, "")
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
         self.assertEqual(signal, "LONG")
         self.assertIn("Stochastic", reason)
@@ -262,10 +260,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(label, "confirmed")
         self.assertIn("локальный 1ч", reason)
 
-    def test_reversal_15m_profile_is_shared_for_gold_without_special_strategy(self) -> None:
+    def test_reversal_core_profile_is_shared_for_gold_without_special_strategy(self) -> None:
         self.assertEqual(get_reversal_profile("GNM6", 60), get_reversal_profile("RNM6", 60))
 
-    def test_reversal_15m_short_does_not_exit_on_rsi_oversold_while_ao_confirms_trend(self) -> None:
+    def test_unified_reversal_short_does_not_exit_on_rsi_oversold_while_ao_confirms_trend(self) -> None:
         df = candle_rows(
             [
                 {"close": 100.0, "ema20": 100.5, "macd": -0.10, "macd_signal": -0.05, "ao": -0.12, "rsi": 34.0},
@@ -273,7 +271,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
             ]
         )
 
-        self.assertTrue(mod.reversal_15m_pressure_intact(df, "SHORT"))
+        self.assertTrue(mod.unified_reversal_pressure_intact(df, "SHORT"))
 
     def test_recovery_mode_allows_only_unified_reversal(self) -> None:
         state = mod.InstrumentState(last_setup_quality_label="strong", last_market_regime="trend_expansion")

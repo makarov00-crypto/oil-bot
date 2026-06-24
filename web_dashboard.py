@@ -26,7 +26,6 @@ from instrument_groups import (
     get_instrument_group,
     uses_unified_reversal,
     uses_unified_reversal_1h,
-    uses_unified_reversal_15m,
 )
 from strategy_registry import get_primary_strategies, get_secondary_strategies
 from daily_ai_review import (
@@ -96,8 +95,8 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
 STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "reversal_15m": {
         "title": "Локальный переворот 15м",
-        "summary": "Единый локальный движок без старшего ТФ: вход строится на пересечении MACD, подтверждении AO, силе объёма и импульса, режиме рынка и защите от late entry и пилы.",
-        "when": "Сейчас не выбирается для активной карты инструментов; оставлен как технический и исторический режим.",
+        "summary": "Исторический режим короткого разворота. Новые входы через него больше не открываются.",
+        "when": "Больше не выбирается как живая стратегия; оставлен только как исторический идентификатор для старых сделок.",
     },
     "reversal_1h": {
         "title": "Часовой переворот 1ч",
@@ -228,21 +227,18 @@ def build_strategy_docs_rows() -> tuple[str, str, list[str], list[str]]:
         )
 
     documentation_symbols = replace_with_active_symbols(sorted(GROUP_BY_SYMBOL))
-    unified_15m_symbols = [symbol for symbol in documentation_symbols if uses_unified_reversal_15m(symbol)]
     unified_1h_symbols = [symbol for symbol in documentation_symbols if uses_unified_reversal_1h(symbol)]
     legacy_symbols = [
         symbol
         for symbol in documentation_symbols
-        if not uses_unified_reversal_15m(symbol) and not uses_unified_reversal_1h(symbol)
+        if not uses_unified_reversal_1h(symbol)
     ]
 
     for symbol in documentation_symbols:
         group = get_instrument_group(symbol)
         primary = ", ".join(get_primary_strategies(symbol))
         secondary = ", ".join(get_secondary_strategies(symbol)) or "—"
-        if uses_unified_reversal_15m(symbol):
-            mode = "unified 15м"
-        elif uses_unified_reversal_1h(symbol):
+        if uses_unified_reversal_1h(symbol):
             mode = "unified 1ч"
         else:
             mode = "legacy"
@@ -258,12 +254,11 @@ def build_strategy_docs_rows() -> tuple[str, str, list[str], list[str]]:
             </tr>
             """
         )
-    return "".join(cards), "".join(rows), unified_15m_symbols, unified_1h_symbols, legacy_symbols
+    return "".join(cards), "".join(rows), unified_1h_symbols, legacy_symbols
 
 
 def build_docs_html() -> str:
-    strategy_cards, strategy_rows, unified_15m_symbols, unified_1h_symbols, legacy_symbols = build_strategy_docs_rows()
-    unified_15m_display = ", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_15m_symbols) or "—"
+    strategy_cards, strategy_rows, unified_1h_symbols, legacy_symbols = build_strategy_docs_rows()
     unified_1h_display = ", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_1h_symbols) or "—"
     legacy_display = ", ".join(f"<span class='mono'>{symbol}</span>" for symbol in legacy_symbols) if legacy_symbols else "—"
     return f"""
@@ -507,8 +502,8 @@ def build_docs_html() -> str:
         <article class="overview-card">
           <h3>Unified 15м</h3>
           <p>
-            `reversal_15m` остаётся в коде как технический и исторический режим.
-            Для текущей активной карты инструментов он больше не выбирается как основная стратегия.
+            `reversal_15m` больше не выбирается как основная стратегия.
+            В интерфейсе он может встречаться только в старых сделках и журналах.
           </p>
         </article>
         <article class="overview-card">
@@ -537,10 +532,6 @@ def build_docs_html() -> str:
     <section class="panel">
       <h2>Состав новой стратегии</h2>
       <div class="overview-grid">
-        <article class="overview-card">
-          <h3>Unified `reversal_15m`</h3>
-          <p>{unified_15m_display}</p>
-        </article>
         <article class="overview-card">
           <h3>Unified `reversal_1h`</h3>
           <p>{unified_1h_display}</p>

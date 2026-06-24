@@ -8,7 +8,7 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 @dataclass(frozen=True)
-class Reversal15mProfile:
+class ReversalProfile:
     min_volume_ratio: float
     strong_volume_ratio: float
     min_body_ratio: float
@@ -30,9 +30,9 @@ class Reversal15mProfile:
     min_atr_pct: float
 
 
-def get_profile(symbol: str, timeframe_minutes: int = 15) -> Reversal15mProfile:
-    if timeframe_minutes >= 60 and is_brent_symbol(symbol):
-        return Reversal15mProfile(
+def get_profile(symbol: str, timeframe_minutes: int = 60) -> ReversalProfile:
+    if is_brent_symbol(symbol):
+        return ReversalProfile(
             min_volume_ratio=0.72,
             strong_volume_ratio=0.96,
             min_body_ratio=0.52,
@@ -53,70 +53,26 @@ def get_profile(symbol: str, timeframe_minutes: int = 15) -> Reversal15mProfile:
             expansion_range_pct=0.024,
             min_atr_pct=0.0010,
         )
-    if timeframe_minutes >= 60:
-        return Reversal15mProfile(
-            min_volume_ratio=0.75,
-            strong_volume_ratio=1.00,
-            min_body_ratio=0.55,
-            strong_body_ratio=0.90,
-            rsi_long_min=42.0,
-            rsi_long_max=72.0,
-            rsi_short_min=28.0,
-            rsi_short_max=58.0,
-            late_rsi_long=70.0,
-            late_rsi_short=30.0,
-            late_stoch_high=90.0,
-            late_stoch_low=10.0,
-            max_distance_to_ema20_pct=0.018,
-            compression_atr_pct=0.0015,
-            compression_range_pct=0.012,
-            compression_bb_width_pct=0.015,
-            chop_range_pct=0.016,
-            expansion_range_pct=0.020,
-            min_atr_pct=0.0008,
-        )
-    if is_brent_symbol(symbol):
-        return Reversal15mProfile(
-            min_volume_ratio=0.90,
-            strong_volume_ratio=1.15,
-            min_body_ratio=0.75,
-            strong_body_ratio=1.10,
-            rsi_long_min=46.0,
-            rsi_long_max=70.0,
-            rsi_short_min=30.0,
-            rsi_short_max=56.0,
-            late_rsi_long=68.0,
-            late_rsi_short=32.0,
-            late_stoch_high=88.0,
-            late_stoch_low=12.0,
-            max_distance_to_ema20_pct=0.012,
-            compression_atr_pct=0.0012,
-            compression_range_pct=0.010,
-            compression_bb_width_pct=0.012,
-            chop_range_pct=0.015,
-            expansion_range_pct=0.018,
-            min_atr_pct=0.0010,
-        )
-    return Reversal15mProfile(
-        min_volume_ratio=0.95,
-        strong_volume_ratio=1.18,
-        min_body_ratio=0.80,
-        strong_body_ratio=1.05,
-        rsi_long_min=45.0,
-        rsi_long_max=68.0,
-        rsi_short_min=32.0,
-        rsi_short_max=55.0,
-        late_rsi_long=66.0,
-        late_rsi_short=34.0,
-        late_stoch_high=86.0,
-        late_stoch_low=14.0,
-        max_distance_to_ema20_pct=0.008,
-        compression_atr_pct=0.0008,
-        compression_range_pct=0.007,
-        compression_bb_width_pct=0.010,
-        chop_range_pct=0.010,
-        expansion_range_pct=0.013,
-        min_atr_pct=0.0005,
+    return ReversalProfile(
+        min_volume_ratio=0.75,
+        strong_volume_ratio=1.00,
+        min_body_ratio=0.55,
+        strong_body_ratio=0.90,
+        rsi_long_min=42.0,
+        rsi_long_max=72.0,
+        rsi_short_min=28.0,
+        rsi_short_max=58.0,
+        late_rsi_long=70.0,
+        late_rsi_short=30.0,
+        late_stoch_high=90.0,
+        late_stoch_low=10.0,
+        max_distance_to_ema20_pct=0.018,
+        compression_atr_pct=0.0015,
+        compression_range_pct=0.012,
+        compression_bb_width_pct=0.015,
+        chop_range_pct=0.016,
+        expansion_range_pct=0.020,
+        min_atr_pct=0.0008,
     )
 
 
@@ -170,7 +126,6 @@ def evaluate_signal_core(
     *,
     timeframe_minutes: int,
     strategy_label: str,
-    timeframe_label: str,
 ) -> tuple[str, str]:
     profile = get_profile(instrument.symbol, timeframe_minutes)
     if len(df) < 8:
@@ -214,8 +169,8 @@ def evaluate_signal_core(
     macd_signal_series = [float(value) for value in recent["macd_signal"].tolist()]
     long_cross_age = _bars_since_cross(macd_series, macd_signal_series, "LONG")
     short_cross_age = _bars_since_cross(macd_series, macd_signal_series, "SHORT")
-    recent_cross_age_limit = 4 if timeframe_minutes >= 60 else 6
-    late_cross_age_limit = 6 if timeframe_minutes >= 60 else 8
+    recent_cross_age_limit = 4
+    late_cross_age_limit = 6
     recent_long_cross = long_cross_age is not None and long_cross_age <= recent_cross_age_limit
     recent_short_cross = short_cross_age is not None and short_cross_age <= recent_cross_age_limit
     macd_hist = macd - macd_signal
@@ -471,16 +426,4 @@ def evaluate_signal_core(
         + ". Главные блокеры short: "
         + "; ".join(short_blockers[:3])
         + ".",
-    )
-
-
-def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
-    return evaluate_signal_core(
-        df,
-        config,
-        instrument,
-        higher_tf_bias,
-        timeframe_minutes=15,
-        strategy_label="reversal_15m",
-        timeframe_label="15м",
     )

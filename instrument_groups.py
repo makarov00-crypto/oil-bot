@@ -19,8 +19,6 @@ BOND_INDEX = InstrumentGroup(name="bond_index", description="Government bond ind
 
 BRENT_SYMBOLS = {"BRK6", "BMM6"}
 NATURAL_GAS_TEMPLATE_SYMBOLS = {"NGJ6", "NGK6"}
-UNIFIED_REVERSAL_15M_SYMBOLS = {
-}
 UNIFIED_REVERSAL_1H_SYMBOLS = {
     "BRK6",
     "BMM6",
@@ -90,17 +88,12 @@ def is_brent_symbol(symbol: str) -> bool:
     return get_symbol_template(symbol) in BRENT_SYMBOLS
 
 
-def uses_unified_reversal_15m(symbol: str) -> bool:
-    return get_symbol_template(symbol) in UNIFIED_REVERSAL_15M_SYMBOLS
-
-
 def uses_unified_reversal_1h(symbol: str) -> bool:
     return get_symbol_template(symbol) in UNIFIED_REVERSAL_1H_SYMBOLS
 
 
 def uses_unified_reversal(symbol: str) -> bool:
-    template = get_symbol_template(symbol)
-    return template in UNIFIED_REVERSAL_15M_SYMBOLS or template in UNIFIED_REVERSAL_1H_SYMBOLS
+    return uses_unified_reversal_1h(symbol)
 
 
 def is_natural_gas_symbol(symbol: str) -> bool:

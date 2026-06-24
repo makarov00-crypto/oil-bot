@@ -26,7 +26,6 @@ from instrument_groups import (
     is_natural_gas_symbol,
     uses_unified_reversal,
     uses_unified_reversal_1h,
-    uses_unified_reversal_15m,
 )
 from news_bias import NewsBias, select_active_biases
 from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
@@ -2919,16 +2918,12 @@ def get_candles(
 def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
     if uses_unified_reversal_1h(symbol):
         return SUPPORTED_INTERVALS[60]
-    if uses_unified_reversal_15m(symbol):
-        return config.higher_tf_interval
     return config.candle_interval
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
     if uses_unified_reversal_1h(symbol):
         return 60
-    if uses_unified_reversal_15m(symbol):
-        return config.higher_tf_interval_minutes
     return config.candle_interval_minutes
 
 
@@ -2952,11 +2947,10 @@ def get_lower_tf_lookback_hours(
         # inside the same wall-clock window, so we keep a longer bootstrap window.
         lookback_hours = max(lookback_hours, 120)
     if symbol and uses_unified_reversal(symbol):
-        # The unified 15m reversal engine needs a stable rolling window for MACD,
-        # RSI, stochastic, Bollinger, ATR and volume baselines, so the default
-        # commodity bootstrap window can still be too short after holidays or
-        # contract rollovers even when the API returns candles correctly.
-        lookback_hours = max(lookback_hours, 240 if uses_unified_reversal_1h(symbol) else 120)
+        # The unified hourly reversal engine needs a stable rolling window for MACD,
+        # RSI, stochastic, Bollinger, ATR and volume baselines after holidays or
+        # contract rollovers.
+        lookback_hours = max(lookback_hours, 240)
     if symbol and is_natural_gas_symbol(symbol):
         # Natural gas sessions are more prone to sparse recent history around
         # rollovers and holiday windows, so keep an extra cushion.
@@ -6078,11 +6072,6 @@ def unified_reversal_pressure_intact(df: pd.DataFrame, side: str) -> bool:
         return close < ema20 and macd < macd_signal and ao < 0
     return False
 
-
-def reversal_15m_pressure_intact(df: pd.DataFrame, side: str) -> bool:
-    return unified_reversal_pressure_intact(df, side)
-
-
 def rbm6_sideways_exhaustion_exit_reason(
     instrument: InstrumentConfig,
     state: InstrumentState,
@@ -6123,7 +6112,7 @@ def rbm6_sideways_exhaustion_exit_reason(
         gave_back = current_gross <= best_gross * 0.65
         if no_new_high and momentum_fades and gave_back:
             return (
-                "RBM6 profit-lock: после импульса нет нового high на 15m, "
+                "RBM6 profit-lock: после импульса нет нового high на рабочем графике, "
                 f"MACD затухает; фиксируем {current_gross:.2f} из max {best_gross:.2f} RUB gross."
             )
     else:
@@ -6132,7 +6121,7 @@ def rbm6_sideways_exhaustion_exit_reason(
         gave_back = current_gross <= best_gross * 0.65
         if no_new_low and momentum_fades and gave_back:
             return (
-                "RBM6 profit-lock: после импульса нет нового low на 15m, "
+                "RBM6 profit-lock: после импульса нет нового low на рабочем графике, "
                 f"MACD затухает; фиксируем {current_gross:.2f} из max {best_gross:.2f} RUB gross."
             )
     return ""
