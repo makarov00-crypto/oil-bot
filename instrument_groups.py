@@ -20,9 +20,6 @@ BOND_INDEX = InstrumentGroup(name="bond_index", description="Government bond ind
 BRENT_SYMBOLS = {"BRK6", "BMM6"}
 NATURAL_GAS_TEMPLATE_SYMBOLS = {"NGJ6", "NGK6"}
 UNIFIED_REVERSAL_15M_SYMBOLS = {
-    "USDRUBF",
-    "CNYRUBF",
-    "UCM6",
 }
 UNIFIED_REVERSAL_1H_SYMBOLS = {
     "BRK6",
@@ -30,6 +27,9 @@ UNIFIED_REVERSAL_1H_SYMBOLS = {
     "GNM6",
     "NGJ6",
     "NGK6",
+    "USDRUBF",
+    "CNYRUBF",
+    "UCM6",
     "RNM6",
     "IMOEXF",
     "SRM6",

@@ -98,12 +98,9 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_all_default_symbols_use_unified_reversal_only(self) -> None:
         for symbol in DEFAULT_SYMBOLS.split(","):
-            if symbol in {"USDRUBF", "CNYRUBF", "UCM6"}:
-                self.assertTrue(uses_unified_reversal_15m(symbol), symbol)
-                self.assertEqual(get_primary_strategies(symbol), ["reversal_15m"])
-            else:
-                self.assertTrue(uses_unified_reversal_1h(symbol), symbol)
-                self.assertEqual(get_primary_strategies(symbol), ["reversal_1h"])
+            self.assertFalse(uses_unified_reversal_15m(symbol), symbol)
+            self.assertTrue(uses_unified_reversal_1h(symbol), symbol)
+            self.assertEqual(get_primary_strategies(symbol), ["reversal_1h"])
             self.assertEqual(get_secondary_strategies(symbol), [])
 
     def test_legacy_strategy_name_is_not_evaluated_live(self) -> None:
@@ -119,7 +116,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
     def test_unified_reversal_symbols_use_longer_bootstrap_lookback(self) -> None:
         self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "BMM6", interval_minutes=60), 240)
-        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "USDRUBF", interval_minutes=15), 120)
+        self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "USDRUBF", interval_minutes=60), 240)
         self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "NGK6", interval_minutes=60), 240)
         self.assertGreaterEqual(mod.get_lower_tf_lookback_hours(self.config, "GNM6", interval_minutes=60), 240)
 

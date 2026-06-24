@@ -97,7 +97,7 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "reversal_15m": {
         "title": "Локальный переворот 15м",
         "summary": "Единый локальный движок без старшего ТФ: вход строится на пересечении MACD, подтверждении AO, силе объёма и импульса, режиме рынка и защите от late entry и пилы.",
-        "when": "Используется для валютных инструментов, где нужна быстрая реакция на локальный 15-минутный график.",
+        "when": "Сейчас не выбирается для активной карты инструментов; оставлен как технический и исторический режим.",
     },
     "reversal_1h": {
         "title": "Часовой переворот 1ч",
@@ -263,6 +263,9 @@ def build_strategy_docs_rows() -> tuple[str, str, list[str], list[str]]:
 
 def build_docs_html() -> str:
     strategy_cards, strategy_rows, unified_15m_symbols, unified_1h_symbols, legacy_symbols = build_strategy_docs_rows()
+    unified_15m_display = ", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_15m_symbols) or "—"
+    unified_1h_display = ", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_1h_symbols) or "—"
+    legacy_display = ", ".join(f"<span class='mono'>{symbol}</span>" for symbol in legacy_symbols) if legacy_symbols else "—"
     return f"""
 <!doctype html>
 <html lang="ru">
@@ -493,8 +496,8 @@ def build_docs_html() -> str:
     <section class="panel hero">
       <h1>Документация стратегий</h1>
       <p>
-        Здесь собрана актуальная живая карта стратегий бота. Сейчас рабочая архитектура разделена на unified `reversal_15m`
-        для валют и unified `reversal_1h` для нефти, газа, золота, индексов и акций.
+        Здесь собрана актуальная живая карта стратегий бота. Сейчас рабочая архитектура переведена на unified `reversal_1h`
+        для валют, нефти, газа, золота, индексов и акций.
         Старые стратегии больше не используются как живой контур для текущих инструментов.
       </p>
     </section>
@@ -504,15 +507,15 @@ def build_docs_html() -> str:
         <article class="overview-card">
           <h3>Unified 15м</h3>
           <p>
-            `reversal_15m` работает локально на `15m` и не ждёт подтверждения от старшего ТФ.
-            Сейчас этот режим используется для валютных инструментов.
+            `reversal_15m` остаётся в коде как технический и исторический режим.
+            Для текущей активной карты инструментов он больше не выбирается как основная стратегия.
           </p>
         </article>
         <article class="overview-card">
           <h3>Unified 1ч</h3>
           <p>
             `reversal_1h` использует тот же принцип разворота, но на часовом графике.
-            Этот режим снижает чувствительность к 15-минутной пиле и используется для нефти, газа, золота, индексов и акций.
+            Этот режим снижает чувствительность к 15-минутной пиле и используется для всех текущих активных инструментов.
           </p>
         </article>
         <article class="overview-card">
@@ -526,7 +529,7 @@ def build_docs_html() -> str:
           <h3>Что важно не путать</h3>
           <p>
             Если в интерфейсе у unified-инструмента всплывает legacy-режим как часть сигнала, это хвост.
-            Для unified-группы рабочая модель должна быть локальной: 15м для валют, 1ч для остальных основных инструментов.
+            Для unified-группы рабочая модель должна быть локальной и часовой: `reversal_1h` для текущей карты инструментов.
           </p>
         </article>
       </div>
@@ -536,28 +539,28 @@ def build_docs_html() -> str:
       <div class="overview-grid">
         <article class="overview-card">
           <h3>Unified `reversal_15m`</h3>
-          <p>{", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_15m_symbols)}</p>
+          <p>{unified_15m_display}</p>
         </article>
         <article class="overview-card">
           <h3>Unified `reversal_1h`</h3>
-          <p>{", ".join(f"<span class='mono'>{symbol}</span>" for symbol in unified_1h_symbols)}</p>
+          <p>{unified_1h_display}</p>
         </article>
         <article class="overview-card">
           <h3>Оставшиеся legacy-инструменты</h3>
-          <p>{", ".join(f"<span class='mono'>{symbol}</span>" for symbol in legacy_symbols) if legacy_symbols else "—"}</p>
+          <p>{legacy_display}</p>
         </article>
       </div>
     </section>
     <section class="panel">
-      <h2>Как работает `reversal_15m`</h2>
+      <h2>Как работает `reversal_1h`</h2>
       <div class="steps">
         <article class="step">
           <div class="step__num">01</div>
           <div>
             <h3>Ищем новый локальный разворот</h3>
             <p>
-              Главный триггер — новое значимое пересечение `MACD` на `15m`. Простое касание линий не считается достаточным входом.
-              Сейчас свежим считается окно до трёх 15-минутных свечей, чтобы не проспать сильное движение, если импульс начался
+              Главный триггер — новое значимое пересечение `MACD` на часовом графике. Простое касание линий не считается достаточным входом.
+              Сейчас свежим считается окно до нескольких часовых свечей, чтобы не проспать сильное движение, если импульс начался
               не строго на последнем баре.
             </p>
           </div>

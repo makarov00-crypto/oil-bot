@@ -2,7 +2,7 @@ from instrument_groups import GROUP_BY_SYMBOL, get_symbol_template
 
 PRIMARY_STRATEGIES_BY_GROUP = {
     "commodities": ["reversal_1h"],
-    "fx": ["reversal_15m"],
+    "fx": ["reversal_1h"],
     "equity_index": ["reversal_1h"],
     "equity_futures": ["reversal_1h"],
     "bond_index": ["reversal_1h"],
@@ -17,8 +17,8 @@ def get_primary_strategies(symbol: str) -> list[str]:
     template_symbol = get_symbol_template(symbol)
     group = GROUP_BY_SYMBOL.get(template_symbol)
     if group is not None:
-        return PRIMARY_STRATEGIES_BY_GROUP.get(group.name, ["reversal_15m"])
-    return ["reversal_15m"]
+        return PRIMARY_STRATEGIES_BY_GROUP.get(group.name, ["reversal_1h"])
+    return ["reversal_1h"]
 
 
 def get_secondary_strategies(symbol: str) -> list[str]:
