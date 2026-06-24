@@ -2550,9 +2550,9 @@ def load_trade_review_for_day(
     states: dict[str, dict] | None = None,
     live_positions: dict[str, dict] | None = None,
 ) -> dict:
-    rows = [row for row in load_all_trade_rows() if row.get("_date") == target_day.isoformat()]
-    review = build_trade_review(rows, states, live_positions)
     all_rows = load_all_trade_rows()
+    rows = [row for row in all_rows if row.get("_date") == target_day.isoformat()]
+    review = build_trade_review(rows, states, live_positions)
     lookback_start = target_day - timedelta(days=2)
     recent_rows = [row for row in all_rows if lookback_start <= row.get("_dt", datetime.min.replace(tzinfo=MOSCOW_TZ)).date() <= target_day]
     recent_review = build_trade_review(recent_rows, states, live_positions)
@@ -2565,7 +2565,15 @@ def load_trade_review_for_day(
     review["release1_summary"] = build_strategy_regime_summary(review["focus_today"], review["focus_3d"])
     review.pop("closed_reviews_full", None)
     review["closed_reviews"] = full_closed_reviews[:limit]
-    review["current_open"] = list(review.get("current_open") or [])[:limit]
+    current_open = list(review.get("current_open") or [])
+    seen_open = {(row.get("symbol"), row.get("side")) for row in current_open}
+    for row in list(recent_review.get("current_open") or []):
+        key = (row.get("symbol"), row.get("side"))
+        if key in seen_open:
+            continue
+        current_open.append(row)
+        seen_open.add(key)
+    review["current_open"] = current_open[:limit]
     return review
 
 

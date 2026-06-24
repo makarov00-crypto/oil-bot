@@ -120,6 +120,37 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(len(review["closed_reviews"]), 5)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_trade_review_for_day_keeps_carryover_current_open(self) -> None:
+        open_dt = datetime(2026, 4, 23, 9, 0, tzinfo=timezone.utc)
+        rows = [
+            {
+                "_dt": open_dt,
+                "_date": "2026-04-23",
+                "time": "2026-04-23T12:00:00+03:00",
+                "symbol": "USDRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 74.50,
+                "strategy": "reversal_15m",
+                "reason": "carryover open",
+                "context": {"market_regime": "trend_expansion", "setup_quality_label": "strong", "entry_edge_label": "high"},
+            }
+        ]
+
+        states = {"USDRUBF": {"position_side": "SHORT", "position_qty": 1}}
+        live_positions = {"USDRUBF": {"side": "SHORT", "qty": 1}}
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
+            review = dashboard.load_trade_review_for_day(
+                date(2026, 4, 24),
+                states=states,
+                live_positions=live_positions,
+            )
+
+        self.assertEqual(len(review["current_open"]), 1)
+        self.assertEqual(review["current_open"][0]["symbol"], "USDRUBF")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_strategy_regime_summary_avoids_duplicate_watch_labels(self) -> None:
         summary = dashboard.build_strategy_regime_summary(
             focus_today={
