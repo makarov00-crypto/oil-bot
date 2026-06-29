@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -19,8 +20,13 @@ from dotenv import load_dotenv
 from active_contracts import replace_with_active_symbols
 from custom_instruments import merge_with_custom_symbols
 from instrument_groups import (
+    BOND_INDEX,
     DEFAULT_SYMBOLS,
+    EQUITY_FUTURES,
+    EQUITY_INDEX,
+    FX,
     get_instrument_group,
+    get_symbol_template,
     is_brent_symbol,
     is_currency_instrument as is_currency_symbol,
     is_natural_gas_symbol,
@@ -659,9 +665,15 @@ def append_signal_observation_decision(
     *,
     decision: str,
     decision_reason: str,
-    horizon_minutes: int = 15,
+    horizon_minutes: int | None = None,
 ) -> str:
     observed_at = str(candidate.get("observed_at") or datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat())
+    strategy_name = str(candidate.get("strategy_name") or "")
+    resolved_horizon_minutes = (
+        int(horizon_minutes)
+        if horizon_minutes is not None
+        else get_signal_observation_horizon_minutes(strategy_name)
+    )
     context = {
         "allocator_summary": str(candidate.get("allocator_summary") or ""),
         "priority_reason": str(candidate.get("priority_reason") or ""),
@@ -687,7 +699,7 @@ def append_signal_observation_decision(
         "observation_key": observation_key,
         "symbol": str(candidate.get("symbol") or "").upper(),
         "signal": str(candidate.get("signal") or "").upper(),
-        "strategy": str(candidate.get("strategy_name") or ""),
+        "strategy": strategy_name,
         "decision": decision,
         "decision_reason": decision_reason,
         "priority_score": float(candidate.get("priority_score") or 0.0),
@@ -697,7 +709,7 @@ def append_signal_observation_decision(
         "regime_confidence": float(candidate.get("regime_confidence") or 0.0),
         "setup_quality": str(candidate.get("setup_quality_label") or ""),
         "observed_price": float(candidate.get("observed_price") or 0.0),
-        "horizon_minutes": horizon_minutes,
+        "horizon_minutes": resolved_horizon_minutes,
         "context": {key: value for key, value in context.items() if value not in ("", None, 0.0)},
     }
     return append_signal_observation(TRADE_DB_PATH, row)
@@ -874,6 +886,13 @@ def update_signal_observation_outcomes(
     if updated:
         logging.info("signal_observation_outcomes_updated count=%s", updated)
     return updated
+
+
+def get_signal_observation_horizon_minutes(strategy_name: str) -> int:
+    normalized = str(strategy_name or "").strip()
+    if normalized == "reversal_1h":
+        return 60
+    return 15
 
 
 def load_trade_journal() -> list[dict[str, Any]]:
@@ -5060,7 +5079,7 @@ def calculate_signal_learning_priority_adjustment(
     symbol: str,
     strategy_name: str,
     *,
-    lookback_days: int = 3,
+    lookback_days: int = 15,
     min_evaluated: int = 5,
 ) -> tuple[float, str]:
     signal = str(state.last_signal or "").strip().upper()
@@ -5071,6 +5090,7 @@ def calculate_signal_learning_priority_adjustment(
     edge_score = float(state.last_entry_edge_score or 0.0)
     market_regime = str(state.last_market_regime or "").strip()
     setup_quality = str(state.last_setup_quality_label or "").strip()
+    expected_horizon_minutes = get_signal_observation_horizon_minutes(strategy_name)
 
     rows: list[dict[str, Any]] = []
     today = datetime.now(MOSCOW_TZ).date()
@@ -5087,6 +5107,7 @@ def calculate_signal_learning_priority_adjustment(
             continue
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         row_edge = str((context or {}).get("entry_edge_label") or "").strip().lower()
+        row_horizon_minutes = int(row.get("horizon_minutes") or 0)
         if (
             str(row.get("symbol") or "").upper() == symbol.upper()
             and str(row.get("signal") or "").upper() == signal
@@ -5094,6 +5115,7 @@ def calculate_signal_learning_priority_adjustment(
             and str(row.get("market_regime") or "").strip() == market_regime
             and str(row.get("setup_quality") or "").strip() == setup_quality
             and row_edge == edge_label
+            and row_horizon_minutes == expected_horizon_minutes
         ):
             matched.append(row)
 
@@ -5150,19 +5172,27 @@ def get_candidate_correlation_bucket(candidate: dict[str, Any]) -> str:
     signal = str(candidate.get("signal") or "").strip().upper()
     if not symbol or signal not in {"LONG", "SHORT"}:
         return ""
+    template_symbol = get_symbol_template(symbol)
     if is_brent_symbol(symbol) or is_natural_gas_symbol(symbol):
         family = "energy"
-    elif symbol == "GNM6":
+    elif template_symbol == "GNM6":
         family = "gold"
-    elif symbol in {"USDRUBF", "CNYRUBF", "UCM6"}:
+    elif get_instrument_group(symbol).name == FX.name:
         family = "fx"
-    elif symbol in {"IMOEXF", "SRM6", "VBM6", "RNM6"}:
+    elif get_instrument_group(symbol).name in {EQUITY_INDEX.name, EQUITY_FUTURES.name}:
         family = "equity"
-    elif symbol == "RBM6":
+    elif get_instrument_group(symbol).name == BOND_INDEX.name:
         family = "bond"
     else:
         family = get_instrument_group(symbol).name
     return f"{family}:{signal}"
+
+
+def get_candidate_capital_efficiency_score(candidate: dict[str, Any]) -> float:
+    priority_score = float(candidate.get("priority_score") or 0.0)
+    edge_score = max(0.25, float(candidate.get("entry_edge_score") or 0.0))
+    requested_margin_rub = max(1.0, float(candidate.get("requested_margin_rub") or 0.0))
+    return (priority_score * (0.7 + edge_score)) / math.sqrt(requested_margin_rub)
 
 
 def rank_cycle_entry_candidates(
@@ -5186,6 +5216,7 @@ def rank_cycle_entry_candidates(
             float(item.get("priority_score") or 0.0),
             float(item.get("entry_edge_score") or 0.0),
             float(item.get("regime_confidence") or 0.0),
+            get_candidate_capital_efficiency_score(item),
             int(item.get("allocator_quantity") or 0),
         ),
         reverse=True,
@@ -5195,8 +5226,10 @@ def rank_cycle_entry_candidates(
     used_budget_rub = 0.0
     class_counts: dict[str, int] = defaultdict(int)
     correlation_counts: dict[str, int] = defaultdict(int)
+    correlation_best_scores: dict[str, float] = defaultdict(float)
     for item in ranked:
         score = float(item.get("priority_score") or 0.0)
+        edge_score = float(item.get("entry_edge_score") or 0.0)
         if score < min_priority_score:
             item["defer_reason"] = (
                 f"приоритет цикла {score:.2f} ниже порога, "
@@ -5213,7 +5246,13 @@ def rank_cycle_entry_candidates(
             continue
 
         correlation_bucket = get_candidate_correlation_bucket(item)
-        if correlation_bucket and correlation_counts[correlation_bucket] >= 1 and score < 0.88:
+        bucket_best_score = float(correlation_best_scores.get(correlation_bucket) or 0.0)
+        if (
+            correlation_bucket
+            and correlation_counts[correlation_bucket] >= 1
+            and score < 0.88
+            and not (edge_score >= 0.70 and score >= bucket_best_score - 0.03)
+        ):
             item["defer_reason"] = (
                 f"похожая рыночная идея уже выбрана в этом цикле; "
                 f"группа {correlation_bucket}, приоритет {score:.2f}."
@@ -5239,17 +5278,49 @@ def rank_cycle_entry_candidates(
             and selected
             and score < 0.86
         ):
-            item["defer_reason"] = (
-                f"в цикле не хватает свободного бюджета ГО: нужно {requested_margin_rub:.0f} RUB, "
-                f"после уже выбранных идей осталось {max(0.0, cycle_budget_rub - used_budget_rub):.0f} RUB."
+            weakest_selected = min(
+                selected,
+                key=lambda candidate: (
+                    get_candidate_capital_efficiency_score(candidate),
+                    float(candidate.get("priority_score") or 0.0),
+                ),
             )
-            deferred.append(item)
+            weakest_requested_margin = float(weakest_selected.get("requested_margin_rub") or 0.0)
+            candidate_efficiency = get_candidate_capital_efficiency_score(item)
+            weakest_efficiency = get_candidate_capital_efficiency_score(weakest_selected)
+            weakest_score = float(weakest_selected.get("priority_score") or 0.0)
+            if (
+                used_budget_rub - weakest_requested_margin + requested_margin_rub <= cycle_budget_rub
+                and score + 0.03 >= weakest_score
+                and candidate_efficiency > weakest_efficiency * 1.12
+            ):
+                selected.remove(weakest_selected)
+                used_budget_rub -= weakest_requested_margin
+                weakest_bucket = get_candidate_correlation_bucket(weakest_selected)
+                weakest_class = str(weakest_selected.get("instrument_class") or "базовый")
+                class_counts[weakest_class] = max(0, class_counts[weakest_class] - 1)
+                if weakest_bucket:
+                    correlation_counts[weakest_bucket] = max(0, correlation_counts[weakest_bucket] - 1)
+                weakest_selected["defer_reason"] = (
+                    f"в цикле заменён более эффективной по ГО идеей {item.get('symbol') or '-'}; "
+                    f"эффективность {candidate_efficiency:.4f} против {weakest_efficiency:.4f}."
+                )
+                deferred.append(weakest_selected)
+            else:
+                item["defer_reason"] = (
+                    f"в цикле не хватает свободного бюджета ГО: нужно {requested_margin_rub:.0f} RUB, "
+                    f"после уже выбранных идей осталось {max(0.0, cycle_budget_rub - used_budget_rub):.0f} RUB."
+                )
+                deferred.append(item)
+                continue
         else:
-            selected.append(item)
-            used_budget_rub += requested_margin_rub
-            class_counts[instrument_class] += 1
-            if correlation_bucket:
-                correlation_counts[correlation_bucket] += 1
+            pass
+        selected.append(item)
+        used_budget_rub += requested_margin_rub
+        class_counts[instrument_class] += 1
+        if correlation_bucket:
+            correlation_counts[correlation_bucket] += 1
+            correlation_best_scores[correlation_bucket] = max(correlation_best_scores[correlation_bucket], score)
     return selected, deferred
 
 

@@ -749,6 +749,37 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual([item["symbol"] for item in deferred], ["NGJ6"])
         self.assertIn("похожая рыночная идея", deferred[0]["defer_reason"])
 
+    def test_rank_cycle_entry_candidates_allows_near_equal_correlated_signal(self) -> None:
+        candidates = [
+            {
+                "symbol": "BMN6",
+                "signal": "LONG",
+                "priority_score": 0.84,
+                "entry_edge_score": 0.76,
+                "regime_confidence": 0.80,
+                "allocator_quantity": 1,
+                "instrument_class": "базовый",
+                "requested_margin_rub": 3200.0,
+                "allocatable_margin_rub": 10000.0,
+            },
+            {
+                "symbol": "NGN6",
+                "signal": "LONG",
+                "priority_score": 0.82,
+                "entry_edge_score": 0.74,
+                "regime_confidence": 0.79,
+                "allocator_quantity": 1,
+                "instrument_class": "тяжёлый",
+                "requested_margin_rub": 3300.0,
+                "allocatable_margin_rub": 10000.0,
+            },
+        ]
+
+        selected, deferred = mod.rank_cycle_entry_candidates(candidates, max_entries=2, min_priority_score=0.45)
+
+        self.assertEqual([item["symbol"] for item in selected], ["BMN6", "NGN6"])
+        self.assertEqual(deferred, [])
+
     def test_mark_cycle_deferred_candidate_updates_allocator_summary(self) -> None:
         symbol = "TESTRANK"
         state = mod.InstrumentState(last_signal_summary=["старый сигнал"])
@@ -943,6 +974,65 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(updated, 0)
         self.assertEqual(rows[0]["evaluated_at"], "")
         self.assertIsNone(rows[0]["current_price"])
+
+    def test_append_signal_observation_decision_uses_hourly_horizon_for_reversal_1h(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trade.sqlite3"):
+            mod.append_signal_observation_decision(
+                {
+                    "symbol": "IMOEXF",
+                    "signal": "LONG",
+                    "strategy_name": "reversal_1h",
+                    "observed_at": "2026-04-24T10:00:00+03:00",
+                    "observed_price": 2700.0,
+                    "priority_score": 0.8,
+                    "entry_edge_score": 0.82,
+                },
+                decision="selected",
+                decision_reason="ok",
+            )
+            rows = mod.load_signal_observations(mod.TRADE_DB_PATH)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["horizon_minutes"], 60)
+
+    def test_signal_learning_for_reversal_1h_ignores_short_horizon_samples(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.83,
+            last_entry_edge_score=0.82,
+            last_entry_edge_label="high",
+        )
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trades.sqlite3"), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "")
+        ), patch.object(mod, "get_strategy_regime_health_score", return_value=(1.0, "")), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            today = mod.datetime.now(mod.MOSCOW_TZ).date()
+            for index in range(6):
+                mod.append_signal_observation(
+                    mod.TRADE_DB_PATH,
+                    {
+                        "observed_at": f"{today.isoformat()}T10:{index:02d}:00+03:00",
+                        "evaluated_at": f"{today.isoformat()}T10:{index:02d}:15+03:00",
+                        "symbol": "IMOEXF",
+                        "signal": "LONG",
+                        "strategy": "reversal_1h",
+                        "decision": "selected",
+                        "market_regime": "trend_expansion",
+                        "setup_quality": "strong",
+                        "move_pct": -1.0,
+                        "favorable": False,
+                        "horizon_minutes": 15,
+                        "context": {"entry_edge_label": "high", "candle_time": f"2026-04-24 10:{index:02d}"},
+                    },
+                )
+            score, reason = mod.calculate_entry_priority_score(state, "IMOEXF", "reversal_1h")
+
+        self.assertGreater(score, 0.72)
+        self.assertNotIn("обучение связки: штраф", reason)
 
     def test_capital_rotation_selects_strong_margin_blocked_candidate_over_weak_open_position(self) -> None:
         watchlist = [
