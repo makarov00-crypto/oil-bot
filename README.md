@@ -14,7 +14,7 @@
 - `USDRUBF` — доллар/рубль
 - `CNYRUBF` — юань/рубль
 - `UCU6` — доллар/юань
-- `BMN6` — Brent mini
+- `BMQ6` — Brent mini
 - `GNU6` — золото
 - `NGN6` — природный газ
 - `IMOEXF` — индекс МосБиржи

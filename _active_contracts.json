@@ -2,13 +2,13 @@
   "contracts": [
     {
       "template_symbol": "BRK6",
-      "active_symbol": "BMN6",
+      "active_symbol": "BMQ6",
       "disabled": false,
       "updated_at": ""
     },
     {
       "template_symbol": "BMM6",
-      "active_symbol": "BMN6",
+      "active_symbol": "BMQ6",
       "disabled": false,
       "updated_at": ""
     },
