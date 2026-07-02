@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 
 import requests
+from active_contracts import replace_with_active_symbols
 from dotenv import load_dotenv
 from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from tinkoff.invest import RequestError
@@ -29,7 +30,8 @@ def quotation_to_float(value) -> float:
 def load_config() -> CheckConfig:
     token = os.getenv("T_INVEST_TOKEN", "").strip()
     account_id = os.getenv("T_INVEST_ACCOUNT_ID", "").strip()
-    symbols = [item.strip().upper() for item in os.getenv("T_INVEST_SYMBOLS", "").split(",") if item.strip()]
+    raw_symbols = [item.strip().upper() for item in os.getenv("T_INVEST_SYMBOLS", "").split(",") if item.strip()]
+    symbols = replace_with_active_symbols(raw_symbols)
     target_name = os.getenv("T_INVEST_TARGET", "PROD").strip().upper()
     target = INVEST_GRPC_API_SANDBOX if target_name == "SANDBOX" else INVEST_GRPC_API
 
