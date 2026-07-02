@@ -15,8 +15,8 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from tinkoff.invest import Client
 from tinkoff.invest.schemas import GetOperationsByCursorRequest, OperationState, OperationType
+from tbank_invest import Client
 
 from bot_oil_main import (
     FEE_OPERATION_TYPES,

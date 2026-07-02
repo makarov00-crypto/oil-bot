@@ -36,6 +36,7 @@ from instrument_groups import (
 from news_bias import NewsBias, select_active_biases
 from news_ingest import CHANNEL_URLS, detect_biases_for_posts, fetch_posts_for_day
 from strategy_engine import evaluate_primary_signal_bundle
+from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from trade_storage import (
     append_signal_observation,
     append_trade_row,
@@ -47,7 +48,6 @@ from trade_storage import (
 )
 from tinkoff.invest import (
     CandleInterval,
-    Client,
     GetMaxLotsRequest,
     GetOperationsByCursorRequest,
     OrderDirection,
@@ -57,7 +57,6 @@ from tinkoff.invest import (
     OperationType,
     RequestError,
 )
-from tinkoff.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from strategies.base import StrategyProfile
 
 

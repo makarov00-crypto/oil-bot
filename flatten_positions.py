@@ -3,7 +3,8 @@ import sys
 import time
 from dataclasses import dataclass
 
-from tinkoff.invest import Client, OrderDirection
+from tbank_invest import Client
+from tinkoff.invest import OrderDirection
 from tinkoff.invest.exceptions import RequestError
 
 from bot_oil_main import (

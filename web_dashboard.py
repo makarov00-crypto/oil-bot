@@ -193,7 +193,7 @@ def build_instrument_catalog(
 
 
 def validate_futures_ticker_exists(symbol: str) -> dict[str, str]:
-    from tinkoff.invest import Client
+    from tbank_invest import Client
     from bot_oil_main import load_config
 
     config = load_config()
@@ -728,7 +728,7 @@ def load_contracts_payload() -> dict:
         "error": "",
     }
     try:
-        from tinkoff.invest import Client
+        from tbank_invest import Client
         from tinkoff.invest.schemas import GetMaxLotsRequest
         from bot_oil_main import load_config, quotation_to_float, resolve_instruments
 

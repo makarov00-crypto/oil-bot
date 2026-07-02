@@ -3,8 +3,8 @@ from dataclasses import dataclass
 
 import requests
 from dotenv import load_dotenv
-from tinkoff.invest import Client, RequestError
-from tinkoff.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
+from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
+from tinkoff.invest import RequestError
 
 
 load_dotenv()

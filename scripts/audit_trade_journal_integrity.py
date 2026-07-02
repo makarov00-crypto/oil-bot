@@ -308,7 +308,7 @@ def resolve_instruments_for_audit(client: Any, config: Any) -> list[dict[str, st
 
 
 def get_broker_audit_dependencies() -> tuple[Any, Any, Any]:
-    from tinkoff.invest import Client
+    from tbank_invest import Client
 
     from bot_oil_main import load_config
     from scripts.recover_trade_operations import fetch_operations
