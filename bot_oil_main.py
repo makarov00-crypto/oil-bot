@@ -1466,6 +1466,18 @@ def confirm_pending_open_from_broker(
             dry_run=config.dry_run,
             state=state,
         )
+        maybe_notify_trade_execution(
+            config,
+            instrument,
+            event="OPEN",
+            source="portfolio_confirmation",
+            side=state.position_side,
+            qty=missing_open_lots,
+            price=state.entry_price,
+            state=state,
+            commission_rub=entry_fee_rub,
+            strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
+        )
     if entry_fee_rub is not None and entry_fee_rub > 0:
         state.entry_commission_rub = entry_fee_rub
         state.entry_commission_accounted = True
@@ -1579,6 +1591,21 @@ def confirm_pending_close_from_broker(
         strategy=previous_strategy,
         dry_run=False,
         state=state,
+    )
+    maybe_notify_trade_execution(
+        config,
+        instrument,
+        event="CLOSE",
+        source=source,
+        side=previous_side,
+        qty=previous_qty,
+        price=close_price,
+        state=state,
+        commission_rub=total_trade_commission,
+        gross_pnl_rub=gross_pnl,
+        net_pnl_rub=net_trade_pnl,
+        exit_reason=previous_exit_reason,
+        strategy=previous_strategy,
     )
     update_latest_close_journal_entry(
         instrument.symbol,
@@ -2367,6 +2394,13 @@ def format_instrument_title(instrument: InstrumentConfig) -> str:
     return f"{instrument.symbol} ({instrument.display_name})"
 
 
+def format_rub(value: float | int | None, *, signed: bool = False) -> str:
+    amount = float(value or 0.0)
+    if signed:
+        return f"{amount:+.2f} RUB"
+    return f"{amount:.2f} RUB"
+
+
 def signal_emoji(signal: str) -> str:
     return {
         "LONG": "🟢",
@@ -2521,6 +2555,109 @@ def is_currency_instrument(symbol: str) -> bool:
 def build_telegram_card(title: str, emoji: str, lines: list[str]) -> str:
     body = "\n".join(line for line in lines if line)
     return f"{emoji} {title}\n\n{body}"
+
+
+def build_position_opened_message(
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    *,
+    qty: int,
+    price: float,
+    commission_rub: float | None,
+    source: str,
+) -> str:
+    lines = [
+        f"Инструмент: {format_instrument_title(instrument)}",
+        f"Сторона: {signal_emoji(state.position_side)} {state.position_side}",
+        f"Объём: {qty} лот.",
+        f"Вход: {price:.4f}",
+        f"Стратегия: {state.entry_strategy or state.last_strategy_name or '-'}",
+        f"Комиссия: {format_rub(commission_rub)}",
+        f"Текущая вар. маржа: {format_rub(state.position_variation_margin_rub, signed=True)}",
+        f"Причина: {compact_reason(state.entry_reason or 'Открытие позиции')}",
+        f"Источник: {source}",
+    ]
+    return build_telegram_card("Позиция открыта", "🟢", lines)
+
+
+def build_position_closed_message(
+    instrument: InstrumentConfig,
+    *,
+    side: str,
+    qty: int,
+    strategy: str,
+    close_price: float,
+    gross_pnl_rub: float,
+    commission_rub: float,
+    net_pnl_rub: float,
+    exit_reason: str,
+    source: str,
+) -> str:
+    lines = [
+        f"Инструмент: {format_instrument_title(instrument)}",
+        f"Закрыта: {signal_emoji(side)} {side}",
+        f"Объём: {qty} лот.",
+        f"Выход: {close_price:.4f}",
+        f"Стратегия: {strategy or '-'}",
+        f"Брутто: {format_rub(gross_pnl_rub, signed=True)}",
+        f"Комиссия: {format_rub(commission_rub)}",
+        f"NET: {format_rub(net_pnl_rub, signed=True)}",
+        f"Причина: {compact_reason(exit_reason or 'Закрытие позиции')}",
+        f"Источник: {source}",
+    ]
+    return build_telegram_card("Позиция закрыта", "🔵", lines)
+
+
+def maybe_notify_trade_execution(
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    *,
+    event: str,
+    source: str,
+    side: str,
+    qty: int,
+    price: float,
+    state: InstrumentState,
+    commission_rub: float | None = None,
+    gross_pnl_rub: float | None = None,
+    net_pnl_rub: float | None = None,
+    exit_reason: str = "",
+    strategy: str = "",
+) -> None:
+    if not config.tg_token or not config.tg_chat_id:
+        return
+    allowed_sources = {"order_fill", "portfolio_confirmation", "dry_run"}
+    if source not in allowed_sources:
+        return
+    if event == "OPEN":
+        send_msg(
+            config,
+            build_position_opened_message(
+                instrument,
+                state,
+                qty=qty,
+                price=price,
+                commission_rub=commission_rub,
+                source=source,
+            ),
+        )
+        return
+    if event == "CLOSE":
+        send_msg(
+            config,
+            build_position_closed_message(
+                instrument,
+                side=side,
+                qty=qty,
+                strategy=strategy,
+                close_price=price,
+                gross_pnl_rub=float(gross_pnl_rub or 0.0),
+                commission_rub=float(commission_rub or 0.0),
+                net_pnl_rub=float(net_pnl_rub or 0.0),
+                exit_reason=exit_reason,
+                source=source,
+            ),
+        )
 
 
 SIGNAL_STATUS_INTERVAL_MINUTES = 60
@@ -3444,28 +3581,7 @@ def notify_signal_change(
     reason: str,
     news_bias: NewsBias | None = None,
 ) -> None:
-    if signal == state.last_signal:
-        return
-    mode = "DRY_RUN" if config.dry_run else "LIVE"
-    impact = describe_news_bias_impact(signal, news_bias)
-    send_msg(
-        config,
-        build_telegram_card(
-            "Изменение сигнала",
-            signal_emoji(signal),
-            [
-                f"Инструмент: {format_instrument_title(instrument)}",
-                f"Режим: {mode}",
-                f"Цена: {price:.4f}",
-                f"Сигнал: {signal_emoji(signal)} {signal}",
-                f"Новости: {format_news_bias_label(news_bias)}",
-                f"Влияние: {impact}",
-                "",
-                "Коротко почему:",
-                *[f"• {line}" for line in summarize_signal_reason(signal, reason)],
-            ],
-        ),
-    )
+    return
 
 
 def notify_periodic_status(
@@ -3840,25 +3956,33 @@ def build_hourly_summary_message(
     portfolio = build_portfolio_snapshot_payload(client, config, watchlist)
     review_rows = get_today_trade_journal_rows()
     closed_reviews, current_open = pair_trade_journal_rows(review_rows)
-    news = get_active_news_biases()
 
     wins = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) > 0)
     losses = sum(1 for item in closed_reviews if float(item.get("pnl_rub") or 0.0) < 0)
+    closed_total_net = sum(float(item.get("net_pnl_rub") or item.get("pnl_rub") or 0.0) for item in closed_reviews)
     session_name = get_market_session()
     recent_closed = sorted(
         closed_reviews,
         key=lambda item: str(item.get("exit_time") or item.get("close_time") or ""),
         reverse=True,
-    )[:3]
+    )[:5]
+    live_open_positions = sorted(
+        list(portfolio.get("broker_open_positions") or []),
+        key=lambda item: str(item.get("symbol") or ""),
+    )
+    state_by_symbol = {instrument.symbol: load_state(instrument.symbol) for instrument in watchlist}
+    recent_closed_total_net = sum(float(item.get("net_pnl_rub") or item.get("pnl_rub") or 0.0) for item in recent_closed)
+    open_total_var_margin = sum(float(item.get("variation_margin_rub") or 0.0) for item in live_open_positions)
     lines = [
         f"🕓 Срез: {portfolio.get('generated_at_moscow', '-')}",
-        f"🕒 Сессия: {session_name} | Закрыто: {len(closed_reviews)} | ✅ {wins} / ⚠️ {losses}",
-        f"💰 Закрытые: {float(portfolio['bot_realized_pnl_rub']):.2f} | "
-        f"📈 Текущая ВМ: {float(portfolio['bot_estimated_variation_margin_rub']):.2f} | "
-        f"🧮 Итог: {float(portfolio['bot_total_pnl_rub']):.2f} RUB",
-        f"💼 Портфель: {float(portfolio['total_portfolio_rub']):.2f} | "
-        f"💵 Свободно: {float(portfolio['free_rub']):.2f} | "
-        f"🛡 ГО: {float(portfolio['blocked_guarantee_rub']):.2f} RUB",
+        f"🕒 Сессия: {session_name}",
+        f"📘 Закрыто сегодня: {len(closed_reviews)} | ✅ {wins} | ⚠️ {losses}",
+        f"💰 NET закрытых: {format_rub(closed_total_net, signed=True)}",
+        f"📈 Текущая ВМ открытых: {format_rub(portfolio['bot_estimated_variation_margin_rub'], signed=True)}",
+        f"🧮 Итог по боту: {format_rub(portfolio['bot_total_pnl_rub'], signed=True)}",
+        f"💼 Портфель: {format_rub(portfolio['total_portfolio_rub'])} | "
+        f"💵 Свободно: {format_rub(portfolio['free_rub'])} | "
+        f"🛡 ГО: {format_rub(portfolio['blocked_guarantee_rub'])}",
     ]
 
     if recent_closed:
@@ -3868,29 +3992,36 @@ def build_hourly_summary_message(
             exit_reason = compact_reason(str(item.get("exit_reason") or ""))[:90]
             lines.append(
                 f"• {item['symbol']} {item['side']} | {item.get('strategy') or '-'} | "
-                f"net {net:.2f} RUB | {exit_reason or 'без причины'}"
+                f"net {format_rub(net, signed=True)} | {exit_reason or 'без причины'}"
             )
+        lines.append(f"Итог раздела: {len(recent_closed)} сдел. | NET {format_rub(recent_closed_total_net, signed=True)}")
+    else:
+        lines.extend(["", "Последние закрытые", "• нет"])
 
-    if current_open:
+    if live_open_positions:
         lines.extend(["", "Открытые позиции"])
-        for symbol, row in current_open.items():
-            lines.append(
-                f"• {symbol} {row.get('side', '')} | {row.get('strategy') or '-'} | "
-                f"{row.get('qty_lots', 0)} лот. | вход {row.get('price')}"
+        for item in live_open_positions:
+            symbol = str(item.get("symbol") or "")
+            state = state_by_symbol.get(symbol, InstrumentState())
+            journal_row = current_open.get(symbol, {})
+            strategy = (
+                state.entry_strategy
+                or state.last_strategy_name
+                or str(journal_row.get("strategy") or "-")
             )
+            entry_price = item.get("entry_price")
+            lines.append(
+                f"• {symbol} {item.get('side', '')} | {strategy} | "
+                f"{int(item.get('qty') or 0)} лот. | "
+                f"вход {(f'{float(entry_price):.4f}' if entry_price else '-') } | "
+                f"ВМ {format_rub(item.get('variation_margin_rub'), signed=True)}"
+            )
+        lines.append(
+            f"Итог раздела: {len(live_open_positions)} поз. | "
+            f"суммарная ВМ {format_rub(open_total_var_margin, signed=True)}"
+        )
     else:
         lines.extend(["", "Открытые позиции", "• нет"])
-
-    lines.extend(["", "Диагностика"])
-    for instrument in watchlist:
-        state = load_state(instrument.symbol)
-        signal = state.last_signal or "HOLD"
-        strategy_name = state.last_strategy_name or state.entry_strategy or "-"
-        news_label = format_news_bias_label(news.get(instrument.symbol))
-        lines.append(
-            f"• {instrument.symbol}: {signal} | {strategy_name} | "
-            f"ТФ {state.last_higher_tf_bias or '-'} | Новости {news_label}"
-        )
 
     return build_telegram_card("Часовой отчёт", "🧾", lines)
 
@@ -4078,6 +4209,18 @@ def sync_state_with_portfolio(
             strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
             dry_run=config.dry_run,
             state=state,
+        )
+        maybe_notify_trade_execution(
+            config,
+            instrument,
+            event="OPEN",
+            source=recovery_source,
+            side=state.position_side,
+            qty=missing_open_lots,
+            price=state.entry_price or last_price,
+            state=state,
+            commission_rub=entry_fee_rub,
+            strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
         )
         save_state(instrument.symbol, state)
     elif state.position_side != "FLAT" and not has_matching_open_entry and state.delayed_close_recovery_needed:
@@ -6744,6 +6887,18 @@ def sync_pending_order(
                 dry_run=False,
                 state=state,
             )
+            maybe_notify_trade_execution(
+                config,
+                instrument,
+                event="OPEN",
+                source="order_fill",
+                side=state.position_side,
+                qty=filled_qty,
+                price=fill_price,
+                state=state,
+                commission_rub=fill_commission_rub,
+                strategy=state.entry_strategy,
+            )
             update_pending_signal_observation_execution(
                 state,
                 execution_status="confirmed_open",
@@ -6781,6 +6936,21 @@ def sync_pending_order(
                 strategy=state.entry_strategy,
                 dry_run=False,
                 state=state,
+            )
+            maybe_notify_trade_execution(
+                config,
+                instrument,
+                event="CLOSE",
+                source="order_fill",
+                side=state.position_side,
+                qty=state.position_qty,
+                price=fill_price,
+                state=state,
+                commission_rub=total_trade_commission,
+                gross_pnl_rub=gross_pnl,
+                net_pnl_rub=net_trade_pnl,
+                exit_reason=exit_reason,
+                strategy=state.entry_strategy,
             )
             state.last_exit_time = datetime.now(UTC).isoformat()
             state.last_exit_side = state.position_side
@@ -6992,6 +7162,18 @@ def open_position(
             dry_run=True,
             state=state,
         )
+        maybe_notify_trade_execution(
+            config,
+            instrument,
+            event="OPEN",
+            source="dry_run",
+            side=side,
+            qty=quantity,
+            price=price,
+            state=state,
+            commission_rub=0.0,
+            strategy=strategy_name,
+        )
         return
 
     try:
@@ -7061,6 +7243,21 @@ def close_position(
             strategy=state.entry_strategy,
             dry_run=True,
             state=state,
+        )
+        maybe_notify_trade_execution(
+            config,
+            instrument,
+            event="CLOSE",
+            source="dry_run",
+            side=state.position_side,
+            qty=qty,
+            price=price,
+            state=state,
+            commission_rub=0.0,
+            gross_pnl_rub=pnl,
+            net_pnl_rub=pnl,
+            exit_reason=exit_reason,
+            strategy=state.entry_strategy,
         )
         state.last_exit_time = datetime.now(UTC).isoformat()
         state.last_exit_side = state.position_side
@@ -7391,8 +7588,6 @@ def process_instrument(
         else str(candle_time_value)
     )
     signal_changed = signal != state.last_signal
-
-    notify_signal_change(config, instrument, state, signal, current_price, reason, news_bias)
 
     if not config.dry_run:
         sync_state_with_portfolio(client, config, instrument, state)
