@@ -88,6 +88,21 @@ class NewsBiasTests(unittest.TestCase):
         self.assertEqual(brent.source_label, "Финам Invest")
         self.assertGreaterEqual(brent.source_reliability, 0.9)
 
+    def test_detects_bcs_express_telegram_as_broker_telegram_source(self) -> None:
+        message = NewsMessage(
+            channel="bcs_express_tg",
+            text="Акции Сбера под давлением, негатив по рынку и банковский сектор снижается.",
+            created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
+        )
+
+        items = detect_news_bias(message)
+        sber = next(item for item in items if item.category == "банки")
+
+        self.assertEqual(sber.bias, "SHORT")
+        self.assertEqual(sber.source_type, "broker_telegram")
+        self.assertEqual(sber.source_label, "БКС Экспресс")
+        self.assertGreaterEqual(sber.source_speed, 0.88)
+
     def test_same_direction_from_broker_and_telegram_is_merged(self) -> None:
         created_at = datetime(2026, 5, 12, 10, 15, tzinfo=UTC)
         items = []
