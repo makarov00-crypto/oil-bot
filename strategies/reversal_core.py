@@ -105,6 +105,30 @@ def _macd_flip_count(macd: list[float], signal: list[float]) -> int:
     return flips
 
 
+def _rsi_direction_ok(current: float, previous: float, earlier: float, direction: str, *, floor: float, ceiling: float) -> bool:
+    if direction == "LONG":
+        return current >= floor and current >= previous + 0.20 and previous >= earlier - 0.35
+    if direction == "SHORT":
+        return current <= ceiling and current <= previous - 0.20 and previous <= earlier + 0.35
+    return False
+
+
+def _ao_direction_ok(current: float, previous: float, earlier: float, direction: str) -> bool:
+    if direction == "LONG":
+        return (
+            (current > 0 and previous <= 0)
+            or (current >= previous >= earlier)
+            or (current > previous and previous <= earlier and current > 0)
+        )
+    if direction == "SHORT":
+        return (
+            (current < 0 and previous >= 0)
+            or (current <= previous <= earlier)
+            or (current < previous and previous >= earlier and current < 0)
+        )
+    return False
+
+
 def _is_late_evening_candle(value) -> bool:
     try:
         if hasattr(value, "tz_convert"):
@@ -151,6 +175,7 @@ def evaluate_signal_core(
     stoch_d = float(last.get("stoch_d", 50.0))
     prev_stoch_k = float(prev.get("stoch_k", 50.0))
     prev_stoch_d = float(prev.get("stoch_d", 50.0))
+    prev2_rsi = float(df.iloc[-3]["rsi"])
     volume = float(last["volume"])
     volume_avg = float(last["volume_avg"])
     body = float(last["body"])
@@ -226,26 +251,30 @@ def evaluate_signal_core(
     compression_long_ok = regime == "compression" and breakout_up and volume_ratio >= soft_volume_floor and body_ratio >= soft_impulse_floor
     compression_short_ok = regime == "compression" and breakout_down and volume_ratio >= soft_volume_floor and body_ratio >= soft_impulse_floor
 
-    rsi_long_ok = rsi >= max(profile.rsi_long_min - 5.0, 40.0) and rsi >= (prev_rsi - 1.0)
-    rsi_short_ok = rsi <= min(profile.rsi_short_max + 5.0, 60.0) and rsi <= (prev_rsi + 1.0)
+    rsi_long_ok = _rsi_direction_ok(
+        rsi,
+        prev_rsi,
+        prev2_rsi,
+        "LONG",
+        floor=max(profile.rsi_long_min, 45.0),
+        ceiling=100.0,
+    )
+    rsi_short_ok = _rsi_direction_ok(
+        rsi,
+        prev_rsi,
+        prev2_rsi,
+        "SHORT",
+        floor=0.0,
+        ceiling=min(profile.rsi_short_max, 55.0),
+    )
     rsi_long_extreme_bad = rsi < max(profile.rsi_long_min - 10.0, 35.0) and rsi < prev_rsi
     rsi_short_extreme_bad = rsi > min(profile.rsi_short_max + 10.0, 65.0) and rsi > prev_rsi
-    ao_long_ok = (
-        (ao >= prev_ao and prev_ao >= prev2_ao)
-        or (ao > 0 and prev_ao <= 0)
-        or (ao >= prev_ao and macd_hist > prev_hist)
-    )
-    ao_short_ok = (
-        (ao <= prev_ao and prev_ao <= prev2_ao)
-        or (ao < 0 and prev_ao >= 0)
-        or (ao <= prev_ao and macd_hist < prev_hist)
-    )
+    ao_long_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "LONG") or (ao >= prev_ao and macd_hist > prev_hist)
+    ao_short_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "SHORT") or (ao <= prev_ao and macd_hist < prev_hist)
     chaikin_long_ok = chaikin >= prev_chaikin and (chaikin > 0 or chaikin_delta > 0)
     chaikin_short_ok = chaikin <= prev_chaikin and (chaikin < 0 or chaikin_delta < 0)
     volume_ok = volume_ratio >= profile.min_volume_ratio
     soft_volume_ok = volume_ratio >= soft_volume_floor
-    long_volume_ok = soft_volume_ok or (late_evening and volume_ratio >= 0.35 and chaikin_long_ok)
-    short_volume_ok = soft_volume_ok or (late_evening and volume_ratio >= 0.35 and chaikin_short_ok)
     impulse_ok = body_ratio >= profile.min_body_ratio
     soft_impulse_ok = body_ratio >= soft_impulse_floor
     volatility_ok = atr_pct >= profile.min_atr_pct
@@ -265,6 +294,24 @@ def evaluate_signal_core(
     early_long_ok = close >= ema20 and ema20 >= prev_ema20
     early_short_ok = close <= ema20 and ema20 <= prev_ema20
     strong_impulse_override = volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio
+    emerging_long_pressure_ok = (
+        recent_long_cross
+        and close >= ema20
+        and ao_long_ok
+        and rsi_long_ok
+        and body_ratio >= soft_impulse_floor
+        and volume_ratio >= max(0.45, soft_volume_floor - 0.10)
+    )
+    emerging_short_pressure_ok = (
+        recent_short_cross
+        and close <= ema20
+        and ao_short_ok
+        and rsi_short_ok
+        and body_ratio >= soft_impulse_floor
+        and volume_ratio >= max(0.45, soft_volume_floor - 0.10)
+    )
+    long_volume_ok = soft_volume_ok or emerging_long_pressure_ok or (late_evening and volume_ratio >= 0.35 and chaikin_long_ok)
+    short_volume_ok = soft_volume_ok or emerging_short_pressure_ok or (late_evening and volume_ratio >= 0.35 and chaikin_short_ok)
     evening_long_pressure_ok = (not late_evening) or volume_ratio >= 1.0 or (volume_ratio >= 0.35 and chaikin_long_ok)
     evening_short_pressure_ok = (not late_evening) or volume_ratio >= 1.0 or (volume_ratio >= 0.35 and chaikin_short_ok)
     slow_long_continuation_ok = (
@@ -275,6 +322,7 @@ def evaluate_signal_core(
         and ema20 >= prev_ema20
         and close >= prev_close
         and ao_long_ok
+        and rsi_long_ok
         and long_volume_ok
         and evening_long_pressure_ok
         and soft_impulse_ok
@@ -287,6 +335,7 @@ def evaluate_signal_core(
         and ema20 <= prev_ema20
         and close <= prev_close
         and ao_short_ok
+        and rsi_short_ok
         and short_volume_ok
         and evening_short_pressure_ok
         and soft_impulse_ok
@@ -359,6 +408,10 @@ def evaluate_signal_core(
         long_blockers.append("RSI не подтверждает рост")
     if rsi_short_extreme_bad and not slow_short_continuation_ok:
         short_blockers.append("RSI не подтверждает снижение")
+    if not rsi_long_ok and not slow_long_continuation_ok:
+        long_blockers.append("RSI ещё не развернулся достаточно уверенно")
+    if not rsi_short_ok and not slow_short_continuation_ok:
+        short_blockers.append("RSI ещё не развернулся достаточно уверенно")
     if not ao_long_ok and not slow_long_continuation_ok:
         long_blockers.append("AO не подтверждает рост")
     if not ao_short_ok and not slow_short_continuation_ok:
@@ -386,6 +439,7 @@ def evaluate_signal_core(
         and recent_long_cross
         and macd_long_ok
         and ao_long_ok
+        and rsi_long_ok
         and long_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok
@@ -398,6 +452,7 @@ def evaluate_signal_core(
         and recent_short_cross
         and macd_short_ok
         and ao_short_ok
+        and rsi_short_ok
         and short_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok

@@ -2642,7 +2642,7 @@ def maybe_notify_trade_execution(
     exit_reason: str = "",
     strategy: str = "",
 ) -> None:
-    if not config.tg_token or not config.tg_chat_id:
+    if not getattr(config, "tg_token", "") or not getattr(config, "tg_chat_id", ""):
         return
     allowed_sources = {"order_fill", "portfolio_confirmation", "dry_run"}
     if source not in allowed_sources:
@@ -6391,11 +6391,68 @@ def price_has_new_extreme_since_exit(
     return True
 
 
+def bars_since_signal_cross(
+    df: pd.DataFrame,
+    direction: str,
+    lookback: int = 6,
+) -> int | None:
+    if len(df) < 2:
+        return None
+    recent = df.iloc[-max(lookback, 2):]
+    macd_values = [float(value) for value in recent["macd"].tolist()]
+    signal_values = [float(value) for value in recent["macd_signal"].tolist()]
+    for idx in range(len(macd_values) - 1, 0, -1):
+        prev_diff = macd_values[idx - 1] - signal_values[idx - 1]
+        diff = macd_values[idx] - signal_values[idx]
+        if direction == "LONG" and prev_diff <= 0 < diff:
+            return len(macd_values) - 1 - idx
+        if direction == "SHORT" and prev_diff >= 0 > diff:
+            return len(macd_values) - 1 - idx
+    return None
+
+
+def unified_reversal_flip_confirmed(df: pd.DataFrame | None, signal: str) -> bool:
+    if df is None or len(df) < 4:
+        return False
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev2 = df.iloc[-3]
+    close = float(last["close"])
+    ema20 = float(last["ema20"])
+    prev_ema20 = float(prev["ema20"])
+    rsi = float(last["rsi"])
+    prev_rsi = float(prev["rsi"])
+    prev2_rsi = float(prev2["rsi"])
+    ao = float(last.get("ao", 0.0))
+    prev_ao = float(prev.get("ao", 0.0))
+    prev2_ao = float(prev2.get("ao", 0.0))
+    volume = float(last.get("volume", 0.0))
+    volume_avg = float(last.get("volume_avg", 0.0))
+    body = float(last.get("body", 0.0))
+    body_avg = float(last.get("body_avg", 0.0))
+    volume_ratio = (volume / volume_avg) if volume_avg > 0 else 0.0
+    body_ratio = (body / body_avg) if body_avg > 0 else 0.0
+    cross_age = bars_since_signal_cross(df, signal, lookback=6)
+    if signal == "LONG":
+        macd_ok = float(last["macd"]) >= float(last["macd_signal"]) and cross_age is not None and cross_age <= 2
+        ao_ok = (ao > 0 and prev_ao <= 0) or (ao >= prev_ao >= prev2_ao)
+        rsi_ok = rsi >= 45.0 and rsi >= prev_rsi + 0.20 and prev_rsi >= prev2_rsi - 0.35
+        structure_ok = close >= ema20 and ema20 >= prev_ema20
+    else:
+        macd_ok = float(last["macd"]) <= float(last["macd_signal"]) and cross_age is not None and cross_age <= 2
+        ao_ok = (ao < 0 and prev_ao >= 0) or (ao <= prev_ao <= prev2_ao)
+        rsi_ok = rsi <= 55.0 and rsi <= prev_rsi - 0.20 and prev_rsi <= prev2_rsi + 0.35
+        structure_ok = close <= ema20 and ema20 <= prev_ema20
+    impulse_ok = body_ratio >= 0.55 or volume_ratio >= 0.55
+    return macd_ok and ao_ok and rsi_ok and structure_ok and impulse_ok
+
+
 def position_reentry_allowed(
     state: InstrumentState,
     instrument: InstrumentConfig,
     signal: str,
     current_price: float,
+    signal_df: pd.DataFrame | None = None,
 ) -> tuple[bool, str]:
     is_unified_reversal = uses_unified_reversal(instrument.symbol)
 
@@ -6480,6 +6537,18 @@ def position_reentry_allowed(
         trading_day = None
     if trading_day and last_exit_at.astimezone(MOSCOW_TZ).date() < trading_day:
         return True, ""
+
+    if is_unified_reversal and state.last_exit_side and state.last_exit_side != signal:
+        now = datetime.now(UTC)
+        flip_guard_minutes = 75
+        if now < last_exit_at + timedelta(minutes=flip_guard_minutes):
+            if not unified_reversal_flip_confirmed(signal_df, signal):
+                remaining = int(((last_exit_at + timedelta(minutes=flip_guard_minutes)) - now).total_seconds() // 60) + 1
+                return (
+                    False,
+                    f"для {instrument.symbol} после свежего переворота нужен подтверждённый импульс MACD/AO/RSI; "
+                    f"без него ждём ещё ~{remaining} мин.",
+                )
 
     if fx_strong_reentry_override():
         return True, ""
@@ -7835,7 +7904,13 @@ def process_instrument(
                             performance_block_reason,
                         )
                     else:
-                        reentry_allowed, reentry_reason = position_reentry_allowed(state, instrument, signal, current_price)
+                        reentry_allowed, reentry_reason = position_reentry_allowed(
+                            state,
+                            instrument,
+                            signal,
+                            current_price,
+                            lower_df,
+                        )
                         if reentry_allowed:
                             strategy_regime_guard_reason = strategy_regime_block_reason(
                                 instrument.symbol,

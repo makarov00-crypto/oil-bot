@@ -1,11 +1,12 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import bot_oil_main as mod
+import pandas as pd
 import strategy_registry
 
 
@@ -896,6 +897,36 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
         self.assertFalse(allowed)
         self.assertIn("нового экстремума", reason)
+
+    def test_unified_reversal_blocks_fast_flip_without_macd_ao_rsi_confirmation(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="IMOEXF",
+            figi="FIGI",
+            display_name="MOEX",
+            min_price_increment=1.0,
+        )
+        state = mod.InstrumentState(
+            trading_day=datetime.now(timezone.utc).astimezone(mod.MOSCOW_TZ).date().isoformat(),
+            last_exit_time=(datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+            last_exit_side="LONG",
+            last_exit_pnl_rub=-120.0,
+            last_exit_price=2640.0,
+            last_exit_reason="Появился подтверждённый противоположный сигнал SHORT",
+            last_strategy_name="reversal_1h",
+        )
+        signal_df = pd.DataFrame(
+            [
+                {"close": 2638.0, "ema20": 2637.8, "rsi": 44.0, "macd": -1.0, "macd_signal": -0.6, "ao": -0.7, "volume": 100.0, "volume_avg": 100.0, "body": 4.0, "body_avg": 4.0},
+                {"close": 2639.0, "ema20": 2638.0, "rsi": 44.1, "macd": -0.8, "macd_signal": -0.7, "ao": -0.5, "volume": 95.0, "volume_avg": 100.0, "body": 3.5, "body_avg": 4.0},
+                {"close": 2639.3, "ema20": 2638.4, "rsi": 44.2, "macd": -0.4, "macd_signal": -0.5, "ao": -0.2, "volume": 96.0, "volume_avg": 100.0, "body": 3.2, "body_avg": 4.0},
+                {"close": 2639.5, "ema20": 2638.6, "rsi": 44.3, "macd": -0.2, "macd_signal": -0.3, "ao": -0.1, "volume": 90.0, "volume_avg": 100.0, "body": 2.8, "body_avg": 4.0},
+            ]
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "SHORT", 2639.5, signal_df)
+
+        self.assertFalse(allowed)
+        self.assertIn("MACD/AO/RSI", reason)
 
     def test_imoexf_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("IMOEXF")
