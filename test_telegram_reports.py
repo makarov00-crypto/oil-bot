@@ -47,11 +47,13 @@ class TelegramReportsTest(unittest.TestCase):
         ):
             text = mod.build_hourly_summary_message(client=None, config=object(), watchlist=[instrument])
 
-        self.assertIn("Последние закрытые", text)
-        self.assertIn("Открытые позиции", text)
-        self.assertIn("Итог раздела: 1 сдел.", text)
-        self.assertIn("суммарная ВМ +25.00 RUB", text)
-        self.assertIn("BMQ6 LONG | reversal_1h | 2 лот.", text)
+        self.assertIn("📕 Сделки", text)
+        self.assertIn("📂 Открытые позиции", text)
+        self.assertIn("📌 Итог сделок", text)
+        self.assertIn("📌 Итог открытых", text)
+        self.assertIn("• Суммарная ВМ: 🟢 +25.00 RUB", text)
+        self.assertIn("🔺 BMQ6 | LONG | 2 лот. | вход 71.6000 | ВМ 🟢 +25.00 RUB", text)
+        self.assertIn("💰 NET закрытых: 🟢 +150.00 RUB", text)
         self.assertNotIn("Диагностика", text)
 
     def test_signal_change_notification_disabled(self) -> None:

@@ -2401,6 +2401,24 @@ def format_rub(value: float | int | None, *, signed: bool = False) -> str:
     return f"{amount:.2f} RUB"
 
 
+def profit_indicator(value: float | int | None) -> str:
+    amount = float(value or 0.0)
+    if amount > 0:
+        return "🟢"
+    if amount < 0:
+        return "🔴"
+    return "⚪️"
+
+
+def side_marker(side: str) -> str:
+    normalized = str(side or "").upper()
+    if normalized == "LONG":
+        return "🔺"
+    if normalized == "SHORT":
+        return "🔻"
+    return "•"
+
+
 def signal_emoji(signal: str) -> str:
     return {
         "LONG": "🟢",
@@ -3974,32 +3992,41 @@ def build_hourly_summary_message(
     recent_closed_total_net = sum(float(item.get("net_pnl_rub") or item.get("pnl_rub") or 0.0) for item in recent_closed)
     open_total_var_margin = sum(float(item.get("variation_margin_rub") or 0.0) for item in live_open_positions)
     lines = [
-        f"🕓 Срез: {portfolio.get('generated_at_moscow', '-')}",
-        f"🕒 Сессия: {session_name}",
-        f"📘 Закрыто сегодня: {len(closed_reviews)} | ✅ {wins} | ⚠️ {losses}",
-        f"💰 NET закрытых: {format_rub(closed_total_net, signed=True)}",
-        f"📈 Текущая ВМ открытых: {format_rub(portfolio['bot_estimated_variation_margin_rub'], signed=True)}",
-        f"🧮 Итог по боту: {format_rub(portfolio['bot_total_pnl_rub'], signed=True)}",
+        f"{portfolio.get('generated_at_moscow', '-')} | {session_name}",
+        "",
+        f"📊 Закрыто: {len(closed_reviews)} | ✅ {wins} | ⚠️ {losses}",
+        f"💰 NET закрытых: {profit_indicator(closed_total_net)} {format_rub(closed_total_net, signed=True)}",
+        f"📈 ВМ открытых: {profit_indicator(portfolio['bot_estimated_variation_margin_rub'])} "
+        f"{format_rub(portfolio['bot_estimated_variation_margin_rub'], signed=True)}",
+        f"🧮 Итог бота: {profit_indicator(portfolio['bot_total_pnl_rub'])} "
+        f"{format_rub(portfolio['bot_total_pnl_rub'], signed=True)}",
         f"💼 Портфель: {format_rub(portfolio['total_portfolio_rub'])} | "
         f"💵 Свободно: {format_rub(portfolio['free_rub'])} | "
         f"🛡 ГО: {format_rub(portfolio['blocked_guarantee_rub'])}",
     ]
 
     if recent_closed:
-        lines.extend(["", "Последние закрытые"])
+        lines.extend(["", "📕 Сделки"])
         for item in recent_closed:
             net = float(item.get("net_pnl_rub") or item.get("pnl_rub") or 0.0)
-            exit_reason = compact_reason(str(item.get("exit_reason") or ""))[:90]
             lines.append(
-                f"• {item['symbol']} {item['side']} | {item.get('strategy') or '-'} | "
-                f"net {format_rub(net, signed=True)} | {exit_reason or 'без причины'}"
+                f"{side_marker(str(item.get('side') or ''))} {item['symbol']} | {item.get('side') or '-'} | "
+                f"{profit_indicator(net)} {format_rub(net, signed=True)}"
             )
-        lines.append(f"Итог раздела: {len(recent_closed)} сдел. | NET {format_rub(recent_closed_total_net, signed=True)}")
+        lines.extend(
+            [
+                "",
+                "📌 Итог сделок",
+                f"• Кол-во: {len(recent_closed)}",
+                f"• Сумма: {profit_indicator(recent_closed_total_net)} "
+                f"{format_rub(recent_closed_total_net, signed=True)}",
+            ]
+        )
     else:
-        lines.extend(["", "Последние закрытые", "• нет"])
+        lines.extend(["", "📕 Сделки", "• нет"])
 
     if live_open_positions:
-        lines.extend(["", "Открытые позиции"])
+        lines.extend(["", "📂 Открытые позиции"])
         for item in live_open_positions:
             symbol = str(item.get("symbol") or "")
             state = state_by_symbol.get(symbol, InstrumentState())
@@ -4010,18 +4037,24 @@ def build_hourly_summary_message(
                 or str(journal_row.get("strategy") or "-")
             )
             entry_price = item.get("entry_price")
+            var_margin = float(item.get("variation_margin_rub") or 0.0)
             lines.append(
-                f"• {symbol} {item.get('side', '')} | {strategy} | "
+                f"{side_marker(str(item.get('side') or ''))} {symbol} | {item.get('side', '')} | "
                 f"{int(item.get('qty') or 0)} лот. | "
-                f"вход {(f'{float(entry_price):.4f}' if entry_price else '-') } | "
-                f"ВМ {format_rub(item.get('variation_margin_rub'), signed=True)}"
+                f"вход {(f'{float(entry_price):.4f}' if entry_price else '-')} | "
+                f"ВМ {profit_indicator(var_margin)} {format_rub(var_margin, signed=True)}"
             )
-        lines.append(
-            f"Итог раздела: {len(live_open_positions)} поз. | "
-            f"суммарная ВМ {format_rub(open_total_var_margin, signed=True)}"
+        lines.extend(
+            [
+                "",
+                "📌 Итог открытых",
+                f"• Позиций: {len(live_open_positions)}",
+                f"• Суммарная ВМ: {profit_indicator(open_total_var_margin)} "
+                f"{format_rub(open_total_var_margin, signed=True)}",
+            ]
         )
     else:
-        lines.extend(["", "Открытые позиции", "• нет"])
+        lines.extend(["", "📂 Открытые позиции", "• нет"])
 
     return build_telegram_card("Часовой отчёт", "🧾", lines)
 
