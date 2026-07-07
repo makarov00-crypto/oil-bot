@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-4.1-mini"
 DEFAULT_OUTPUT_PATH = BASE_DIR / "logs" / "ai_reviews" / "latest_review.md"
 
 SYSTEM_INSTRUCTIONS = """Ты рыночный аналитик для фьючерсного бота на Мосбирже.

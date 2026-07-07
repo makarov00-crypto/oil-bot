@@ -98,7 +98,7 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
-NEWS_AI_DEFAULT_MODEL = "gpt-5-mini"
+NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 SUPPORTED_INTERVALS = {
     1: CandleInterval.CANDLE_INTERVAL_1_MIN,
     2: CandleInterval.CANDLE_INTERVAL_2_MIN,

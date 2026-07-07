@@ -61,7 +61,7 @@ class NewsAiAnalyzerTests(unittest.TestCase):
                 }
 
         with patch("news_ai_analyzer.requests.post", return_value=FakeResponse()) as mocked_post:
-            signals = request_news_ai_signals("test-key", "gpt-5-mini", [sample_bias()])
+            signals = request_news_ai_signals("test-key", "gpt-4.1-mini", [sample_bias()])
 
         self.assertEqual(len(signals), 1)
         self.assertEqual(signals[0].symbol, "USDRUBF")
