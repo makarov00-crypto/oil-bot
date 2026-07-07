@@ -4,6 +4,8 @@ from dataclasses import dataclass
 MARKETTWITS = "markettwits"
 MOEX_DERIVATIVES = "moex_derivatives"
 MARKETSNAPSHOT = "marketsnapshot"
+FINAM_ALERT = "finamalert"
+FINAM_INVEST = "finam_invest"
 FINAM = "finam"
 BCS_EXPRESS = "bcs_express"
 T_INVEST = "t_invest"
@@ -62,6 +64,26 @@ CHANNEL_RULES: dict[str, ChannelRule] = {
         reliability_score=0.98,
         source_type="official",
         display_name="Мосбиржа деривативы",
+    ),
+    FINAM_ALERT: ChannelRule(
+        channel=FINAM_ALERT,
+        source_weight=3,
+        default_ttl_minutes=120,
+        can_block_entries=False,
+        speed_score=0.90,
+        reliability_score=0.88,
+        source_type="broker_telegram",
+        display_name="Финам Alert",
+    ),
+    FINAM_INVEST: ChannelRule(
+        channel=FINAM_INVEST,
+        source_weight=3,
+        default_ttl_minutes=180,
+        can_block_entries=False,
+        speed_score=0.82,
+        reliability_score=0.90,
+        source_type="broker_telegram",
+        display_name="Финам Invest",
     ),
     FINAM: ChannelRule(
         channel=FINAM,

@@ -209,6 +209,7 @@ struct NewsScreen: View {
         let label = item.sourceLabel?.isEmpty == false ? item.sourceLabel! : item.source
         let typeMap = [
             "telegram": "быстрый Telegram",
+            "broker_telegram": "Telegram брокера",
             "broker": "брокерская аналитика",
             "official": "официальный источник"
         ]

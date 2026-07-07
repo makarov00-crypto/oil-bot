@@ -4598,6 +4598,7 @@ def build_dashboard_html() -> str:
       const raw = String(value || '').toLowerCase();
       const map = {
         telegram: 'быстрый Telegram',
+        broker_telegram: 'Telegram брокера',
         broker: 'брокерская аналитика',
         official: 'официальный источник',
       };

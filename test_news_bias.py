@@ -58,6 +58,36 @@ class NewsBiasTests(unittest.TestCase):
         self.assertEqual(brent.actionability, "ACTION")
         self.assertEqual(brent.source_type, "telegram")
 
+    def test_detects_finam_alert_as_broker_telegram_source(self) -> None:
+        message = NewsMessage(
+            channel="finamalert",
+            text="USD/RUB выше, рост доллара и спрос на валюту усилились.",
+            created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
+        )
+
+        items = detect_news_bias(message)
+        usdrub = next(item for item in items if item.symbol == "USDRUBF")
+
+        self.assertEqual(usdrub.bias, "LONG")
+        self.assertEqual(usdrub.source_type, "broker_telegram")
+        self.assertEqual(usdrub.source_label, "Финам Alert")
+        self.assertGreaterEqual(usdrub.source_speed, 0.9)
+
+    def test_detects_finam_invest_as_broker_telegram_source(self) -> None:
+        message = NewsMessage(
+            channel="finam_invest",
+            text="Нефть Brent выше, рост нефти и сильный спрос поддерживают рынок.",
+            created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
+        )
+
+        items = detect_news_bias(message)
+        brent = next(item for item in items if item.category == "нефть")
+
+        self.assertEqual(brent.bias, "LONG")
+        self.assertEqual(brent.source_type, "broker_telegram")
+        self.assertEqual(brent.source_label, "Финам Invest")
+        self.assertGreaterEqual(brent.source_reliability, 0.9)
+
     def test_same_direction_from_broker_and_telegram_is_merged(self) -> None:
         created_at = datetime(2026, 5, 12, 10, 15, tzinfo=UTC)
         items = []
