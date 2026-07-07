@@ -103,6 +103,25 @@ class NewsBiasTests(unittest.TestCase):
         self.assertEqual(sber.source_label, "БКС Экспресс")
         self.assertGreaterEqual(sber.source_speed, 0.88)
 
+    def test_human_readable_market_terms_map_to_traded_symbols(self) -> None:
+        cases = [
+            ("marketsnapshot", "Баррель нефти выше после сокращения добычи ОПЕК+.", "нефть"),
+            ("marketsnapshot", "Ключевая ставка давит на долговой рынок и ОФЗ.", "облигации"),
+            ("bcs_express_tg", "Банковский сектор под давлением, акции Сбера снижаются.", "банки"),
+            ("finam_invest", "Газовый рынок растёт, запасы газа снижаются.", "газ"),
+        ]
+
+        for channel, text, category in cases:
+            with self.subTest(category=category):
+                items = detect_news_bias(
+                    NewsMessage(
+                        channel=channel,
+                        text=text,
+                        created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
+                    )
+                )
+                self.assertTrue(any(item.category == category for item in items))
+
     def test_same_direction_from_broker_and_telegram_is_merged(self) -> None:
         created_at = datetime(2026, 5, 12, 10, 15, tzinfo=UTC)
         items = []

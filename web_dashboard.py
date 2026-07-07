@@ -27,6 +27,7 @@ from instrument_groups import (
     uses_unified_reversal,
     uses_unified_reversal_1h,
 )
+from news_rules import NEWS_RULES
 from strategy_registry import get_primary_strategies, get_secondary_strategies
 from daily_ai_review import (
     FOLLOWUP_SYSTEM_INSTRUCTIONS,
@@ -1194,7 +1195,34 @@ def load_news_snapshot() -> dict:
         payload["source_stats"] = summarize_news_source_stats(TRADE_DB_PATH, days=10, limit=8)
     except Exception:
         payload["source_stats"] = []
+    payload["coverage"] = build_news_coverage_payload()
     return payload
+
+
+def build_news_coverage_payload() -> dict:
+    watched_symbols = sorted(current_watchlist_symbols())
+    rule_symbols: dict[str, list[str]] = {}
+    for rule in NEWS_RULES:
+        for active_symbol in replace_with_active_symbols([rule.symbol]):
+            rule_symbols.setdefault(active_symbol, [])
+            rule_symbols[active_symbol].extend(rule.keywords)
+    news_symbols = sorted(
+        {
+            symbol for symbol in rule_symbols if symbol
+        }
+    )
+    watched_set = set(watched_symbols)
+    news_set = set(news_symbols)
+    return {
+        "watched_symbols": watched_symbols,
+        "news_symbols": news_symbols,
+        "missing_symbols": sorted(watched_set - news_set),
+        "extra_symbols": sorted(news_set - watched_set),
+        "keyword_samples": {
+            symbol: list(dict.fromkeys(rule_symbols.get(symbol, [])))[:12]
+            for symbol in sorted(watched_set | news_set)
+        },
+    }
 
 
 CAPITAL_ALERT_PATTERNS = (
@@ -4252,6 +4280,7 @@ def build_dashboard_html() -> str:
       </div>
       <div id="newsLeadCards" class="review-grid" style="margin-top:16px;"></div>
       <div id="newsSourceStats" class="review-grid" style="margin-top:16px;"></div>
+      <div id="newsCoverageCards" class="review-grid" style="margin-top:16px;"></div>
       <div id="newsCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="newsTable" style="margin-top:16px;">
@@ -5285,10 +5314,12 @@ def build_dashboard_html() -> str:
 
       const newsLeadCards = document.getElementById('newsLeadCards');
       const newsSourceStats = document.getElementById('newsSourceStats');
+      const newsCoverageCards = document.getElementById('newsCoverageCards');
       const newsBody = document.querySelector('#newsTable tbody');
       const newsCards = document.getElementById('newsCards');
       newsLeadCards.innerHTML = '';
       newsSourceStats.innerHTML = '';
+      newsCoverageCards.innerHTML = '';
       newsBody.innerHTML = '';
       newsCards.innerHTML = '';
       const leadItems = [
@@ -5331,6 +5362,28 @@ def build_dashboard_html() -> str:
         <div class="review-summary-main">история ещё копится</div>
         <div class="review-summary-sub">после первых оценённых новостей появится статистика попаданий</div>
       </div>`;
+      const coverage = news.coverage || {};
+      const watchedSymbols = Array.isArray(coverage.watched_symbols) ? coverage.watched_symbols : [];
+      const newsSymbols = Array.isArray(coverage.news_symbols) ? coverage.news_symbols : [];
+      const missingSymbols = Array.isArray(coverage.missing_symbols) ? coverage.missing_symbols : [];
+      const keywordSamples = coverage.keyword_samples || {};
+      const coveredCount = watchedSymbols.filter((symbol) => newsSymbols.includes(symbol)).length;
+      const sampleRows = watchedSymbols.slice(0, 5).map((symbol) => {
+        const words = Array.isArray(keywordSamples[symbol]) ? keywordSamples[symbol].slice(0, 5).join(', ') : '-';
+        return `${symbol}: ${words || '-'}`;
+      }).join(' | ');
+      newsCoverageCards.innerHTML = `
+        <div class="glass-card">
+          <div class="label">Покрытие новостей</div>
+          <div class="review-summary-main">${coveredCount} из ${watchedSymbols.length} тикеров</div>
+          <div class="review-summary-sub">${missingSymbols.length ? `не хватает: ${missingSymbols.join(', ')}` : 'все торгуемые тикеры покрыты новостными правилами'}</div>
+        </div>
+        <div class="glass-card">
+          <div class="label">Слова для поиска</div>
+          <div class="review-summary-main">тикеры + человеческие названия</div>
+          <div class="review-summary-sub">${escapeHtml(sampleRows || 'словарь пока пуст')}</div>
+        </div>
+      `;
       for (const item of activeBiases) {
         const hasMessage = String(item.message_text || '').trim().length > 0;
         const reasonText = humanizeNewsReason(item.reason || '-');

@@ -13,6 +13,12 @@
       "updated_at": ""
     },
     {
+      "template_symbol": "BMN6",
+      "active_symbol": "BMQ6",
+      "disabled": false,
+      "updated_at": ""
+    },
+    {
       "template_symbol": "NGJ6",
       "active_symbol": "NGN6",
       "disabled": false,

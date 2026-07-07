@@ -63,6 +63,7 @@ DEFAULT_SYMBOLS = ",".join(
         "RNM6",
         "SRM6",
         "VBM6",
+        "RBM6",
     ]
 )
 

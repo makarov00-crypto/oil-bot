@@ -17,6 +17,16 @@ else:
 
 class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_news_coverage_payload_includes_human_keywords(self) -> None:
+        payload = dashboard.build_news_coverage_payload()
+
+        self.assertFalse(payload["missing_symbols"])
+        self.assertIn("BMQ6", payload["news_symbols"])
+        self.assertIn("RBU6", payload["news_symbols"])
+        self.assertIn("баррель", payload["keyword_samples"]["BMQ6"])
+        self.assertIn("ключевая ставка", payload["keyword_samples"]["RBU6"])
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:
         rows = []
         base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)
