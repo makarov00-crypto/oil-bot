@@ -103,6 +103,21 @@ class NewsBiasTests(unittest.TestCase):
         self.assertEqual(sber.source_label, "БКС Экспресс")
         self.assertGreaterEqual(sber.source_speed, 0.88)
 
+    def test_detects_t_invest_telegram_as_broker_telegram_source(self) -> None:
+        message = NewsMessage(
+            channel="tb_invest_official",
+            text="Индекс Мосбиржи растёт, российский рынок акций получил позитивный импульс.",
+            created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
+        )
+
+        items = detect_news_bias(message)
+        index = next(item for item in items if item.category == "индекс")
+
+        self.assertEqual(index.bias, "LONG")
+        self.assertEqual(index.source_type, "broker_telegram")
+        self.assertEqual(index.source_label, "Т-Инвестиции Official")
+        self.assertGreaterEqual(index.source_reliability, 0.88)
+
     def test_human_readable_market_terms_map_to_traded_symbols(self) -> None:
         cases = [
             ("marketsnapshot", "Баррель нефти выше после сокращения добычи ОПЕК+.", "нефть"),

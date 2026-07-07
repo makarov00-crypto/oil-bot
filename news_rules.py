@@ -10,6 +10,7 @@ FINAM = "finam"
 BCS_EXPRESS = "bcs_express"
 BCS_EXPRESS_TG = "bcs_express_tg"
 T_INVEST = "t_invest"
+T_INVEST_TG = "tb_invest_official"
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,16 @@ CHANNEL_RULES: dict[str, ChannelRule] = {
         reliability_score=0.88,
         source_type="broker",
         display_name="Т-Инвестиции",
+    ),
+    T_INVEST_TG: ChannelRule(
+        channel=T_INVEST_TG,
+        source_weight=3,
+        default_ttl_minutes=150,
+        can_block_entries=False,
+        speed_score=0.86,
+        reliability_score=0.88,
+        source_type="broker_telegram",
+        display_name="Т-Инвестиции Official",
     ),
 }
 

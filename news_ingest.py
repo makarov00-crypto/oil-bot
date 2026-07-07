@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 import requests
 
 from news_bias import NewsBias, NewsMessage, detect_news_bias
-from news_rules import BCS_EXPRESS, BCS_EXPRESS_TG, FINAM, FINAM_ALERT, FINAM_INVEST, T_INVEST
+from news_rules import BCS_EXPRESS, BCS_EXPRESS_TG, FINAM, FINAM_ALERT, FINAM_INVEST, T_INVEST, T_INVEST_TG
 
 
 UTC = timezone.utc
@@ -23,6 +23,7 @@ CHANNEL_URLS: dict[str, str] = {
     FINAM_ALERT: "https://t.me/s/finamalert",
     FINAM_INVEST: "https://t.me/s/finam_invest",
     BCS_EXPRESS_TG: "https://t.me/s/bcs_express",
+    T_INVEST_TG: "https://t.me/s/tb_invest_official",
 }
 
 WEB_SOURCE_URLS: dict[str, str] = {
