@@ -25,7 +25,7 @@ CHANNEL_URLS: dict[str, str] = {
 WEB_SOURCE_URLS: dict[str, str] = {
     FINAM: "https://www.finam.ru/publications/",
     BCS_EXPRESS: "https://bcs-express.ru/novosti-i-analitika",
-    T_INVEST: "https://www.tbank.ru/invest/social/news/",
+    T_INVEST: "https://www.tbank.ru/invest/research/",
 }
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
@@ -74,6 +74,9 @@ def fetch_web_news_items(source: str, timeout: int = 20, limit: int = 30) -> lis
     url = WEB_SOURCE_URLS[source]
     response = requests.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
     response.raise_for_status()
+    response_encoding = getattr(response, "encoding", None)
+    if response_encoding is None or str(response_encoding).lower() in {"iso-8859-1", "latin-1"}:
+        response.encoding = getattr(response, "apparent_encoding", None) or "utf-8"
 
     items: list[WebNewsItem] = []
     seen_urls: set[str] = set()

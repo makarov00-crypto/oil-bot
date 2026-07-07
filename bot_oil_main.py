@@ -2943,6 +2943,9 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
     for source in WEB_SOURCE_URLS:
         try:
             items = fetch_web_news_items(source)
+            if not items:
+                logging.info("Новостной источник %s пока не дал пригодных заголовков", source)
+                continue
             source_seen = set(seen_links.get(source, []))
             if not source_seen:
                 seen_links[source] = [item.url for item in items]
