@@ -55,7 +55,7 @@ struct NewsScreen: View {
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(item.symbol)
                                                 .font(.title3.weight(.semibold))
-                                            Text(item.summary ?? item.source)
+                                            Text(item.summary ?? item.sourceLabel ?? item.source)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
                                         }
@@ -80,9 +80,13 @@ struct NewsScreen: View {
                                     }
 
                                     InfoRow(title: "Сейчас", value: "\(displayNewsHorizon(item.horizon)) · \(displayBias(item.strength))")
+                                    if let aiReason = item.aiReason, !aiReason.isEmpty {
+                                        InfoRow(title: "AI-разбор", value: aiSummary(for: item))
+                                    }
                                     if let category = item.category, !category.isEmpty {
                                         InfoRow(title: "Тема", value: category)
                                     }
+                                    InfoRow(title: "Источник", value: sourceSummary(for: item))
                                     if let expires = item.expiresAtMoscow, !expires.isEmpty {
                                         InfoRow(title: "Актуально до", value: expires)
                                     }
@@ -184,11 +188,36 @@ struct NewsScreen: View {
         let pieces: [String] = [
             item.category,
             item.topics?.isEmpty == false ? "темы: \((item.topics ?? []).joined(separator: ", "))" : nil,
+            item.aiReason?.isEmpty == false ? "AI: \(item.aiReason!)" : nil,
+            item.aiRisk?.isEmpty == false ? "риск: \(item.aiRisk!)" : nil,
             item.reason
         ].compactMap { value in
             guard let value, !value.isEmpty else { return nil }
             return value
         }
         return pieces.joined(separator: " · ")
+    }
+
+    private func aiSummary(for item: NewsBiasItem) -> String {
+        let direction = displayBias(item.aiDirection)
+        let confidence = item.aiConfidence.map { "\(Int(($0 * 100).rounded()))%" } ?? "-"
+        let reason = item.aiReason ?? "-"
+        return "\(direction) · уверенность \(confidence) · \(reason)"
+    }
+
+    private func sourceSummary(for item: NewsBiasItem) -> String {
+        let label = item.sourceLabel?.isEmpty == false ? item.sourceLabel! : item.source
+        let typeMap = [
+            "telegram": "быстрый Telegram",
+            "broker": "брокерская аналитика",
+            "official": "официальный источник"
+        ]
+        let type = typeMap[(item.sourceType ?? "").lowercased()] ?? "источник"
+        let speed = item.sourceSpeed.map { "\(Int(($0 * 100).rounded()))%" } ?? "-"
+        let reliability = item.sourceReliability.map { "\(Int(($0 * 100).rounded()))%" } ?? "-"
+        let confirmations = (item.confirmingSources ?? []).count > 1
+            ? " · подтверждения: \((item.confirmingSources ?? []).joined(separator: ", "))"
+            : ""
+        return "\(label) · \(type) · скорость \(speed) · надёжность \(reliability)\(confirmations)"
     }
 }

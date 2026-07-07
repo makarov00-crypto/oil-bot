@@ -7,7 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -152,9 +152,68 @@ def ensure_trade_db(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_signal_observations_observed_date ON signal_observations(observed_date);
             CREATE INDEX IF NOT EXISTS idx_signal_observations_symbol ON signal_observations(symbol);
             CREATE INDEX IF NOT EXISTS idx_signal_observations_evaluated ON signal_observations(evaluated_at);
+
+            CREATE TABLE IF NOT EXISTS news_events (
+                news_uid TEXT PRIMARY KEY,
+                observed_at TEXT NOT NULL,
+                observed_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                category TEXT,
+                bias TEXT NOT NULL,
+                strength TEXT,
+                source TEXT,
+                source_label TEXT,
+                source_type TEXT,
+                source_speed REAL,
+                source_reliability REAL,
+                source_count INTEGER,
+                confirming_sources_json TEXT,
+                horizon TEXT,
+                actionability TEXT,
+                score REAL,
+                reason TEXT,
+                summary TEXT,
+                topics_json TEXT,
+                message_url TEXT,
+                message_text TEXT,
+                ai_direction TEXT,
+                ai_strength TEXT,
+                ai_confidence REAL,
+                ai_horizon TEXT,
+                ai_event_type TEXT,
+                ai_reason TEXT,
+                ai_risk TEXT,
+                expires_at TEXT,
+                observed_price REAL,
+                horizon_minutes INTEGER NOT NULL,
+                evaluated_at TEXT,
+                current_price REAL,
+                move_pct REAL,
+                favorable INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_news_events_observed_date ON news_events(observed_date);
+            CREATE INDEX IF NOT EXISTS idx_news_events_symbol ON news_events(symbol);
+            CREATE INDEX IF NOT EXISTS idx_news_events_evaluated ON news_events(evaluated_at);
+            CREATE INDEX IF NOT EXISTS idx_news_events_source ON news_events(source);
             """
         )
         connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+
+def _news_event_uid(row: dict[str, Any]) -> str:
+    message_url = str(row.get("message_url") or "").strip()
+    base = {
+        "symbol": str(row.get("symbol") or "").upper(),
+        "bias": str(row.get("bias") or "").upper(),
+        "source": str(row.get("source") or ""),
+        "summary": str(row.get("summary") or "")[:120],
+    }
+    if message_url:
+        base["message_url"] = message_url
+    else:
+        base["observed_at"] = str(row.get("observed_at") or "")[:16]
+    payload = json.dumps(base, ensure_ascii=True, sort_keys=True)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 def _signal_observation_uid(row: dict[str, Any]) -> str:
@@ -217,6 +276,184 @@ def append_signal_observation(db_path: Path, row: dict[str, Any]) -> str:
             ),
         )
     return observation_uid
+
+
+def append_news_event(db_path: Path, row: dict[str, Any]) -> str:
+    ensure_trade_db(db_path)
+    observed_at = str(row.get("observed_at") or row.get("time") or "")
+    news_uid = str(row.get("news_uid") or _news_event_uid(row))
+    confirming_sources = row.get("confirming_sources")
+    if not isinstance(confirming_sources, list):
+        confirming_sources = []
+    topics = row.get("topics")
+    if not isinstance(topics, list):
+        topics = []
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO news_events (
+                news_uid, observed_at, observed_date, symbol, category, bias, strength,
+                source, source_label, source_type, source_speed, source_reliability,
+                source_count, confirming_sources_json, horizon, actionability, score,
+                reason, summary, topics_json, message_url, message_text,
+                ai_direction, ai_strength, ai_confidence, ai_horizon, ai_event_type,
+                ai_reason, ai_risk, expires_at, observed_price, horizon_minutes,
+                evaluated_at, current_price, move_pct, favorable
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                news_uid,
+                observed_at,
+                _trade_date(observed_at),
+                str(row.get("symbol") or "").upper(),
+                str(row.get("category") or ""),
+                str(row.get("bias") or "").upper(),
+                str(row.get("strength") or ""),
+                str(row.get("source") or ""),
+                str(row.get("source_label") or ""),
+                str(row.get("source_type") or ""),
+                float(row.get("source_speed")) if row.get("source_speed") not in (None, "") else None,
+                float(row.get("source_reliability")) if row.get("source_reliability") not in (None, "") else None,
+                int(row.get("source_count") or 1),
+                json.dumps(confirming_sources, ensure_ascii=False),
+                str(row.get("horizon") or ""),
+                str(row.get("actionability") or ""),
+                float(row.get("score")) if row.get("score") not in (None, "") else None,
+                str(row.get("reason") or ""),
+                str(row.get("summary") or ""),
+                json.dumps(topics, ensure_ascii=False),
+                str(row.get("message_url") or ""),
+                str(row.get("message_text") or ""),
+                str(row.get("ai_direction") or ""),
+                str(row.get("ai_strength") or ""),
+                float(row.get("ai_confidence")) if row.get("ai_confidence") not in (None, "") else None,
+                str(row.get("ai_horizon") or ""),
+                str(row.get("ai_event_type") or ""),
+                str(row.get("ai_reason") or ""),
+                str(row.get("ai_risk") or ""),
+                str(row.get("expires_at") or ""),
+                float(row.get("observed_price")) if row.get("observed_price") not in (None, "") else None,
+                int(row.get("horizon_minutes") or 60),
+                str(row.get("evaluated_at") or ""),
+                float(row.get("current_price")) if row.get("current_price") not in (None, "") else None,
+                float(row.get("move_pct")) if row.get("move_pct") not in (None, "") else None,
+                int(bool(row.get("favorable"))) if row.get("favorable") not in (None, "") else None,
+            ),
+        )
+    return news_uid
+
+
+def _news_event_from_db(item: sqlite3.Row) -> dict[str, Any]:
+    row = dict(item)
+    for json_key, output_key in (
+        ("confirming_sources_json", "confirming_sources"),
+        ("topics_json", "topics"),
+    ):
+        raw = str(row.pop(json_key, "") or "")
+        if raw:
+            try:
+                row[output_key] = json.loads(raw)
+            except Exception:
+                row[output_key] = []
+        else:
+            row[output_key] = []
+    if row.get("favorable") is not None:
+        row["favorable"] = bool(row["favorable"])
+    return row
+
+
+def load_news_events(
+    db_path: Path,
+    *,
+    limit: int | None = None,
+    target_day: date | None = None,
+    unevaluated_only: bool = False,
+) -> list[dict[str, Any]]:
+    ensure_trade_db(db_path)
+    query = "SELECT * FROM news_events"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if target_day is not None:
+        clauses.append("observed_date = ?")
+        params.append(target_day.isoformat())
+    if unevaluated_only:
+        clauses.append("(evaluated_at IS NULL OR evaluated_at = '')")
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY observed_at ASC"
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+    with _connect(db_path) as connection:
+        return [_news_event_from_db(item) for item in connection.execute(query, params).fetchall()]
+
+
+def update_news_event_outcome(
+    db_path: Path,
+    news_uid: str,
+    *,
+    evaluated_at: str,
+    current_price: float,
+    move_pct: float,
+    favorable: bool,
+) -> None:
+    ensure_trade_db(db_path)
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE news_events
+            SET evaluated_at = ?, current_price = ?, move_pct = ?, favorable = ?
+            WHERE news_uid = ?
+            """,
+            (evaluated_at, float(current_price), float(move_pct), int(bool(favorable)), news_uid),
+        )
+
+
+def summarize_news_source_stats(db_path: Path, *, days: int = 10, limit: int = 12) -> list[dict[str, Any]]:
+    ensure_trade_db(db_path)
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(source_label, ''), source) AS source_label,
+                source,
+                source_type,
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN favorable = 1 THEN 1 ELSE 0 END) AS favorable_count,
+                SUM(CASE WHEN favorable = 0 THEN 1 ELSE 0 END) AS unfavorable_count,
+                AVG(move_pct) AS avg_move_pct,
+                AVG(source_speed) AS avg_speed,
+                AVG(source_reliability) AS avg_reliability
+            FROM news_events
+            WHERE observed_date >= date('now', ?)
+              AND evaluated_at IS NOT NULL
+              AND evaluated_at != ''
+              AND bias IN ('LONG', 'SHORT')
+            GROUP BY COALESCE(NULLIF(source_label, ''), source), source, source_type
+            ORDER BY total_count DESC, favorable_count DESC
+            LIMIT ?
+            """,
+            (f"-{int(days)} day", int(limit)),
+        ).fetchall()
+    stats: list[dict[str, Any]] = []
+    for item in rows:
+        total = int(item["total_count"] or 0)
+        favorable = int(item["favorable_count"] or 0)
+        stats.append(
+            {
+                "source_label": str(item["source_label"] or item["source"] or ""),
+                "source": str(item["source"] or ""),
+                "source_type": str(item["source_type"] or ""),
+                "total_count": total,
+                "favorable_count": favorable,
+                "unfavorable_count": int(item["unfavorable_count"] or 0),
+                "win_rate_pct": round((favorable / total * 100.0), 1) if total else 0.0,
+                "avg_move_pct": round(float(item["avg_move_pct"] or 0.0), 4),
+                "avg_speed": round(float(item["avg_speed"] or 0.0), 3),
+                "avg_reliability": round(float(item["avg_reliability"] or 0.0), 3),
+            }
+        )
+    return stats
 
 
 def _signal_observation_from_db(item: sqlite3.Row) -> dict[str, Any]:

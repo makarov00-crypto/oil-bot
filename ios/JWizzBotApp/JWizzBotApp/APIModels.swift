@@ -373,6 +373,19 @@ struct NewsBiasItem: Decodable, Identifiable {
     let bias: String
     let strength: String
     let source: String
+    let sourceLabel: String?
+    let sourceType: String?
+    let sourceSpeed: Double?
+    let sourceReliability: Double?
+    let sourceCount: Int?
+    let confirmingSources: [String]?
+    let aiDirection: String?
+    let aiStrength: String?
+    let aiConfidence: Double?
+    let aiHorizon: String?
+    let aiEventType: String?
+    let aiReason: String?
+    let aiRisk: String?
     let reason: String
     let summary: String?
     let horizon: String?
@@ -390,6 +403,19 @@ struct NewsBiasItem: Decodable, Identifiable {
         case bias
         case strength
         case source
+        case sourceLabel = "source_label"
+        case sourceType = "source_type"
+        case sourceSpeed = "source_speed"
+        case sourceReliability = "source_reliability"
+        case sourceCount = "source_count"
+        case confirmingSources = "confirming_sources"
+        case aiDirection = "ai_direction"
+        case aiStrength = "ai_strength"
+        case aiConfidence = "ai_confidence"
+        case aiHorizon = "ai_horizon"
+        case aiEventType = "ai_event_type"
+        case aiReason = "ai_reason"
+        case aiRisk = "ai_risk"
         case reason
         case summary
         case horizon

@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
 from active_contracts import get_active_contract_symbol
@@ -30,10 +30,23 @@ class NewsBias:
     horizon: str
     actionability: str
     expires_at: datetime
-    score: int
+    score: float
     message_text: str = ""
     message_url: str = ""
     topics: tuple[str, ...] = ()
+    source_speed: float = 0.0
+    source_reliability: float = 0.0
+    source_type: str = ""
+    source_label: str = ""
+    source_count: int = 1
+    confirming_sources: tuple[str, ...] = ()
+    ai_direction: str = ""
+    ai_strength: str = ""
+    ai_confidence: float = 0.0
+    ai_horizon: str = ""
+    ai_event_type: str = ""
+    ai_reason: str = ""
+    ai_risk: str = ""
 
 
 IMMEDIATE_TERMS = (
@@ -101,8 +114,12 @@ def collect_hits(text: str, phrases: tuple[str, ...]) -> list[str]:
     return hits
 
 
-def classify_strength(score: int, source_weight: int) -> str:
-    weighted = score * source_weight
+def source_quality_multiplier(speed_score: float, reliability_score: float) -> float:
+    return 0.55 * speed_score + 0.45 * reliability_score
+
+
+def classify_strength(score: int, source_weight: int, speed_score: float, reliability_score: float) -> str:
+    weighted = score * source_weight * source_quality_multiplier(speed_score, reliability_score)
     if weighted >= 6:
         return "HIGH"
     if weighted >= 3:
@@ -130,10 +147,12 @@ def classify_horizon(
     return "INTRADAY" if bias in {"LONG", "SHORT"} else "BACKGROUND"
 
 
-def classify_actionability(bias: str, strength: str, horizon: str) -> str:
+def classify_actionability(bias: str, strength: str, horizon: str, source_speed: float) -> str:
     if bias == "BLOCK":
         return "BLOCK"
     if bias in {"LONG", "SHORT"} and horizon == "NOW" and strength in {"MEDIUM", "HIGH"}:
+        return "ACTION"
+    if bias in {"LONG", "SHORT"} and source_speed >= 0.85 and strength == "HIGH":
         return "ACTION"
     if bias in {"LONG", "SHORT"} and horizon == "INTRADAY":
         return "WATCH"
@@ -198,10 +217,17 @@ def detect_news_bias(message: NewsMessage) -> list[NewsBias]:
         else:
             continue
 
-        strength = classify_strength(score, channel_rule.source_weight)
+        strength = classify_strength(
+            score,
+            channel_rule.source_weight,
+            channel_rule.speed_score,
+            channel_rule.reliability_score,
+        )
         horizon = classify_horizon(text, bias, strength, message.channel, block_hits)
         ttl = timedelta(minutes=channel_rule.default_ttl_minutes)
         target_symbol = get_active_contract_symbol(rule.symbol) or rule.symbol
+        quality_multiplier = source_quality_multiplier(channel_rule.speed_score, channel_rule.reliability_score)
+        weighted_score = round(score * channel_rule.source_weight * quality_multiplier, 2)
         results.append(
             NewsBias(
                 symbol=target_symbol,
@@ -225,16 +251,59 @@ def detect_news_bias(message: NewsMessage) -> list[NewsBias]:
                     bias,
                     strength,
                     horizon,
+                    channel_rule.speed_score,
                 ),
                 expires_at=message.created_at.astimezone(UTC) + ttl,
-                score=score * channel_rule.source_weight,
+                score=weighted_score,
                 message_text=message.text,
                 message_url=message.url,
                 topics=tuple(keyword_hits[:3]),
+                source_speed=channel_rule.speed_score,
+                source_reliability=channel_rule.reliability_score,
+                source_type=channel_rule.source_type,
+                source_label=channel_rule.display_name,
+                confirming_sources=(channel_rule.display_name,),
             )
         )
 
     return results
+
+
+def strength_rank(value: str) -> int:
+    return {"LOW": 1, "MEDIUM": 2, "HIGH": 3}.get((value or "").upper(), 0)
+
+
+def actionability_rank(value: str) -> int:
+    return {"BACKGROUND": 1, "WATCH": 2, "ACTION": 3, "BLOCK": 4}.get((value or "").upper(), 0)
+
+
+def merge_confirming_biases(primary: NewsBias, secondary: NewsBias) -> NewsBias:
+    source_names = tuple(dict.fromkeys((*primary.confirming_sources, *secondary.confirming_sources)))
+    stronger_strength = primary.strength
+    if strength_rank(secondary.strength) > strength_rank(primary.strength):
+        stronger_strength = secondary.strength
+
+    stronger_actionability = primary.actionability
+    if actionability_rank(secondary.actionability) > actionability_rank(primary.actionability):
+        stronger_actionability = secondary.actionability
+
+    lead = primary if primary.score >= secondary.score else secondary
+    support = secondary if lead is primary else primary
+    reason = lead.reason
+    if len(source_names) > 1:
+        reason = f"{lead.reason} Подтверждено источниками: {', '.join(source_names[:4])}."
+
+    return replace(
+        lead,
+        strength=stronger_strength,
+        actionability=stronger_actionability,
+        reason=reason,
+        summary=lead.summary or support.summary,
+        expires_at=max(primary.expires_at, secondary.expires_at),
+        score=round(max(primary.score, secondary.score) + min(primary.score, secondary.score) * 0.35, 2),
+        source_count=len(source_names),
+        confirming_sources=source_names,
+    )
 
 
 def select_active_biases(biases: list[NewsBias], now: datetime | None = None) -> dict[str, NewsBias]:
@@ -245,7 +314,11 @@ def select_active_biases(biases: list[NewsBias], now: datetime | None = None) ->
         if item.expires_at <= now:
             continue
         current = active.get(item.symbol)
-        if current is None or item.score > current.score:
+        if current is None:
+            active[item.symbol] = item
+        elif item.bias == current.bias and item.bias in {"LONG", "SHORT", "BLOCK"}:
+            active[item.symbol] = merge_confirming_biases(current, item)
+        elif item.score > current.score:
             active[item.symbol] = item
         elif current is not None and item.score == current.score and item.source == MOEX_DERIVATIVES:
             active[item.symbol] = item

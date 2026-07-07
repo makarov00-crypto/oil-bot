@@ -4,6 +4,9 @@ from dataclasses import dataclass
 MARKETTWITS = "markettwits"
 MOEX_DERIVATIVES = "moex_derivatives"
 MARKETSNAPSHOT = "marketsnapshot"
+FINAM = "finam"
+BCS_EXPRESS = "bcs_express"
+T_INVEST = "t_invest"
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,10 @@ class ChannelRule:
     source_weight: int
     default_ttl_minutes: int
     can_block_entries: bool
+    speed_score: float
+    reliability_score: float
+    source_type: str
+    display_name: str
 
 
 CHANNEL_RULES: dict[str, ChannelRule] = {
@@ -31,18 +38,60 @@ CHANNEL_RULES: dict[str, ChannelRule] = {
         source_weight=1,
         default_ttl_minutes=45,
         can_block_entries=False,
+        speed_score=0.95,
+        reliability_score=0.78,
+        source_type="telegram",
+        display_name="MarketTwits",
     ),
     MARKETSNAPSHOT: ChannelRule(
         channel=MARKETSNAPSHOT,
         source_weight=2,
         default_ttl_minutes=60,
         can_block_entries=False,
+        speed_score=0.92,
+        reliability_score=0.82,
+        source_type="telegram",
+        display_name="MarketSnapshot",
     ),
     MOEX_DERIVATIVES: ChannelRule(
         channel=MOEX_DERIVATIVES,
         source_weight=3,
         default_ttl_minutes=90,
         can_block_entries=True,
+        speed_score=0.55,
+        reliability_score=0.98,
+        source_type="official",
+        display_name="Мосбиржа деривативы",
+    ),
+    FINAM: ChannelRule(
+        channel=FINAM,
+        source_weight=3,
+        default_ttl_minutes=180,
+        can_block_entries=False,
+        speed_score=0.65,
+        reliability_score=0.92,
+        source_type="broker",
+        display_name="Финам",
+    ),
+    BCS_EXPRESS: ChannelRule(
+        channel=BCS_EXPRESS,
+        source_weight=3,
+        default_ttl_minutes=180,
+        can_block_entries=False,
+        speed_score=0.65,
+        reliability_score=0.90,
+        source_type="broker",
+        display_name="БКС Экспресс",
+    ),
+    T_INVEST: ChannelRule(
+        channel=T_INVEST,
+        source_weight=2,
+        default_ttl_minutes=180,
+        can_block_entries=False,
+        speed_score=0.60,
+        reliability_score=0.88,
+        source_type="broker",
+        display_name="Т-Инвестиции",
     ),
 }
 

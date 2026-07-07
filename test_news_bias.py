@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 import unittest
+from unittest.mock import patch
 
 import bot_oil_main as bot
-from news_bias import NewsBias, NewsMessage, detect_news_bias
+from news_bias import NewsBias, NewsMessage, detect_news_bias, select_active_biases
+from news_ingest import fetch_web_news_items
 
 
 UTC = timezone.utc
@@ -17,7 +19,7 @@ class NewsBiasTests(unittest.TestCase):
         )
 
         items = detect_news_bias(message)
-        brent = next(item for item in items if item.symbol == "BMN6")
+        brent = next(item for item in items if item.category == "нефть")
 
         self.assertEqual(brent.bias, "BLOCK")
         self.assertEqual(brent.horizon, "NOW")
@@ -38,6 +40,67 @@ class NewsBiasTests(unittest.TestCase):
         self.assertEqual(ucny.category, "валюта")
         self.assertTrue(ucny.summary.startswith("UCU6:"))
         self.assertTrue(len(ucny.topics) >= 1)
+        self.assertGreater(ucny.source_speed, 0.8)
+        self.assertGreater(ucny.source_reliability, 0.7)
+
+    def test_fast_telegram_can_make_strong_intraday_news_actionable(self) -> None:
+        message = NewsMessage(
+            channel="marketsnapshot",
+            text="Нефть Brent резко выше, рост нефти, дефицит нефти, сильный спрос.",
+            created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
+        )
+
+        items = detect_news_bias(message)
+        brent = next(item for item in items if item.category == "нефть")
+
+        self.assertEqual(brent.bias, "LONG")
+        self.assertEqual(brent.strength, "HIGH")
+        self.assertEqual(brent.actionability, "ACTION")
+        self.assertEqual(brent.source_type, "telegram")
+
+    def test_same_direction_from_broker_and_telegram_is_merged(self) -> None:
+        created_at = datetime(2026, 5, 12, 10, 15, tzinfo=UTC)
+        items = []
+        for channel in ("marketsnapshot", "finam"):
+            items.extend(
+                detect_news_bias(
+                    NewsMessage(
+                        channel=channel,
+                        text="USD/RUB выше, рост доллара и спрос на валюту усилились.",
+                        created_at=created_at,
+                    )
+                )
+            )
+
+        active = select_active_biases(items, now=datetime(2026, 5, 12, 10, 20, tzinfo=UTC))
+        usdrub = active["USDRUBF"]
+
+        self.assertEqual(usdrub.bias, "LONG")
+        self.assertGreaterEqual(usdrub.source_count, 2)
+        self.assertIn("MarketSnapshot", usdrub.confirming_sources)
+        self.assertIn("Финам", usdrub.confirming_sources)
+        self.assertIn("Подтверждено источниками", usdrub.reason)
+
+    def test_fetch_web_news_items_extracts_broker_headlines(self) -> None:
+        class FakeResponse:
+            text = """
+                <html><body>
+                  <a href="/news/1">Рост доллара усилился после новых валютных комментариев</a>
+                  <a href="/news/1">Рост доллара усилился после новых валютных комментариев</a>
+                  <a href="/news/2">читать далее</a>
+                </body></html>
+            """
+
+            def raise_for_status(self) -> None:
+                return None
+
+        with patch("news_ingest.requests.get", return_value=FakeResponse()):
+            items = fetch_web_news_items("finam", limit=10)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source, "finam")
+        self.assertTrue(items[0].url.endswith("/news/1"))
+        self.assertIn("Рост доллара", items[0].title)
 
     def test_weak_background_conflict_does_not_block_signal(self) -> None:
         bias = NewsBias(

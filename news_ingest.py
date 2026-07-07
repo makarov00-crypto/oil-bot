@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from html import unescape
 from typing import Iterable
+from urllib.parse import urljoin
 
 import requests
 
 from news_bias import NewsBias, NewsMessage, detect_news_bias
+from news_rules import BCS_EXPRESS, FINAM, T_INVEST
 
 
 UTC = timezone.utc
@@ -20,6 +22,12 @@ CHANNEL_URLS: dict[str, str] = {
     "moex_derivatives": "https://t.me/s/moex_derivatives",
 }
 
+WEB_SOURCE_URLS: dict[str, str] = {
+    FINAM: "https://www.finam.ru/publications/",
+    BCS_EXPRESS: "https://bcs-express.ru/novosti-i-analitika",
+    T_INVEST: "https://www.tbank.ru/invest/social/news/",
+}
+
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 WRAP_SPLIT = '<div class="tgme_widget_message_wrap js-widget_message_wrap">'
 TEXT_RE = re.compile(r'<div class="tgme_widget_message_text js-message_text"[^>]*>(.*?)</div>', re.S)
@@ -27,6 +35,7 @@ DATE_RE = re.compile(r'<time datetime="([^"]+)" class="time">')
 POST_RE = re.compile(r'data-post="[^/]+/(\d+)"')
 BEFORE_RE = re.compile(r'class="tme_messages_more js-messages_more" data-before="(\d+)"')
 TAG_RE = re.compile(r"<[^>]+>")
+LINK_RE = re.compile(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S | re.I)
 
 
 @dataclass(frozen=True)
@@ -45,10 +54,45 @@ class ChannelPage:
     next_before: int | None
 
 
+@dataclass(frozen=True)
+class WebNewsItem:
+    source: str
+    created_at: datetime
+    title: str
+    url: str
+
+
 def strip_html(html: str) -> str:
     text = html.replace("<br/>", "\n").replace("<br>", "\n").replace("</p>", "\n")
     text = TAG_RE.sub("", text)
     return "\n".join(line.strip() for line in unescape(text).splitlines() if line.strip())
+
+
+def fetch_web_news_items(source: str, timeout: int = 20, limit: int = 30) -> list[WebNewsItem]:
+    if source not in WEB_SOURCE_URLS:
+        raise KeyError(f"Неизвестный веб-источник: {source}")
+    url = WEB_SOURCE_URLS[source]
+    response = requests.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
+    response.raise_for_status()
+
+    items: list[WebNewsItem] = []
+    seen_urls: set[str] = set()
+    now = datetime.now(UTC)
+    for href, raw_title in LINK_RE.findall(response.text):
+        title = strip_html(raw_title)
+        if len(title) < 20 or len(title) > 260:
+            continue
+        normalized_title = " ".join(title.split())
+        if normalized_title.lower() in {"читать далее", "подробнее", "все новости", "новости и аналитика"}:
+            continue
+        item_url = urljoin(url, href)
+        if item_url in seen_urls:
+            continue
+        seen_urls.add(item_url)
+        items.append(WebNewsItem(source=source, created_at=now, title=normalized_title, url=item_url))
+        if len(items) >= limit:
+            break
+    return items
 
 
 def fetch_channel_page(channel: str, before: int | None = None, timeout: int = 20) -> ChannelPage:
@@ -123,6 +167,18 @@ def build_news_messages(posts: Iterable[ChannelPost]) -> list[NewsMessage]:
             url=post.url,
         )
         for post in posts
+    ]
+
+
+def build_news_messages_from_web(items: Iterable[WebNewsItem]) -> list[NewsMessage]:
+    return [
+        NewsMessage(
+            channel=item.source,
+            text=item.title,
+            created_at=item.created_at,
+            url=item.url,
+        )
+        for item in items
     ]
 
 

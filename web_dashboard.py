@@ -37,6 +37,7 @@ from daily_ai_review import (
 from trade_storage import (
     load_signal_observations as load_signal_observations_from_storage,
     load_trade_rows as load_trade_rows_from_storage,
+    summarize_news_source_stats,
 )
 
 
@@ -1183,11 +1184,17 @@ def runtime_heartbeat_age_seconds(runtime: dict) -> float | None:
 
 def load_news_snapshot() -> dict:
     if not NEWS_SNAPSHOT_PATH.exists():
-        return {}
+        payload: dict = {}
+    else:
+        try:
+            payload = load_json(NEWS_SNAPSHOT_PATH)
+        except Exception:
+            payload = {}
     try:
-        return load_json(NEWS_SNAPSHOT_PATH)
+        payload["source_stats"] = summarize_news_source_stats(TRADE_DB_PATH, days=10, limit=8)
     except Exception:
-        return {}
+        payload["source_stats"] = []
+    return payload
 
 
 CAPITAL_ALERT_PATTERNS = (
@@ -4244,6 +4251,7 @@ def build_dashboard_html() -> str:
         </div>
       </div>
       <div id="newsLeadCards" class="review-grid" style="margin-top:16px;"></div>
+      <div id="newsSourceStats" class="review-grid" style="margin-top:16px;"></div>
       <div id="newsCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="newsTable" style="margin-top:16px;">
@@ -4586,6 +4594,33 @@ def build_dashboard_html() -> str:
       return raw || 'рынок';
     }
 
+    function formatNewsSourceType(value) {
+      const raw = String(value || '').toLowerCase();
+      const map = {
+        telegram: 'быстрый Telegram',
+        broker: 'брокерская аналитика',
+        official: 'официальный источник',
+      };
+      return map[raw] || raw || 'источник';
+    }
+
+    function formatNewsQuality(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num) || num <= 0) return '-';
+      return `${Math.round(num * 100)}%`;
+    }
+
+    function formatNewsSourceSummary(item) {
+      const label = String(item.source_label || item.source || '-').replaceAll('_', ' ');
+      const type = formatNewsSourceType(item.source_type || '');
+      const speed = formatNewsQuality(item.source_speed);
+      const reliability = formatNewsQuality(item.source_reliability);
+      const confirmations = Array.isArray(item.confirming_sources) && item.confirming_sources.length > 1
+        ? ` · подтверждений: ${item.confirming_sources.join(', ')}`
+        : '';
+      return `${label} · ${type} · скорость ${speed} · надёжность ${reliability}${confirmations}`;
+    }
+
     function classifyNewsBucket(item) {
       const actionability = String(item.actionability || '').toUpperCase();
       const horizon = String(item.horizon || '').toUpperCase();
@@ -4598,7 +4633,10 @@ def build_dashboard_html() -> str:
     function formatNewsWhatMatters(item) {
       const bias = formatBiasLabel(item.bias || 'NEUTRAL');
       const action = formatNewsActionability(item.actionability || '');
-      return `${bias} · ${action}`;
+      const ai = item.ai_direction
+        ? ` · AI: ${formatBiasLabel(item.ai_direction)} ${formatNewsQuality(item.ai_confidence)}`
+        : '';
+      return `${bias} · ${action}${ai}`;
     }
 
     function formatRuntimeState(value) {
@@ -5245,9 +5283,11 @@ def build_dashboard_html() -> str:
       document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
 
       const newsLeadCards = document.getElementById('newsLeadCards');
+      const newsSourceStats = document.getElementById('newsSourceStats');
       const newsBody = document.querySelector('#newsTable tbody');
       const newsCards = document.getElementById('newsCards');
       newsLeadCards.innerHTML = '';
+      newsSourceStats.innerHTML = '';
       newsBody.innerHTML = '';
       newsCards.innerHTML = '';
       const leadItems = [
@@ -5274,16 +5314,35 @@ def build_dashboard_html() -> str:
           <div class="review-summary-sub">${escapeHtml(item.sub)}</div>
         </div>
       `).join('');
+      const sourceStats = Array.isArray(news.source_stats) ? news.source_stats : [];
+      newsSourceStats.innerHTML = sourceStats.length ? sourceStats.slice(0, 4).map((item) => {
+        const winRate = Number(item.win_rate_pct || 0);
+        const avgMove = Number(item.avg_move_pct || 0);
+        const count = Number(item.total_count || 0);
+        const type = formatNewsSourceType(item.source_type || '');
+        return `<div class="glass-card">
+          <div class="label">${escapeHtml(item.source_label || item.source || '-')}</div>
+          <div class="review-summary-main">${winRate.toFixed(1)}% попаданий</div>
+          <div class="review-summary-sub">${escapeHtml(type)} · проверено ${count} · среднее движение ${avgMove.toFixed(3)}%</div>
+        </div>`;
+      }).join('') : `<div class="glass-card">
+        <div class="label">Качество источников</div>
+        <div class="review-summary-main">история ещё копится</div>
+        <div class="review-summary-sub">после первых оценённых новостей появится статистика попаданий</div>
+      </div>`;
       for (const item of activeBiases) {
         const hasMessage = String(item.message_text || '').trim().length > 0;
         const reasonText = humanizeNewsReason(item.reason || '-');
         const summaryText = summarizeNewsCard(item);
-        const sourceLabel = String(item.source || '-').replaceAll('_', ' ');
+        const sourceLabel = String(item.source_label || item.source || '-').replaceAll('_', ' ');
+        const sourceSummary = formatNewsSourceSummary(item);
         const whatMatters = formatNewsWhatMatters(item);
         const nowText = `${formatNewsHorizon(item.horizon || '')} · ${formatStrength(item.strength || '-')}`;
         const whyImportant = [
           formatNewsCategory(item.category || ''),
           item.topics && item.topics.length ? `темы: ${item.topics.join(', ')}` : '',
+          item.ai_reason ? `AI: ${item.ai_reason}` : '',
+          item.ai_risk ? `риск: ${item.ai_risk}` : '',
           reasonText,
         ].filter(Boolean).join(' · ');
         const detailsButton = hasMessage
@@ -5293,7 +5352,7 @@ def build_dashboard_html() -> str:
           <td>${renderInstrumentLabel(item.symbol || '-', item.display_name || '')}</td>
           <td><div class="trade-cell-main">${escapeHtml(summaryText)}</div><div class="trade-cell-sub">${escapeHtml(whatMatters)}</div></td>
           <td>${escapeHtml(nowText)}</td>
-          <td>${escapeHtml(item.source || '-')}</td>
+          <td><div class="trade-cell-main">${escapeHtml(sourceLabel)}</div><div class="trade-cell-sub">${escapeHtml(sourceSummary)}</div></td>
           <td class="mono">${escapeHtml(item.expires_at_moscow || '-')}</td>
           <td><div class="news-reason"><span class="reason">${escapeHtml(whyImportant)}</span>${detailsButton}</div></td>
         </tr>`);
@@ -5305,7 +5364,7 @@ def build_dashboard_html() -> str:
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Что важно</span><div class="mobile-card-value">${escapeHtml(whatMatters)}</div></div>
             <div class="mobile-card-item"><span class="muted">Сейчас</span><div class="mobile-card-value">${escapeHtml(nowText)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Источник</span><div class="mobile-card-value">${escapeHtml(item.source || '-')}</div></div>
+            <div class="mobile-card-item"><span class="muted">Источник</span><div class="mobile-card-value">${escapeHtml(sourceSummary)}</div></div>
             <div class="mobile-card-item"><span class="muted">Актуально до</span><div class="mobile-card-value mono">${escapeHtml(item.expires_at_moscow || '-')}</div></div>
           </div>
           <div class="mobile-card-footer">

@@ -8,10 +8,14 @@ from unittest.mock import patch
 import bot_oil_main as mod
 import trade_storage
 from trade_storage import (
+    append_news_event,
     append_signal_observation,
     ensure_trade_db,
+    load_news_events,
     load_signal_observations,
     load_trade_rows,
+    summarize_news_source_stats,
+    update_news_event_outcome,
     update_signal_observation_context,
     update_signal_observation_outcome,
 )
@@ -20,6 +24,66 @@ from trade_storage import (
 class TradeStorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.instrument = mod.InstrumentConfig(symbol="TEST", figi="FIGI", display_name="Test")
+
+    def test_news_events_are_deduped_and_summarized(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
+            row = {
+                "observed_at": "2026-05-12T10:00:00+03:00",
+                "symbol": "USDRUBF",
+                "category": "валюта",
+                "bias": "LONG",
+                "strength": "HIGH",
+                "source": "finam",
+                "source_label": "Финам",
+                "source_type": "broker",
+                "source_speed": 0.65,
+                "source_reliability": 0.92,
+                "source_count": 1,
+                "confirming_sources": ["Финам"],
+                "horizon": "INTRADAY",
+                "actionability": "ACTION",
+                "score": 8.5,
+                "reason": "Новость подтверждает рост доллара",
+                "summary": "USDRUBF: фон в лонг",
+                "topics": ["usd/rub"],
+                "message_url": "https://example.com/news/1",
+                "message_text": "USD/RUB выше",
+                "ai_direction": "LONG",
+                "ai_strength": "HIGH",
+                "ai_confidence": 0.8,
+                "ai_horizon": "INTRADAY",
+                "ai_event_type": "валютный импульс",
+                "ai_reason": "AI подтвердил направление",
+                "ai_risk": "шум",
+                "expires_at": "2026-05-12T14:00:00+03:00",
+                "observed_price": 75.0,
+                "horizon_minutes": 240,
+            }
+
+            first_uid = append_news_event(db_path, row)
+            second_uid = append_news_event(db_path, {**row, "observed_at": "2026-05-12T10:05:00+03:00"})
+            rows = load_news_events(db_path)
+
+            self.assertEqual(first_uid, second_uid)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["confirming_sources"], ["Финам"])
+            self.assertEqual(rows[0]["topics"], ["usd/rub"])
+
+            update_news_event_outcome(
+                db_path,
+                first_uid,
+                evaluated_at="2026-05-12T14:00:00+03:00",
+                current_price=76.0,
+                move_pct=1.3333,
+                favorable=True,
+            )
+            stats = summarize_news_source_stats(db_path, days=100, limit=5)
+
+            self.assertEqual(len(stats), 1)
+            self.assertEqual(stats[0]["source_label"], "Финам")
+            self.assertEqual(stats[0]["win_rate_pct"], 100.0)
+            self.assertEqual(stats[0]["avg_move_pct"], 1.3333)
 
     def test_append_trade_journal_persists_context_to_sqlite(self) -> None:
         state = mod.InstrumentState(
