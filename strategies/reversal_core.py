@@ -129,6 +129,15 @@ def _ao_direction_ok(current: float, previous: float, earlier: float, direction:
     return False
 
 
+def _ao_trend_tolerates(current: float, previous: float, direction: str) -> bool:
+    tolerance = max(abs(previous) * 0.35, abs(current) * 0.20, 1e-9)
+    if direction == "LONG":
+        return current > 0 and current >= previous - tolerance
+    if direction == "SHORT":
+        return current < 0 and current <= previous + tolerance
+    return False
+
+
 def _is_late_evening_candle(value) -> bool:
     try:
         if hasattr(value, "tz_convert"):
@@ -245,6 +254,7 @@ def evaluate_signal_core(
         regime = "trend"
     else:
         regime = "mixed"
+    trend_like_regime = regime in {"trend", "expansion"}
 
     breakout_up = close > recent_high and close > ema20
     breakout_down = close < recent_low and close < ema20
@@ -271,6 +281,8 @@ def evaluate_signal_core(
     rsi_short_extreme_bad = rsi > min(profile.rsi_short_max + 10.0, 65.0) and rsi > prev_rsi
     ao_long_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "LONG") or (ao >= prev_ao and macd_hist > prev_hist)
     ao_short_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "SHORT") or (ao <= prev_ao and macd_hist < prev_hist)
+    ao_long_supported = ao_long_ok or (trend_like_regime and _ao_trend_tolerates(ao, prev_ao, "LONG"))
+    ao_short_supported = ao_short_ok or (trend_like_regime and _ao_trend_tolerates(ao, prev_ao, "SHORT"))
     chaikin_long_ok = chaikin >= prev_chaikin and (chaikin > 0 or chaikin_delta > 0)
     chaikin_short_ok = chaikin <= prev_chaikin and (chaikin < 0 or chaikin_delta < 0)
     volume_ok = volume_ratio >= profile.min_volume_ratio
@@ -297,7 +309,7 @@ def evaluate_signal_core(
     emerging_long_pressure_ok = (
         recent_long_cross
         and close >= ema20
-        and ao_long_ok
+        and ao_long_supported
         and rsi_long_ok
         and body_ratio >= soft_impulse_floor
         and volume_ratio >= max(0.45, soft_volume_floor - 0.10)
@@ -305,7 +317,7 @@ def evaluate_signal_core(
     emerging_short_pressure_ok = (
         recent_short_cross
         and close <= ema20
-        and ao_short_ok
+        and ao_short_supported
         and rsi_short_ok
         and body_ratio >= soft_impulse_floor
         and volume_ratio >= max(0.45, soft_volume_floor - 0.10)
@@ -321,7 +333,7 @@ def evaluate_signal_core(
         and close >= ema20
         and ema20 >= prev_ema20
         and close >= prev_close
-        and ao_long_ok
+        and ao_long_supported
         and rsi_long_ok
         and long_volume_ok
         and evening_long_pressure_ok
@@ -334,11 +346,39 @@ def evaluate_signal_core(
         and close <= ema20
         and ema20 <= prev_ema20
         and close <= prev_close
-        and ao_short_ok
+        and ao_short_supported
         and rsi_short_ok
         and short_volume_ok
         and evening_short_pressure_ok
         and soft_impulse_ok
+    )
+    trend_long_continuation_ok = (
+        trend_like_regime
+        and close >= ema20
+        and ema20 >= prev_ema20
+        and macd >= macd_signal
+        and macd_hist >= 0
+        and (macd_hist >= prev_hist or rsi >= prev_rsi)
+        and rsi_long_ok
+        and ao_long_supported
+        and long_volume_ok
+        and soft_impulse_ok
+        and soft_volatility_ok
+        and not rsi_long_extreme_bad
+    )
+    trend_short_continuation_ok = (
+        trend_like_regime
+        and close <= ema20
+        and ema20 <= prev_ema20
+        and macd <= macd_signal
+        and macd_hist <= 0
+        and (macd_hist <= prev_hist or rsi <= prev_rsi)
+        and rsi_short_ok
+        and ao_short_supported
+        and short_volume_ok
+        and soft_impulse_ok
+        and soft_volatility_ok
+        and not rsi_short_extreme_bad
     )
 
     late_long = (
@@ -359,6 +399,27 @@ def evaluate_signal_core(
             and not strong_impulse_override
             and not ao_short_ok
             and (short_cross_age is None or short_cross_age > 3)
+        )
+    )
+    severe_late_distance = max(profile.max_distance_to_ema20_pct * 2.0, profile.max_distance_to_ema20_pct + 0.015)
+    hard_late_long = late_long and (
+        not trend_like_regime
+        or (
+            distance_to_ema20_pct >= severe_late_distance
+            and rsi >= profile.late_rsi_long
+            and stoch_k >= profile.late_stoch_high
+            and not strong_impulse_override
+            and not ao_long_supported
+        )
+    )
+    hard_late_short = late_short and (
+        not trend_like_regime
+        or (
+            distance_to_ema20_pct >= severe_late_distance
+            and rsi <= profile.late_rsi_short
+            and stoch_k <= profile.late_stoch_low
+            and not strong_impulse_override
+            and not ao_short_supported
         )
     )
 
@@ -391,6 +452,8 @@ def evaluate_signal_core(
 
     long_blockers: list[str] = []
     short_blockers: list[str] = []
+    long_warnings: list[str] = []
+    short_warnings: list[str] = []
     if regime == "chop":
         long_blockers.append("режим chop: переворот запрещён")
         short_blockers.append("режим chop: переворот запрещён")
@@ -412,10 +475,14 @@ def evaluate_signal_core(
         long_blockers.append("RSI ещё не развернулся достаточно уверенно")
     if not rsi_short_ok and not slow_short_continuation_ok:
         short_blockers.append("RSI ещё не развернулся достаточно уверенно")
-    if not ao_long_ok and not slow_long_continuation_ok:
+    if not ao_long_supported and not slow_long_continuation_ok and not trend_long_continuation_ok:
         long_blockers.append("AO не подтверждает рост")
-    if not ao_short_ok and not slow_short_continuation_ok:
+    elif not ao_long_ok:
+        long_warnings.append("AO нейтрален: тренд допускает осторожный вход")
+    if not ao_short_supported and not slow_short_continuation_ok and not trend_short_continuation_ok:
         short_blockers.append("AO не подтверждает снижение")
+    elif not ao_short_ok:
+        short_warnings.append("AO нейтрален: тренд допускает осторожный вход")
     if not long_volume_ok:
         long_blockers.append("объём слишком слабый")
     if not short_volume_ok:
@@ -426,10 +493,14 @@ def evaluate_signal_core(
     if not soft_volatility_ok and not (slow_long_continuation_ok or slow_short_continuation_ok):
         long_blockers.append("волатильность слишком низкая")
         short_blockers.append("волатильность слишком низкая")
-    if late_long and not slow_long_continuation_ok:
+    if hard_late_long and not slow_long_continuation_ok and not trend_long_continuation_ok:
         long_blockers.append("late entry: движение уже ушло")
-    if late_short and not slow_short_continuation_ok:
+    elif late_long:
+        long_warnings.append("late entry мягкий: вход только как продолжение тренда")
+    if hard_late_short and not slow_short_continuation_ok and not trend_short_continuation_ok:
         short_blockers.append("late entry: движение уже ушло")
+    elif late_short:
+        short_warnings.append("late entry мягкий: вход только как продолжение тренда")
 
     regime_allows_long = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and (fresh_impulse_override or (recent_long_cross and ao_long_ok and soft_impulse_ok)))
     regime_allows_short = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and (fresh_impulse_override or (recent_short_cross and ao_short_ok and soft_impulse_ok)))
@@ -438,12 +509,12 @@ def evaluate_signal_core(
         and (trend_up or expansion_up or compression_long_ok or early_long_ok)
         and recent_long_cross
         and macd_long_ok
-        and ao_long_ok
+        and ao_long_supported
         and rsi_long_ok
         and long_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok
-        and not late_long
+        and not hard_late_long
         and not rsi_long_extreme_bad
     )
     short_ok = (
@@ -451,12 +522,12 @@ def evaluate_signal_core(
         and (trend_down or expansion_down or compression_short_ok or early_short_ok)
         and recent_short_cross
         and macd_short_ok
-        and ao_short_ok
+        and ao_short_supported
         and rsi_short_ok
         and short_volume_ok
         and soft_impulse_ok
         and soft_volatility_ok
-        and not late_short
+        and not hard_late_short
         and not rsi_short_extreme_bad
     )
     if not long_ok and slow_long_continuation_ok:
@@ -465,6 +536,17 @@ def evaluate_signal_core(
     if not short_ok and slow_short_continuation_ok:
         short_ok = True
         short_reasons.append("медленное продолжение вниз по MACD")
+    if not long_ok and trend_long_continuation_ok:
+        long_ok = True
+        long_reasons.append("продолжение тренда вверх без свежего MACD cross")
+    if not short_ok and trend_short_continuation_ok:
+        short_ok = True
+        short_reasons.append("продолжение тренда вниз без свежего MACD cross")
+
+    if long_warnings:
+        long_reasons.extend(long_warnings)
+    if short_warnings:
+        short_reasons.extend(short_warnings)
 
     if long_ok:
         return "LONG", f"Сигнал LONG ({strategy_label}): " + "; ".join(long_reasons) + "."

@@ -262,6 +262,90 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "LONG")
         self.assertIn("AO=", reason)
 
+    def test_unified_reversal_allows_trend_long_when_ao_softens_and_cross_is_old(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.0, "ema20": 99.6, "ema50": 99.1, "rsi": 51.0, "macd": 0.08, "macd_signal": 0.02, "ao": 0.16},
+                {"close": 100.3, "ema20": 99.8, "ema50": 99.2, "rsi": 53.0, "macd": 0.10, "macd_signal": 0.03, "ao": 0.18},
+                {"close": 100.7, "ema20": 100.0, "ema50": 99.35, "rsi": 55.0, "macd": 0.13, "macd_signal": 0.05, "ao": 0.20},
+                {"close": 101.1, "ema20": 100.25, "ema50": 99.55, "rsi": 58.0, "macd": 0.16, "macd_signal": 0.07, "ao": 0.23},
+                {"close": 101.5, "ema20": 100.55, "ema50": 99.80, "rsi": 61.0, "macd": 0.20, "macd_signal": 0.10, "ao": 0.26},
+                {"close": 101.9, "ema20": 100.90, "ema50": 100.10, "rsi": 64.0, "macd": 0.24, "macd_signal": 0.13, "ao": 0.30},
+                {"close": 102.4, "ema20": 101.25, "ema50": 100.40, "rsi": 67.0, "macd": 0.29, "macd_signal": 0.17, "ao": 0.34},
+                {
+                    "open": 102.3,
+                    "close": 102.8,
+                    "high": 102.9,
+                    "low": 102.1,
+                    "ema20": 101.60,
+                    "ema50": 100.75,
+                    "rsi": 69.0,
+                    "macd": 0.31,
+                    "macd_signal": 0.20,
+                    "ao": 0.27,
+                    "volume": 95.0,
+                    "volume_avg": 100.0,
+                    "body": 0.50,
+                    "body_avg": 0.60,
+                    "atr": 0.30,
+                    "bb_upper": 103.2,
+                    "bb_lower": 99.7,
+                    "stoch_k": 87.0,
+                    "stoch_d": 82.0,
+                },
+            ]
+        )
+        instrument = InstrumentConfig(symbol="RNM6", figi="FIGI", display_name="Rosneft")
+
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("продолжение тренда вверх", reason)
+        self.assertIn("AO нейтрален", reason)
+        self.assertIn("late entry мягкий", reason)
+
+    def test_unified_reversal_allows_trend_short_when_ao_softens_and_cross_is_old(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.0, "ema20": 100.4, "ema50": 100.9, "rsi": 49.0, "macd": -0.08, "macd_signal": -0.02, "ao": -0.16},
+                {"close": 99.7, "ema20": 100.2, "ema50": 100.8, "rsi": 47.0, "macd": -0.10, "macd_signal": -0.03, "ao": -0.18},
+                {"close": 99.3, "ema20": 100.0, "ema50": 100.65, "rsi": 45.0, "macd": -0.13, "macd_signal": -0.05, "ao": -0.20},
+                {"close": 98.9, "ema20": 99.75, "ema50": 100.45, "rsi": 42.0, "macd": -0.16, "macd_signal": -0.07, "ao": -0.23},
+                {"close": 98.5, "ema20": 99.45, "ema50": 100.20, "rsi": 39.0, "macd": -0.20, "macd_signal": -0.10, "ao": -0.26},
+                {"close": 98.1, "ema20": 99.10, "ema50": 99.90, "rsi": 36.0, "macd": -0.24, "macd_signal": -0.13, "ao": -0.30},
+                {"close": 97.7, "ema20": 98.75, "ema50": 99.55, "rsi": 33.0, "macd": -0.29, "macd_signal": -0.17, "ao": -0.34},
+                {
+                    "open": 97.8,
+                    "close": 97.3,
+                    "high": 98.0,
+                    "low": 97.2,
+                    "ema20": 98.40,
+                    "ema50": 99.20,
+                    "rsi": 31.0,
+                    "macd": -0.31,
+                    "macd_signal": -0.20,
+                    "ao": -0.27,
+                    "volume": 96.0,
+                    "volume_avg": 100.0,
+                    "body": 0.50,
+                    "body_avg": 0.60,
+                    "atr": 0.30,
+                    "bb_upper": 100.3,
+                    "bb_lower": 96.8,
+                    "stoch_k": 13.0,
+                    "stoch_d": 18.0,
+                },
+            ]
+        )
+        instrument = InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="MOEX")
+
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("продолжение тренда вниз", reason)
+        self.assertIn("AO нейтрален", reason)
+        self.assertIn("late entry мягкий", reason)
+
     def test_unified_reversal_entry_edge_is_not_crushed_by_early_compression(self) -> None:
         state = mod.InstrumentState(
             last_setup_quality_label="medium",
