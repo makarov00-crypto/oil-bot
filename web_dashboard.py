@@ -3489,6 +3489,42 @@ def build_dashboard_html() -> str:
       color: #dbe9f8;
       line-height: 1.35;
     }
+    .news-overview {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .news-overview-card {
+      min-height: 118px;
+      background: rgba(10, 18, 34, 0.66);
+      border: 1px solid rgba(102, 174, 255, 0.14);
+      border-radius: 8px;
+      padding: 14px 16px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    }
+    .news-overview-card.primary {
+      border-color: rgba(55, 230, 164, 0.28);
+      background: linear-gradient(180deg, rgba(13, 34, 34, 0.74), rgba(10, 18, 34, 0.66));
+    }
+    .news-overview-kicker {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .news-overview-main {
+      margin-top: 8px;
+      color: #eff6ff;
+      font: 800 18px/1.22 "Sora", "Manrope", sans-serif;
+    }
+    .news-overview-sub {
+      margin-top: 8px;
+      color: #9eb1c9;
+      font-size: 13px;
+      line-height: 1.35;
+    }
     .news-detail-list {
       display: grid;
       gap: 4px;
@@ -4080,6 +4116,9 @@ def build_dashboard_html() -> str:
       .mobile-cards {
         display: grid;
       }
+      .news-overview {
+        grid-template-columns: 1fr;
+      }
       .mobile-card-grid {
         grid-template-columns: 1fr 1fr;
       }
@@ -4313,9 +4352,7 @@ def build_dashboard_html() -> str:
           <div class="metric" id="newsBlockCount">-</div>
         </div>
       </div>
-      <div id="newsLeadCards" class="review-grid" style="margin-top:16px;"></div>
-      <div id="newsSourceStats" class="review-grid" style="margin-top:16px;"></div>
-      <div id="newsCoverageCards" class="review-grid" style="margin-top:16px;"></div>
+      <div id="newsLeadCards" class="news-overview"></div>
       <div id="newsCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="newsTable" style="margin-top:16px;">
@@ -5377,7 +5414,6 @@ def build_dashboard_html() -> str:
       const signalNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'signal');
       const tradeNews = activeBiases.filter((item) => item.trade_eligible);
       const blockNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'block');
-      const backgroundNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'background');
       document.getElementById('newsUpdatedAt').textContent = `Новости: ${news.fetched_at_moscow || '-'}`;
       document.getElementById('newsCount').textContent = activeBiases.length;
       document.getElementById('newsKeyCount').textContent = keyNews.length;
@@ -5385,77 +5421,53 @@ def build_dashboard_html() -> str:
       document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
 
       const newsLeadCards = document.getElementById('newsLeadCards');
-      const newsSourceStats = document.getElementById('newsSourceStats');
-      const newsCoverageCards = document.getElementById('newsCoverageCards');
       const newsBody = document.querySelector('#newsTable tbody');
       const newsCards = document.getElementById('newsCards');
       newsLeadCards.innerHTML = '';
-      newsSourceStats.innerHTML = '';
-      newsCoverageCards.innerHTML = '';
       newsBody.innerHTML = '';
       newsCards.innerHTML = '';
-      const leadItems = [
-        {
-          title: 'Ключевое сейчас',
-          value: keyNews.length ? keyNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'сильных новостей сейчас нет',
-          sub: keyNews.length ? 'это может быстро повлиять на входы' : 'техника сейчас важнее фона',
-        },
-        {
-          title: 'Влияет на сигналы',
-          value: tradeNews.length ? tradeNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'новости не допущены к сделкам',
-          sub: tradeNews.length ? 'ИИ подтвердил направление и горизонт' : 'техника сейчас важнее новостного фона',
-        },
-        {
-          title: 'Фон',
-          value: backgroundNews.length ? backgroundNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'фон спокоен',
-          sub: backgroundNews.length ? 'это скорее контекст, а не причина сделки' : 'лишнего шума в новостях нет',
-        },
-      ];
-      newsLeadCards.innerHTML = leadItems.map((item) => `
-        <div class="glass-card">
-          <div class="label">${escapeHtml(item.title)}</div>
-          <div class="review-summary-main">${escapeHtml(item.value)}</div>
-          <div class="review-summary-sub">${escapeHtml(item.sub)}</div>
-        </div>
-      `).join('');
       const sourceStats = Array.isArray(news.source_stats) ? news.source_stats : [];
-      newsSourceStats.innerHTML = sourceStats.length ? sourceStats.slice(0, 4).map((item) => {
-        const winRate = Number(item.win_rate_pct || 0);
-        const avgMove = Number(item.avg_move_pct || 0);
-        const count = Number(item.total_count || 0);
-        const type = formatNewsSourceType(item.source_type || '');
-        return `<div class="glass-card">
-          <div class="label">${escapeHtml(item.source_label || item.source || '-')}</div>
-          <div class="review-summary-main">${winRate.toFixed(1)}% попаданий</div>
-          <div class="review-summary-sub">${escapeHtml(type)} · проверено ${count} · среднее движение ${avgMove.toFixed(3)}%</div>
-        </div>`;
-      }).join('') : `<div class="glass-card">
-        <div class="label">Качество источников</div>
-        <div class="review-summary-main">история ещё копится</div>
-        <div class="review-summary-sub">после первых оценённых новостей появится статистика попаданий</div>
-      </div>`;
+      const topSource = sourceStats.length ? sourceStats[0] : null;
       const coverage = news.coverage || {};
       const watchedSymbols = Array.isArray(coverage.watched_symbols) ? coverage.watched_symbols : [];
       const newsSymbols = Array.isArray(coverage.news_symbols) ? coverage.news_symbols : [];
       const missingSymbols = Array.isArray(coverage.missing_symbols) ? coverage.missing_symbols : [];
-      const keywordSamples = coverage.keyword_samples || {};
       const coveredCount = watchedSymbols.filter((symbol) => newsSymbols.includes(symbol)).length;
-      const sampleRows = watchedSymbols.slice(0, 5).map((symbol) => {
-        const words = Array.isArray(keywordSamples[symbol]) ? keywordSamples[symbol].slice(0, 5).join(', ') : '-';
-        return `${symbol}: ${words || '-'}`;
-      }).join(' | ');
-      newsCoverageCards.innerHTML = `
-        <div class="glass-card">
-          <div class="label">Покрытие новостей</div>
-          <div class="review-summary-main">${coveredCount} из ${watchedSymbols.length} тикеров</div>
-          <div class="review-summary-sub">${missingSymbols.length ? `не хватает: ${missingSymbols.join(', ')}` : 'все торгуемые тикеры покрыты новостными правилами'}</div>
+      const mainNews = tradeNews[0] || keyNews[0] || activeBiases[0] || null;
+      const missingText = missingSymbols.length
+        ? `без новостного правила: ${missingSymbols.slice(0, 4).join(', ')}${missingSymbols.length > 4 ? ` +${missingSymbols.length - 4}` : ''}`
+        : 'все торгуемые инструменты закрыты новостями';
+      const overviewItems = [
+        {
+          title: 'Главное сейчас',
+          value: mainNews ? summarizeNewsCard(mainNews) : 'сильных новостей сейчас нет',
+          sub: mainNews ? `${mainNews.symbol || '-'} · ${formatNewsWhatMatters(mainNews)}` : 'техника сейчас важнее новостного фона',
+        },
+        {
+          title: 'Торговое влияние',
+          value: tradeNews.length ? tradeNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'новости не допущены к сделкам',
+          sub: tradeNews.length ? 'ИИ подтвердил направление и горизонт' : 'нет подтверждённого влияния на входы',
+        },
+        {
+          title: 'Лучший источник',
+          value: topSource ? `${Number(topSource.win_rate_pct || 0).toFixed(1)}% попаданий` : 'история ещё копится',
+          sub: topSource
+            ? `${topSource.source_label || topSource.source || '-'} · проверено ${Number(topSource.total_count || 0)} · среднее движение ${Number(topSource.avg_move_pct || 0).toFixed(3)}%`
+            : 'после первых оценённых новостей появится статистика',
+        },
+        {
+          title: 'Покрытие',
+          value: watchedSymbols.length ? `${coveredCount} из ${watchedSymbols.length} тикеров` : 'нет списка тикеров',
+          sub: missingText,
+        },
+      ];
+      newsLeadCards.innerHTML = overviewItems.map((item, index) => `
+        <div class="news-overview-card ${index === 0 ? 'primary' : ''}">
+          <div class="news-overview-kicker">${escapeHtml(item.title)}</div>
+          <div class="news-overview-main">${escapeHtml(item.value)}</div>
+          <div class="news-overview-sub">${escapeHtml(item.sub)}</div>
         </div>
-        <div class="glass-card">
-          <div class="label">Слова для поиска</div>
-          <div class="review-summary-main">тикеры + человеческие названия</div>
-          <div class="review-summary-sub">${escapeHtml(sampleRows || 'словарь пока пуст')}</div>
-        </div>
-      `;
+      `).join('');
       for (const item of activeBiases) {
         const hasMessage = String(item.message_text || '').trim().length > 0;
         const reasonText = humanizeNewsReason(item.reason || '-');

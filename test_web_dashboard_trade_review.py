@@ -35,6 +35,14 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("ключевая ставка", payload["keyword_samples"]["RBU6"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_dashboard_hides_internal_news_keyword_dictionary(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertNotIn("Слова для поиска", html)
+        self.assertNotIn("keywordSamples", html)
+        self.assertIn("news-overview", html)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:
         rows = []
         base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)
