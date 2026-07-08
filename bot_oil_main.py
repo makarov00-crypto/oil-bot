@@ -5461,6 +5461,24 @@ def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_n
     return min(weight, 1.65)
 
 
+def calculate_news_priority_adjustment(state: InstrumentState, signal: str) -> tuple[float, str]:
+    news_bias, news_strength = parse_bias_label(state.last_news_bias)
+    if signal not in {"LONG", "SHORT"} or news_bias in {"", "NEUTRAL"}:
+        return 0.0, ""
+    strength_bonus = {"HIGH": 0.10, "MEDIUM": 0.06, "LOW": 0.03}
+    strength_penalty = {"HIGH": -0.16, "MEDIUM": -0.10, "LOW": -0.05}
+    strength = str(news_strength or "").upper()
+    if news_bias == signal:
+        adjustment = strength_bonus.get(strength, 0.04)
+        return adjustment, f"новости подтверждают сигнал: +{adjustment:.2f}"
+    if news_bias in {"LONG", "SHORT"}:
+        adjustment = strength_penalty.get(strength, -0.08)
+        return adjustment, f"новости против сигнала: {adjustment:.2f}"
+    if news_bias == "BLOCK":
+        return -0.25, "новости дают жёсткий риск: -0.25"
+    return 0.0, ""
+
+
 def get_adaptive_entry_size_multiplier(
     state: InstrumentState,
     symbol: str,
@@ -5600,6 +5618,12 @@ def calculate_entry_priority_score(
         score += learning_adjustment
     if learning_reason:
         reasons.append(learning_reason)
+
+    news_adjustment, news_reason = calculate_news_priority_adjustment(state, signal)
+    if news_adjustment:
+        score += news_adjustment
+    if news_reason:
+        reasons.append(news_reason)
 
     score = clamp_float(score, 0.0, 1.0)
     return score, ", ".join(reason for reason in reasons if reason) or "нейтральный приоритет"

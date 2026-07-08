@@ -538,6 +538,46 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertIn("высокое качество входа", reason)
         self.assertIn("режим подтверждён", reason)
 
+    def test_entry_priority_score_rewards_confirmed_news(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_news_bias="LONG/HIGH",
+            last_setup_quality_label="medium",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.72,
+            last_entry_edge_score=0.66,
+        )
+
+        with patch.object(mod, "get_strategy_health_score", return_value=(1.0, "")), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "")
+        ), patch.object(mod, "get_recovery_mode_status", return_value={"active": False}), patch.object(
+            mod, "calculate_signal_learning_priority_adjustment", return_value=(0.0, "")
+        ):
+            score, reason = mod.calculate_entry_priority_score(state, "BMM6", "reversal_1h")
+
+        self.assertGreaterEqual(score, 0.65)
+        self.assertIn("новости подтверждают сигнал", reason)
+
+    def test_entry_priority_score_penalizes_conflicting_news(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_news_bias="SHORT/HIGH",
+            last_setup_quality_label="medium",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.72,
+            last_entry_edge_score=0.66,
+        )
+
+        with patch.object(mod, "get_strategy_health_score", return_value=(1.0, "")), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "")
+        ), patch.object(mod, "get_recovery_mode_status", return_value={"active": False}), patch.object(
+            mod, "calculate_signal_learning_priority_adjustment", return_value=(0.0, "")
+        ):
+            score, reason = mod.calculate_entry_priority_score(state, "BMM6", "reversal_1h")
+
+        self.assertLess(score, 0.55)
+        self.assertIn("новости против сигнала", reason)
+
     def test_entry_priority_score_penalizes_bad_signal_learning_combo(self) -> None:
         state = mod.InstrumentState(
             last_signal="LONG",
