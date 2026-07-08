@@ -202,6 +202,20 @@ class NewsBiasTests(unittest.TestCase):
         self.assertIn("не влияют на сделку", reason)
         self.assertIn("новость только фоновая", reason)
 
+    def test_gazprom_equity_news_does_not_trigger_natural_gas(self) -> None:
+        message = NewsMessage(
+            channel="finamalert",
+            text=(
+                "Изменилась фигура тренда #Газпром с нисходящий клин на расходящийся клин "
+                "с наклоном вниз. Настроение инвесторов изменилось на бычье."
+            ),
+            created_at=datetime(2026, 5, 12, 12, 0, tzinfo=UTC),
+        )
+
+        biases = detect_news_bias(message)
+
+        self.assertFalse(any(item.category == "газ" for item in biases))
+
 
 if __name__ == "__main__":
     unittest.main()
