@@ -379,7 +379,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         with patch.object(mod, "get_today_trade_journal_rows", return_value=rows):
             reason = mod.recovery_mode_block_reason(state, "NGJ6", "momentum_breakout", "LONG")
 
-        self.assertIn("recovery mode", reason)
+        self.assertIn("режим восстановления", reason)
         self.assertIn("точечные стратегии", reason)
 
     def test_recovery_mode_allows_strong_unified_reversal(self) -> None:
@@ -429,7 +429,41 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertGreater(score, 1.0)
         self.assertIn("сильна 3 дня", reason)
-        self.assertIn("edge", reason)
+        self.assertIn("преимущество", reason)
+
+    def test_entry_priority_details_exposes_components(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_entry_edge_score=0.80,
+            last_entry_edge_label="high",
+            last_market_regime_confidence=0.80,
+            last_market_regime="trend_expansion",
+            last_setup_quality_label="strong",
+            last_news_bias="LONG/HIGH",
+        )
+
+        with patch.object(mod, "get_strategy_health_score", return_value=(1.10, "связка сильна")), patch.object(
+            mod,
+            "get_strategy_regime_health_score",
+            return_value=(1.00, "режим нейтрален"),
+        ), patch.object(
+            mod,
+            "get_recovery_mode_status",
+            return_value={"active": False},
+        ), patch.object(
+            mod,
+            "calculate_signal_learning_priority_adjustment",
+            return_value=(0.04, "обучение связки: бонус +0.04"),
+        ):
+            details = mod.calculate_entry_priority_details(state, "BMM6", "reversal_1h")
+
+        self.assertGreater(float(details["score"]), 0.0)
+        self.assertIn("components", details)
+        self.assertAlmostEqual(details["components"]["качество входа"], 0.44)
+        self.assertAlmostEqual(details["components"]["новости"], 0.10)
+        self.assertAlmostEqual(details["components"]["обучение"], 0.04)
+        self.assertEqual(details["news_priority_adjustment"], 0.10)
+        self.assertEqual(details["learning_adjustment"], 0.04)
 
     def test_recent_strategy_regime_performance_uses_context_regime(self) -> None:
         today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
@@ -1226,7 +1260,7 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertLessEqual(adapted.min_hold_minutes, 20)
         self.assertLessEqual(adapted.trailing_stop_pct, 0.0040)
-        self.assertIn("recovery mode", reason)
+        self.assertIn("режим восстановления", reason)
 
     def test_adaptive_exit_profile_allows_strong_trend_more_room(self) -> None:
         config = SimpleNamespace(
@@ -1247,7 +1281,7 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertGreaterEqual(adapted.min_hold_minutes, 30)
         self.assertGreaterEqual(adapted.trailing_stop_pct, 0.0075)
-        self.assertIn("strong setup", reason)
+        self.assertIn("сильная точка входа", reason)
 
     def test_adaptive_exit_profile_tightens_for_fragile_edge(self) -> None:
         config = SimpleNamespace(
@@ -1270,7 +1304,7 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertLessEqual(adapted.min_hold_minutes, 18)
         self.assertLessEqual(adapted.trailing_stop_pct, 0.0038)
-        self.assertIn("edge fragile", reason)
+        self.assertIn("качество входа fragile", reason)
 
     def test_adaptive_exit_profile_extends_room_for_high_edge(self) -> None:
         config = SimpleNamespace(
@@ -1293,7 +1327,7 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertGreaterEqual(adapted.min_hold_minutes, 35)
         self.assertGreaterEqual(adapted.trailing_stop_pct, 0.0080)
-        self.assertIn("edge high", reason)
+        self.assertIn("качество входа high", reason)
 
 
 if __name__ == "__main__":

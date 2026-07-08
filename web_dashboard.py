@@ -3450,6 +3450,35 @@ def build_dashboard_html() -> str:
       border-color: rgba(255, 202, 98, 0.18);
       color: var(--warn);
     }
+    .priority-components {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .priority-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border-radius: 8px;
+      border: 1px solid rgba(154, 180, 214, 0.18);
+      color: var(--muted);
+      background: rgba(154, 180, 214, 0.07);
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .priority-chip.good {
+      color: var(--good);
+      border-color: rgba(55, 230, 164, 0.22);
+      background: rgba(55, 230, 164, 0.08);
+    }
+    .priority-chip.bad {
+      color: var(--bad);
+      border-color: rgba(255, 107, 135, 0.22);
+      background: rgba(255, 107, 135, 0.08);
+    }
     .mono {
       font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
     }
@@ -4750,7 +4779,7 @@ def build_dashboard_html() -> str:
     }
 
     function shortNewsText(value, maxLength = 120) {
-      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      const text = String(value || '').replace(/\\s+/g, ' ').trim();
       if (!text) return '-';
       return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
     }
@@ -4785,10 +4814,14 @@ def build_dashboard_html() -> str:
       if (!raw) return '-';
       return raw
         .replaceAll('health ', 'форма связки ')
+        .replaceAll('strong setup', 'сильная точка входа')
+        .replaceAll('weak setup', 'слабая точка входа')
+        .replaceAll('medium setup', 'средняя точка входа')
         .replaceAll('edge high', 'качество входа высокое')
         .replaceAll('edge confirmed', 'качество входа подтверждённое')
         .replaceAll('edge moderate', 'качество входа умеренное')
         .replaceAll('edge fragile', 'качество входа слабое')
+        .replaceAll('edge ', 'качество входа ')
         .replaceAll('recovery mode', 'режим восстановления')
         .replaceAll('trend_expansion', 'расширение тренда')
         .replaceAll('trend_pullback', 'откат в тренде')
@@ -4797,6 +4830,35 @@ def build_dashboard_html() -> str:
         .replaceAll('chop', 'пила')
         .replaceAll('mixed', 'смешанный режим')
         .replaceAll('impulse', 'импульс');
+    }
+
+    function formatPriorityComponentLabel(value) {
+      const raw = String(value || '').trim();
+      const map = {
+        entry_quality: 'качество входа',
+        market_regime: 'режим',
+        setup_quality: 'точка входа',
+        strategy_health: 'форма связки',
+        regime_health: 'форма режима',
+        recovery: 'восстановление',
+        learning: 'обучение',
+        news: 'новости',
+      };
+      return map[raw] || raw.replaceAll('_', ' ');
+    }
+
+    function renderPriorityComponents(components) {
+      if (!components || typeof components !== 'object' || Array.isArray(components)) return '';
+      const rows = Object.entries(components)
+        .map(([key, rawValue]) => [formatPriorityComponentLabel(key), Number(rawValue)])
+        .filter(([, value]) => Number.isFinite(value) && Math.abs(value) >= 0.001)
+        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+      if (!rows.length) return '';
+      return `<div class="priority-components">${rows.map(([label, value]) => {
+        const cls = value > 0 ? 'good' : value < 0 ? 'bad' : '';
+        const sign = value > 0 ? '+' : '';
+        return `<span class="priority-chip ${cls}">${escapeHtml(label)} ${sign}${value.toFixed(2)}</span>`;
+      }).join('')}</div>`;
     }
 
     function summarizeAllocatorSummary(value) {
@@ -5023,10 +5085,16 @@ def build_dashboard_html() -> str:
       return `<tr><td class="review-summary-label">${escapeHtml(label)}</td><td class="review-summary-value">${reviewValueHtml(main, sub)}</td></tr>`;
     }
 
+    function buildReviewRowRich(label, main, sub = '', html = '') {
+      const safeMain = escapeHtml(main || '-');
+      const safeSub = escapeHtml(sub || '');
+      return `<tr><td class="review-summary-label">${escapeHtml(label)}</td><td class="review-summary-value"><div class="review-summary-main">${safeMain}</div>${safeSub ? `<div class="review-summary-sub">${safeSub}</div>` : ''}${html || ''}</td></tr>`;
+    }
+
     function cleanDiagnosticText(value) {
       return String(value || '')
         .replace(/^Сигнал\s+/i, '')
-        .replace(/\s+/g, ' ')
+        .replace(/\\s+/g, ' ')
         .trim();
     }
 
@@ -5712,10 +5780,12 @@ def build_dashboard_html() -> str:
             const margin = Number(item.requested_margin_rub || 0);
             const marginText = margin > 0 ? `ГО ${formatRub(margin)}` : '';
             const meta = [scoreText, newsText, marginText].filter(Boolean).join(' · ');
-            return buildReviewRow(
+            const componentHtml = renderPriorityComponents(item.priority_components);
+            return buildReviewRowRich(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}${replaced}`,
-              [meta, item.news_priority_reason || '', humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · ')
+              [meta, item.news_priority_reason || '', humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · '),
+              componentHtml
             );
           }).join('')
         : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не перераспределял сигналы');

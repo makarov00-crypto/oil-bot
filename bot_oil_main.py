@@ -675,6 +675,7 @@ def append_allocator_decision(
     learning_reason: str = "",
     news_priority_adjustment: float = 0.0,
     news_priority_reason: str = "",
+    priority_components: dict[str, Any] | None = None,
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     row = {
@@ -695,6 +696,12 @@ def append_allocator_decision(
         "news_priority_adjustment": round(float(news_priority_adjustment or 0.0), 3),
         "news_priority_reason": news_priority_reason,
     }
+    if priority_components:
+        row["priority_components"] = {
+            str(key): round(float(value or 0.0), 3)
+            for key, value in priority_components.items()
+            if abs(float(value or 0.0)) >= 0.001
+        }
     with ALLOCATOR_DECISIONS_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps({key: value for key, value in row.items() if value not in ("", None)}, ensure_ascii=False) + "\n")
 
@@ -716,6 +723,7 @@ def append_signal_observation_decision(
     context = {
         "allocator_summary": str(candidate.get("allocator_summary") or ""),
         "priority_reason": str(candidate.get("priority_reason") or ""),
+        "priority_components": candidate.get("priority_components") if isinstance(candidate.get("priority_components"), dict) else {},
         "learning_adjustment": round(float(candidate.get("learning_adjustment") or 0.0), 3),
         "learning_reason": str(candidate.get("learning_reason") or ""),
         "news_priority_adjustment": round(float(candidate.get("news_priority_adjustment") or 0.0), 3),
@@ -4961,8 +4969,8 @@ def get_recovery_mode_status(symbol: str, strategy_name: str) -> dict[str, Any]:
         "losses": losses,
         "net_pnl_rub": net_pnl,
         "reason": (
-            f"recovery mode: {symbol} {strategy_name} сегодня закрытий={closed_count}, "
-            f"wins={wins}, losses={losses}, net={net_pnl:.2f} RUB."
+            f"режим восстановления: {symbol} {strategy_name} сегодня закрытий={closed_count}, "
+            f"плюсов={wins}, минусов={losses}, итог={net_pnl:.2f} RUB."
         ),
     }
 
@@ -4996,7 +5004,7 @@ def get_strategy_health_score(symbol: str, strategy_name: str) -> tuple[float, s
         reasons.append("сегодняшняя просадка")
     elif today_closed >= 2 and today_net >= 80.0 and today_win_rate >= 50.0:
         score *= 1.05
-        reasons.append("сегодняшний edge")
+        reasons.append("сегодняшнее преимущество")
 
     score = max(0.70, min(score, 1.20))
     return score, ", ".join(reasons) if reasons else "нейтральная форма связки"
@@ -5103,7 +5111,7 @@ def get_entry_edge_profile(
     recovery_status = get_recovery_mode_status(symbol, strategy_name)
     if recovery_status["active"]:
         edge -= 0.10
-        reasons.append("recovery mode")
+        reasons.append("режим восстановления")
 
     edge = clamp_float(edge, 0.05, 0.95)
     if edge >= 0.78:
@@ -5114,7 +5122,7 @@ def get_entry_edge_profile(
         label = "moderate"
     else:
         label = "fragile"
-    return edge, label, ", ".join(reasons) if reasons else "нейтральный edge"
+    return edge, label, ", ".join(reasons) if reasons else "нейтральное качество входа"
 
 
 def strategy_regime_block_reason(symbol: str, strategy_name: str, market_regime: str) -> str:
@@ -5161,9 +5169,9 @@ def recovery_mode_block_reason(
     if strategy_name not in allowed_strategies:
         return f"{status['reason']} Разрешены только точечные стратегии после серии минусов."
     if setup_label != "strong":
-        return f"{status['reason']} Нужен только strong setup."
+        return f"{status['reason']} Нужна только сильная точка входа."
     if regime not in {"trend_pullback", "trend_expansion", "impulse"}:
-        return f"{status['reason']} Текущий режим {regime or '-'} слишком слабый для recovery mode."
+        return f"{status['reason']} Текущий режим {regime or '-'} слишком слабый для режима восстановления."
     if not is_unified_reversal_strategy(strategy_name) and higher_tf_bias != signal:
         return f"{status['reason']} Нужен вход только по направлению старшего ТФ."
     return ""
@@ -5536,38 +5544,49 @@ def get_adaptive_entry_size_multiplier(
     recovery_status = get_recovery_mode_status(symbol, strategy_name)
     if recovery_status["active"]:
         multiplier *= 0.65
-        reasons.append("recovery mode")
+        reasons.append("режим восстановления")
 
     edge_score = float(state.last_entry_edge_score or 0.0)
     edge_label = str(state.last_entry_edge_label or "").strip().lower()
     if edge_score >= 0.78:
         multiplier *= 1.08
-        reasons.append(f"edge {edge_label or 'high'}")
+        reasons.append(f"качество входа {edge_label or 'high'}")
     elif edge_score >= 0.62:
         multiplier *= 1.04
-        reasons.append(f"edge {edge_label or 'confirmed'}")
+        reasons.append(f"качество входа {edge_label or 'confirmed'}")
     elif 0.0 < edge_score < 0.45:
         multiplier *= 0.78
-        reasons.append(f"edge {edge_label or 'fragile'}")
+        reasons.append(f"качество входа {edge_label or 'fragile'}")
 
     multiplier = max(0.35, min(multiplier, 1.35))
     return multiplier, ", ".join(reasons) if reasons else "нейтральный размер"
 
 
-def calculate_entry_priority_score(
+def calculate_entry_priority_details(
     state: InstrumentState,
     symbol: str,
     strategy_name: str,
-) -> tuple[float, str]:
+) -> dict[str, Any]:
     signal = str(state.last_signal or "").strip().upper()
     if signal not in {"LONG", "SHORT"}:
-        return 0.0, "нет сигнала на вход"
+        return {
+            "score": 0.0,
+            "reason": "нет сигнала на вход",
+            "components": {},
+            "learning_adjustment": 0.0,
+            "learning_reason": "",
+            "news_priority_adjustment": 0.0,
+            "news_priority_reason": "",
+        }
 
     score = 0.0
     reasons: list[str] = []
+    components: dict[str, float] = {}
 
     edge_score = float(state.last_entry_edge_score or 0.0)
-    score += edge_score * 0.55
+    edge_component = edge_score * 0.55
+    score += edge_component
+    components["качество входа"] = edge_component
     if edge_score >= 0.78:
         reasons.append("высокое качество входа")
     elif edge_score >= 0.62:
@@ -5576,7 +5595,9 @@ def calculate_entry_priority_score(
         reasons.append("вход слабее среднего")
 
     regime_confidence = float(state.last_market_regime_confidence or 0.0)
-    score += regime_confidence * 0.20
+    regime_component = regime_confidence * 0.20
+    score += regime_component
+    components["уверенность режима"] = regime_component
     if regime_confidence >= 0.75:
         reasons.append("режим подтверждён")
     elif regime_confidence > 0.0 and regime_confidence < 0.50:
@@ -5585,15 +5606,21 @@ def calculate_entry_priority_score(
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     if setup_label == "strong":
         score += 0.12
-        reasons.append("strong setup")
+        components["точка входа"] = 0.12
+        reasons.append("сильная точка входа")
     elif setup_label == "medium":
         score += 0.05
+        components["точка входа"] = 0.05
+        reasons.append("средняя точка входа")
     elif setup_label == "weak":
         score -= 0.08
-        reasons.append("weak setup")
+        components["точка входа"] = -0.08
+        reasons.append("слабая точка входа")
 
     strategy_health_score, strategy_health_reason = get_strategy_health_score(symbol, strategy_name)
-    score += (strategy_health_score - 1.0) * 0.30
+    strategy_health_component = (strategy_health_score - 1.0) * 0.30
+    score += strategy_health_component
+    components["форма связки"] = strategy_health_component
     if strategy_health_score >= 1.05:
         reasons.append(strategy_health_reason)
     elif strategy_health_score <= 0.90:
@@ -5604,7 +5631,9 @@ def calculate_entry_priority_score(
         strategy_name,
         state.last_market_regime,
     )
-    score += (regime_health_score - 1.0) * 0.25
+    regime_health_component = (regime_health_score - 1.0) * 0.25
+    score += regime_health_component
+    components["форма режима"] = regime_health_component
     if regime_health_score >= 1.05:
         reasons.append(regime_health_reason)
     elif regime_health_score <= 0.90:
@@ -5613,7 +5642,8 @@ def calculate_entry_priority_score(
     recovery_status = get_recovery_mode_status(symbol, strategy_name)
     if recovery_status["active"]:
         score -= 0.12
-        reasons.append("recovery mode")
+        components["режим восстановления"] = -0.12
+        reasons.append("режим восстановления")
 
     learning_adjustment, learning_reason = calculate_signal_learning_priority_adjustment(
         state,
@@ -5622,17 +5652,36 @@ def calculate_entry_priority_score(
     )
     if learning_adjustment:
         score += learning_adjustment
+        components["обучение"] = learning_adjustment
     if learning_reason:
         reasons.append(learning_reason)
 
     news_adjustment, news_reason = calculate_news_priority_adjustment(state, signal)
     if news_adjustment:
         score += news_adjustment
+        components["новости"] = news_adjustment
     if news_reason:
         reasons.append(news_reason)
 
     score = clamp_float(score, 0.0, 1.0)
-    return score, ", ".join(reason for reason in reasons if reason) or "нейтральный приоритет"
+    return {
+        "score": score,
+        "reason": ", ".join(reason for reason in reasons if reason) or "нейтральный приоритет",
+        "components": components,
+        "learning_adjustment": learning_adjustment,
+        "learning_reason": learning_reason,
+        "news_priority_adjustment": news_adjustment,
+        "news_priority_reason": news_reason,
+    }
+
+
+def calculate_entry_priority_score(
+    state: InstrumentState,
+    symbol: str,
+    strategy_name: str,
+) -> tuple[float, str]:
+    details = calculate_entry_priority_details(state, symbol, strategy_name)
+    return float(details.get("score") or 0.0), str(details.get("reason") or "нейтральный приоритет")
 
 
 def calculate_signal_learning_priority_adjustment(
@@ -5702,7 +5751,7 @@ def calculate_signal_learning_priority_adjustment(
         if edge_score < 0.45:
             return 0.0, (
                 f"обучение связки: {confirmation_rate * 100:.0f}% подтверждений, "
-                "но текущий edge слабый, бонус не применён"
+                "но текущее качество входа слабое, бонус не применён"
             )
         adjustment = 0.03 + min(0.04, (confirmation_rate - 0.70) / 0.30 * 0.04) + min(0.02, avg_move_pct / 2.0)
         adjustment = min(0.08, adjustment * sample_weight)
@@ -5931,7 +5980,7 @@ def calculate_open_position_hold_score(
     recovery_status = get_recovery_mode_status(symbol, str(state.entry_strategy or ""))
     if recovery_status.get("active"):
         score -= 0.08
-        reasons.append("связка в recovery mode")
+        reasons.append("связка в режиме восстановления")
 
     round_trip_commission = estimate_round_trip_commission_rub(state)
     current_pnl = float(state.position_variation_margin_rub or 0.0)
@@ -6111,6 +6160,7 @@ def execute_capital_rotation_plan(
         learning_reason=str(candidate.get("learning_reason") or ""),
         news_priority_adjustment=float(candidate.get("news_priority_adjustment") or 0.0),
         news_priority_reason=str(candidate.get("news_priority_reason") or ""),
+        priority_components=candidate.get("priority_components") if isinstance(candidate.get("priority_components"), dict) else None,
     )
 
     deferred_reason = (
@@ -6146,6 +6196,7 @@ def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> Non
         learning_reason=str(candidate.get("learning_reason") or ""),
         news_priority_adjustment=float(candidate.get("news_priority_adjustment") or 0.0),
         news_priority_reason=str(candidate.get("news_priority_reason") or ""),
+        priority_components=candidate.get("priority_components") if isinstance(candidate.get("priority_components"), dict) else None,
     )
     state = load_state(symbol)
     state.last_allocator_quantity = 0
@@ -6431,9 +6482,9 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     broker_min_lot_override = bool(sizing.get("broker_min_lot_override"))
     recovery_mode_active = bool(sizing.get("recovery_mode_active"))
     daily_loss_recovery_active = bool(sizing.get("daily_loss_recovery_active"))
-    recovery_hint = ", recovery mode" if recovery_mode_active else ""
+    recovery_hint = ", режим восстановления" if recovery_mode_active else ""
     daily_loss_hint = ", мягкий дневной стоп" if daily_loss_recovery_active else ""
-    edge_hint = f", edge {edge_label} {edge_score:.2f}" if edge_score > 0.0 else ""
+    edge_hint = f", качество входа {edge_label} {edge_score:.2f}" if edge_score > 0.0 else ""
     edge_cap_hint = f", потолок качества {edge_cap_multiplier:.2f}" if edge_cap_multiplier < 1.0 else ""
     broker_override_hint = ", 1 лот разрешён по лимиту брокера" if broker_min_lot_override else ""
     broker_leverage_hint = (
@@ -6445,14 +6496,14 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
-            f"вес сигнала {conviction_weight:.2f}, health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}, запас {margin_headroom:.0f} RUB, "
+            f"вес сигнала {conviction_weight:.2f}, форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}, запас {margin_headroom:.0f} RUB, "
             f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
             f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"health {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}, "
+        f"форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."
@@ -6571,9 +6622,9 @@ def get_adaptive_exit_profile(
         if regime in {"compression", "chop"}:
             reasons.append(f"режим {regime}")
         if setup_label == "weak":
-            reasons.append("weak setup")
+            reasons.append("слабая точка входа")
         if recovery_active:
-            reasons.append("recovery mode")
+            reasons.append("режим восстановления")
         if 0.0 < regime_confidence < 0.48:
             reasons.append("низкая уверенность режима")
     elif regime in {"trend_expansion", "impulse"} and setup_label == "strong":
@@ -6583,14 +6634,14 @@ def get_adaptive_exit_profile(
             trailing_stop_pct=max(profile.trailing_stop_pct, 0.0075),
         )
         reasons.append(f"режим {regime}")
-        reasons.append("strong setup")
+        reasons.append("сильная точка входа")
     elif regime == "trend_pullback" and setup_label in {"strong", "medium"}:
         profile = ExitProfile(
             min_hold_minutes=max(profile.min_hold_minutes, 25),
             breakeven_profit_pct=max(profile.breakeven_profit_pct, 0.0055),
             trailing_stop_pct=max(profile.trailing_stop_pct, 0.0065),
         )
-        reasons.append("trend pullback context")
+        reasons.append("откат в тренде")
 
     if 0.0 < edge_score < 0.45:
         profile = ExitProfile(
@@ -6598,21 +6649,21 @@ def get_adaptive_exit_profile(
             breakeven_profit_pct=min(profile.breakeven_profit_pct, 0.0040),
             trailing_stop_pct=min(profile.trailing_stop_pct, 0.0038),
         )
-        reasons.append(f"edge {edge_label or 'fragile'}")
+        reasons.append(f"качество входа {edge_label or 'fragile'}")
     elif edge_score >= 0.78:
         profile = ExitProfile(
             min_hold_minutes=max(profile.min_hold_minutes, 35),
             breakeven_profit_pct=max(profile.breakeven_profit_pct, 0.0065),
             trailing_stop_pct=max(profile.trailing_stop_pct, 0.0080),
         )
-        reasons.append(f"edge {edge_label or 'high'}")
+        reasons.append(f"качество входа {edge_label or 'high'}")
     elif edge_score >= 0.62:
         profile = ExitProfile(
             min_hold_minutes=max(profile.min_hold_minutes, 28),
             breakeven_profit_pct=max(profile.breakeven_profit_pct, 0.0055),
             trailing_stop_pct=max(profile.trailing_stop_pct, 0.0068),
         )
-        reasons.append(f"edge {edge_label or 'confirmed'}")
+        reasons.append(f"качество входа {edge_label or 'confirmed'}")
 
     return profile, ", ".join(reasons) if reasons else ""
 
@@ -8219,7 +8270,7 @@ def process_instrument(
                             )
                             if recovery_block_reason:
                                 state.last_allocator_quantity = 0
-                                state.last_allocator_summary = f"Аллокатор в recovery mode: {recovery_block_reason}"
+                                state.last_allocator_summary = f"Аллокатор в режиме восстановления: {recovery_block_reason}"
                             else:
                                 regime_block_reason = regime_entry_block_reason(
                                     instrument.symbol,
@@ -8346,20 +8397,20 @@ def process_instrument(
                                         logging.info("symbol=%s strategy=%s status=entry_blocked_regime reason=%s", instrument.symbol, primary_strategy_name, regime_block_reason)
                                     else:
                                         if collect_entry_candidate_only:
-                                            priority_score, priority_reason = calculate_entry_priority_score(
+                                            priority_details = calculate_entry_priority_details(
                                                 state,
                                                 instrument.symbol,
                                                 primary_strategy_name,
                                             )
-                                            news_priority_adjustment, news_priority_reason = calculate_news_priority_adjustment(
-                                                state,
-                                                signal,
-                                            )
-                                            learning_adjustment, learning_reason = calculate_signal_learning_priority_adjustment(
-                                                state,
-                                                instrument.symbol,
-                                                primary_strategy_name,
-                                            )
+                                            priority_score = float(priority_details.get("score") or 0.0)
+                                            priority_reason = str(priority_details.get("reason") or "")
+                                            priority_components = priority_details.get("components")
+                                            if not isinstance(priority_components, dict):
+                                                priority_components = {}
+                                            news_priority_adjustment = float(priority_details.get("news_priority_adjustment") or 0.0)
+                                            news_priority_reason = str(priority_details.get("news_priority_reason") or "")
+                                            learning_adjustment = float(priority_details.get("learning_adjustment") or 0.0)
+                                            learning_reason = str(priority_details.get("learning_reason") or "")
                                             candidate_payload = {
                                                 "symbol": instrument.symbol,
                                                 "signal": signal,
@@ -8370,6 +8421,7 @@ def process_instrument(
                                                 "candle_time": candle_time,
                                                 "priority_score": priority_score,
                                                 "priority_reason": priority_reason,
+                                                "priority_components": priority_components,
                                                 "news_priority_adjustment": news_priority_adjustment,
                                                 "news_priority_reason": news_priority_reason,
                                                 "learning_adjustment": learning_adjustment,
