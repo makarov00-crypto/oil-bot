@@ -2615,6 +2615,9 @@ def format_news_bias_label(news_bias: NewsBias | None) -> str:
 def describe_news_bias_impact(signal: str, news_bias: NewsBias | None) -> str:
     if news_bias is None or news_bias.bias == "NEUTRAL":
         return "новости не вмешиваются"
+    eligible, gate_reason = news_bias_trade_gate(news_bias)
+    if not eligible:
+        return f"новости только в наблюдении: {gate_reason}"
     if news_bias.bias == "BLOCK":
         return "сильная новость блокирует новый вход"
     if signal == "HOLD":
@@ -2636,8 +2639,11 @@ def format_news_bias_lines(news_bias: NewsBias | None) -> list[str]:
     source_text = news_bias.source_label or news_bias.source
     if news_bias.source_count > 1:
         source_text = f"{source_text} + ещё {news_bias.source_count - 1}"
+    eligible, gate_reason = news_bias_trade_gate(news_bias)
+    influence_text = "допущена к решению" if eligible else f"только наблюдение: {gate_reason}"
     return [
         f"• Новости: {news_bias.bias} ({news_bias.strength})",
+        f"• Влияние: {influence_text}",
         f"• Горизонт: {news_bias.horizon}",
         f"• Действие: {news_bias.actionability}",
         f"• Источник: {source_text}",
@@ -2652,6 +2658,13 @@ def get_news_ai_enabled() -> bool:
 
 def get_news_ai_model() -> str:
     return os.getenv("OIL_NEWS_AI_MODEL", NEWS_AI_DEFAULT_MODEL).strip() or NEWS_AI_DEFAULT_MODEL
+
+
+def get_news_ai_trade_min_confidence() -> float:
+    try:
+        return max(0.0, min(1.0, float(os.getenv("OIL_NEWS_AI_TRADE_MIN_CONFIDENCE", "0.70"))))
+    except ValueError:
+        return 0.70
 
 
 def strength_rank(value: str) -> int:
@@ -2693,6 +2706,43 @@ def apply_ai_signal_to_news_bias(item: NewsBias, ai_signal: NewsAiSignal) -> New
         ai_reason=ai_signal.reason,
         ai_risk=ai_signal.risk,
     )
+
+
+def news_bias_trade_gate(news_bias: NewsBias | None) -> tuple[bool, str]:
+    if news_bias is None or news_bias.bias == "NEUTRAL":
+        return False, "новостей по инструменту нет"
+    if not get_news_ai_enabled():
+        if news_bias.actionability == "BACKGROUND" or news_bias.horizon == "BACKGROUND":
+            return False, "новость только фоновая"
+        return True, "ИИ-фильтр новостей выключен"
+
+    direction = (news_bias.ai_direction or "").upper()
+    confidence = float(news_bias.ai_confidence or 0.0)
+    horizon = (news_bias.ai_horizon or news_bias.horizon or "").upper()
+    min_confidence = get_news_ai_trade_min_confidence()
+
+    if direction not in {"LONG", "SHORT", "BLOCK"}:
+        return False, "ИИ не дал торгового направления"
+    if direction != news_bias.bias:
+        return False, f"ИИ спорит со словарём: {direction}"
+    if horizon == "BACKGROUND":
+        return False, "ИИ считает новость фоном"
+    if confidence < min_confidence:
+        return False, f"уверенность ИИ {confidence:.2f} ниже порога {min_confidence:.2f}"
+    if news_bias.actionability == "BACKGROUND":
+        return False, "новость оставлена как фон"
+    return True, f"ИИ подтвердил: {direction}, уверенность {confidence:.2f}"
+
+
+def is_news_bias_trade_eligible(news_bias: NewsBias | None) -> bool:
+    eligible, _ = news_bias_trade_gate(news_bias)
+    return eligible
+
+
+def format_trading_news_bias_label(news_bias: NewsBias | None) -> str:
+    if not is_news_bias_trade_eligible(news_bias):
+        return "NEUTRAL"
+    return format_news_bias_label(news_bias)
 
 
 def enrich_news_biases_with_ai(active: dict[str, NewsBias]) -> dict[str, NewsBias]:
@@ -2966,41 +3016,48 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
     active = enrich_news_biases_with_ai(select_active_biases(all_biases, now=now))
     NEWS_CACHE["fetched_at"] = now
     NEWS_CACHE["biases"] = active
+
+    def news_snapshot_row(item: NewsBias) -> dict[str, Any]:
+        eligible, gate_reason = news_bias_trade_gate(item)
+        return {
+            "symbol": item.symbol,
+            "category": item.category,
+            "bias": item.bias,
+            "strength": item.strength,
+            "source": item.source,
+            "source_label": item.source_label or item.source,
+            "source_type": item.source_type,
+            "source_speed": item.source_speed,
+            "source_reliability": item.source_reliability,
+            "source_count": item.source_count,
+            "confirming_sources": list(item.confirming_sources),
+            "trade_eligible": eligible,
+            "trade_gate_reason": gate_reason,
+            "ai_direction": item.ai_direction,
+            "ai_strength": item.ai_strength,
+            "ai_confidence": item.ai_confidence,
+            "ai_horizon": item.ai_horizon,
+            "ai_event_type": item.ai_event_type,
+            "ai_reason": item.ai_reason,
+            "ai_risk": item.ai_risk,
+            "reason": item.reason,
+            "summary": item.summary,
+            "horizon": item.horizon,
+            "actionability": item.actionability,
+            "message_text": item.message_text,
+            "message_url": item.message_url,
+            "topics": list(item.topics),
+            "expires_at": item.expires_at.isoformat(),
+            "expires_at_moscow": item.expires_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+            "score": item.score,
+        }
+
     save_news_snapshot(
         {
             "fetched_at": now.isoformat(),
             "fetched_at_moscow": now.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
             "active_biases": [
-                {
-                    "symbol": item.symbol,
-                    "category": item.category,
-                    "bias": item.bias,
-                    "strength": item.strength,
-                    "source": item.source,
-                    "source_label": item.source_label or item.source,
-                    "source_type": item.source_type,
-                    "source_speed": item.source_speed,
-                    "source_reliability": item.source_reliability,
-                    "source_count": item.source_count,
-                    "confirming_sources": list(item.confirming_sources),
-                    "ai_direction": item.ai_direction,
-                    "ai_strength": item.ai_strength,
-                    "ai_confidence": item.ai_confidence,
-                    "ai_horizon": item.ai_horizon,
-                    "ai_event_type": item.ai_event_type,
-                    "ai_reason": item.ai_reason,
-                    "ai_risk": item.ai_risk,
-                    "reason": item.reason,
-                    "summary": item.summary,
-                    "horizon": item.horizon,
-                    "actionability": item.actionability,
-                    "message_text": item.message_text,
-                    "message_url": item.message_url,
-                    "topics": list(item.topics),
-                    "expires_at": item.expires_at.isoformat(),
-                    "expires_at_moscow": item.expires_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
-                    "score": item.score,
-                }
+                news_snapshot_row(item)
                 for item in sorted(active.values(), key=lambda x: (-x.score, x.symbol))
             ],
         }
@@ -3011,6 +3068,9 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
 def apply_news_bias_to_signal(signal: str, reason: str, news_bias: NewsBias | None) -> tuple[str, str]:
     if news_bias is None:
         return signal, reason
+    eligible, gate_reason = news_bias_trade_gate(news_bias)
+    if not eligible:
+        return signal, f"{reason}. Новости не влияют на сделку: {gate_reason}."
     if news_bias.bias == "BLOCK" and signal in {"LONG", "SHORT"}:
         return "HOLD", f"{reason}. Новости дают жёсткий блок: {news_bias.reason}."
     if signal == "LONG" and news_bias.bias == "SHORT":
@@ -7988,7 +8048,7 @@ def process_instrument(
     state.last_signal = signal
     state.last_strategy_name = primary_strategy_name
     state.last_higher_tf_bias = context_higher_tf_bias
-    state.last_news_bias = format_news_bias_label(news_bias)
+    state.last_news_bias = format_trading_news_bias_label(news_bias)
     state.last_news_impact = describe_news_bias_impact(signal, news_bias)
     market_regime, regime_metrics = classify_market_regime(lower_df, context_higher_tf_bias)
     setup_quality_score, setup_quality_label = estimate_setup_quality(

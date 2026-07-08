@@ -199,7 +199,8 @@ class NewsBiasTests(unittest.TestCase):
         signal, reason = bot.apply_news_bias_to_signal("LONG", "Базовый long", bias)
 
         self.assertEqual(signal, "LONG")
-        self.assertIn("это пока лишь фон", reason)
+        self.assertIn("не влияют на сделку", reason)
+        self.assertIn("новость только фоновая", reason)
 
 
 if __name__ == "__main__":

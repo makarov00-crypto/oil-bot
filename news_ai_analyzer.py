@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -148,7 +149,13 @@ def parse_ai_signals(payload: dict[str, Any]) -> list[NewsAiSignal]:
     return parsed
 
 
-def request_news_ai_signals(api_key: str, model: str, items: Iterable[NewsBias], timeout: int = 90) -> list[NewsAiSignal]:
+def request_news_ai_signals(
+    api_key: str,
+    model: str,
+    items: Iterable[NewsBias],
+    timeout: int = 90,
+    attempts: int = 2,
+) -> list[NewsAiSignal]:
     prompt = build_news_ai_prompt(items)
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -167,8 +174,18 @@ def request_news_ai_signals(api_key: str, model: str, items: Iterable[NewsBias],
             }
         },
     }
-    response = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=payload, timeout=timeout)
-    response.raise_for_status()
+    response = None
+    for attempt in range(max(1, attempts)):
+        response = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=payload, timeout=timeout)
+        try:
+            response.raise_for_status()
+            break
+        except requests.HTTPError:
+            if response.status_code < 500 or attempt + 1 >= max(1, attempts):
+                raise
+            time.sleep(1.5 * (attempt + 1))
+    if response is None:
+        return []
     text = extract_output_text(response.json())
     if not text:
         return []

@@ -4,6 +4,8 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import requests
+
 import bot_oil_main as bot
 from news_ai_analyzer import request_news_ai_signals
 from news_bias import NewsBias
@@ -70,6 +72,31 @@ class NewsAiAnalyzerTests(unittest.TestCase):
         self.assertEqual(payload["text"]["format"]["type"], "json_schema")
         self.assertTrue(payload["text"]["format"]["strict"])
 
+    def test_request_news_ai_signals_retries_server_error(self) -> None:
+        class ErrorResponse:
+            status_code = 500
+
+            def raise_for_status(self) -> None:
+                raise requests.HTTPError("server error", response=self)
+
+        class OkResponse:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {"output_text": json.dumps({"signals": []})}
+
+        with (
+            patch("news_ai_analyzer.requests.post", side_effect=[ErrorResponse(), OkResponse()]) as mocked_post,
+            patch("news_ai_analyzer.time.sleep"),
+        ):
+            signals = request_news_ai_signals("test-key", "gpt-4.1-mini", [sample_bias()])
+
+        self.assertEqual(signals, [])
+        self.assertEqual(mocked_post.call_count, 2)
+
     def test_ai_confirmation_boosts_matching_news_bias(self) -> None:
         bias = sample_bias()
         ai_signal = bot.NewsAiSignal(
@@ -90,6 +117,74 @@ class NewsAiAnalyzerTests(unittest.TestCase):
         self.assertEqual(enriched.actionability, "ACTION")
         self.assertGreater(enriched.score, bias.score)
         self.assertIn("AI подтвердил", enriched.reason)
+
+    def test_confirmed_ai_news_can_block_conflicting_trade(self) -> None:
+        old_enabled = os.environ.get("OIL_NEWS_AI_ENABLED")
+        old_threshold = os.environ.get("OIL_NEWS_AI_TRADE_MIN_CONFIDENCE")
+        os.environ["OIL_NEWS_AI_ENABLED"] = "1"
+        os.environ["OIL_NEWS_AI_TRADE_MIN_CONFIDENCE"] = "0.70"
+        try:
+            bias = sample_bias()
+            bias = bot.replace(
+                bias,
+                bias="SHORT",
+                strength="HIGH",
+                actionability="ACTION",
+                ai_direction="SHORT",
+                ai_strength="HIGH",
+                ai_confidence=0.82,
+                ai_horizon="INTRADAY",
+                ai_reason="AI подтвердил шорт",
+            )
+
+            signal, reason = bot.apply_news_bias_to_signal("LONG", "Базовый long", bias)
+
+            self.assertEqual(signal, "HOLD")
+            self.assertIn("Новости конфликтуют", reason)
+            self.assertEqual(bot.format_trading_news_bias_label(bias), "SHORT/HIGH")
+        finally:
+            if old_enabled is None:
+                os.environ.pop("OIL_NEWS_AI_ENABLED", None)
+            else:
+                os.environ["OIL_NEWS_AI_ENABLED"] = old_enabled
+            if old_threshold is None:
+                os.environ.pop("OIL_NEWS_AI_TRADE_MIN_CONFIDENCE", None)
+            else:
+                os.environ["OIL_NEWS_AI_TRADE_MIN_CONFIDENCE"] = old_threshold
+
+    def test_low_confidence_ai_news_does_not_block_trade(self) -> None:
+        old_enabled = os.environ.get("OIL_NEWS_AI_ENABLED")
+        old_threshold = os.environ.get("OIL_NEWS_AI_TRADE_MIN_CONFIDENCE")
+        os.environ["OIL_NEWS_AI_ENABLED"] = "1"
+        os.environ["OIL_NEWS_AI_TRADE_MIN_CONFIDENCE"] = "0.70"
+        try:
+            bias = sample_bias()
+            bias = bot.replace(
+                bias,
+                bias="SHORT",
+                strength="HIGH",
+                actionability="ACTION",
+                ai_direction="SHORT",
+                ai_strength="HIGH",
+                ai_confidence=0.45,
+                ai_horizon="INTRADAY",
+                ai_reason="AI не уверен",
+            )
+
+            signal, reason = bot.apply_news_bias_to_signal("LONG", "Базовый long", bias)
+
+            self.assertEqual(signal, "LONG")
+            self.assertIn("ниже порога", reason)
+            self.assertEqual(bot.format_trading_news_bias_label(bias), "NEUTRAL")
+        finally:
+            if old_enabled is None:
+                os.environ.pop("OIL_NEWS_AI_ENABLED", None)
+            else:
+                os.environ["OIL_NEWS_AI_ENABLED"] = old_enabled
+            if old_threshold is None:
+                os.environ.pop("OIL_NEWS_AI_TRADE_MIN_CONFIDENCE", None)
+            else:
+                os.environ["OIL_NEWS_AI_TRADE_MIN_CONFIDENCE"] = old_threshold
 
     def test_enrich_news_biases_is_disabled_by_default(self) -> None:
         old_enabled = os.environ.pop("OIL_NEWS_AI_ENABLED", None)

@@ -4669,6 +4669,14 @@ def build_dashboard_html() -> str:
       return `${bias} · ${action}${ai}`;
     }
 
+    function formatNewsTradeGate(item) {
+      const reason = String(item.trade_gate_reason || '').trim();
+      if (item.trade_eligible) {
+        return reason ? `влияет на решение · ${reason}` : 'влияет на решение';
+      }
+      return reason ? `только наблюдение · ${reason}` : 'только наблюдение';
+    }
+
     function formatRuntimeState(value) {
       const raw = String(value || '').toLowerCase();
       const map = {
@@ -5304,6 +5312,7 @@ def build_dashboard_html() -> str:
       const activeBiases = Array.isArray(news.active_biases) ? news.active_biases : [];
       const keyNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'key');
       const signalNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'signal');
+      const tradeNews = activeBiases.filter((item) => item.trade_eligible);
       const blockNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'block');
       const backgroundNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'background');
       document.getElementById('newsUpdatedAt').textContent = `Новости: ${news.fetched_at_moscow || '-'}`;
@@ -5330,8 +5339,8 @@ def build_dashboard_html() -> str:
         },
         {
           title: 'Влияет на сигналы',
-          value: signalNews.length ? signalNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'новости не давят на сигналы',
-          sub: signalNews.length ? 'держим в уме, но не рубим входы автоматически' : 'сильных конфликтов сейчас нет',
+          value: tradeNews.length ? tradeNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'новости не допущены к сделкам',
+          sub: tradeNews.length ? 'ИИ подтвердил направление и горизонт' : 'техника сейчас важнее новостного фона',
         },
         {
           title: 'Фон',
@@ -5391,8 +5400,10 @@ def build_dashboard_html() -> str:
         const sourceLabel = String(item.source_label || item.source || '-').replaceAll('_', ' ');
         const sourceSummary = formatNewsSourceSummary(item);
         const whatMatters = formatNewsWhatMatters(item);
+        const tradeGate = formatNewsTradeGate(item);
         const nowText = `${formatNewsHorizon(item.horizon || '')} · ${formatStrength(item.strength || '-')}`;
         const whyImportant = [
+          tradeGate,
           formatNewsCategory(item.category || ''),
           item.topics && item.topics.length ? `темы: ${item.topics.join(', ')}` : '',
           item.ai_reason ? `AI: ${item.ai_reason}` : '',
@@ -5417,6 +5428,7 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Что важно</span><div class="mobile-card-value">${escapeHtml(whatMatters)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Решение</span><div class="mobile-card-value">${escapeHtml(tradeGate)}</div></div>
             <div class="mobile-card-item"><span class="muted">Сейчас</span><div class="mobile-card-value">${escapeHtml(nowText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Источник</span><div class="mobile-card-value">${escapeHtml(sourceSummary)}</div></div>
             <div class="mobile-card-item"><span class="muted">Актуально до</span><div class="mobile-card-value mono">${escapeHtml(item.expires_at_moscow || '-')}</div></div>
