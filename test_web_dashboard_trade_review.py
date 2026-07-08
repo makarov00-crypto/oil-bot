@@ -835,6 +835,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "priority_score": 0.84,
                     "learning_adjustment": -0.08,
                     "learning_reason": "обучение связки: штраф -0.08, 0% подтверждений, 10 наблюд., среднее движение -1.61%",
+                    "news_priority_adjustment": 0.10,
+                    "news_priority_reason": "новости подтверждают сигнал: +0.10",
                 },
                 {
                     "time": "2026-04-23T10:15:00+03:00",
@@ -854,6 +856,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(loaded[0]["time_display"], "10:15:00")
         self.assertEqual(loaded[0]["learning_adjustment"], -0.08)
         self.assertIn("штраф -0.08", loaded[0]["learning_reason"])
+        self.assertEqual(loaded[0]["news_priority_adjustment"], 0.10)
+        self.assertIn("новости подтверждают", loaded[0]["news_priority_reason"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_signal_observation_summary_for_day_counts_learning_rows(self) -> None:

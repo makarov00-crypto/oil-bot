@@ -5707,13 +5707,15 @@ def build_dashboard_html() -> str:
             const replaced = item.replaced_symbol ? ` вместо ${instrumentText(item.replaced_symbol)}` : '';
             const score = Number(item.priority_score || 0);
             const scoreText = score > 0 ? `приоритет ${score.toFixed(2)}` : '';
+            const newsAdjustment = Number(item.news_priority_adjustment || 0);
+            const newsText = newsAdjustment ? `новости ${newsAdjustment > 0 ? '+' : ''}${newsAdjustment.toFixed(2)}` : '';
             const margin = Number(item.requested_margin_rub || 0);
             const marginText = margin > 0 ? `ГО ${formatRub(margin)}` : '';
-            const meta = [scoreText, marginText].filter(Boolean).join(' · ');
+            const meta = [scoreText, newsText, marginText].filter(Boolean).join(' · ');
             return buildReviewRow(
               `${item.time_display || '-'} · ${item.decision_display || '-'}`,
               `${symbol}${signal}${replaced}`,
-              [meta, humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · ')
+              [meta, item.news_priority_reason || '', humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · ')
             );
           }).join('')
         : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не перераспределял сигналы');

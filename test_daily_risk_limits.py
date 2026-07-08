@@ -578,6 +578,25 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertLess(score, 0.55)
         self.assertIn("новости против сигнала", reason)
 
+    def test_mark_cycle_deferred_candidate_persists_news_priority_fields(self) -> None:
+        candidate = {
+            "symbol": "BMM6",
+            "signal": "LONG",
+            "priority_score": 0.71,
+            "entry_edge_score": 0.66,
+            "news_priority_adjustment": 0.10,
+            "news_priority_reason": "новости подтверждают сигнал: +0.10",
+        }
+        recorded: list[dict] = []
+
+        with patch.object(mod, "append_allocator_decision", side_effect=lambda **kwargs: recorded.append(kwargs)), patch.object(
+            mod, "load_state", return_value=mod.InstrumentState()
+        ), patch.object(mod, "save_state", lambda *_args, **_kwargs: None):
+            mod.mark_cycle_deferred_candidate(candidate, "кандидат отложен")
+
+        self.assertEqual(recorded[0]["news_priority_adjustment"], 0.10)
+        self.assertEqual(recorded[0]["news_priority_reason"], "новости подтверждают сигнал: +0.10")
+
     def test_entry_priority_score_penalizes_bad_signal_learning_combo(self) -> None:
         state = mod.InstrumentState(
             last_signal="LONG",
