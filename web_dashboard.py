@@ -1839,6 +1839,8 @@ def resolve_trade_context_value(
 def humanize_strategy_name(strategy: str | None) -> str:
     value = str(strategy or "").strip()
     mapping = {
+        "reversal_15m": "архивная 15м-стратегия",
+        "reversal_1h": "часовой разворот",
         "opening_range_breakout": "пробой стартового диапазона",
         "range_break_continuation": "продолжение пробоя диапазона",
         "trend_pullback": "откат по тренду",
@@ -3418,6 +3420,9 @@ def build_dashboard_html() -> str:
     #reviewTable {
       min-width: 880px;
     }
+    #newsTable {
+      min-width: 1040px;
+    }
     #tradesTable {
       min-width: 1100px;
     }
@@ -3460,6 +3465,36 @@ def build_dashboard_html() -> str:
       display: flex;
       align-items: flex-start;
       gap: 10px;
+    }
+    .news-decision {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 202, 98, 0.18);
+      background: rgba(255, 202, 98, 0.09);
+      color: #ffdca2;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .news-decision.trade {
+      border-color: rgba(55, 230, 164, 0.22);
+      background: rgba(55, 230, 164, 0.11);
+      color: var(--good);
+    }
+    .news-ai-summary {
+      max-width: 320px;
+      color: #dbe9f8;
+      line-height: 1.35;
+    }
+    .news-detail-list {
+      display: grid;
+      gap: 4px;
+      color: #aebed2;
+      font-size: 12px;
+      line-height: 1.35;
     }
     .hint-button {
       flex: 0 0 auto;
@@ -4286,7 +4321,7 @@ def build_dashboard_html() -> str:
         <table id="newsTable" style="margin-top:16px;">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Что важно</th><th>Сейчас</th><th>Источник</th><th>Актуально до</th><th>Почему это важно</th>
+              <th>Инструмент</th><th>Сигнал</th><th>Решение</th><th>Источник</th><th>AI-разбор</th><th>Детали</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -4532,7 +4567,7 @@ def build_dashboard_html() -> str:
     function higherTFBadge(state) {
       const strategy = String(state.last_strategy_name || state.entry_strategy || '').trim().toLowerCase();
       if (strategy === 'reversal_15m') {
-        return `<span class="badge hold">ЛОКАЛЬНЫЙ 15М</span>`;
+        return `<span class="badge hold">АРХИВ 15М</span>`;
       }
       if (strategy === 'reversal_1h') {
         return `<span class="badge hold">ЛОКАЛЬНЫЙ 1Ч</span>`;
@@ -4543,7 +4578,7 @@ def build_dashboard_html() -> str:
     function signalScopeBadge(state) {
       const strategy = String(state.last_strategy_name || state.entry_strategy || '').trim().toLowerCase();
       if (strategy === 'reversal_15m') {
-        return `<span class="badge hold">UNIFIED 15М</span>`;
+        return `<span class="badge hold">АРХИВ 15М</span>`;
       }
       if (strategy === 'reversal_1h') {
         return `<span class="badge hold">UNIFIED 1Ч</span>`;
@@ -4677,6 +4712,23 @@ def build_dashboard_html() -> str:
       return reason ? `только наблюдение · ${reason}` : 'только наблюдение';
     }
 
+    function shortNewsText(value, maxLength = 120) {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      if (!text) return '-';
+      return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+    }
+
+    function formatNewsDecision(item) {
+      const css = item.trade_eligible ? 'trade' : 'watch';
+      const label = item.trade_eligible ? 'ВЛИЯЕТ' : 'НАБЛЮДЕНИЕ';
+      return `<span class="news-decision ${css}">${label}</span>`;
+    }
+
+    function formatNewsDecisionReason(item) {
+      const reason = String(item.trade_gate_reason || '').trim();
+      return shortNewsText(reason || (item.trade_eligible ? 'ИИ подтвердил торговый смысл' : 'нет допуска к сделке'), 86);
+    }
+
     function formatRuntimeState(value) {
       const raw = String(value || '').toLowerCase();
       const map = {
@@ -4769,8 +4821,8 @@ def build_dashboard_html() -> str:
       const raw = String(value || '').trim();
       if (!raw || raw === '-') return 'не определена';
       const map = {
-        reversal_15m: '15м разворот',
-        reversal_1h: '1ч разворот',
+        reversal_15m: 'Архив 15м',
+        reversal_1h: 'Часовой разворот',
         momentum_breakout: 'Импульсный пробой',
         trend_pullback: 'Откат по тренду',
         trend_rollover: 'Разворот тренда',
@@ -5318,7 +5370,7 @@ def build_dashboard_html() -> str:
       document.getElementById('newsUpdatedAt').textContent = `Новости: ${news.fetched_at_moscow || '-'}`;
       document.getElementById('newsCount').textContent = activeBiases.length;
       document.getElementById('newsKeyCount').textContent = keyNews.length;
-      document.getElementById('newsSignalCount').textContent = signalNews.length;
+      document.getElementById('newsSignalCount').textContent = tradeNews.length;
       document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
 
       const newsLeadCards = document.getElementById('newsLeadCards');
@@ -5401,7 +5453,17 @@ def build_dashboard_html() -> str:
         const sourceSummary = formatNewsSourceSummary(item);
         const whatMatters = formatNewsWhatMatters(item);
         const tradeGate = formatNewsTradeGate(item);
+        const tradeGateShort = formatNewsDecisionReason(item);
+        const aiSummary = item.ai_reason
+          ? shortNewsText(item.ai_reason, 150)
+          : shortNewsText(reasonText, 150);
+        const aiRisk = item.ai_risk ? shortNewsText(item.ai_risk, 96) : '';
         const nowText = `${formatNewsHorizon(item.horizon || '')} · ${formatStrength(item.strength || '-')}`;
+        const detailLines = [
+          `${formatNewsCategory(item.category || '')} · ${nowText}`,
+          item.topics && item.topics.length ? `темы: ${item.topics.slice(0, 3).join(', ')}` : '',
+          `до ${item.expires_at_moscow || '-'}`,
+        ].filter(Boolean);
         const whyImportant = [
           tradeGate,
           formatNewsCategory(item.category || ''),
@@ -5416,10 +5478,10 @@ def build_dashboard_html() -> str:
         newsBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(item.symbol || '-', item.display_name || '')}</td>
           <td><div class="trade-cell-main">${escapeHtml(summaryText)}</div><div class="trade-cell-sub">${escapeHtml(whatMatters)}</div></td>
-          <td>${escapeHtml(nowText)}</td>
+          <td><div>${formatNewsDecision(item)}</div><div class="trade-cell-sub">${escapeHtml(tradeGateShort)}</div></td>
           <td><div class="trade-cell-main">${escapeHtml(sourceLabel)}</div><div class="trade-cell-sub">${escapeHtml(sourceSummary)}</div></td>
-          <td class="mono">${escapeHtml(item.expires_at_moscow || '-')}</td>
-          <td><div class="news-reason"><span class="reason">${escapeHtml(whyImportant)}</span>${detailsButton}</div></td>
+          <td><div class="news-ai-summary">${escapeHtml(aiSummary)}</div>${aiRisk ? `<div class="trade-cell-sub">риск: ${escapeHtml(aiRisk)}</div>` : ''}</td>
+          <td><div class="news-reason"><div class="news-detail-list">${detailLines.map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>${detailsButton}</div></td>
         </tr>`);
         newsCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
           <div class="mobile-card-head">

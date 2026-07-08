@@ -159,7 +159,7 @@ struct SignalsScreen: View {
     private func displayScope(for state: InstrumentSignalState) -> String {
         let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if strategy == "reversal_15m" {
-            return "UNIFIED 15М"
+            return "АРХИВ 15М"
         }
         if strategy == "reversal_1h" {
             return "UNIFIED 1Ч"
