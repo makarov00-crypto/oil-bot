@@ -653,6 +653,68 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(closes[0]["side"], "SHORT")
         self.assertEqual(closes[0]["qty_lots"], 2)
 
+    def test_auto_recovery_does_not_consume_live_position_open_claim(self) -> None:
+        rows = [
+            {
+                "time": "2026-07-06T08:50:10+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+                "lot_size": 1,
+                "price": 6.778,
+                "commission_rub": 59.05,
+                "strategy": "reversal_1h",
+                "source": "portfolio_confirmation",
+                "mode": "LIVE",
+                "session": "MORNING",
+            },
+        ]
+        saved = {}
+        config = SimpleNamespace(account_id="acc", dry_run=False)
+        fee_by_parent = {"buy-op": 133.94}
+        trade_ops = [
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="buy-op",
+                parent_id="parent",
+                op_type=mod.OperationType.OPERATION_TYPE_BUY,
+                side="LONG",
+                qty=7,
+                price=6.795,
+                dt=datetime(2026, 7, 8, 10, 0, 47, tzinfo=timezone.utc),
+            ),
+        ]
+        live_state = mod.InstrumentState(
+            position_side="LONG",
+            position_qty=7,
+            entry_price=6.795,
+            entry_time=datetime(2026, 7, 8, 10, 0, 47, tzinfo=timezone.utc).isoformat(),
+        )
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", return_value=list(rows)), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ), patch.object(
+            mod, "fetch_trade_operations_for_day", return_value=(trade_ops, fee_by_parent)
+        ), patch.object(
+            mod, "load_state", return_value=live_state
+        ):
+            recovered = mod.reconcile_missing_trade_closes_from_broker(
+                None,
+                config,
+                [self.instrument],
+                target_day=datetime(2026, 7, 8, tzinfo=timezone.utc).date(),
+            )
+
+        self.assertEqual(recovered, 0)
+        self.assertEqual(saved, {})
+
     def test_build_today_journal_integrity_alert_reports_broker_issue(self) -> None:
         fake_audit = SimpleNamespace(
             broker_alignment_issues=[{"symbol": "IMOEXF", "type": "broker_op_mismatch"}],

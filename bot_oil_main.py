@@ -2128,6 +2128,27 @@ def build_open_broker_claim_entries(
     return claims
 
 
+def build_live_open_broker_claim_entries(
+    target_day: date,
+    instruments_by_symbol: dict[str, InstrumentConfig],
+) -> list[tuple[str, str, int, float, int]]:
+    claims: list[tuple[str, str, int, float, int]] = []
+    for symbol, instrument in instruments_by_symbol.items():
+        state = load_state(symbol)
+        side = str(state.position_side or "").upper()
+        qty = int(state.position_qty or 0)
+        entry_price = float(state.entry_price or 0.0)
+        entry_dt = parse_state_datetime(state.entry_time)
+        if side not in {"LONG", "SHORT"} or qty <= 0 or entry_price <= 0 or entry_dt is None:
+            continue
+        if entry_dt.astimezone(MOSCOW_TZ).date() != target_day:
+            continue
+        action = "BUY" if side == "LONG" else "SELL"
+        price = _normalize_recovery_price(entry_price, instrument)
+        claims.append((symbol, action, int(entry_dt.timestamp()), price, qty))
+    return claims
+
+
 def open_broker_claim_qty_near_operation(
     claims: list[tuple[str, str, int, float, int]],
     *,
@@ -2181,7 +2202,10 @@ def reconcile_missing_trade_closes_from_broker(
         filtered_unmatched_opens.append(open_row)
     unmatched_opens = filtered_unmatched_opens
     instruments_by_symbol = {item.symbol: item for item in watchlist}
-    open_claim_entries = build_open_broker_claim_entries(rows, target_day, instruments_by_symbol)
+    open_claim_entries = [
+        *build_open_broker_claim_entries(rows, target_day, instruments_by_symbol),
+        *build_live_open_broker_claim_entries(target_day, instruments_by_symbol),
+    ]
     matches: list[dict[str, Any]] = []
     used_op_qty: dict[str, int] = defaultdict(int)
 
