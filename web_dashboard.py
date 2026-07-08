@@ -4896,6 +4896,17 @@ def build_dashboard_html() -> str:
       return ['reversal_15m', 'reversal_1h'].includes(String(row.strategy || '').trim().toLowerCase());
     }
 
+    function strategyBadge(row) {
+      const strategy = String(row.strategy || '').trim().toLowerCase();
+      if (strategy === 'reversal_1h') {
+        return '<span class="badge long">ЧАСОВОЙ РАЗВОРОТ</span>';
+      }
+      if (strategy === 'reversal_15m') {
+        return '<span class="badge hold">АРХИВ 15М</span>';
+      }
+      return '';
+    }
+
     function isSignalFlipTrade(row) {
       if (row.is_signal_flip === true) return true;
       const exitReason = String(row.exit_reason || '').toLowerCase();
@@ -5717,7 +5728,7 @@ def build_dashboard_html() -> str:
         const entrySummary = buildTradeEntrySummary(row);
         const exitSummary = buildTradeExitSummary(row);
         const flipBadge = isSignalFlipTrade(row) ? '<span class="badge hold">ПЕРЕВОРОТ</span>' : '';
-        const unifiedBadge = isUnifiedReversalTrade(row) ? '<span class="badge long">15М РАЗВОРОТ</span>' : '';
+        const unifiedBadge = strategyBadge(row);
         const regimeBadge = `<span class="trade-regime-badge">${escapeHtml(formatRegimeLabel(row.market_regime || '-'))}</span>`;
         reviewBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>

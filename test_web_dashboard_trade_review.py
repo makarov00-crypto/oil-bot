@@ -17,6 +17,14 @@ else:
 
 class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_dashboard_does_not_render_legacy_15m_badge_for_hourly_reversal(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertNotIn("15М РАЗВОРОТ", html)
+        self.assertIn("ЧАСОВОЙ РАЗВОРОТ", html)
+        self.assertIn("АРХИВ 15М", html)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_news_coverage_payload_includes_human_keywords(self) -> None:
         payload = dashboard.build_news_coverage_payload()
 
