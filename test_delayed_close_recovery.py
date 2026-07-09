@@ -715,6 +715,104 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered, 0)
         self.assertEqual(saved, {})
 
+    def test_auto_recovery_does_not_consume_pending_flip_open_claim(self) -> None:
+        rows = [
+            {
+                "time": "2026-07-08T13:00:47+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 7,
+                "lot_size": 1,
+                "price": 6.795,
+                "commission_rub": 133.14,
+                "strategy": "reversal_1h",
+                "source": "portfolio_confirmation",
+                "mode": "LIVE",
+                "session": "DAY",
+            },
+            {
+                "time": "2026-07-09T08:50:18+03:00",
+                "symbol": "TEST",
+                "display_name": "Test",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 7,
+                "lot_size": 1,
+                "price": 6.795,
+                "commission_rub": 0.0,
+                "strategy": "reversal_1h",
+                "source": "portfolio_recovery",
+                "mode": "LIVE",
+                "session": "MORNING",
+            },
+        ]
+        saved = {}
+        config = SimpleNamespace(account_id="acc", dry_run=False)
+        fee_by_parent = {"close-long": 133.14, "open-short": 19.02}
+        trade_ops = [
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="close-long",
+                parent_id="parent-close",
+                op_type=mod.OperationType.OPERATION_TYPE_SELL,
+                side="SHORT",
+                qty=7,
+                price=6.792,
+                dt=datetime(2026, 7, 9, 9, 3, 39, tzinfo=timezone.utc),
+            ),
+            mod.BrokerTradeOp(
+                symbol="TEST",
+                display_name="Test",
+                figi="FIGI",
+                op_id="open-short",
+                parent_id="parent-open",
+                op_type=mod.OperationType.OPERATION_TYPE_SELL,
+                side="SHORT",
+                qty=1,
+                price=6.792,
+                dt=datetime(2026, 7, 9, 9, 6, 9, tzinfo=timezone.utc),
+            ),
+        ]
+        pending_flip_state = mod.InstrumentState(
+            pending_order_action="OPEN",
+            pending_order_side="SHORT",
+            pending_order_qty=1,
+            pending_submitted_at=datetime(2026, 7, 9, 9, 6, 8, tzinfo=timezone.utc).isoformat(),
+        )
+
+        def fake_save(new_rows):
+            saved["rows"] = new_rows
+
+        with patch.object(mod, "load_trade_journal", return_value=list(rows)), patch.object(
+            mod, "save_trade_journal", side_effect=fake_save
+        ), patch.object(
+            mod, "fetch_trade_operations_for_day", return_value=(trade_ops, fee_by_parent)
+        ), patch.object(
+            mod, "load_state", return_value=pending_flip_state
+        ), patch.object(
+            mod,
+            "calculate_futures_pnl_rub",
+            side_effect=lambda instrument, entry_price, exit_price, qty, side: round((exit_price - entry_price) * qty, 2),
+        ), patch.object(
+            mod, "infer_close_reason_for_recovery", return_value="flip close"
+        ):
+            recovered = mod.reconcile_missing_trade_closes_from_broker(
+                None,
+                config,
+                [self.instrument],
+                target_day=datetime(2026, 7, 9, tzinfo=timezone.utc).date(),
+            )
+
+        self.assertEqual(recovered, 1)
+        closes = [row for row in saved["rows"] if row.get("event") == "CLOSE"]
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(closes[0]["broker_op_id"], "close-long")
+        self.assertEqual(closes[0]["qty_lots"], 7)
+
     def test_build_today_journal_integrity_alert_reports_broker_issue(self) -> None:
         fake_audit = SimpleNamespace(
             broker_alignment_issues=[{"symbol": "IMOEXF", "type": "broker_op_mismatch"}],

@@ -2163,6 +2163,26 @@ def build_live_open_broker_claim_entries(
     return claims
 
 
+def build_pending_open_broker_claim_entries(
+    target_day: date,
+    instruments_by_symbol: dict[str, InstrumentConfig],
+) -> list[tuple[str, str, int, float, int]]:
+    claims: list[tuple[str, str, int, float, int]] = []
+    for symbol in instruments_by_symbol:
+        state = load_state(symbol)
+        pending_action = str(state.pending_order_action or "").upper()
+        side = str(state.pending_order_side or "").upper()
+        qty = int(state.pending_order_qty or 0)
+        submitted_dt = parse_state_datetime(state.pending_submitted_at)
+        if pending_action != "OPEN" or side not in {"LONG", "SHORT"} or qty <= 0 or submitted_dt is None:
+            continue
+        if submitted_dt.astimezone(MOSCOW_TZ).date() != target_day:
+            continue
+        action = "BUY" if side == "LONG" else "SELL"
+        claims.append((symbol, action, int(submitted_dt.timestamp()), 0.0, qty))
+    return claims
+
+
 def open_broker_claim_qty_near_operation(
     claims: list[tuple[str, str, int, float, int]],
     *,
@@ -2176,7 +2196,7 @@ def open_broker_claim_qty_near_operation(
     for claim_symbol, claim_action, claim_timestamp, claim_price, claim_qty in claims:
         if claim_symbol != symbol or claim_action != broker_action:
             continue
-        if claim_price != price:
+        if claim_price > 0 and claim_price != price:
             continue
         if abs(claim_timestamp - op_timestamp) > tolerance_seconds:
             continue
@@ -2219,6 +2239,7 @@ def reconcile_missing_trade_closes_from_broker(
     open_claim_entries = [
         *build_open_broker_claim_entries(rows, target_day, instruments_by_symbol),
         *build_live_open_broker_claim_entries(target_day, instruments_by_symbol),
+        *build_pending_open_broker_claim_entries(target_day, instruments_by_symbol),
     ]
     matches: list[dict[str, Any]] = []
     used_op_qty: dict[str, int] = defaultdict(int)
