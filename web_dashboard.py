@@ -114,7 +114,7 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
-        ("/docs", "Документация", "docs"),
+        ("/allocator", "Аллокатор", "allocator"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
@@ -1372,6 +1372,139 @@ def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[
         rows.append(item)
     rows.sort(key=lambda item: str(item.get("time") or ""), reverse=True)
     return rows[:limit]
+
+
+def _allocator_status_label(decision: str, execution_status: str = "") -> str:
+    normalized = str(decision or "").lower()
+    if normalized == "selected":
+        if execution_status == "submitted_open":
+            return "заявка отправлена"
+        if execution_status in {"confirmed_open", "recovered_open"}:
+            return "позиция открыта"
+        if execution_status == "rejected":
+            return "заявка отклонена"
+        return "выбран"
+    if normalized == "deferred":
+        return "отложен"
+    if normalized == "blocked":
+        return "не дошёл до рейтинга"
+    if normalized == "rotation":
+        return "переключение капитала"
+    return normalized or "ожидание"
+
+
+def _allocator_candidate_from_observation(row: dict[str, Any]) -> dict[str, Any]:
+    context = row.get("context") if isinstance(row.get("context"), dict) else {}
+    components = context.get("priority_components") if isinstance(context.get("priority_components"), dict) else {}
+    execution_status = _signal_observation_execution_status(row)
+    reason = str(row.get("decision_reason") or "").strip()
+    allocator_summary = str(context.get("allocator_summary") or "").strip()
+    blocker = reason or allocator_summary or "причина не сохранена"
+    return {
+        "symbol": str(row.get("symbol") or "").upper(),
+        "display_name": INSTRUMENT_DISPLAY_NAMES.get(str(row.get("symbol") or "").upper(), str(row.get("symbol") or "-")),
+        "time_display": _display_observation_time(row.get("observed_at")),
+        "decision": str(row.get("decision") or ""),
+        "decision_display": _allocator_status_label(str(row.get("decision") or ""), execution_status),
+        "signal": str(row.get("signal") or "").upper(),
+        "priority_score": round(float(row.get("priority_score") or 0.0), 3),
+        "entry_edge_score": round(float(row.get("entry_edge_score") or 0.0), 3),
+        "market_regime": str(row.get("market_regime") or context.get("market_regime") or ""),
+        "setup_quality": str(row.get("setup_quality") or context.get("setup_quality_label") or ""),
+        "priority_components": components,
+        "news_priority_adjustment": _signal_observation_context_float(row, "news_priority_adjustment"),
+        "learning_adjustment": _signal_observation_context_float(row, "learning_adjustment"),
+        "requested_margin_rub": _signal_observation_context_float(row, "requested_margin_rub"),
+        "allocatable_margin_rub": _signal_observation_context_float(row, "allocatable_margin_rub"),
+        "quantity": int(context.get("allocator_quantity") or 0),
+        "execution_status": execution_status,
+        "execution_note": str(context.get("execution_note") or ""),
+        "reason": blocker,
+        "allocator_summary": allocator_summary,
+        "outcome": _format_observation_outcome(row),
+        "favorable": row.get("favorable"),
+    }
+
+
+def load_allocator_workspace(target_day: date, states: dict[str, dict], portfolio: dict) -> dict[str, Any]:
+    observations = load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day, limit=400)
+    observations.sort(key=lambda item: str(item.get("observed_at") or ""), reverse=True)
+    candidates = [
+        _allocator_candidate_from_observation(row)
+        for row in observations
+        if str(row.get("signal") or "").upper() in {"LONG", "SHORT"}
+        and str(row.get("decision") or "") in {"selected", "deferred"}
+    ]
+
+    latest_by_symbol: dict[str, dict[str, Any]] = {}
+    for item in candidates:
+        latest_by_symbol.setdefault(str(item.get("symbol") or ""), item)
+    current_candidates = list(latest_by_symbol.values())
+    current_candidates.sort(
+        key=lambda item: (str(item.get("decision") or "") != "selected", -float(item.get("priority_score") or 0.0)),
+    )
+
+    blocked: list[dict[str, Any]] = []
+    for symbol, state in states.items():
+        signal = str(state.get("last_signal") or "").upper()
+        if signal not in {"LONG", "SHORT"} or symbol in latest_by_symbol:
+            continue
+        if str(state.get("position_side") or "FLAT").upper() != "FLAT":
+            continue
+        reason = str(state.get("last_error") or state.get("last_allocator_summary") or "").strip()
+        if not reason:
+            continue
+        blocked.append(
+            {
+                "symbol": symbol,
+                "display_name": INSTRUMENT_DISPLAY_NAMES.get(symbol, symbol),
+                "time_display": str(state.get("_state_updated_at_moscow") or "-").replace(" МСК", ""),
+                "decision": "blocked",
+                "decision_display": _allocator_status_label("blocked"),
+                "signal": signal,
+                "priority_score": 0.0,
+                "entry_edge_score": float(state.get("last_entry_edge_score") or 0.0),
+                "market_regime": str(state.get("last_market_regime") or ""),
+                "setup_quality": str(state.get("last_setup_quality_label") or ""),
+                "priority_components": {},
+                "news_priority_adjustment": 0.0,
+                "learning_adjustment": 0.0,
+                "requested_margin_rub": 0.0,
+                "allocatable_margin_rub": 0.0,
+                "quantity": 0,
+                "execution_status": "",
+                "execution_note": "",
+                "reason": reason,
+                "allocator_summary": str(state.get("last_allocator_summary") or ""),
+                "outcome": "не оценивался",
+                "favorable": None,
+            }
+        )
+    blocked.sort(key=lambda item: str(item.get("symbol") or ""))
+    all_items = [*current_candidates, *blocked]
+    capital_blocked = sum(
+        1
+        for item in all_items
+        if any(token in str(item.get("reason") or "").lower() for token in ("го", "капитал", "марж", "средств"))
+    )
+    selected = sum(1 for item in current_candidates if item.get("decision") == "selected")
+    deferred = sum(1 for item in current_candidates if item.get("decision") == "deferred")
+    return {
+        "generated_at_moscow": datetime.now(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
+        "target_date": target_day.isoformat(),
+        "candidates": all_items,
+        "summary": {
+            "candidates": len(current_candidates),
+            "selected": selected,
+            "deferred": deferred,
+            "blocked": len(blocked),
+            "capital_blocked": capital_blocked,
+            "free_cash_rub": float(portfolio.get("free_cash_rub") or portfolio.get("free_rub") or 0.0),
+            "blocked_guarantee_rub": float(portfolio.get("blocked_guarantee_rub") or 0.0),
+            "open_positions": int(portfolio.get("open_positions_count") or 0),
+        },
+        "recent_decisions": load_allocator_decisions_for_day(target_day, 20),
+    }
 
 
 def _display_observation_time(raw_value: Any) -> str:
@@ -3157,6 +3290,105 @@ def build_health_payload(states: dict[str, dict]) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "generated_at_moscow": datetime.now(timezone.utc).astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
+
+
+def build_allocator_html() -> str:
+    return f"""
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Аллокатор Oil Bot</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {{ --bg:#030711; --panel:#0a1222; --ink:#ebf4ff; --muted:#7f95b3; --line:rgba(102,174,255,.18); --good:#37e6a4; --bad:#ff6b87; --warn:#ffca62; --accent:#43c5ff; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; background:linear-gradient(180deg,#091120 0%,var(--bg) 100%); color:var(--ink); font-family:"Manrope",sans-serif; }}
+    .site-header {{ position:sticky; top:0; z-index:10; background:rgba(4,9,18,.9); backdrop-filter:blur(16px); border-bottom:1px solid var(--line); }}
+    .site-header__inner,.wrap {{ max-width:1380px; margin:0 auto; }}
+    .site-header__inner {{ padding:18px 28px; display:flex; gap:20px; align-items:center; justify-content:space-between; }}
+    .site-brand__eyebrow {{ color:#14f1ff; font:700 12px/1 "JetBrains Mono",monospace; letter-spacing:.16em; text-transform:uppercase; margin-bottom:6px; }}
+    .site-brand__title {{ font:700 18px/1.1 "Sora",sans-serif; }}
+    .site-nav {{ display:flex; flex-wrap:wrap; gap:10px; }}
+    .site-nav__link {{ color:#b8cae3; text-decoration:none; padding:10px 14px; border:1px solid var(--line); border-radius:8px; font-weight:600; }}
+    .site-nav__link.is-active {{ color:#fff; background:rgba(67,197,255,.16); border-color:rgba(67,197,255,.42); }}
+    .wrap {{ padding:28px; }} h1,h2 {{ font-family:"Sora",sans-serif; margin:0; }} h1 {{ font-size:32px; }} h2 {{ font-size:21px; }}
+    .panel {{ margin-bottom:16px; padding:20px 22px; border:1px solid var(--line); border-radius:8px; background:rgba(7,14,27,.82); }}
+    .section-head {{ display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }} .muted {{ color:var(--muted); }} .mono {{ font-family:"JetBrains Mono",monospace; }}
+    .kpis {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-top:18px; }}
+    .kpi {{ min-width:0; padding:13px 14px; border:1px solid rgba(102,174,255,.14); border-radius:8px; background:rgba(3,8,17,.58); }}
+    .kpi-label {{ color:var(--muted); font-size:12px; }} .kpi-value {{ margin-top:6px; font:700 24px/1.1 "Sora",sans-serif; overflow-wrap:anywhere; }}
+    .decision-list {{ display:grid; gap:10px; margin-top:16px; }}
+    .candidate {{ display:grid; grid-template-columns:180px 132px minmax(260px,1fr) minmax(220px,.85fr); gap:14px; padding:15px 0; border-bottom:1px solid var(--line); }} .candidate:last-child {{ border-bottom:0; }}
+    .candidate-title {{ font-weight:700; }} .candidate-sub {{ margin-top:4px; color:var(--muted); font-size:12px; line-height:1.35; }}
+    .decision {{ display:inline-flex; width:max-content; padding:4px 8px; border:1px solid rgba(255,202,98,.22); border-radius:8px; color:var(--warn); font-size:12px; font-weight:700; }}
+    .decision.selected {{ color:var(--good); border-color:rgba(55,230,164,.3); background:rgba(55,230,164,.08); }} .decision.blocked {{ color:var(--bad); border-color:rgba(255,107,135,.28); background:rgba(255,107,135,.07); }}
+    .chips {{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }} .chip {{ padding:3px 7px; border:1px solid rgba(154,180,214,.18); border-radius:8px; color:#c5d3e5; font-size:11px; }} .chip.good {{ color:var(--good); }} .chip.bad {{ color:var(--bad); }}
+    details {{ margin-top:9px; }} summary {{ cursor:pointer; color:#9fdcff; font-size:12px; }} .detail-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:9px; }} .detail {{ color:var(--muted); font-size:12px; }} .detail b {{ display:block; color:#dce9f8; font-weight:600; margin-top:2px; overflow-wrap:anywhere; }}
+    .compare-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }} select {{ width:100%; padding:10px; color:var(--ink); background:#07101e; border:1px solid var(--line); border-radius:8px; }} .comparison {{ margin-top:14px; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }} .comparison-item {{ padding:12px; border-left:2px solid rgba(67,197,255,.35); background:rgba(67,197,255,.04); font-size:13px; }} .comparison-item b {{ display:block; margin-top:5px; font-family:"JetBrains Mono",monospace; }}
+    .history {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:16px; }} .history-row {{ padding:12px; border:1px solid rgba(102,174,255,.12); border-radius:8px; }}
+    .footer-help {{ margin:22px 0 4px; text-align:center; font-size:13px; }} .footer-help a {{ color:#9fdcff; }}
+    @media (max-width:980px) {{ .kpis {{ grid-template-columns:repeat(3,minmax(0,1fr)); }} .candidate {{ grid-template-columns:1fr 1fr; }} .history {{ grid-template-columns:1fr; }} }}
+    @media (max-width:640px) {{ .site-header__inner {{ padding:14px 16px; align-items:flex-start; flex-direction:column; }} .wrap {{ padding:16px; }} h1 {{ font-size:26px; }} .kpis,.candidate,.compare-grid,.comparison {{ grid-template-columns:1fr; }} .panel {{ padding:16px; }} .section-head {{ flex-direction:column; }} }}
+  </style>
+</head>
+<body>
+  {build_site_nav("allocator")}
+  <main class="wrap">
+    <section class="panel">
+      <div class="section-head"><div><h1>Аллокатор</h1><p class="muted">Выбор сигналов и распределение капитала по последним решениям.</p></div><div id="updatedAt" class="muted mono">Обновление: -</div></div>
+      <div id="kpis" class="kpis"></div>
+    </section>
+    <section class="panel"><div class="section-head"><h2>Почему принято решение</h2><div class="muted">Последнее решение по каждому инструменту</div></div><div id="candidateList" class="decision-list"></div></section>
+    <section class="panel"><div class="section-head"><h2>Сравнение сигналов</h2><div class="muted">Разница между двумя кандидатами</div></div><div class="compare-grid"><select id="compareLeft"></select><select id="compareRight"></select></div><div id="comparison" class="comparison"></div></section>
+    <section class="panel"><div class="section-head"><h2>Журнал переключений</h2><div class="muted">Последние действия с капиталом</div></div><div id="history" class="history"></div></section>
+    <div class="footer-help"><a href="/docs">Документация и описание стратегии</a></div>
+  </main>
+  <script>
+    const esc = (value) => String(value ?? '').replace(/[&<>'\"]/g, (char) => ({{'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','\"':'&quot;'}}[char]));
+    const rub = (value) => `${{Number(value || 0).toLocaleString('ru-RU', {{maximumFractionDigits:0}})}} RUB`;
+    const score = (value) => Number(value || 0).toFixed(2);
+    const signal = (value) => value === 'LONG' ? 'ЛОНГ' : value === 'SHORT' ? 'ШОРТ' : String(value || '-');
+    const components = (item) => Object.entries(item.priority_components || {{}}).filter(([,value]) => Math.abs(Number(value || 0)) >= .001).map(([name,value]) => `<span class="chip ${{Number(value) > 0 ? 'good' : 'bad'}}">${{esc(name)}} ${{Number(value) > 0 ? '+' : ''}}${{Number(value).toFixed(2)}}</span>`).join('') || '<span class="muted">состав приоритета не сохранён</span>';
+    const decisionClass = (item) => item.decision === 'selected' ? 'selected' : item.decision === 'blocked' ? 'blocked' : '';
+    function renderCandidate(item) {{
+      const margin = Number(item.requested_margin_rub || 0);
+      const available = Number(item.allocatable_margin_rub || 0);
+      return `<article class="candidate">
+        <div><div class="candidate-title">${{esc(item.symbol)}} · ${{esc(signal(item.signal))}}</div><div class="candidate-sub">${{esc(item.display_name)}}<br>${{esc(item.time_display || '-')}}</div></div>
+        <div><span class="decision ${{decisionClass(item)}}">${{esc(item.decision_display)}}</span><div class="candidate-sub">приоритет <b class="mono">${{score(item.priority_score)}}</b> · вход <b class="mono">${{score(item.entry_edge_score)}}</b></div></div>
+        <div><div class="candidate-title">Что повлияло</div><div class="chips">${{components(item)}}</div><details><summary>Причина и исполнение</summary><div class="detail-grid"><div class="detail">Главная причина<b>${{esc(item.reason)}}</b></div><div class="detail">Исполнение<b>${{esc(item.execution_note || item.execution_status || 'не применимо')}}</b></div></div></details></div>
+        <div><div class="candidate-title">Капитал и результат</div><div class="candidate-sub">цель ГО: ${{margin ? rub(margin) : 'не рассчитана'}}<br>доступно: ${{available ? rub(available) : '—'}}<br>размер: ${{Number(item.quantity || 0) || '—'}} лот(а)<br>проверка: ${{esc(item.outcome || 'ожидает')}}</div></div>
+      </article>`;
+    }}
+    function renderComparison(items) {{
+      const left = items.find((item) => item.symbol === document.getElementById('compareLeft').value);
+      const right = items.find((item) => item.symbol === document.getElementById('compareRight').value);
+      const target = document.getElementById('comparison');
+      if (!left || !right || left.symbol === right.symbol) {{ target.innerHTML = '<div class="muted">Выберите два разных сигнала.</div>'; return; }}
+      const componentValue = (item, name) => Number((item.priority_components || {{}})[name] || 0);
+      const fields = [['Приоритет', left.priority_score, right.priority_score], ['Качество входа', left.entry_edge_score, right.entry_edge_score], ['Новости', componentValue(left,'новости'), componentValue(right,'новости')], ['Обучение', componentValue(left,'обучение'), componentValue(right,'обучение')]];
+      target.innerHTML = fields.map(([label,a,b]) => {{ const delta = Number(a) - Number(b); return `<div class="comparison-item">${{esc(label)}}<b>${{esc(left.symbol)}} ${{Number(a).toFixed(2)}} · ${{esc(right.symbol)}} ${{Number(b).toFixed(2)}}</b><span class="${{delta > 0 ? 'good' : delta < 0 ? 'bad' : 'muted'}}">разница ${{delta > 0 ? '+' : ''}}${{delta.toFixed(2)}} в пользу ${{esc(delta >= 0 ? left.symbol : right.symbol)}}</span></div>`; }}).join('');
+    }}
+    async function load() {{
+      const response = await fetch('/api/allocator', {{cache:'no-store'}}); if (!response.ok) throw new Error('Не удалось загрузить данные аллокатора'); const data = await response.json();
+      document.getElementById('updatedAt').textContent = `Обновление: ${{data.generated_at_moscow || '-'}}`;
+      const summary = data.summary || {{}}; const kpis = [['Кандидатов',summary.candidates],['Выбрано',summary.selected],['Отложено',summary.deferred],['Не дошли до рейтинга',summary.blocked],['Не хватает ГО',summary.capital_blocked],['Свободно',rub(summary.free_cash_rub)]];
+      document.getElementById('kpis').innerHTML = kpis.map(([label,value]) => `<div class="kpi"><div class="kpi-label">${{esc(label)}}</div><div class="kpi-value">${{esc(value ?? 0)}}</div></div>`).join('');
+      const items = Array.isArray(data.candidates) ? data.candidates : []; document.getElementById('candidateList').innerHTML = items.length ? items.map(renderCandidate).join('') : '<div class="muted">Сегодня кандидатов на вход пока не было.</div>';
+      const selects = [document.getElementById('compareLeft'),document.getElementById('compareRight')]; const options = items.map((item) => `<option value="${{esc(item.symbol)}}">${{esc(item.symbol)}} · ${{esc(signal(item.signal))}} · ${{esc(item.decision_display)}}</option>`).join(''); selects.forEach((select) => select.innerHTML = options || '<option value="">Нет кандидатов</option>'); if (items.length > 1) selects[1].selectedIndex = 1; selects.forEach((select) => select.addEventListener('change', () => renderComparison(items))); renderComparison(items);
+      const decisions = Array.isArray(data.recent_decisions) ? data.recent_decisions : []; document.getElementById('history').innerHTML = decisions.length ? decisions.slice(0,9).map((item) => `<div class="history-row"><b>${{esc(item.time_display || '-')}} · ${{esc(item.decision_display || '-')}}</b><div class="candidate-sub">${{esc(item.symbol || '-')}} ${{esc(signal(item.signal))}} · приоритет ${{score(item.priority_score)}}<br>${{esc(item.reason || '')}}</div></div>`).join('') : '<div class="muted">Переключений и отложенных решений за сегодня нет.</div>';
+    }}
+    load().catch((error) => {{ document.getElementById('candidateList').innerHTML = `<div class="bad">${{esc(error.message)}}</div>`; }});
+  </script>
+</body>
+</html>
+"""
 
 
 def build_dashboard_html() -> str:
@@ -6227,6 +6459,11 @@ def docs() -> str:
     return build_docs_html()
 
 
+@app.get("/allocator", response_class=HTMLResponse)
+def allocator() -> str:
+    return build_allocator_html()
+
+
 @app.get("/contracts", response_class=HTMLResponse)
 def contracts() -> str:
     return build_contracts_html()
@@ -6285,6 +6522,18 @@ def api_dashboard(date: str | None = None) -> dict:
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
+
+
+@app.get("/api/allocator", response_class=JSONResponse)
+def api_allocator(date: str | None = None) -> dict:
+    target_day = datetime.now(MOSCOW_TZ).date()
+    if date:
+        try:
+            target_day = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    states = load_states(current_watchlist_symbols())
+    return load_allocator_workspace(target_day, states, load_portfolio_snapshot())
 
 
 @app.post("/api/ai-review/refresh", response_class=JSONResponse)

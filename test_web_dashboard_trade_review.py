@@ -860,6 +860,53 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("новости подтверждают", loaded[0]["news_priority_reason"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_allocator_workspace_explains_ranked_and_blocked_signals(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T10:15:00+03:00",
+                    "symbol": "BMM6",
+                    "signal": "LONG",
+                    "decision": "selected",
+                    "priority_score": 0.84,
+                    "entry_edge_score": 0.80,
+                    "context": {
+                        "priority_components": {"качество входа": 0.44, "новости": 0.10},
+                        "allocator_summary": "Аллокатор одобрил вход.",
+                        "allocator_quantity": 2,
+                        "requested_margin_rub": 4000.0,
+                        "allocatable_margin_rub": 8000.0,
+                        "execution_status": "submitted_open",
+                    },
+                },
+            )
+            with patch.object(dashboard, "TRADE_DB_PATH", db_path), patch.object(
+                dashboard,
+                "load_allocator_decisions_for_day",
+                return_value=[],
+            ):
+                payload = dashboard.load_allocator_workspace(
+                    date(2026, 4, 24),
+                    {
+                        "NGN6": {
+                            "last_signal": "SHORT",
+                            "position_side": "FLAT",
+                            "last_error": "недостаточно ГО для входа",
+                        }
+                    },
+                    {"free_cash_rub": 12000.0},
+                )
+
+        self.assertEqual(payload["summary"]["selected"], 1)
+        self.assertEqual(payload["summary"]["blocked"], 1)
+        self.assertEqual(payload["summary"]["capital_blocked"], 1)
+        self.assertEqual(payload["candidates"][0]["decision_display"], "заявка отправлена")
+        self.assertEqual(payload["candidates"][1]["decision_display"], "не дошёл до рейтинга")
+        self.assertIn("новости", payload["candidates"][0]["priority_components"])
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_signal_observation_summary_for_day_counts_learning_rows(self) -> None:
         with TemporaryDirectory() as temp_dir:
             db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
