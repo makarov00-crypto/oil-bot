@@ -11,11 +11,24 @@ struct MoreScreen: View {
                         Text("Дополнительные разделы")
                             .font(.headline)
                         NavigationLink {
+                            AllocatorScreen(store: store)
+                        } label: {
+                            menuRow(
+                                title: "Аллокатор",
+                                subtitle: "Кандидаты, причины выбора, ГО и сравнение сигналов",
+                                systemImage: "slider.horizontal.3"
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        Divider().overlay(Color.white.opacity(0.08))
+
+                        NavigationLink {
                             NewsScreen(store: store)
                         } label: {
                             menuRow(
                                 title: "Новости",
-                                subtitle: "Активные bias, источники и тексты новостей",
+                                subtitle: "Активные сигналы, качество источников и влияние на входы",
                                 systemImage: "newspaper"
                             )
                         }

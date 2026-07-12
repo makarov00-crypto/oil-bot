@@ -21,6 +21,49 @@ struct NewsScreen: View {
                         }
                     }
 
+                    if let analytics = payload.news.analytics {
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Качество за \(analytics.days) дней")
+                                    .font(.headline)
+                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                                    compactMetric("Попадания", analytics.evaluatedCount > 0 ? "\(String(format: "%.1f", analytics.winRatePct))%" : "копится")
+                                    compactMetric("Оценено", "\(analytics.evaluatedCount)")
+                                    compactMetric("Ожидают", "\(analytics.pendingCount)")
+                                    compactMetric("Недоступно", "\(analytics.unavailableCount)")
+                                }
+                                Text(analytics.evaluatedCount < 30
+                                    ? "Выборка пока мала: источник не стоит считать лучшим до 20 наблюдений."
+                                    : "Среднее движение после новости: \(String(format: "%.3f", analytics.avgMovePct))%.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        analyticsGroup(title: "Источники", rows: analytics.sources)
+                        analyticsGroup(title: "Направление", rows: analytics.directions)
+                        analyticsGroup(title: "Проверка ИИ", rows: analytics.aiConfirmation)
+                    }
+
+                    if let impact = payload.news.allocatorImpact {
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Влияние на аллокатор")
+                                    .font(.headline)
+                                InfoRow(title: "Изменили приоритет", value: "\(impact.totalCount)")
+                                InfoRow(title: "Повысили", value: "\(impact.boostCount)", accent: .green)
+                                InfoRow(title: "Понизили", value: "\(impact.penaltyCount)", accent: impact.penaltyCount > 0 ? .red : nil)
+                                InfoRow(title: "Отложили вход", value: "\(impact.deferredCount)")
+                                if impact.evaluatedSelectedCount > 0 {
+                                    InfoRow(
+                                        title: "Выбранные подтвердились",
+                                        value: "\(impact.favorableSelectedCount)/\(impact.evaluatedSelectedCount) · \(String(format: "%.1f", impact.selectedWinRatePct))%"
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     if payload.news.activeBiases.isEmpty {
                         EmptyGlassState(
                             title: "Активных новостей нет",
@@ -182,6 +225,37 @@ struct NewsScreen: View {
         default:
             return (item.horizon ?? "").uppercased() == "NOW" ? .key : .background
         }
+    }
+
+    private func analyticsGroup(title: String, rows: [NewsAnalyticsRow]) -> some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title)
+                    .font(.headline)
+                if rows.isEmpty {
+                    Text("Данные ещё копятся.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(rows.prefix(4)) { row in
+                        InfoRow(
+                            title: row.label,
+                            value: "\(String(format: "%.1f", row.winRatePct))% · \(row.totalCount) оценено"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func compactMetric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.subheadline.weight(.semibold))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func whyImportant(for item: NewsBiasItem) -> String {

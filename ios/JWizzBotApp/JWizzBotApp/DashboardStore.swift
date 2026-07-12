@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class DashboardStore: ObservableObject {
     @Published private(set) var payload: DashboardPayload?
+    @Published private(set) var allocatorPayload: AllocatorWorkspace?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastLoadedAt: Date?
@@ -17,12 +18,14 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var tradeRecoveryMessage: String?
     @Published private(set) var isAddingInstrument = false
     @Published private(set) var addInstrumentMessage: String?
+    @Published private(set) var allocatorErrorMessage: String?
 
     private let dashboardURL = URL(string: "https://jwizzbot.ru/api/dashboard")!
     private let aiReviewRefreshURL = URL(string: "https://jwizzbot.ru/api/ai-review/refresh")!
     private let aiReviewFollowupURL = URL(string: "https://jwizzbot.ru/api/ai-review/followup")!
     private let tradeRecoveryURL = URL(string: "https://jwizzbot.ru/api/trades/recover")!
     private let addInstrumentURL = URL(string: "https://jwizzbot.ru/api/instruments/add")!
+    private let allocatorURL = URL(string: "https://jwizzbot.ru/api/allocator")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -50,6 +53,7 @@ final class DashboardStore: ObservableObject {
             let result = try await fetchDashboard(date: targetDate)
             let decoded = result.payload
             apply(decoded)
+            await loadAllocator()
             do {
                 try saveCache(result.data, for: targetDate)
             } catch {
@@ -62,6 +66,7 @@ final class DashboardStore: ObservableObject {
             }
             if let cached = loadCache(for: targetDate) {
                 apply(cached, cached: true)
+                await loadAllocator()
                 errorMessage = "Сервер временно недоступен. Показан сохранённый срез."
             } else {
                 errorMessage = describe(error)
@@ -71,6 +76,22 @@ final class DashboardStore: ObservableObject {
 
     func selectDate(_ date: String) async {
         await load(date: date)
+    }
+
+    func loadAllocator() async {
+        do {
+            let (data, response) = try await session.data(from: allocatorURL)
+            guard let http = response as? HTTPURLResponse else {
+                throw DashboardLoadError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw DashboardLoadError.httpStatus(http.statusCode)
+            }
+            allocatorPayload = try JSONDecoder().decode(AllocatorWorkspace.self, from: data)
+            allocatorErrorMessage = nil
+        } catch {
+            allocatorErrorMessage = describe(error)
+        }
     }
 
     func refreshAIReview(date: String? = nil) async {

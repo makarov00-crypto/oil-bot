@@ -360,10 +360,227 @@ struct CustomInstrumentItem: Decodable, Identifiable {
 struct NewsSnapshot: Decodable {
     let fetchedAtMoscow: String?
     let activeBiases: [NewsBiasItem]
+    let analytics: NewsAnalytics?
+    let allocatorImpact: NewsAllocatorImpact?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAtMoscow = "fetched_at_moscow"
         case activeBiases = "active_biases"
+        case analytics
+        case allocatorImpact = "allocator_impact"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fetchedAtMoscow = try container.decodeIfPresent(String.self, forKey: .fetchedAtMoscow)
+        activeBiases = try container.decodeIfPresent([NewsBiasItem].self, forKey: .activeBiases) ?? []
+        analytics = try? container.decodeIfPresent(NewsAnalytics.self, forKey: .analytics)
+        allocatorImpact = try? container.decodeIfPresent(NewsAllocatorImpact.self, forKey: .allocatorImpact)
+    }
+}
+
+struct NewsAnalytics: Decodable {
+    let days: Int
+    let totalCount: Int
+    let evaluatedCount: Int
+    let unavailableCount: Int
+    let pendingCount: Int
+    let favorableCount: Int
+    let winRatePct: Double
+    let avgMovePct: Double
+    let sources: [NewsAnalyticsRow]
+    let directions: [NewsAnalyticsRow]
+    let horizons: [NewsAnalyticsRow]
+    let actions: [NewsAnalyticsRow]
+    let aiConfirmation: [NewsAnalyticsRow]
+
+    enum CodingKeys: String, CodingKey {
+        case days
+        case totalCount = "total_count"
+        case evaluatedCount = "evaluated_count"
+        case unavailableCount = "unavailable_count"
+        case pendingCount = "pending_count"
+        case favorableCount = "favorable_count"
+        case winRatePct = "win_rate_pct"
+        case avgMovePct = "avg_move_pct"
+        case sources, directions, horizons, actions
+        case aiConfirmation = "ai_confirmation"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        days = try container.decodeIfPresent(Int.self, forKey: .days) ?? 10
+        totalCount = try container.decodeIfPresent(Int.self, forKey: .totalCount) ?? 0
+        evaluatedCount = try container.decodeIfPresent(Int.self, forKey: .evaluatedCount) ?? 0
+        unavailableCount = try container.decodeIfPresent(Int.self, forKey: .unavailableCount) ?? 0
+        pendingCount = try container.decodeIfPresent(Int.self, forKey: .pendingCount) ?? 0
+        favorableCount = try container.decodeIfPresent(Int.self, forKey: .favorableCount) ?? 0
+        winRatePct = try container.decodeIfPresent(Double.self, forKey: .winRatePct) ?? 0
+        avgMovePct = try container.decodeIfPresent(Double.self, forKey: .avgMovePct) ?? 0
+        sources = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .sources) ?? []
+        directions = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .directions) ?? []
+        horizons = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .horizons) ?? []
+        actions = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .actions) ?? []
+        aiConfirmation = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .aiConfirmation) ?? []
+    }
+}
+
+struct NewsAnalyticsRow: Decodable, Identifiable {
+    let label: String
+    let totalCount: Int
+    let favorableCount: Int
+    let winRatePct: Double
+    let avgMovePct: Double
+
+    var id: String { label }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case totalCount = "total_count"
+        case favorableCount = "favorable_count"
+        case winRatePct = "win_rate_pct"
+        case avgMovePct = "avg_move_pct"
+    }
+}
+
+struct NewsAllocatorImpact: Decodable {
+    let totalCount: Int
+    let boostCount: Int
+    let penaltyCount: Int
+    let selectedCount: Int
+    let deferredCount: Int
+    let evaluatedSelectedCount: Int
+    let favorableSelectedCount: Int
+    let selectedWinRatePct: Double
+
+    enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
+        case boostCount = "boost_count"
+        case penaltyCount = "penalty_count"
+        case selectedCount = "selected_count"
+        case deferredCount = "deferred_count"
+        case evaluatedSelectedCount = "evaluated_selected_count"
+        case favorableSelectedCount = "favorable_selected_count"
+        case selectedWinRatePct = "selected_win_rate_pct"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        totalCount = try container.decodeIfPresent(Int.self, forKey: .totalCount) ?? 0
+        boostCount = try container.decodeIfPresent(Int.self, forKey: .boostCount) ?? 0
+        penaltyCount = try container.decodeIfPresent(Int.self, forKey: .penaltyCount) ?? 0
+        selectedCount = try container.decodeIfPresent(Int.self, forKey: .selectedCount) ?? 0
+        deferredCount = try container.decodeIfPresent(Int.self, forKey: .deferredCount) ?? 0
+        evaluatedSelectedCount = try container.decodeIfPresent(Int.self, forKey: .evaluatedSelectedCount) ?? 0
+        favorableSelectedCount = try container.decodeIfPresent(Int.self, forKey: .favorableSelectedCount) ?? 0
+        selectedWinRatePct = try container.decodeIfPresent(Double.self, forKey: .selectedWinRatePct) ?? 0
+    }
+}
+
+struct AllocatorWorkspace: Decodable {
+    let generatedAtMoscow: String?
+    let summary: AllocatorWorkspaceSummary
+    let candidates: [AllocatorCandidate]
+    let recentDecisions: [AllocatorDecision]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAtMoscow = "generated_at_moscow"
+        case summary, candidates
+        case recentDecisions = "recent_decisions"
+    }
+}
+
+struct AllocatorWorkspaceSummary: Decodable {
+    let candidates: Int
+    let selected: Int
+    let deferred: Int
+    let blocked: Int
+    let capitalBlocked: Int
+    let freeCashRub: Double
+    let blockedGuaranteeRub: Double
+    let openPositions: Int
+
+    enum CodingKeys: String, CodingKey {
+        case candidates, selected, deferred, blocked
+        case capitalBlocked = "capital_blocked"
+        case freeCashRub = "free_cash_rub"
+        case blockedGuaranteeRub = "blocked_guarantee_rub"
+        case openPositions = "open_positions"
+    }
+}
+
+struct AllocatorCandidate: Decodable, Identifiable {
+    let symbol: String
+    let displayName: String?
+    let timeDisplay: String?
+    let decision: String
+    let decisionDisplay: String
+    let signal: String?
+    let priorityScore: Double
+    let entryEdgeScore: Double
+    let marketRegime: String?
+    let setupQuality: String?
+    let priorityComponents: [String: Double]
+    let newsPriorityAdjustment: Double
+    let learningAdjustment: Double
+    let requestedMarginRub: Double
+    let allocatableMarginRub: Double
+    let quantity: Int
+    let executionStatus: String?
+    let executionNote: String?
+    let reason: String
+    let allocatorSummary: String?
+    let outcome: String?
+
+    var id: String { "\(symbol)-\(decision)-\(timeDisplay ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case displayName = "display_name"
+        case timeDisplay = "time_display"
+        case decision
+        case decisionDisplay = "decision_display"
+        case signal
+        case priorityScore = "priority_score"
+        case entryEdgeScore = "entry_edge_score"
+        case marketRegime = "market_regime"
+        case setupQuality = "setup_quality"
+        case priorityComponents = "priority_components"
+        case newsPriorityAdjustment = "news_priority_adjustment"
+        case learningAdjustment = "learning_adjustment"
+        case requestedMarginRub = "requested_margin_rub"
+        case allocatableMarginRub = "allocatable_margin_rub"
+        case quantity
+        case executionStatus = "execution_status"
+        case executionNote = "execution_note"
+        case reason
+        case allocatorSummary = "allocator_summary"
+        case outcome
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol) ?? "-"
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        timeDisplay = try container.decodeIfPresent(String.self, forKey: .timeDisplay)
+        decision = try container.decodeIfPresent(String.self, forKey: .decision) ?? ""
+        decisionDisplay = try container.decodeIfPresent(String.self, forKey: .decisionDisplay) ?? "ожидание"
+        signal = try container.decodeIfPresent(String.self, forKey: .signal)
+        priorityScore = try container.decodeIfPresent(Double.self, forKey: .priorityScore) ?? 0
+        entryEdgeScore = try container.decodeIfPresent(Double.self, forKey: .entryEdgeScore) ?? 0
+        marketRegime = try container.decodeIfPresent(String.self, forKey: .marketRegime)
+        setupQuality = try container.decodeIfPresent(String.self, forKey: .setupQuality)
+        priorityComponents = try container.decodeIfPresent([String: Double].self, forKey: .priorityComponents) ?? [:]
+        newsPriorityAdjustment = try container.decodeIfPresent(Double.self, forKey: .newsPriorityAdjustment) ?? 0
+        learningAdjustment = try container.decodeIfPresent(Double.self, forKey: .learningAdjustment) ?? 0
+        requestedMarginRub = try container.decodeIfPresent(Double.self, forKey: .requestedMarginRub) ?? 0
+        allocatableMarginRub = try container.decodeIfPresent(Double.self, forKey: .allocatableMarginRub) ?? 0
+        quantity = try container.decodeIfPresent(Int.self, forKey: .quantity) ?? 0
+        executionStatus = try container.decodeIfPresent(String.self, forKey: .executionStatus)
+        executionNote = try container.decodeIfPresent(String.self, forKey: .executionNote)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason) ?? "причина не сохранена"
+        allocatorSummary = try container.decodeIfPresent(String.self, forKey: .allocatorSummary)
+        outcome = try container.decodeIfPresent(String.self, forKey: .outcome)
     }
 }
 
