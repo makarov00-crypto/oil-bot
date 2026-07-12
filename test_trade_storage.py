@@ -17,6 +17,7 @@ from trade_storage import (
     load_trade_rows,
     mark_news_event_outcome_unavailable,
     summarize_news_analytics,
+    summarize_news_allocator_impact,
     summarize_news_source_stats,
     update_news_event_outcome,
     update_signal_observation_context,
@@ -198,6 +199,69 @@ class TradeStorageTests(unittest.TestCase):
             self.assertEqual(rows[0]["outcome_status"], "UNAVAILABLE")
             self.assertIn("историческая минутная свеча", rows[0]["outcome_note"])
             self.assertEqual(horizon_price.call_count, 1)
+
+    def test_news_allocator_impact_counts_only_changed_priorities(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
+            observed_at = datetime.now(timezone.utc).isoformat()
+            base = {
+                "observed_at": observed_at,
+                "strategy": "reversal_1h",
+                "signal": "LONG",
+                "horizon_minutes": 60,
+            }
+            append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "symbol": "GNU6",
+                    "decision": "selected",
+                    "observation_key": "news-boost",
+                    "favorable": True,
+                    "context": {"news_priority_adjustment": 0.10},
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "symbol": "RBU6",
+                    "decision": "deferred",
+                    "observation_key": "news-deferred",
+                    "context": {"news_priority_adjustment": 0.10},
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "symbol": "BMQ6",
+                    "decision": "selected",
+                    "observation_key": "news-penalty",
+                    "favorable": False,
+                    "context": {"news_priority_adjustment": -0.10},
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "symbol": "IMOEXF",
+                    "decision": "selected",
+                    "observation_key": "without-news",
+                    "favorable": True,
+                    "context": {"news_priority_adjustment": 0.0},
+                },
+            )
+
+            impact = summarize_news_allocator_impact(db_path, days=10000)
+
+            self.assertEqual(impact["total_count"], 3)
+            self.assertEqual(impact["boost_count"], 2)
+            self.assertEqual(impact["penalty_count"], 1)
+            self.assertEqual(impact["selected_count"], 2)
+            self.assertEqual(impact["deferred_count"], 1)
+            self.assertEqual(impact["selected_win_rate_pct"], 50.0)
 
     def test_append_trade_journal_persists_context_to_sqlite(self) -> None:
         state = mod.InstrumentState(

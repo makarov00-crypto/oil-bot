@@ -629,6 +629,57 @@ def load_signal_observations(
         return [_signal_observation_from_db(item) for item in connection.execute(query, params).fetchall()]
 
 
+def summarize_news_allocator_impact(db_path: Path, *, days: int = 10) -> dict[str, Any]:
+    """Summarize only signal decisions whose priority was changed by news."""
+    ensure_trade_db(db_path)
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT decision, favorable, context_json
+            FROM signal_observations
+            WHERE observed_date >= date('now', ?)
+            """,
+            (f"-{int(days)} day",),
+        ).fetchall()
+
+    impacted: list[tuple[str, bool | None, float]] = []
+    for row in rows:
+        context: dict[str, Any] = {}
+        raw_context = str(row["context_json"] or "")
+        if raw_context:
+            try:
+                context = json.loads(raw_context)
+            except Exception:
+                continue
+        try:
+            adjustment = float(context.get("news_priority_adjustment") or 0.0)
+        except (TypeError, ValueError):
+            adjustment = 0.0
+        if abs(adjustment) < 0.001:
+            continue
+        favorable_raw = row["favorable"]
+        favorable = bool(favorable_raw) if favorable_raw is not None else None
+        impacted.append((str(row["decision"] or ""), favorable, adjustment))
+
+    selected = [item for item in impacted if item[0] == "selected"]
+    evaluated_selected = [item for item in selected if item[1] is not None]
+    favorable_selected = sum(1 for _, favorable, _ in evaluated_selected if favorable)
+    return {
+        "days": int(days),
+        "total_count": len(impacted),
+        "boost_count": sum(1 for _, _, adjustment in impacted if adjustment > 0.0),
+        "penalty_count": sum(1 for _, _, adjustment in impacted if adjustment < 0.0),
+        "selected_count": len(selected),
+        "deferred_count": sum(1 for decision, _, _ in impacted if decision == "deferred"),
+        "evaluated_selected_count": len(evaluated_selected),
+        "favorable_selected_count": favorable_selected,
+        "selected_win_rate_pct": round(
+            favorable_selected / len(evaluated_selected) * 100.0,
+            1,
+        ) if evaluated_selected else 0.0,
+    }
+
+
 def update_signal_observation_outcome(
     db_path: Path,
     observation_uid: str,

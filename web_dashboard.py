@@ -39,6 +39,7 @@ from trade_storage import (
     load_signal_observations as load_signal_observations_from_storage,
     load_trade_rows as load_trade_rows_from_storage,
     summarize_news_analytics,
+    summarize_news_allocator_impact,
     summarize_news_source_stats,
 )
 
@@ -1200,6 +1201,10 @@ def load_news_snapshot() -> dict:
         payload["analytics"] = summarize_news_analytics(TRADE_DB_PATH, days=10, limit=8)
     except Exception:
         payload["analytics"] = {}
+    try:
+        payload["allocator_impact"] = summarize_news_allocator_impact(TRADE_DB_PATH, days=10)
+    except Exception:
+        payload["allocator_impact"] = {}
     payload["coverage"] = build_news_coverage_payload()
     return payload
 
@@ -3559,6 +3564,55 @@ def build_dashboard_html() -> str:
       font-size: 13px;
       line-height: 1.35;
     }
+    .news-diagnostics {
+      display: grid;
+      grid-template-columns: 1.25fr repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .news-diagnostic {
+      min-width: 0;
+      padding: 13px 14px;
+      border: 1px solid rgba(102, 174, 255, 0.14);
+      border-radius: 8px;
+      background: rgba(7, 14, 27, 0.54);
+    }
+    .news-diagnostic-title {
+      color: #b9cbe4;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .news-diagnostic-main {
+      margin-top: 7px;
+      color: #edf5ff;
+      font: 750 17px/1.25 "Sora", "Manrope", sans-serif;
+    }
+    .news-diagnostic-note {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .news-diagnostic-list {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .news-diagnostic-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: #cbd9ea;
+      font-size: 12px;
+      line-height: 1.25;
+    }
+    .news-diagnostic-row span:last-child {
+      flex: 0 0 auto;
+      color: #edf5ff;
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
     .news-detail-list {
       display: grid;
       gap: 4px;
@@ -4153,6 +4207,9 @@ def build_dashboard_html() -> str:
       .news-overview {
         grid-template-columns: 1fr;
       }
+      .news-diagnostics {
+        grid-template-columns: 1fr;
+      }
       .mobile-card-grid {
         grid-template-columns: 1fr 1fr;
       }
@@ -4387,6 +4444,7 @@ def build_dashboard_html() -> str:
         </div>
       </div>
       <div id="newsLeadCards" class="news-overview"></div>
+      <div id="newsDiagnostics" class="news-diagnostics"></div>
       <div id="newsCards" class="mobile-cards" style="margin-top:16px;"></div>
       <div class="table-scroll desktop-table">
         <table id="newsTable" style="margin-top:16px;">
@@ -5494,9 +5552,11 @@ def build_dashboard_html() -> str:
       document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
 
       const newsLeadCards = document.getElementById('newsLeadCards');
+      const newsDiagnostics = document.getElementById('newsDiagnostics');
       const newsBody = document.querySelector('#newsTable tbody');
       const newsCards = document.getElementById('newsCards');
       newsLeadCards.innerHTML = '';
+      newsDiagnostics.innerHTML = '';
       newsBody.innerHTML = '';
       newsCards.innerHTML = '';
       const analytics = news.analytics || {};
@@ -5527,7 +5587,7 @@ def build_dashboard_html() -> str:
           title: `Качество за ${Number(analytics.days || 10)} дней`,
           value: evaluatedNews ? `${Number(analytics.win_rate_pct || 0).toFixed(1)}% по ${evaluatedNews} оценённым` : 'история ещё копится',
           sub: evaluatedNews
-            ? `не удалось оценить ${unavailableNews} · ожидают ${pendingNews} · среднее движение ${Number(analytics.avg_move_pct || 0).toFixed(3)}%`
+            ? `${evaluatedNews < 30 ? 'выборка пока мала · ' : ''}не удалось оценить ${unavailableNews} · ожидают ${pendingNews} · среднее движение ${Number(analytics.avg_move_pct || 0).toFixed(3)}%`
             : 'результат появится после завершения горизонта новости',
         },
         {
@@ -5542,6 +5602,58 @@ def build_dashboard_html() -> str:
           <div class="news-overview-main">${escapeHtml(item.value)}</div>
           <div class="news-overview-sub">${escapeHtml(item.sub)}</div>
         </div>
+      `).join('');
+      const diagnosticRows = (items) => {
+        if (!Array.isArray(items) || !items.length) return '<div class="news-diagnostic-note">данные ещё копятся</div>';
+        return `<div class="news-diagnostic-list">${items.slice(0, 4).map((item) => `
+          <div class="news-diagnostic-row"><span>${escapeHtml(item.label || '-')}</span><span>${Number(item.win_rate_pct || 0).toFixed(1)}% · ${Number(item.total_count || 0)}</span></div>
+        `).join('')}</div>`;
+      };
+      const allocatorImpact = news.allocator_impact || {};
+      const allocatorEvaluated = Number(allocatorImpact.evaluated_selected_count || 0);
+      const allocatorWon = Number(allocatorImpact.favorable_selected_count || 0);
+      const allocatorRows = [
+        { label: 'приоритет повышен', value: Number(allocatorImpact.boost_count || 0) },
+        { label: 'приоритет снижен', value: Number(allocatorImpact.penalty_count || 0) },
+        { label: 'вход отложен', value: Number(allocatorImpact.deferred_count || 0) },
+      ];
+      const diagnosticItems = [
+        {
+          title: 'Источники',
+          main: 'попадания · оценено',
+          note: 'минимум 20 наблюдений нужен для сравнения источников',
+          body: diagnosticRows(analytics.sources),
+        },
+        {
+          title: 'Направление',
+          main: 'лонг и шорт отдельно',
+          note: 'показывает, где новостное направление точнее',
+          body: diagnosticRows(analytics.directions),
+        },
+        {
+          title: 'Проверка ИИ',
+          main: 'подтверждение направления',
+          note: 'сравнение словаря с выводом ИИ',
+          body: diagnosticRows(analytics.ai_confirmation),
+        },
+        {
+          title: 'Влияние на аллокатор',
+          main: `${Number(allocatorImpact.total_count || 0)} вмешательств`,
+          note: allocatorEvaluated
+            ? `выбранные входы: ${allocatorWon}/${allocatorEvaluated} в сторону сигнала (${Number(allocatorImpact.selected_win_rate_pct || 0).toFixed(1)}%)`
+            : 'новости ещё не меняли выбор входов',
+          body: `<div class="news-diagnostic-list">${allocatorRows.map((item) => `
+            <div class="news-diagnostic-row"><span>${escapeHtml(item.label)}</span><span>${item.value}</span></div>
+          `).join('')}</div>`,
+        },
+      ];
+      newsDiagnostics.innerHTML = diagnosticItems.map((item) => `
+        <article class="news-diagnostic">
+          <div class="news-diagnostic-title">${escapeHtml(item.title)}</div>
+          <div class="news-diagnostic-main">${escapeHtml(item.main)}</div>
+          <div class="news-diagnostic-note">${escapeHtml(item.note)}</div>
+          ${item.body}
+        </article>
       `).join('');
       for (const item of activeBiases) {
         const hasMessage = String(item.message_text || '').trim().length > 0;
