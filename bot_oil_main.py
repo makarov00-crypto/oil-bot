@@ -732,6 +732,7 @@ def append_signal_observation_decision(
         "news_priority_reason": str(candidate.get("news_priority_reason") or ""),
         "entry_edge_label": str(candidate.get("entry_edge_label") or ""),
         "instrument_class": str(candidate.get("instrument_class") or ""),
+        "allocator_quantity": int(candidate.get("allocator_quantity") or 0),
         "allocatable_margin_rub": float(candidate.get("allocatable_margin_rub") or 0.0),
         "requested_margin_rub": float(candidate.get("requested_margin_rub") or 0.0),
         "candle_time": str(candidate.get("candle_time") or ""),

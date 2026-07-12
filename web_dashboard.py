@@ -1400,6 +1400,13 @@ def _allocator_candidate_from_observation(row: dict[str, Any]) -> dict[str, Any]
     reason = str(row.get("decision_reason") or "").strip()
     allocator_summary = str(context.get("allocator_summary") or "").strip()
     blocker = reason or allocator_summary or "причина не сохранена"
+    quantity = int(context.get("allocator_quantity") or 0)
+    if quantity <= 0 and allocator_summary:
+        quantity_match = re.search(r"лимит брокера\s+\d+\s*->\s*(\d+)\s+лот", allocator_summary, flags=re.IGNORECASE)
+        if quantity_match is None:
+            quantity_match = re.search(r"брокерский размер\s+(\d+)\s+лот", allocator_summary, flags=re.IGNORECASE)
+        if quantity_match is not None:
+            quantity = int(quantity_match.group(1))
     return {
         "symbol": str(row.get("symbol") or "").upper(),
         "display_name": INSTRUMENT_DISPLAY_NAMES.get(str(row.get("symbol") or "").upper(), str(row.get("symbol") or "-")),
@@ -1416,7 +1423,7 @@ def _allocator_candidate_from_observation(row: dict[str, Any]) -> dict[str, Any]
         "learning_adjustment": _signal_observation_context_float(row, "learning_adjustment"),
         "requested_margin_rub": _signal_observation_context_float(row, "requested_margin_rub"),
         "allocatable_margin_rub": _signal_observation_context_float(row, "allocatable_margin_rub"),
-        "quantity": int(context.get("allocator_quantity") or 0),
+        "quantity": quantity,
         "execution_status": execution_status,
         "execution_note": str(context.get("execution_note") or ""),
         "reason": blocker,
