@@ -7,7 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -189,13 +189,37 @@ def ensure_trade_db(db_path: Path) -> None:
                 evaluated_at TEXT,
                 current_price REAL,
                 move_pct REAL,
-                favorable INTEGER
+                favorable INTEGER,
+                outcome_status TEXT NOT NULL DEFAULT 'PENDING',
+                outcome_note TEXT,
+                outcome_checked_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_news_events_observed_date ON news_events(observed_date);
             CREATE INDEX IF NOT EXISTS idx_news_events_symbol ON news_events(symbol);
             CREATE INDEX IF NOT EXISTS idx_news_events_evaluated ON news_events(evaluated_at);
             CREATE INDEX IF NOT EXISTS idx_news_events_source ON news_events(source);
             """
+        )
+        news_columns = {str(item[1]) for item in connection.execute("PRAGMA table_info(news_events)")}
+        for column_name, definition in (
+            ("outcome_status", "TEXT NOT NULL DEFAULT 'PENDING'"),
+            ("outcome_note", "TEXT"),
+            ("outcome_checked_at", "TEXT"),
+        ):
+            if column_name not in news_columns:
+                connection.execute(f"ALTER TABLE news_events ADD COLUMN {column_name} {definition}")
+        connection.execute(
+            """
+            UPDATE news_events
+            SET outcome_status = CASE
+                WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN 'EVALUATED'
+                WHEN outcome_status IS NULL OR outcome_status = '' THEN 'PENDING'
+                ELSE outcome_status
+            END
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_news_events_outcome_status ON news_events(outcome_status)"
         )
         connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
@@ -298,8 +322,9 @@ def append_news_event(db_path: Path, row: dict[str, Any]) -> str:
                 reason, summary, topics_json, message_url, message_text,
                 ai_direction, ai_strength, ai_confidence, ai_horizon, ai_event_type,
                 ai_reason, ai_risk, expires_at, observed_price, horizon_minutes,
-                evaluated_at, current_price, move_pct, favorable
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                evaluated_at, current_price, move_pct, favorable,
+                outcome_status, outcome_note, outcome_checked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 news_uid,
@@ -338,6 +363,9 @@ def append_news_event(db_path: Path, row: dict[str, Any]) -> str:
                 float(row.get("current_price")) if row.get("current_price") not in (None, "") else None,
                 float(row.get("move_pct")) if row.get("move_pct") not in (None, "") else None,
                 int(bool(row.get("favorable"))) if row.get("favorable") not in (None, "") else None,
+                str(row.get("outcome_status") or "PENDING").upper(),
+                str(row.get("outcome_note") or ""),
+                str(row.get("outcome_checked_at") or ""),
             ),
         )
     return news_uid
@@ -377,7 +405,7 @@ def load_news_events(
         clauses.append("observed_date = ?")
         params.append(target_day.isoformat())
     if unevaluated_only:
-        clauses.append("(evaluated_at IS NULL OR evaluated_at = '')")
+        clauses.append("(outcome_status IS NULL OR outcome_status = '' OR outcome_status = 'PENDING')")
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY observed_at ASC"
@@ -402,10 +430,37 @@ def update_news_event_outcome(
         connection.execute(
             """
             UPDATE news_events
-            SET evaluated_at = ?, current_price = ?, move_pct = ?, favorable = ?
+            SET evaluated_at = ?, current_price = ?, move_pct = ?, favorable = ?,
+                outcome_status = 'EVALUATED', outcome_note = '', outcome_checked_at = ?
             WHERE news_uid = ?
             """,
-            (evaluated_at, float(current_price), float(move_pct), int(bool(favorable)), news_uid),
+            (
+                evaluated_at,
+                float(current_price),
+                float(move_pct),
+                int(bool(favorable)),
+                evaluated_at,
+                news_uid,
+            ),
+        )
+
+
+def mark_news_event_outcome_unavailable(
+    db_path: Path,
+    news_uid: str,
+    *,
+    checked_at: str,
+    note: str,
+) -> None:
+    ensure_trade_db(db_path)
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE news_events
+            SET outcome_status = 'UNAVAILABLE', outcome_note = ?, outcome_checked_at = ?
+            WHERE news_uid = ?
+            """,
+            (str(note or "историческая цена недоступна"), checked_at, news_uid),
         )
 
 
@@ -426,8 +481,7 @@ def summarize_news_source_stats(db_path: Path, *, days: int = 10, limit: int = 1
                 AVG(source_reliability) AS avg_reliability
             FROM news_events
             WHERE observed_date >= date('now', ?)
-              AND evaluated_at IS NOT NULL
-              AND evaluated_at != ''
+              AND outcome_status = 'EVALUATED'
               AND bias IN ('LONG', 'SHORT')
             GROUP BY COALESCE(NULLIF(source_label, ''), source), source, source_type
             ORDER BY total_count DESC, favorable_count DESC
@@ -454,6 +508,86 @@ def summarize_news_source_stats(db_path: Path, *, days: int = 10, limit: int = 1
             }
         )
     return stats
+
+
+def summarize_news_analytics(db_path: Path, *, days: int = 10, limit: int = 8) -> dict[str, Any]:
+    """Return outcome quality split by the dimensions used in news decisions."""
+    ensure_trade_db(db_path)
+    period = f"-{int(days)} day"
+    where = "observed_date >= date('now', ?) AND bias IN ('LONG', 'SHORT')"
+    with _connect(db_path) as connection:
+        totals = connection.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN outcome_status = 'EVALUATED' THEN 1 ELSE 0 END) AS evaluated_count,
+                SUM(CASE WHEN outcome_status = 'UNAVAILABLE' THEN 1 ELSE 0 END) AS unavailable_count,
+                SUM(CASE WHEN outcome_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_count,
+                SUM(CASE WHEN outcome_status = 'EVALUATED' AND favorable = 1 THEN 1 ELSE 0 END) AS favorable_count,
+                AVG(CASE WHEN outcome_status = 'EVALUATED' THEN move_pct END) AS avg_move_pct
+            FROM news_events
+            WHERE {where}
+            """,
+            (period,),
+        ).fetchone()
+
+        dimensions = {
+            "sources": "COALESCE(NULLIF(source_label, ''), source)",
+            "directions": "bias",
+            "horizons": "horizon",
+            "actions": "actionability",
+            "ai_confirmation": """
+                CASE
+                    WHEN ai_direction = bias THEN 'ИИ подтвердил'
+                    WHEN ai_direction IS NULL OR ai_direction = '' THEN 'Без ИИ-разбора'
+                    ELSE 'ИИ не подтвердил'
+                END
+            """,
+        }
+        result: dict[str, list[dict[str, Any]]] = {}
+        for key, expression in dimensions.items():
+            rows = connection.execute(
+                f"""
+                SELECT
+                    {expression} AS label,
+                    COUNT(*) AS total_count,
+                    SUM(CASE WHEN favorable = 1 THEN 1 ELSE 0 END) AS favorable_count,
+                    AVG(move_pct) AS avg_move_pct
+                FROM news_events
+                WHERE {where} AND outcome_status = 'EVALUATED'
+                GROUP BY {expression}
+                ORDER BY total_count DESC, favorable_count DESC
+                LIMIT ?
+                """,
+                (period, int(limit)),
+            ).fetchall()
+            result[key] = [
+                {
+                    "label": str(row["label"] or "Не указано"),
+                    "total_count": int(row["total_count"] or 0),
+                    "favorable_count": int(row["favorable_count"] or 0),
+                    "win_rate_pct": round(
+                        int(row["favorable_count"] or 0) / int(row["total_count"] or 1) * 100.0,
+                        1,
+                    ),
+                    "avg_move_pct": round(float(row["avg_move_pct"] or 0.0), 4),
+                }
+                for row in rows
+            ]
+
+    evaluated_count = int(totals["evaluated_count"] or 0)
+    favorable_count = int(totals["favorable_count"] or 0)
+    return {
+        "days": int(days),
+        "total_count": int(totals["total_count"] or 0),
+        "evaluated_count": evaluated_count,
+        "unavailable_count": int(totals["unavailable_count"] or 0),
+        "pending_count": int(totals["pending_count"] or 0),
+        "favorable_count": favorable_count,
+        "win_rate_pct": round(favorable_count / evaluated_count * 100.0, 1) if evaluated_count else 0.0,
+        "avg_move_pct": round(float(totals["avg_move_pct"] or 0.0), 4),
+        **result,
+    }
 
 
 def _signal_observation_from_db(item: sqlite3.Row) -> dict[str, Any]:

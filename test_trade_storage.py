@@ -1,6 +1,7 @@
 import unittest
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -14,6 +15,8 @@ from trade_storage import (
     load_news_events,
     load_signal_observations,
     load_trade_rows,
+    mark_news_event_outcome_unavailable,
+    summarize_news_analytics,
     summarize_news_source_stats,
     update_news_event_outcome,
     update_signal_observation_context,
@@ -84,6 +87,117 @@ class TradeStorageTests(unittest.TestCase):
             self.assertEqual(stats[0]["source_label"], "Финам")
             self.assertEqual(stats[0]["win_rate_pct"], 100.0)
             self.assertEqual(stats[0]["avg_move_pct"], 1.3333)
+
+    def test_news_analytics_excludes_unavailable_events_from_quality(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
+            observed_at = datetime.now(timezone.utc).isoformat()
+            base = {
+                "observed_at": observed_at,
+                "category": "валюта",
+                "strength": "HIGH",
+                "source": "finam",
+                "source_label": "Финам",
+                "source_type": "broker",
+                "horizon": "INTRADAY",
+                "actionability": "ACTION",
+                "score": 8.5,
+                "summary": "Тестовый новостной сигнал",
+                "horizon_minutes": 240,
+            }
+            confirmed_uid = append_news_event(
+                db_path,
+                {
+                    **base,
+                    "symbol": "USDRUBF",
+                    "bias": "LONG",
+                    "message_url": "https://example.com/news/confirmed",
+                    "ai_direction": "LONG",
+                },
+            )
+            conflict_uid = append_news_event(
+                db_path,
+                {
+                    **base,
+                    "symbol": "CNYRUBF",
+                    "bias": "SHORT",
+                    "message_url": "https://example.com/news/conflict",
+                    "ai_direction": "LONG",
+                    "actionability": "WATCH",
+                },
+            )
+            unavailable_uid = append_news_event(
+                db_path,
+                {
+                    **base,
+                    "symbol": "GNU6",
+                    "bias": "LONG",
+                    "message_url": "https://example.com/news/unavailable",
+                },
+            )
+            update_news_event_outcome(
+                db_path,
+                confirmed_uid,
+                evaluated_at=observed_at,
+                current_price=101.0,
+                move_pct=1.0,
+                favorable=True,
+            )
+            update_news_event_outcome(
+                db_path,
+                conflict_uid,
+                evaluated_at=observed_at,
+                current_price=99.0,
+                move_pct=-1.0,
+                favorable=False,
+            )
+            mark_news_event_outcome_unavailable(
+                db_path,
+                unavailable_uid,
+                checked_at=observed_at,
+                note="историческая свеча недоступна",
+            )
+
+            pending_rows = load_news_events(db_path, unevaluated_only=True)
+            analytics = summarize_news_analytics(db_path, days=10000)
+
+            self.assertEqual(pending_rows, [])
+            self.assertEqual(analytics["total_count"], 3)
+            self.assertEqual(analytics["evaluated_count"], 2)
+            self.assertEqual(analytics["unavailable_count"], 1)
+            self.assertEqual(analytics["favorable_count"], 1)
+            self.assertEqual(analytics["win_rate_pct"], 50.0)
+            self.assertEqual(analytics["ai_confirmation"][0]["label"], "ИИ подтвердил")
+
+    def test_unavailable_news_horizon_is_not_retried_forever(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
+            observed_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+            news_uid = append_news_event(
+                db_path,
+                {
+                    "observed_at": observed_at,
+                    "symbol": "TEST",
+                    "bias": "LONG",
+                    "source": "test",
+                    "summary": "Тестовая новость",
+                    "observed_price": 100.0,
+                    "horizon_minutes": 60,
+                },
+            )
+            with patch.object(mod, "TRADE_DB_PATH", db_path), patch.object(
+                mod,
+                "get_price_near_observation_horizon",
+                return_value=None,
+            ) as horizon_price:
+                mod.update_news_event_outcomes(None, None, [self.instrument])
+                mod.update_news_event_outcomes(None, None, [self.instrument])
+
+            rows = load_news_events(db_path)
+            self.assertEqual(rows[0]["news_uid"], news_uid)
+            self.assertEqual(rows[0]["outcome_status"], "UNAVAILABLE")
+            self.assertIn("историческая минутная свеча", rows[0]["outcome_note"])
+            self.assertEqual(horizon_price.call_count, 1)
 
     def test_append_trade_journal_persists_context_to_sqlite(self) -> None:
         state = mod.InstrumentState(

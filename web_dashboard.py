@@ -38,6 +38,7 @@ from daily_ai_review import (
 from trade_storage import (
     load_signal_observations as load_signal_observations_from_storage,
     load_trade_rows as load_trade_rows_from_storage,
+    summarize_news_analytics,
     summarize_news_source_stats,
 )
 
@@ -1195,6 +1196,10 @@ def load_news_snapshot() -> dict:
         payload["source_stats"] = summarize_news_source_stats(TRADE_DB_PATH, days=10, limit=8)
     except Exception:
         payload["source_stats"] = []
+    try:
+        payload["analytics"] = summarize_news_analytics(TRADE_DB_PATH, days=10, limit=8)
+    except Exception:
+        payload["analytics"] = {}
     payload["coverage"] = build_news_coverage_payload()
     return payload
 
@@ -5494,8 +5499,10 @@ def build_dashboard_html() -> str:
       newsLeadCards.innerHTML = '';
       newsBody.innerHTML = '';
       newsCards.innerHTML = '';
-      const sourceStats = Array.isArray(news.source_stats) ? news.source_stats : [];
-      const topSource = sourceStats.length ? sourceStats[0] : null;
+      const analytics = news.analytics || {};
+      const evaluatedNews = Number(analytics.evaluated_count || 0);
+      const unavailableNews = Number(analytics.unavailable_count || 0);
+      const pendingNews = Number(analytics.pending_count || 0);
       const coverage = news.coverage || {};
       const watchedSymbols = Array.isArray(coverage.watched_symbols) ? coverage.watched_symbols : [];
       const newsSymbols = Array.isArray(coverage.news_symbols) ? coverage.news_symbols : [];
@@ -5517,11 +5524,11 @@ def build_dashboard_html() -> str:
           sub: tradeNews.length ? 'ИИ подтвердил направление и горизонт' : 'нет подтверждённого влияния на входы',
         },
         {
-          title: 'Лучший источник',
-          value: topSource ? `${Number(topSource.win_rate_pct || 0).toFixed(1)}% попаданий` : 'история ещё копится',
-          sub: topSource
-            ? `${topSource.source_label || topSource.source || '-'} · проверено ${Number(topSource.total_count || 0)} · среднее движение ${Number(topSource.avg_move_pct || 0).toFixed(3)}%`
-            : 'после первых оценённых новостей появится статистика',
+          title: `Качество за ${Number(analytics.days || 10)} дней`,
+          value: evaluatedNews ? `${Number(analytics.win_rate_pct || 0).toFixed(1)}% по ${evaluatedNews} оценённым` : 'история ещё копится',
+          sub: evaluatedNews
+            ? `не удалось оценить ${unavailableNews} · ожидают ${pendingNews} · среднее движение ${Number(analytics.avg_move_pct || 0).toFixed(3)}%`
+            : 'результат появится после завершения горизонта новости',
         },
         {
           title: 'Покрытие',

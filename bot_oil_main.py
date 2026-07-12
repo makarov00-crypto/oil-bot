@@ -52,6 +52,7 @@ from trade_storage import (
     load_news_events,
     load_signal_observations,
     load_trade_rows as load_trade_rows_from_storage,
+    mark_news_event_outcome_unavailable,
     summarize_news_source_stats,
     update_news_event_outcome,
     sync_journal_to_db,
@@ -99,6 +100,7 @@ UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
+NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 SUPPORTED_INTERVALS = {
     1: CandleInterval.CANDLE_INTERVAL_1_MIN,
     2: CandleInterval.CANDLE_INTERVAL_2_MIN,
@@ -1018,12 +1020,30 @@ def update_news_event_outcomes(
         symbol = str(row.get("symbol") or "").upper()
         instrument = instruments_by_symbol.get(symbol)
         if instrument is None:
+            mark_news_event_outcome_unavailable(
+                TRADE_DB_PATH,
+                str(row.get("news_uid") or ""),
+                checked_at=now.isoformat(),
+                note="инструмент больше не входит в активный список",
+            )
             continue
         bias = str(row.get("bias") or "").upper()
         if bias not in {"LONG", "SHORT"}:
+            mark_news_event_outcome_unavailable(
+                TRADE_DB_PATH,
+                str(row.get("news_uid") or ""),
+                checked_at=now.isoformat(),
+                note="направление новости не подходит для оценки результата",
+            )
             continue
         observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
         if observed_at is None:
+            mark_news_event_outcome_unavailable(
+                TRADE_DB_PATH,
+                str(row.get("news_uid") or ""),
+                checked_at=now.isoformat(),
+                note="не удалось прочитать время новости",
+            )
             continue
         horizon_minutes = int(row.get("horizon_minutes") or 60)
         target_time = observed_at + timedelta(minutes=max(1, horizon_minutes))
@@ -1031,9 +1051,28 @@ def update_news_event_outcomes(
             continue
         observed_price = float(row.get("observed_price") or 0.0)
         if observed_price <= 0.0:
+            mark_news_event_outcome_unavailable(
+                TRADE_DB_PATH,
+                str(row.get("news_uid") or ""),
+                checked_at=now.isoformat(),
+                note="не удалось зафиксировать цену в момент новости",
+            )
             continue
         horizon_snapshot = get_price_near_observation_horizon(client, config, instrument, target_time)
         if horizon_snapshot is None:
+            if now >= target_time + NEWS_OUTCOME_MAX_WAIT:
+                mark_news_event_outcome_unavailable(
+                    TRADE_DB_PATH,
+                    str(row.get("news_uid") or ""),
+                    checked_at=now.isoformat(),
+                    note="историческая минутная свеча на горизонте новости недоступна",
+                )
+                logging.info(
+                    "symbol=%s news_event_outcome_unavailable target_time=%s",
+                    symbol,
+                    target_time.astimezone(MOSCOW_TZ).isoformat(),
+                )
+                continue
             logging.info(
                 "symbol=%s news_event_outcome_wait horizon_price_unavailable target_time=%s",
                 symbol,
