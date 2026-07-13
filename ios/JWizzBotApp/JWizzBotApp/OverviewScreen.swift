@@ -81,7 +81,7 @@ struct OverviewScreen: View {
                     MetricGlassTile(title: "Итог бота", value: formatRub(payload.portfolio.botAnalyticalTotalPnlRub), tone: statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), help: portfolioHelp("analytical"))
                     MetricGlassTile(title: "Закрытые сделки", value: formatRub(payload.portfolio.botClosedNetPnlRub), tone: statusTone(for: payload.portfolio.botClosedNetPnlRub), help: portfolioHelp("closed"))
                     MetricGlassTile(title: "Открытые позиции", value: formatRub(payload.portfolio.botOpenPositionsLivePnlRub), tone: statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub), help: portfolioHelp("open_live"))
-                    MetricGlassTile(title: "Свободные деньги", value: formatRub(payload.portfolio.freeCashRub ?? payload.portfolio.freeRub), help: portfolioHelp("free"))
+                    MetricGlassTile(title: "Свободные деньги", value: formatRub(calculatedFreeCash(payload.portfolio)), help: portfolioHelp("free"))
                     MetricGlassTile(title: "Открытых позиций", value: formatInt(payload.portfolio.openPositionsCount))
                 }
             }
@@ -105,7 +105,7 @@ struct OverviewScreen: View {
                     subtitle: "Сколько денег есть и сколько уже занято под позиции.",
                     rows: [
                         PortfolioMetric("Стоимость портфеля", formatRub(payload.portfolio.totalPortfolioRub), .white, portfolioHelp("total")),
-                        PortfolioMetric("Свободные деньги", formatRub(payload.portfolio.freeCashRub ?? payload.portfolio.freeRub), .white, portfolioHelp("free")),
+                        PortfolioMetric("Свободные деньги", formatRub(calculatedFreeCash(payload.portfolio)), .white, portfolioHelp("free")),
                         PortfolioMetric("Занято под ГО", formatRub(payload.portfolio.blockedGuaranteeRub), .white, portfolioHelp("blocked")),
                         PortfolioMetric("Режим", displayMode(payload.portfolio.mode), .white, portfolioHelp("mode")),
                     ]
@@ -118,7 +118,7 @@ struct OverviewScreen: View {
                         PortfolioMetric("Итог бота", formatRub(payload.portfolio.botAnalyticalTotalPnlRub), statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), portfolioHelp("analytical")),
                         PortfolioMetric("Закрытые сделки", formatRub(payload.portfolio.botClosedNetPnlRub), statusTone(for: payload.portfolio.botClosedNetPnlRub), portfolioHelp("closed")),
                         PortfolioMetric("Открытые позиции", formatRub(payload.portfolio.botOpenPositionsLivePnlRub), statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub), portfolioHelp("open_live")),
-                        PortfolioMetric("До комиссии + открытые", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
+                        PortfolioMetric("Валовый результат", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
                     ]
                 )
 
@@ -128,7 +128,7 @@ struct OverviewScreen: View {
                     rows: [
                         PortfolioMetric("Клиринговая ВМ", formatRub(payload.portfolio.botActualVarmarginRub), statusTone(for: payload.portfolio.botActualVarmarginRub), portfolioHelp("actual_vm")),
                         PortfolioMetric("Комиссия", formatRub(payload.portfolio.botActualFeeRub), statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)), portfolioHelp("fee")),
-                        PortfolioMetric("Денежный эффект", formatRub(payload.portfolio.botOperationsCashEffectRub), statusTone(for: payload.portfolio.botOperationsCashEffectRub), portfolioHelp("cash_effect")),
+                        PortfolioMetric("Факт по счету", formatRub(payload.portfolio.botOperationsCashEffectRub), statusTone(for: payload.portfolio.botOperationsCashEffectRub), portfolioHelp("cash_effect")),
                         PortfolioMetric("Текущая ВМ", formatRub(payload.portfolio.botEstimatedVariationMarginRub), statusTone(for: payload.portfolio.botEstimatedVariationMarginRub), portfolioHelp("estimated_vm")),
                     ]
                 )
@@ -151,6 +151,17 @@ struct OverviewScreen: View {
         }
     }
 
+    private func calculatedFreeCash(_ portfolio: PortfolioSnapshot) -> Double? {
+        if let value = portfolio.freeCashRub {
+            return value
+        }
+        guard let total = portfolio.totalPortfolioRub else {
+            return portfolio.freeRub
+        }
+        let blocked = portfolio.blockedGuaranteeRub ?? 0
+        return max(0, total - blocked)
+    }
+
     private func portfolioGroup(title: String, subtitle: String, rows: [PortfolioMetric]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
@@ -171,29 +182,29 @@ struct OverviewScreen: View {
     private func portfolioHelp(_ key: String) -> String {
         switch key {
         case "total":
-            return "Оценка всего счёта у брокера: свободные деньги плюс текущая стоимость/результат открытых позиций по данным портфельного среза."
+            return "Оценка всего счёта у брокера по портфельному срезу T-Invest. Формула у брокера: деньги + текущая оценка позиций и активов счёта."
         case "free":
-            return "Деньги, которые сейчас не заняты гарантийным обеспечением и могут использоваться для новых входов."
+            return "Расчётный свободный капитал после ГО. Формула: Стоимость портфеля − Занято под ГО."
         case "blocked":
-            return "Гарантийное обеспечение по открытым фьючерсным позициям. Чем выше эта сумма, тем меньше места для новых сделок."
+            return "Гарантийное обеспечение по открытым фьючерсным позициям по данным брокера. Используется в формуле свободных денег: Стоимость портфеля − ГО."
         case "mode":
             return "Режим работы бота: боевой, тестовый, выходной или ожидание. Он влияет на разрешение новых входов."
         case "analytical":
-            return "Главная цифра для оценки бота: закрытые сделки NET плюс текущий live-результат открытых позиций."
+            return "Главная цифра дня по боту. Формула: Валовый результат − Комиссия."
         case "closed":
-            return "Финальный результат закрытых сделок бота после комиссий. Эта часть уже зафиксирована."
+            return "Зафиксированный результат закрытых сделок. Формула: сумма NET по CLOSE-сделкам журнала за выбранный день."
         case "open_live":
-            return "Плавающий результат открытых позиций прямо сейчас. Он ещё может измениться до закрытия сделки."
+            return "Плавающий live-результат открытых позиций. Формула: сумма expected_yield по открытым позициям брокера из watchlist."
         case "gross_live":
-            return "Грубая сверка: результат закрытых сделок до части корректировок плюс live-результат открытых позиций."
+            return "Валовый результат до вычитания брокерских комиссий. Формула: gross PnL закрытых сделок + плавающий результат открытых позиций."
         case "actual_vm":
-            return "Вариационная маржа, которую брокер уже провёл клирингом по счёту за выбранный день."
+            return "Вариационная маржа, которую брокер уже провёл клирингом за выбранный день. Формула: сумма брокерских операций вариационной маржи."
         case "fee":
-            return "Комиссии брокера по операциям счёта. В PnL бота они уменьшают итоговый результат."
+            return "Комиссии брокера по операциям счёта. Формула: сумма абсолютных значений fee-операций за выбранный день."
         case "cash_effect":
-            return "Денежный эффект операций по счёту: клиринговая вариационная маржа минус комиссии и связанные движения."
+            return "Фактическое денежное движение по счету за день. Формула: Клиринговая ВМ + cash-effect комиссий, обычно это Клиринговая ВМ − Комиссия."
         case "estimated_vm":
-            return "Расчётная текущая вариационная маржа по открытым позициям до следующего окончательного клиринга."
+            return "Расчётная текущая вариационная маржа по открытым позициям до следующего клиринга. Формула: сумма var_margin по открытым позициям; если var_margin недоступна, используется expected_yield."
         default:
             return "Пояснение к показателю портфеля."
         }

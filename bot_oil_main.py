@@ -4161,6 +4161,7 @@ def build_portfolio_snapshot_payload(
     realized_commission = float(closed_totals["commission_rub"])
     total_varmargin_rub = realized_gross_pnl + broker_open_positions_pnl
     total_bot_pnl = total_varmargin_rub - float(accounting["actual_fee_expense_rub"])
+    calculated_free_cash = max(0.0, snapshot.total_portfolio - snapshot.blocked_guarantee_rub)
 
     generated_at = datetime.now(timezone.utc)
     return {
@@ -4170,7 +4171,7 @@ def build_portfolio_snapshot_payload(
         "selected_date_moscow": current_moscow_time().strftime("%d.%m.%Y"),
         "total_portfolio_rub": round(snapshot.total_portfolio, 2),
         "free_rub": round(snapshot.free_rub, 2),
-        "free_cash_rub": round(snapshot.free_rub, 2),
+        "free_cash_rub": round(calculated_free_cash, 2),
         "blocked_guarantee_rub": round(snapshot.blocked_guarantee_rub, 2),
         "open_positions_count": open_positions,
         "bot_realized_gross_pnl_rub": round(realized_gross_pnl, 2),

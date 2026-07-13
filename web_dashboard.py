@@ -2891,7 +2891,12 @@ def build_portfolio_view_for_day(
     view["report_date"] = day_key
     view["selected_date_moscow"] = target_day.strftime("%d.%m.%Y")
     view["selected_is_today"] = selected_is_today
-    view["free_cash_rub"] = view.get("free_rub")
+    try:
+        total_portfolio = float(view.get("total_portfolio_rub") or 0.0)
+        blocked_guarantee = float(view.get("blocked_guarantee_rub") or 0.0)
+        view["free_cash_rub"] = round(max(0.0, total_portfolio - blocked_guarantee), 2)
+    except Exception:
+        view["free_cash_rub"] = view.get("free_rub")
     view["bot_realized_gross_pnl_rub"] = round(closed_totals["gross_pnl_rub"], 2)
     view["bot_realized_commission_rub"] = round(closed_totals["commission_rub"], 2)
     view["bot_realized_pnl_rub"] = round(closed_totals["net_pnl_rub"], 2)
@@ -4499,15 +4504,15 @@ def build_dashboard_html() -> str:
           <h3>Счёт брокера</h3>
           <p>Сколько денег есть, сколько свободно и сколько занято под позиции.</p>
           <div class="portfolio-metrics">
-            <div class="portfolio-metric" data-help="Оценка всего счёта у брокера: свободные деньги плюс текущая стоимость и результат открытых позиций по портфельному срезу." tabindex="0">
+            <div class="portfolio-metric" data-help="Оценка всего счёта у брокера по портфельному срезу T-Invest. Формула у брокера: деньги + текущая оценка позиций и активов счёта." tabindex="0">
               <div class="portfolio-label">Стоимость портфеля <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioTotal">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Деньги, которые сейчас не заняты гарантийным обеспечением и могут использоваться для новых входов." tabindex="0">
+            <div class="portfolio-metric" data-help="Расчётный свободный капитал после ГО. Формула: Стоимость портфеля − Занято под ГО." tabindex="0">
               <div class="portfolio-label">Свободные деньги <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioFree">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Гарантийное обеспечение по открытым фьючерсным позициям. Чем выше эта сумма, тем меньше места для новых сделок." tabindex="0">
+            <div class="portfolio-metric" data-help="Гарантийное обеспечение по открытым фьючерсным позициям по данным брокера. Используется в формуле свободных денег: Стоимость портфеля − ГО." tabindex="0">
               <div class="portfolio-label">Занято под ГО <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioBlocked">-</div>
             </div>
@@ -4521,20 +4526,20 @@ def build_dashboard_html() -> str:
           <h3>Результат бота</h3>
           <p>Главная оценка торговли: что уже закрыто и что сейчас плавает в открытых позициях.</p>
           <div class="portfolio-metrics">
-            <div class="portfolio-metric" data-help="Главная цифра дня: закрытые сделки NET плюс текущий плавающий результат открытых позиций." tabindex="0">
+            <div class="portfolio-metric" data-help="Главная цифра дня по боту. Формула: Валовый результат − Комиссия." tabindex="0">
               <div class="portfolio-label">Итог бота <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioTotalPnl">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Финальный результат закрытых сделок бота после комиссий. Эта часть уже зафиксирована." tabindex="0">
+            <div class="portfolio-metric" data-help="Зафиксированный результат закрытых сделок. Формула: сумма NET по CLOSE-сделкам журнала за выбранный день." tabindex="0">
               <div class="portfolio-label">Закрытые сделки <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioRealized">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Плавающий результат открытых позиций прямо сейчас. Он ещё может измениться до закрытия сделки." tabindex="0">
+            <div class="portfolio-metric" data-help="Плавающий live-результат открытых позиций. Формула: сумма expected_yield по открытым позициям брокера из watchlist." tabindex="0">
               <div class="portfolio-label">Плавающий результат <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioOpenLive">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Быстрая сверка: результат закрытых сделок до части корректировок плюс плавающий результат открытых позиций." tabindex="0">
-              <div class="portfolio-label">Быстрая сверка <span class="portfolio-help-icon">?</span></div>
+            <div class="portfolio-metric" data-help="Валовый результат до вычитания брокерских комиссий. Формула: gross PnL закрытых сделок + плавающий результат открытых позиций." tabindex="0">
+              <div class="portfolio-label">Валовый результат <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioTotalVm">-</div>
             </div>
           </div>
@@ -4543,19 +4548,19 @@ def build_dashboard_html() -> str:
           <h3>Сверка с брокером</h3>
           <p>Брокерские движения по вариационной марже, комиссиям и денежному эффекту операций.</p>
           <div class="portfolio-metrics">
-            <div class="portfolio-metric" data-help="Вариационная маржа, которую брокер уже провёл клирингом по счёту за выбранный день." tabindex="0">
+            <div class="portfolio-metric" data-help="Вариационная маржа, которую брокер уже провёл клирингом за выбранный день. Формула: сумма брокерских операций вариационной маржи." tabindex="0">
               <div class="portfolio-label">Клиринговая ВМ <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioActualVm">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Комиссии брокера по операциям счёта. В PnL бота они уменьшают итоговый результат." tabindex="0">
+            <div class="portfolio-metric" data-help="Комиссии брокера по операциям счёта. Формула: сумма абсолютных значений fee-операций за выбранный день." tabindex="0">
               <div class="portfolio-label">Комиссия <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioActualFee">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Денежный эффект операций по счёту: клиринговая вариационная маржа минус комиссии и связанные движения." tabindex="0">
-              <div class="portfolio-label">Денежный эффект <span class="portfolio-help-icon">?</span></div>
+            <div class="portfolio-metric" data-help="Фактическое денежное движение по счету за день. Формула: Клиринговая ВМ + cash-effect комиссий, обычно это Клиринговая ВМ − Комиссия." tabindex="0">
+              <div class="portfolio-label">Факт по счету <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioCashEffect">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Расчётная текущая вариационная маржа по открытым позициям до следующего окончательного клиринга." tabindex="0">
+            <div class="portfolio-metric" data-help="Расчётная текущая вариационная маржа по открытым позициям до следующего клиринга. Формула: сумма var_margin по открытым позициям; если var_margin недоступна, используется expected_yield." tabindex="0">
               <div class="portfolio-label">Текущая ВМ <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioVariation">-</div>
             </div>
@@ -5716,10 +5721,11 @@ def build_dashboard_html() -> str:
 
       const portfolio = data.portfolio || {};
       const selectedDateLabel = portfolio.selected_date_moscow ? ` | Дата отчёта: ${portfolio.selected_date_moscow}` : '';
+      const calculatedFreeCash = Math.max(0, Number(portfolio.total_portfolio_rub || 0) - Number(portfolio.blocked_guarantee_rub || 0));
       document.getElementById('portfolioGeneratedAt').textContent = `Срез портфеля: ${portfolio.generated_at_moscow || '-'}${selectedDateLabel}`;
       document.getElementById('portfolioMode').textContent = portfolio.mode === 'DRY_RUN' ? 'ТЕСТ' : (portfolio.mode || '-');
       document.getElementById('portfolioTotal').textContent = formatRub(portfolio.total_portfolio_rub);
-      document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_cash_rub ?? portfolio.free_rub);
+      document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_cash_rub ?? calculatedFreeCash);
       document.getElementById('portfolioBlocked').textContent = formatRub(portfolio.blocked_guarantee_rub);
       document.getElementById('portfolioRealized').textContent = formatRub(portfolio.bot_closed_net_pnl_rub ?? portfolio.bot_realized_pnl_rub);
       document.getElementById('portfolioActualFee').textContent = formatRub(portfolio.bot_actual_fee_rub);
