@@ -813,6 +813,79 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(closes[0]["broker_op_id"], "close-long")
         self.assertEqual(closes[0]["qty_lots"], 7)
 
+    def test_pending_close_recovery_skips_already_journaled_broker_op(self) -> None:
+        close_time = datetime(2026, 7, 13, 12, 0, 30, tzinfo=timezone.utc)
+        rows = [
+            {
+                "time": close_time.astimezone(mod.MOSCOW_TZ).isoformat(),
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "CLOSE",
+                "qty_lots": 1,
+                "price": 6.773,
+                "broker_op_id": "close-op",
+            }
+        ]
+        state = mod.InstrumentState()
+
+        with patch.object(mod, "load_trade_journal", return_value=rows), patch.object(
+            mod, "find_recent_live_close_details", return_value=(close_time, 19.17, 6.773, "close-op")
+        ), patch.object(mod, "append_trade_journal") as append_mock:
+            recovered = mod.confirm_pending_close_from_broker(
+                None,
+                SimpleNamespace(dry_run=False),
+                self.instrument,
+                state,
+                previous_side="LONG",
+                previous_qty=1,
+                previous_entry_price=6.785,
+                previous_entry_commission=19.08,
+                previous_strategy="reversal_1h",
+                previous_exit_reason="exit",
+                previous_entry_time=datetime(2026, 7, 13, 5, 50, tzinfo=timezone.utc),
+                source="broker_ops_recovery",
+                recovered_status="recovered_close",
+            )
+
+        self.assertFalse(recovered)
+        append_mock.assert_not_called()
+
+    def test_pending_close_recovery_skips_broker_op_claimed_by_open(self) -> None:
+        open_time = datetime(2026, 7, 13, 15, 0, 33, tzinfo=timezone.utc)
+        rows = [
+            {
+                "time": open_time.astimezone(mod.MOSCOW_TZ).isoformat(),
+                "symbol": "TEST",
+                "side": "LONG",
+                "event": "OPEN",
+                "qty_lots": 1,
+                "price": 6.781,
+            }
+        ]
+        state = mod.InstrumentState()
+
+        with patch.object(mod, "load_trade_journal", return_value=rows), patch.object(
+            mod, "find_recent_live_close_details", return_value=(open_time, 19.2, 6.781, "open-long")
+        ), patch.object(mod, "append_trade_journal") as append_mock:
+            recovered = mod.confirm_pending_close_from_broker(
+                None,
+                SimpleNamespace(dry_run=False),
+                self.instrument,
+                state,
+                previous_side="SHORT",
+                previous_qty=1,
+                previous_entry_price=6.778,
+                previous_entry_commission=19.68,
+                previous_strategy="reversal_1h",
+                previous_exit_reason="exit",
+                previous_entry_time=datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc),
+                source="broker_ops_recovery",
+                recovered_status="recovered_close",
+            )
+
+        self.assertFalse(recovered)
+        append_mock.assert_not_called()
+
     def test_build_today_journal_integrity_alert_reports_broker_issue(self) -> None:
         fake_audit = SimpleNamespace(
             broker_alignment_issues=[{"symbol": "IMOEXF", "type": "broker_op_mismatch"}],

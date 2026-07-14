@@ -575,6 +575,7 @@ def append_trade_journal(
     strategy: str = "",
     dry_run: bool = True,
     state: InstrumentState | None = None,
+    broker_op_id: str = "",
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     if isinstance(event_time, datetime):
@@ -588,11 +589,21 @@ def append_trade_journal(
     strategy_name = str(strategy or "")
     reason_text = str(reason or "")
     source_text = str(source or "")
+    broker_op_id_text = str(broker_op_id or "")
     try:
         existing_rows = load_trade_journal()[-20:]
     except Exception:
         existing_rows = []
     for existing in reversed(existing_rows):
+        if broker_op_id_text and str(existing.get("broker_op_id") or "") == broker_op_id_text:
+            logging.info(
+                "Пропускаю дублирующую запись журнала по broker_op_id: %s %s %s %s",
+                broker_op_id_text,
+                instrument.symbol,
+                event_name,
+                side_name,
+            )
+            return
         try:
             same_price = round(float(existing.get("price") or 0.0), 6) == round(float(price or 0.0), 6)
         except Exception:
@@ -652,6 +663,8 @@ def append_trade_journal(
         "mode": "DRY_RUN" if dry_run else "LIVE",
         "session": get_market_session(),
     }
+    if broker_op_id_text:
+        row["broker_op_id"] = broker_op_id_text
     context = build_trade_event_context(state)
     if context:
         row["context"] = context
@@ -1472,6 +1485,55 @@ def has_journal_event_since(
     return False
 
 
+def journal_has_broker_operation(broker_op_id: str) -> bool:
+    op_id = str(broker_op_id or "").strip()
+    if not op_id:
+        return False
+    for row in reversed(load_trade_journal()):
+        if str(row.get("broker_op_id") or "").strip() == op_id:
+            return True
+    return False
+
+
+def journal_has_open_claim_for_broker_action(
+    symbol: str,
+    broker_action: str,
+    op_time: datetime,
+    price: float,
+    qty: int,
+    *,
+    tolerance_seconds: float = 90.0,
+) -> bool:
+    target_symbol = symbol.upper()
+    target_action = broker_action.upper()
+    target_price = round(float(price or 0.0), 6)
+    target_qty = int(qty or 0)
+    for row in reversed(load_trade_journal()):
+        if str(row.get("symbol", "")).upper() != target_symbol:
+            continue
+        if str(row.get("event", "")).upper() != "OPEN":
+            continue
+        row_side = str(row.get("side", "")).upper()
+        row_action = "BUY" if row_side == "LONG" else "SELL" if row_side == "SHORT" else ""
+        if row_action != target_action:
+            continue
+        if target_qty > 0 and int(row.get("qty_lots") or 0) != target_qty:
+            continue
+        try:
+            row_price = round(float(row.get("price") or 0.0), 6)
+        except Exception:
+            continue
+        if row_price != target_price:
+            continue
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if row_dt is None:
+            continue
+        compare_op_time = op_time if op_time.tzinfo is not None else op_time.replace(tzinfo=UTC)
+        if abs((row_dt - compare_op_time).total_seconds()) <= tolerance_seconds:
+            return True
+    return False
+
+
 def find_recent_live_open_details(
     client: Client,
     config: BotConfig,
@@ -1552,7 +1614,7 @@ def find_recent_live_close_details(
     previous_side: str,
     qty: int,
     not_before: datetime | None = None,
-) -> tuple[datetime | None, float | None, float | None]:
+) -> tuple[datetime | None, float | None, float | None, str | None]:
     from_utc, to_utc = get_moscow_day_bounds_utc()
     cursor = ""
     fee_by_parent: dict[str, float] = {}
@@ -1607,11 +1669,11 @@ def find_recent_live_close_details(
         cursor = next_cursor
 
     if not candidates:
-        return None, None, None
+        return None, None, None, None
 
     candidates.sort(key=lambda item: item[0])
     op_time, op_id, op_price = candidates[-1]
-    return op_time, fee_by_parent.get(op_id), op_price
+    return op_time, fee_by_parent.get(op_id), op_price, op_id
 
 
 def confirm_pending_open_from_broker(
@@ -1736,7 +1798,7 @@ def confirm_pending_close_from_broker(
 ) -> bool:
     if previous_side == "FLAT" or previous_qty <= 0:
         return False
-    close_time, close_fee_rub, close_price = find_recent_live_close_details(
+    close_time, close_fee_rub, close_price, close_op_id = find_recent_live_close_details(
         client,
         config,
         instrument,
@@ -1745,6 +1807,13 @@ def confirm_pending_close_from_broker(
         not_before=not_before,
     )
     if close_time is None:
+        return False
+    if close_op_id and journal_has_broker_operation(close_op_id):
+        logging.info(
+            "symbol=%s status=pending_close_skip_broker_op_already_journaled op_id=%s",
+            instrument.symbol,
+            close_op_id,
+        )
         return False
     recovered_entry_commission = previous_entry_commission
     if recovered_entry_commission <= 0 and previous_entry_price is not None:
@@ -1761,6 +1830,21 @@ def confirm_pending_close_from_broker(
             recovered_entry_commission = recovered_open_fee
     if close_price is None or close_price <= 0:
         close_price = get_last_price(client, instrument)
+    broker_action = "BUY" if previous_side.upper() == "SHORT" else "SELL"
+    if journal_has_open_claim_for_broker_action(
+        instrument.symbol,
+        broker_action,
+        close_time,
+        close_price,
+        previous_qty,
+    ):
+        logging.info(
+            "symbol=%s status=pending_close_skip_broker_op_claimed_by_open action=%s op_id=%s",
+            instrument.symbol,
+            broker_action,
+            close_op_id or "",
+        )
+        return False
     gross_pnl = 0.0
     if previous_entry_price is not None and close_price is not None:
         gross_pnl = calculate_futures_pnl_rub(
@@ -1803,6 +1887,7 @@ def confirm_pending_close_from_broker(
         strategy=previous_strategy,
         dry_run=False,
         state=state,
+        broker_op_id=close_op_id or "",
     )
     maybe_notify_trade_execution(
         config,
