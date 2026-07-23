@@ -112,6 +112,7 @@ struct PortfolioSnapshot: Decodable {
     let botTotalVariationMarginRub: Double?
     let botBrokerDayPnlRub: Double?
     let botOpenPositionsLivePnlRub: Double?
+    let botOpenPositionsIncomeRub: Double?
     let botTotalPnlRub: Double?
     let botAnalyticalTotalPnlRub: Double?
     let botOperationsCashEffectRub: Double?
@@ -142,6 +143,7 @@ struct PortfolioSnapshot: Decodable {
         case botTotalVariationMarginRub = "bot_total_variation_margin_rub"
         case botBrokerDayPnlRub = "bot_broker_day_pnl_rub"
         case botOpenPositionsLivePnlRub = "bot_open_positions_live_pnl_rub"
+        case botOpenPositionsIncomeRub = "bot_open_positions_income_rub"
         case botTotalPnlRub = "bot_total_pnl_rub"
         case botAnalyticalTotalPnlRub = "bot_analytical_total_pnl_rub"
         case botOperationsCashEffectRub = "bot_operations_cash_effect_rub"
@@ -176,6 +178,7 @@ struct PortfolioSnapshot: Decodable {
         botTotalVariationMarginRub = totalVmAlias ?? totalVmPrimary
         botBrokerDayPnlRub = try container.decodeIfPresent(Double.self, forKey: .botBrokerDayPnlRub)
         botOpenPositionsLivePnlRub = try container.decodeIfPresent(Double.self, forKey: .botOpenPositionsLivePnlRub) ?? botBrokerDayPnlRub
+        botOpenPositionsIncomeRub = try container.decodeIfPresent(Double.self, forKey: .botOpenPositionsIncomeRub) ?? botOpenPositionsLivePnlRub
         botTotalPnlRub = try container.decodeIfPresent(Double.self, forKey: .botTotalPnlRub)
         botAnalyticalTotalPnlRub = try container.decodeIfPresent(Double.self, forKey: .botAnalyticalTotalPnlRub) ?? botTotalPnlRub
         botOperationsCashEffectRub = try container.decodeIfPresent(Double.self, forKey: .botOperationsCashEffectRub) ?? botActualCashEffectRub
@@ -242,6 +245,8 @@ struct OpenPosition: Decodable, Identifiable {
     let currentPrice: Double?
     let notionalRub: Double?
     let variationMarginRub: Double?
+    let incomeRub: Double?
+    let variationMarginSource: String?
     let pnlPct: Double?
     let strategy: String
     let lastSignal: String
@@ -257,6 +262,8 @@ struct OpenPosition: Decodable, Identifiable {
         case currentPrice = "current_price"
         case notionalRub = "notional_rub"
         case variationMarginRub = "variation_margin_rub"
+        case incomeRub = "income_rub"
+        case variationMarginSource = "variation_margin_source"
         case pnlPct = "pnl_pct"
         case strategy
         case lastSignal = "last_signal"

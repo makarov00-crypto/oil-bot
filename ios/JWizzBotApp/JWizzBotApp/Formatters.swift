@@ -27,9 +27,12 @@ func displayMode(_ raw: String?) -> String {
 
 func displaySession(_ raw: String?) -> String {
     switch (raw ?? "").uppercased() {
+    case "PREMARKET": return "ПРЕМАРКЕТ"
+    case "MAIN": return "ОСНОВНАЯ"
     case "MORNING": return "УТРО"
     case "DAY": return "ДЕНЬ"
     case "EVENING": return "ВЕЧЕР"
+    case "CLEARING": return "КЛИРИНГ"
     case "CLOSED": return "ЗАКРЫТО"
     case "WEEKEND": return "ВЫХОДНОЙ"
     default: return raw ?? "-"

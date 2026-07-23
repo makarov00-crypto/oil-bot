@@ -164,6 +164,26 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(mod.get_market_session(sunday_before_cutoff), "WEEKEND")
         self.assertEqual(mod.get_market_session(sunday_after_cutoff), "CLOSED")
 
+    def test_weekday_session_schedule_matches_moex_futures_hours(self) -> None:
+        day = (2026, 7, 22)
+
+        def at(hour: int, minute: int) -> str:
+            return mod.get_market_session(mod.datetime(*day, hour, minute, tzinfo=mod.MOSCOW_TZ))
+
+        self.assertEqual(at(0, 15), "CLEARING")
+        self.assertEqual(at(0, 16), "CLOSED")
+        self.assertEqual(at(6, 59), "CLOSED")
+        self.assertEqual(at(7, 0), "PREMARKET")
+        self.assertEqual(at(9, 59), "PREMARKET")
+        self.assertEqual(at(10, 0), "MAIN")
+        self.assertEqual(at(18, 59), "MAIN")
+        self.assertEqual(at(19, 0), "EVENING")
+        self.assertEqual(at(23, 54), "EVENING")
+        self.assertEqual(at(23, 55), "CLEARING")
+        self.assertEqual(mod.get_session_position_multiplier("PREMARKET"), 0.5)
+        self.assertEqual(mod.get_session_position_multiplier("EVENING"), 0.5)
+        self.assertFalse(mod.session_allows_new_entries("CLEARING", "BMQ6"))
+
     def test_recent_strategy_performance_blocks_toxic_combo(self) -> None:
         today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
         rows = [

@@ -34,7 +34,8 @@ struct PositionsScreen: View {
                                         compactInfo("Лоты", "\(position.qty)")
                                         compactInfo("Сигнал", displaySignal(position.lastSignal))
                                         compactInfo("Вход → текущая", "\(formatPrice(position.entryPrice)) → \(formatPrice(position.currentPrice))")
-                                        compactInfo("Плавающий результат", "\(formatRub(position.variationMarginRub)) · \(formatPct(position.pnlPct))", tone: statusTone(for: position.variationMarginRub))
+                                        compactInfo("Доход", "\(formatRub(position.incomeRub)) · \(formatPct(position.pnlPct))", tone: statusTone(for: position.incomeRub))
+                                        compactInfo("Вар. маржа", formatRub(position.variationMarginRub), tone: statusTone(for: position.variationMarginRub))
                                         compactInfo("Стоимость", formatRub(position.notionalRub))
                                         compactInfo("Стратегия", formatStrategyLabel(position.strategy))
                                     }

@@ -80,7 +80,7 @@ struct OverviewScreen: View {
                 LazyVGrid(columns: twoColumns, spacing: 12) {
                     MetricGlassTile(title: "Итог бота", value: formatRub(payload.portfolio.botAnalyticalTotalPnlRub), tone: statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), help: portfolioHelp("analytical"))
                     MetricGlassTile(title: "Закрытые сделки", value: formatRub(payload.portfolio.botClosedNetPnlRub), tone: statusTone(for: payload.portfolio.botClosedNetPnlRub), help: portfolioHelp("closed"))
-                    MetricGlassTile(title: "Открытые позиции", value: formatRub(payload.portfolio.botOpenPositionsLivePnlRub), tone: statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub), help: portfolioHelp("open_live"))
+                    MetricGlassTile(title: "Доход открытых позиций", value: formatRub(payload.portfolio.botOpenPositionsIncomeRub), tone: statusTone(for: payload.portfolio.botOpenPositionsIncomeRub), help: portfolioHelp("open_income"))
                     MetricGlassTile(title: "Свободные деньги", value: formatRub(calculatedFreeCash(payload.portfolio)), help: portfolioHelp("free"))
                     MetricGlassTile(title: "Открытых позиций", value: formatInt(payload.portfolio.openPositionsCount))
                 }
@@ -117,8 +117,8 @@ struct OverviewScreen: View {
                     rows: [
                         PortfolioMetric("Итог бота", formatRub(payload.portfolio.botAnalyticalTotalPnlRub), statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), portfolioHelp("analytical")),
                         PortfolioMetric("Закрытые сделки", formatRub(payload.portfolio.botClosedNetPnlRub), statusTone(for: payload.portfolio.botClosedNetPnlRub), portfolioHelp("closed")),
-                        PortfolioMetric("Открытые позиции", formatRub(payload.portfolio.botOpenPositionsLivePnlRub), statusTone(for: payload.portfolio.botOpenPositionsLivePnlRub), portfolioHelp("open_live")),
-                        PortfolioMetric("Валовый результат", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
+                        PortfolioMetric("Доход открытых позиций", formatRub(payload.portfolio.botOpenPositionsIncomeRub), statusTone(for: payload.portfolio.botOpenPositionsIncomeRub), portfolioHelp("open_income")),
+                        PortfolioMetric("Доход до комиссии", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
                     ]
                 )
 
@@ -193,8 +193,8 @@ struct OverviewScreen: View {
             return "Главная цифра дня по боту. Формула: Валовый результат − Комиссия."
         case "closed":
             return "Зафиксированный результат закрытых сделок. Формула: сумма NET по CLOSE-сделкам журнала за выбранный день."
-        case "open_live":
-            return "Плавающий live-результат открытых позиций. Формула: сумма expected_yield по открытым позициям брокера из watchlist."
+        case "open_income":
+            return "Доход открытых позиций по полю expected_yield брокера. После вечернего клиринга он может отличаться от вариационной маржи."
         case "gross_live":
             return "Валовый результат до вычитания брокерских комиссий. Формула: gross PnL закрытых сделок + плавающий результат открытых позиций."
         case "actual_vm":
@@ -204,7 +204,7 @@ struct OverviewScreen: View {
         case "cash_effect":
             return "Фактическое денежное движение по счету за день. Формула: Клиринговая ВМ + cash-effect комиссий, обычно это Клиринговая ВМ − Комиссия."
         case "estimated_vm":
-            return "Расчётная текущая вариационная маржа по открытым позициям до следующего клиринга. Формула: сумма var_margin по открытым позициям; если var_margin недоступна, используется expected_yield."
+            return "Текущая вариационная маржа по полю var_margin брокера. После вечернего клиринга она может отличаться от дохода открытых позиций."
         default:
             return "Пояснение к показателю портфеля."
         }

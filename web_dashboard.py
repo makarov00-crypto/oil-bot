@@ -2907,10 +2907,10 @@ def build_portfolio_view_for_day(
     view["bot_actual_fee_rub"] = round(selected_actual_fee, 2)
     view["bot_actual_cash_effect_rub"] = round(selected_cash_effect, 2)
     if selected_is_today:
-        broker_open_positions_pnl = 0.0
+        broker_open_positions_income = 0.0
         for item in (portfolio.get("broker_open_positions") or []):
             try:
-                broker_open_positions_pnl += float(item.get("expected_yield_rub") or 0.0)
+                broker_open_positions_income += float(item.get("income_rub", item.get("expected_yield_rub")) or 0.0)
             except Exception:
                 pass
         estimated_variation = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
@@ -2926,30 +2926,32 @@ def build_portfolio_view_for_day(
                 continue
             live_varmargin_by_symbol[symbol] = round(live_varmargin_by_symbol.get(symbol, 0.0) + live_value, 2)
     else:
-        broker_open_positions_pnl = 0.0
+        broker_open_positions_income = 0.0
         estimated_variation = 0.0
         open_positions_count = 0
         live_varmargin_by_symbol = {}
     view["bot_estimated_variation_margin_rub"] = round(estimated_variation, 2)
     view["open_positions_count"] = open_positions_count
-    view["bot_broker_day_pnl_rub"] = round(broker_open_positions_pnl, 2)
-    view["bot_open_positions_live_pnl_rub"] = round(broker_open_positions_pnl, 2)
-    total_varmargin = float(
+    view["bot_broker_day_pnl_rub"] = round(broker_open_positions_income, 2)
+    view["bot_open_positions_live_pnl_rub"] = round(broker_open_positions_income, 2)
+    view["bot_open_positions_income_rub"] = round(broker_open_positions_income, 2)
+    total_income = float(
         history_entry.get(
             "total_varmargin_rub",
-            closed_totals["gross_pnl_rub"] + broker_open_positions_pnl,
+            closed_totals["gross_pnl_rub"] + broker_open_positions_income,
         )
         or 0.0
     )
     total_pnl = float(
         history_entry.get(
             "total_pnl_rub",
-            total_varmargin - selected_actual_fee,
+            total_income - selected_actual_fee,
         )
         or 0.0
     )
-    view["bot_total_varmargin_rub"] = round(total_varmargin, 2)
-    view["bot_total_variation_margin_rub"] = round(total_varmargin, 2)
+    view["bot_total_varmargin_rub"] = round(total_income, 2)
+    view["bot_total_variation_margin_rub"] = round(total_income, 2)
+    view["bot_total_income_rub"] = round(total_income, 2)
     view["bot_total_pnl_rub"] = round(total_pnl, 2)
     view["bot_analytical_total_pnl_rub"] = round(total_pnl, 2)
     view["bot_operations_cash_effect_rub"] = round(selected_cash_effect, 2)
@@ -3249,7 +3251,9 @@ def summarize_states(states: dict[str, dict], portfolio: dict | None = None) -> 
                     "entry_price": pos.get("entry_price", state.get("entry_price")),
                     "current_price": pos.get("current_price", state.get("last_market_price")),
                     "notional_rub": pos.get("notional_rub") or state.get("position_notional_rub") or 0.0,
-                    "variation_margin_rub": pos.get("variation_margin_rub") or 0.0,
+                    "variation_margin_rub": pos.get("variation_margin_rub"),
+                    "income_rub": pos.get("income_rub", pos.get("expected_yield_rub")),
+                    "variation_margin_source": pos.get("variation_margin_source") or "unavailable",
                     "pnl_pct": state.get("position_pnl_pct") or 0.0,
                     "strategy": state.get("entry_strategy") or "-",
                     "last_signal": (state.get("last_signal") or "HOLD").upper(),
@@ -3269,6 +3273,8 @@ def summarize_states(states: dict[str, dict], portfolio: dict | None = None) -> 
                         "current_price": state.get("last_market_price"),
                         "notional_rub": state.get("position_notional_rub") or 0.0,
                         "variation_margin_rub": state.get("position_variation_margin_rub") or 0.0,
+                        "income_rub": None,
+                        "variation_margin_source": "state_fallback",
                         "pnl_pct": state.get("position_pnl_pct") or 0.0,
                         "strategy": state.get("entry_strategy") or "-",
                         "last_signal": (state.get("last_signal") or "HOLD").upper(),
@@ -4534,12 +4540,12 @@ def build_dashboard_html() -> str:
               <div class="portfolio-label">Закрытые сделки <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioRealized">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Плавающий live-результат открытых позиций. Формула: сумма expected_yield по открытым позициям брокера из watchlist." tabindex="0">
-              <div class="portfolio-label">Плавающий результат <span class="portfolio-help-icon">?</span></div>
+            <div class="portfolio-metric" data-help="Доход открытых позиций по полю expected_yield брокера. После вечернего клиринга он может отличаться от вариационной маржи." tabindex="0">
+              <div class="portfolio-label">Доход открытых позиций <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioOpenLive">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Валовый результат до вычитания брокерских комиссий. Формула: gross PnL закрытых сделок + плавающий результат открытых позиций." tabindex="0">
-              <div class="portfolio-label">Валовый результат <span class="portfolio-help-icon">?</span></div>
+            <div class="portfolio-metric" data-help="Доход до вычитания брокерских комиссий. Формула: gross PnL закрытых сделок + доход открытых позиций." tabindex="0">
+              <div class="portfolio-label">Доход до комиссии <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioTotalVm">-</div>
             </div>
           </div>
@@ -4632,7 +4638,7 @@ def build_dashboard_html() -> str:
         <div id="positionsCards" class="mobile-cards"></div>
         <div class="table-scroll desktop-table">
           <table id="positionsTable">
-            <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход → текущая</th><th class="right">Плавающий результат</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
+            <thead><tr><th>Инструмент</th><th>Сторона</th><th>Лоты</th><th>Вход → текущая</th><th class="right">Доход</th><th class="right">Вар. маржа</th><th>Стратегия</th><th>Сигнал</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -5500,9 +5506,12 @@ def build_dashboard_html() -> str:
     function formatSessionLabel(value) {
       const raw = String(value || '').toUpperCase();
       const map = {
+        PREMARKET: 'ПРЕМАРКЕТ',
+        MAIN: 'ОСНОВНАЯ',
         MORNING: 'УТРО',
         DAY: 'ДЕНЬ',
         EVENING: 'ВЕЧЕР',
+        CLEARING: 'КЛИРИНГ',
         CLOSED: 'ЗАКРЫТО',
         WEEKEND: 'ВЫХОДНОЙ',
       };
@@ -5732,8 +5741,8 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioActualVm').textContent = formatRub(portfolio.bot_actual_varmargin_rub);
       document.getElementById('portfolioCashEffect').textContent = formatRub(portfolio.bot_operations_cash_effect_rub ?? portfolio.bot_actual_cash_effect_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
-      document.getElementById('portfolioOpenLive').textContent = formatRub(portfolio.bot_open_positions_live_pnl_rub ?? portfolio.bot_broker_day_pnl_rub);
-      document.getElementById('portfolioTotalVm').textContent = formatRub(portfolio.bot_total_variation_margin_rub ?? portfolio.bot_total_varmargin_rub);
+      document.getElementById('portfolioOpenLive').textContent = formatRub(portfolio.bot_open_positions_income_rub ?? portfolio.bot_open_positions_live_pnl_rub ?? portfolio.bot_broker_day_pnl_rub);
+      document.getElementById('portfolioTotalVm').textContent = formatRub(portfolio.bot_total_income_rub ?? portfolio.bot_total_variation_margin_rub ?? portfolio.bot_total_varmargin_rub);
       document.getElementById('portfolioTotalPnl').textContent = formatRub(portfolio.bot_analytical_total_pnl_rub ?? portfolio.bot_total_pnl_rub);
       document.getElementById('portfolioOpenCount').textContent = portfolio.open_positions_count ?? '-';
 
@@ -5966,17 +5975,21 @@ def build_dashboard_html() -> str:
       posBody.innerHTML = '';
       posCards.innerHTML = '';
       for (const pos of data.summary.open_positions) {
+        const income = Number(pos.income_rub || 0);
         const vm = Number(pos.variation_margin_rub || 0);
         const pct = Number(pos.pnl_pct || 0);
+        const incomeClass = income > 0 ? 'good' : income < 0 ? 'bad' : 'muted';
         const vmClass = vm > 0 ? 'good' : vm < 0 ? 'bad' : 'muted';
         const pctClass = pct > 0 ? 'good' : pct < 0 ? 'bad' : 'muted';
-        const positionSummary = `${formatRub(pos.variation_margin_rub)} · ${formatPct(pos.pnl_pct)}`;
+        const incomeSummary = `${formatRub(pos.income_rub)} · ${formatPct(pos.pnl_pct)}`;
+        const variationMarginText = pos.variation_margin_rub == null ? 'нет данных' : formatRub(pos.variation_margin_rub);
         posBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(pos.symbol, pos.display_name || '')}</td>
           <td>${signalBadge(pos.side)}</td>
           <td class="mono">${escapeHtml(pos.qty)}</td>
           <td><div class="trade-cell-main mono">${escapeHtml(formatPrice(pos.entry_price))} → ${escapeHtml(formatPrice(pos.current_price))}</div><div class="trade-cell-sub">стоимость ${escapeHtml(formatRub(pos.notional_rub))}</div></td>
-          <td class="mono right ${vmClass}">${escapeHtml(positionSummary)}</td>
+          <td class="mono right ${incomeClass}">${escapeHtml(incomeSummary)}</td>
+          <td class="mono right ${vmClass}">${escapeHtml(variationMarginText)}</td>
           <td>${escapeHtml(formatStrategyLabel(pos.strategy || '-'))}</td>
           <td>${signalBadge(pos.last_signal)}</td>
         </tr>`);
@@ -5989,14 +6002,15 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-item"><span class="muted">Лоты</span><div class="mobile-card-value mono">${escapeHtml(pos.qty)}</div></div>
             <div class="mobile-card-item"><span class="muted">Сигнал</span><div class="mobile-card-value">${signalBadge(pos.last_signal)}</div></div>
             <div class="mobile-card-item"><span class="muted">Вход → текущая</span><div class="mobile-card-value mono">${escapeHtml(formatPrice(pos.entry_price))} → ${escapeHtml(formatPrice(pos.current_price))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Плавающий результат</span><div class="mobile-card-value mono ${vmClass}">${escapeHtml(positionSummary)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Доход</span><div class="mobile-card-value mono ${incomeClass}">${escapeHtml(incomeSummary)}</div></div>
+            <div class="mobile-card-item"><span class="muted">Вар. маржа</span><div class="mobile-card-value mono ${vmClass}">${escapeHtml(variationMarginText)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стоимость</span><div class="mobile-card-value mono">${escapeHtml(formatRub(pos.notional_rub))}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(pos.strategy || '-'))}</div></div>
           </div>
         </article>`);
       }
       if (!data.summary.open_positions.length) {
-        posBody.insertAdjacentHTML('beforeend', '<tr><td colspan="7" class="muted">Открытых позиций нет.</td></tr>');
+        posBody.insertAdjacentHTML('beforeend', '<tr><td colspan="8" class="muted">Открытых позиций нет.</td></tr>');
         posCards.insertAdjacentHTML('beforeend', '<div class="muted">Открытых позиций нет.</div>');
       }
 

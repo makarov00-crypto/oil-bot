@@ -3499,37 +3499,39 @@ def get_day_bounds_utc_for_date(target_day: date) -> tuple[datetime, datetime]:
 def get_market_session(now: datetime | None = None) -> str:
     now = now or current_moscow_time()
     current_minutes = now.hour * 60 + now.minute
+    if current_minutes <= 15:
+        return "CLEARING"
     if now.weekday() >= 5:
         if current_minutes < 19 * 60:
             return "WEEKEND"
         return "CLOSED"
-    if current_minutes < 8 * 60 + 50:
+    if current_minutes < 7 * 60:
         return "CLOSED"
     if current_minutes < 10 * 60:
-        return "MORNING"
+        return "PREMARKET"
     if current_minutes < 19 * 60:
-        return "DAY"
-    if current_minutes < 23 * 60 + 50:
+        return "MAIN"
+    if current_minutes < 23 * 60 + 55:
         return "EVENING"
-    return "CLOSED"
+    return "CLEARING"
 
 
 def get_session_position_multiplier(session_name: str, symbol: str | None = None) -> float:
-    if session_name == "CLOSED":
+    if session_name in {"CLOSED", "CLEARING"}:
         return 0.0
     if session_name == "WEEKEND":
         if symbol and is_currency_symbol(symbol):
             return 0.0
         return 0.35
     return {
-        "MORNING": 0.5,
-        "DAY": 1.0,
+        "PREMARKET": 0.5,
+        "MAIN": 1.0,
         "EVENING": 0.5,
     }.get(session_name, 1.0)
 
 
 def session_allows_new_entries(session_name: str, symbol: str) -> bool:
-    if session_name == "CLOSED":
+    if session_name in {"CLOSED", "CLEARING"}:
         return False
     if session_name == "WEEKEND":
         return not is_currency_symbol(symbol)
@@ -3537,11 +3539,11 @@ def session_allows_new_entries(session_name: str, symbol: str) -> bool:
 
 
 def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str) -> bool:
-    if session_name == "CLOSED":
+    if session_name in {"CLOSED", "CLEARING"}:
         return False
     if session_name == "WEEKEND" and is_currency_symbol(symbol):
         return False
-    if session_name in {"DAY", "MORNING"}:
+    if session_name == "MAIN":
         return True
 
     last = df.iloc[-1]
@@ -4223,7 +4225,7 @@ def build_portfolio_snapshot_message(
         f"💸 Комиссия по счёту: {float(payload['bot_actual_fee_rub']):.2f} RUB",
         f"🏦 Клиринговая ВМ: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
         f"📈 Текущая вар. маржа позиций: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
-        f"🧾 Общая вар. маржа: {float(payload['bot_total_varmargin_rub']):.2f} RUB",
+        f"🧾 Доход до комиссии: {float(payload['bot_total_income_rub']):.2f} RUB",
         f"🧮 Итог по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
         f"📌 Открытых позиций: {int(payload['open_positions_count'])}",
     ]
@@ -4245,8 +4247,8 @@ def build_portfolio_snapshot_payload(
     realized_pnl = float(closed_totals["net_pnl_rub"])
     realized_gross_pnl = float(closed_totals["gross_pnl_rub"])
     realized_commission = float(closed_totals["commission_rub"])
-    total_varmargin_rub = realized_gross_pnl + broker_open_positions_pnl
-    total_bot_pnl = total_varmargin_rub - float(accounting["actual_fee_expense_rub"])
+    total_income_rub = realized_gross_pnl + broker_open_positions_pnl
+    total_bot_pnl = total_income_rub - float(accounting["actual_fee_expense_rub"])
     calculated_free_cash = max(0.0, snapshot.total_portfolio - snapshot.blocked_guarantee_rub)
 
     generated_at = datetime.now(timezone.utc)
@@ -4268,9 +4270,12 @@ def build_portfolio_snapshot_payload(
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
         "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
-        "bot_total_varmargin_rub": round(total_varmargin_rub, 2),
-        "bot_total_variation_margin_rub": round(total_varmargin_rub, 2),
+        # Legacy aliases are retained for clients, but contain income, not clearing VM.
+        "bot_total_varmargin_rub": round(total_income_rub, 2),
+        "bot_total_variation_margin_rub": round(total_income_rub, 2),
         "bot_broker_day_pnl_rub": round(broker_open_positions_pnl, 2),
+        "bot_open_positions_income_rub": round(broker_open_positions_pnl, 2),
+        "bot_total_income_rub": round(total_income_rub, 2),
         "bot_total_pnl_rub": round(total_bot_pnl, 2),
         "broker_open_positions": list(live_positions.values()),
         "generated_at": generated_at.isoformat(),
@@ -4670,7 +4675,7 @@ def maybe_send_hourly_summary(
     watchlist: list[InstrumentConfig],
 ) -> None:
     session_name = get_market_session()
-    if session_name == "CLOSED":
+    if session_name in {"CLOSED", "CLEARING"}:
         return
     now_slot = floor_time_slot(datetime.now(MOSCOW_TZ), HOURLY_REPORT_INTERVAL_MINUTES).strftime("%Y-%m-%d %H:%M")
     meta = load_meta_state()
@@ -4700,8 +4705,10 @@ def extract_position_data(
         qty = int(round(quotation_to_float(getattr(position, "quantity", None))))
         avg = quotation_to_float(getattr(position, "average_position_price", None))
         current_price = quotation_to_float(getattr(position, "current_price", None))
-        var_margin = quotation_to_float(getattr(position, "var_margin", None))
-        expected_yield = quotation_to_float(getattr(position, "expected_yield", None))
+        raw_var_margin = getattr(position, "var_margin", None)
+        raw_expected_yield = getattr(position, "expected_yield", None)
+        var_margin = quotation_to_float(raw_var_margin) if raw_var_margin is not None else None
+        expected_yield = quotation_to_float(raw_expected_yield) if raw_expected_yield is not None else None
         return (
             qty,
             (avg if avg > 0 else None),
@@ -4731,8 +4738,10 @@ def get_live_portfolio_positions(
         side = "LONG" if qty_signed > 0 else "SHORT"
         avg_price = quotation_to_float(getattr(position, "average_position_price", None))
         current_price = quotation_to_float(getattr(position, "current_price", None))
-        var_margin = quotation_to_float(getattr(position, "var_margin", None))
-        expected_yield = quotation_to_float(getattr(position, "expected_yield", None))
+        raw_var_margin = getattr(position, "var_margin", None)
+        raw_expected_yield = getattr(position, "expected_yield", None)
+        var_margin = quotation_to_float(raw_var_margin) if raw_var_margin is not None else None
+        expected_yield = quotation_to_float(raw_expected_yield) if raw_expected_yield is not None else None
         positions[instrument.symbol] = {
             "symbol": instrument.symbol,
             "side": side,
@@ -4740,7 +4749,10 @@ def get_live_portfolio_positions(
             "entry_price": avg_price if avg_price > 0 else None,
             "current_price": current_price if current_price > 0 else None,
             "notional_rub": calculate_futures_notional_rub(instrument, current_price, qty) if current_price > 0 else 0.0,
-            "variation_margin_rub": var_margin if var_margin is not None else expected_yield,
+            # These are separate broker metrics. Do not replace missing VM with income in reports.
+            "variation_margin_rub": var_margin,
+            "income_rub": expected_yield,
+            "variation_margin_source": "broker_var_margin" if var_margin is not None else "unavailable",
             "expected_yield_rub": expected_yield,
         }
     return positions
@@ -8292,8 +8304,12 @@ def process_instrument(
         state.last_higher_tf_bias = ""
         higher_tf_cleared = True
     session_name = get_market_session()
-    if session_name == "CLOSED":
-        closed_message = "Вне торговой сессии срочного рынка Мосбиржи."
+    if session_name in {"CLOSED", "CLEARING"}:
+        closed_message = (
+            "Техническое окно вечернего клиринга: новые входы временно остановлены."
+            if session_name == "CLEARING"
+            else "Вне торговой сессии срочного рынка Мосбиржи."
+        )
         if state.last_error != closed_message or state.last_signal != "HOLD":
             state.last_error = closed_message
             state.last_signal = "HOLD"

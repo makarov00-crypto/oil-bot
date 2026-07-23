@@ -11,6 +11,38 @@ class AccountingReconciliationTests(unittest.TestCase):
         self.config = SimpleNamespace()
         self.watchlist = []
 
+    def test_live_position_keeps_broker_income_and_variation_margin_separate(self) -> None:
+        quote = lambda value: SimpleNamespace(units=int(value), nano=int(round((value - int(value)) * 1_000_000_000)))
+        position = SimpleNamespace(
+            figi="FIGI",
+            quantity=quote(2),
+            average_position_price=quote(100.0),
+            current_price=quote(105.0),
+            var_margin=quote(123.45),
+            expected_yield=quote(210.75),
+        )
+        client = SimpleNamespace(
+            operations=SimpleNamespace(
+                get_portfolio=lambda account_id: SimpleNamespace(positions=[position])
+            )
+        )
+        config = SimpleNamespace(account_id="account")
+        watchlist = [
+            SimpleNamespace(
+                figi="FIGI",
+                symbol="BMQ6",
+                lot=1,
+                min_price_increment=0.01,
+                min_price_increment_amount=1.0,
+            )
+        ]
+
+        result = mod.get_live_portfolio_positions(client, config, watchlist)["BMQ6"]
+
+        self.assertEqual(result["income_rub"], 210.75)
+        self.assertEqual(result["variation_margin_rub"], 123.45)
+        self.assertEqual(result["variation_margin_source"], "broker_var_margin")
+
     def test_reconciles_previous_day_once_after_clearing_window(self) -> None:
         meta: dict[str, str] = {}
         now = datetime(2026, 7, 22, 21, 17, tzinfo=timezone.utc)  # 00:17 Moscow
