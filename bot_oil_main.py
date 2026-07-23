@@ -74,6 +74,16 @@ from strategies.base import StrategyProfile
 
 
 APP_NAME = "oil-bot-main"
+T_INVEST_REST_PORTFOLIO_URL = (
+    "https://invest-public-api.tinkoff.ru/rest/"
+    "tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio"
+)
+T_INVEST_SANDBOX_REST_PORTFOLIO_URL = (
+    "https://sandbox-invest-public-api.tinkoff.ru/rest/"
+    "tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio"
+)
+SETTLED_VAR_MARGIN_CACHE_TTL_SECONDS = 5
+SETTLED_VAR_MARGIN_CACHE: dict[str, Any] = {"fetched_at": 0.0, "account_id": "", "values": {}}
 WATCHLIST_REFRESH_SECONDS = 300
 RECENT_STRATEGY_GUARD_DAYS = 1
 RECENT_STRATEGY_GUARD_MIN_TRADES = 4
@@ -4698,11 +4708,62 @@ def get_last_price(client: Client, instrument: InstrumentConfig) -> float:
     return quotation_to_float(response.last_prices[0].price)
 
 
+def rest_money_to_float(value: Any) -> float | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return float(value.get("units") or 0.0) + float(value.get("nano") or 0.0) / 1_000_000_000
+    except (TypeError, ValueError):
+        return None
+
+
+def get_settled_variation_margins(config: BotConfig) -> dict[str, float]:
+    """Return terminal VM calculated from the 19:00 fixing for each futures FIGI."""
+    account_id = str(getattr(config, "account_id", "") or "")
+    token = str(getattr(config, "token", "") or "")
+    if not account_id or not token:
+        return {}
+    now = time.monotonic()
+    cached_account = str(SETTLED_VAR_MARGIN_CACHE.get("account_id") or "")
+    cached_at = float(SETTLED_VAR_MARGIN_CACHE.get("fetched_at") or 0.0)
+    cached_values = SETTLED_VAR_MARGIN_CACHE.get("values") or {}
+    if (
+        cached_account == account_id
+        and isinstance(cached_values, dict)
+        and now - cached_at < SETTLED_VAR_MARGIN_CACHE_TTL_SECONDS
+    ):
+        return dict(cached_values)
+
+    target = getattr(config, "target", INVEST_GRPC_API)
+    url = T_INVEST_SANDBOX_REST_PORTFOLIO_URL if target == INVEST_GRPC_API_SANDBOX else T_INVEST_REST_PORTFOLIO_URL
+    try:
+        response = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"accountId": account_id},
+            timeout=8,
+        )
+        response.raise_for_status()
+        values: dict[str, float] = {}
+        for position in response.json().get("positions") or []:
+            figi = str(position.get("figi") or "").strip()
+            settled = rest_money_to_float(position.get("varMarginSettled"))
+            if figi and settled is not None:
+                values[figi] = settled
+        SETTLED_VAR_MARGIN_CACHE.update({"fetched_at": now, "account_id": account_id, "values": values})
+        return values
+    except (requests.RequestException, ValueError, TypeError) as error:
+        logging.warning("Не удалось получить расчётную ВМ через REST API: %s", error)
+        SETTLED_VAR_MARGIN_CACHE.update({"fetched_at": now, "account_id": account_id, "values": {}})
+        return {}
+
+
 def extract_position_data(
     client: Client,
     config: BotConfig,
     instrument: InstrumentConfig,
 ) -> tuple[int, float | None, float | None, float | None, float | None]:
+    settled_var_margin_by_figi = get_settled_variation_margins(config)
     portfolio = client.operations.get_portfolio(account_id=config.account_id)
     for position in portfolio.positions:
         if position.figi != instrument.figi:
@@ -4713,12 +4774,13 @@ def extract_position_data(
         raw_var_margin = getattr(position, "var_margin", None)
         raw_expected_yield = getattr(position, "expected_yield", None)
         var_margin = quotation_to_float(raw_var_margin) if raw_var_margin is not None else None
+        settled_var_margin = settled_var_margin_by_figi.get(instrument.figi)
         expected_yield = quotation_to_float(raw_expected_yield) if raw_expected_yield is not None else None
         return (
             qty,
             (avg if avg > 0 else None),
             (current_price if current_price > 0 else None),
-            var_margin,
+            settled_var_margin if settled_var_margin is not None else var_margin,
             expected_yield,
         )
     return 0, None, None, None, None
@@ -4730,6 +4792,7 @@ def get_live_portfolio_positions(
     watchlist: list[InstrumentConfig],
 ) -> dict[str, dict[str, float | int | str | None]]:
     figi_to_instrument = {item.figi: item for item in watchlist}
+    settled_var_margin_by_figi = get_settled_variation_margins(config)
     portfolio = client.operations.get_portfolio(account_id=config.account_id)
     positions: dict[str, dict[str, float | int | str | None]] = {}
     for position in portfolio.positions:
@@ -4747,6 +4810,8 @@ def get_live_portfolio_positions(
         raw_expected_yield = getattr(position, "expected_yield", None)
         var_margin = quotation_to_float(raw_var_margin) if raw_var_margin is not None else None
         expected_yield = quotation_to_float(raw_expected_yield) if raw_expected_yield is not None else None
+        settled_var_margin = settled_var_margin_by_figi.get(position.figi)
+        live_variation_margin = settled_var_margin if settled_var_margin is not None else var_margin
         positions[instrument.symbol] = {
             "symbol": instrument.symbol,
             "side": side,
@@ -4754,10 +4819,19 @@ def get_live_portfolio_positions(
             "entry_price": avg_price if avg_price > 0 else None,
             "current_price": current_price if current_price > 0 else None,
             "notional_rub": calculate_futures_notional_rub(instrument, current_price, qty) if current_price > 0 else 0.0,
-            # These are separate broker metrics. Do not replace missing VM with income in reports.
-            "variation_margin_rub": var_margin,
+            # var_margin_settled is the terminal's calculated VM by the 19:00 fixing.
+            # The older gRPC contract does not expose it, so REST is used as the source.
+            "variation_margin_rub": live_variation_margin,
             "income_rub": expected_yield,
-            "variation_margin_source": "broker_var_margin" if var_margin is not None else "unavailable",
+            "variation_margin_source": (
+                "broker_var_margin_settled"
+                if settled_var_margin is not None
+                else "broker_var_margin"
+                if var_margin is not None
+                else "unavailable"
+            ),
+            "broker_var_margin_rub": var_margin,
+            "settled_variation_margin_rub": settled_var_margin,
             "expected_yield_rub": expected_yield,
         }
     return positions

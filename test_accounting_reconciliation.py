@@ -10,6 +10,25 @@ class AccountingReconciliationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = SimpleNamespace()
         self.watchlist = []
+        mod.SETTLED_VAR_MARGIN_CACHE.update({"fetched_at": 0.0, "account_id": "", "values": {}})
+
+    def test_settled_variation_margin_uses_broker_fixing_field(self) -> None:
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "positions": [
+                    {"figi": "BMQ6", "varMarginSettled": {"units": "6669", "nano": 910_000_000}},
+                    {"figi": "UCU6", "varMarginSettled": {"units": "57", "nano": 840_000_000}},
+                ]
+            },
+        )
+        config = SimpleNamespace(account_id="account", token="token", target=mod.INVEST_GRPC_API)
+
+        with patch.object(mod.requests, "post", return_value=response) as post:
+            result = mod.get_settled_variation_margins(config)
+
+        self.assertEqual(result, {"BMQ6": 6669.91, "UCU6": 57.84})
+        post.assert_called_once()
 
     def test_live_position_keeps_broker_income_and_variation_margin_separate(self) -> None:
         quote = lambda value: SimpleNamespace(units=int(value), nano=int(round((value - int(value)) * 1_000_000_000)))
