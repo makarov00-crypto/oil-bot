@@ -75,6 +75,40 @@ class AccountingReconciliationTests(unittest.TestCase):
         self.assertEqual(result["actual_varmargin_rub"], -1719.95)
         self.assertEqual(result["varmargin_by_symbol"], {"BMQ6": -1719.95})
 
+    def test_audit_rewrites_one_day_only_after_live_broker_response(self) -> None:
+        meta: dict[str, str] = {"accounting_audit_next_day": "2026-07-13"}
+        now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+
+        with patch.object(
+            mod,
+            "update_accounting_history_for_day",
+            return_value={"source": "live", "actual_varmargin_rub": 100.0},
+        ) as refresh:
+            reconciled = mod.reconcile_accounting_history_audit_if_needed(
+                None, self.config, self.watchlist, meta, now=now
+            )
+
+        self.assertTrue(reconciled)
+        self.assertEqual(meta["accounting_audit_next_day"], "2026-07-14")
+        refresh.assert_called_once_with(None, self.config, self.watchlist, date(2026, 7, 13))
+
+    def test_audit_retries_later_without_advancing_on_cached_data(self) -> None:
+        meta: dict[str, str] = {"accounting_audit_next_day": "2026-07-13"}
+        now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+
+        with patch.object(
+            mod,
+            "update_accounting_history_for_day",
+            return_value={"source": "history_fallback", "actual_varmargin_rub": 0.0},
+        ):
+            reconciled = mod.reconcile_accounting_history_audit_if_needed(
+                None, self.config, self.watchlist, meta, now=now
+            )
+
+        self.assertFalse(reconciled)
+        self.assertEqual(meta["accounting_audit_next_day"], "2026-07-13")
+        self.assertIn("accounting_audit_retry_after", meta)
+
 
 if __name__ == "__main__":
     unittest.main()

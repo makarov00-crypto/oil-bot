@@ -101,6 +101,7 @@ NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
+ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
 SUPPORTED_INTERVALS = {
     1: CandleInterval.CANDLE_INTERVAL_1_MIN,
     2: CandleInterval.CANDLE_INTERVAL_2_MIN,
@@ -4313,6 +4314,7 @@ def maybe_refresh_portfolio_snapshot(
     }
     save_accounting_history(history)
     reconcile_previous_accounting_day_if_needed(client, config, watchlist, meta, now=now)
+    reconcile_accounting_history_audit_if_needed(client, config, watchlist, meta, now=now)
     meta["portfolio_snapshot_refreshed_at"] = now.isoformat()
     save_meta_state(meta)
 
@@ -4375,6 +4377,54 @@ def reconcile_previous_accounting_day_if_needed(
     logging.info(
         "Сверен завершённый день по брокерской ВМ: %s, ВМ=%s RUB",
         completed_key,
+        entry.get("actual_varmargin_rub", 0.0),
+    )
+    return True
+
+
+def reconcile_accounting_history_audit_if_needed(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+    meta: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Backfill one verified accounting day per cycle after a metric-rule change."""
+    now_utc = now or datetime.now(timezone.utc)
+    now_moscow = now_utc.astimezone(MOSCOW_TZ)
+    last_completed_day = now_moscow.date() - timedelta(days=1)
+    cursor_raw = str(meta.get("accounting_audit_next_day") or ACCOUNTING_AUDIT_START_DAY.isoformat())
+    try:
+        target_day = date.fromisoformat(cursor_raw)
+    except ValueError:
+        target_day = ACCOUNTING_AUDIT_START_DAY
+    target_day = max(target_day, ACCOUNTING_AUDIT_START_DAY)
+    if target_day > last_completed_day:
+        return False
+
+    retry_after_raw = str(meta.get("accounting_audit_retry_after") or "")
+    if retry_after_raw:
+        try:
+            retry_after = datetime.fromisoformat(retry_after_raw)
+            if retry_after.tzinfo is None:
+                retry_after = retry_after.replace(tzinfo=timezone.utc)
+            if now_utc < retry_after:
+                return False
+        except ValueError:
+            pass
+
+    entry = update_accounting_history_for_day(client, config, watchlist, target_day)
+    if str(entry.get("source") or "") != "live":
+        meta["accounting_audit_retry_after"] = (now_utc + timedelta(minutes=10)).isoformat()
+        logging.warning("Аудит ВМ за %s отложен: брокерские операции недоступны", target_day.isoformat())
+        return False
+
+    meta["accounting_audit_next_day"] = (target_day + timedelta(days=1)).isoformat()
+    meta.pop("accounting_audit_retry_after", None)
+    logging.info(
+        "Аудит ВМ подтверждён: %s, ВМ=%s RUB",
+        target_day.isoformat(),
         entry.get("actual_varmargin_rub", 0.0),
     )
     return True
