@@ -83,6 +83,7 @@ IMOEXF   1.22604    10</pre>
                 "event": "OPEN",
                 "side": "SHORT",
                 "qty_lots": 59,
+                "source": "portfolio_recovery",
             },
             {
                 "time": "2026-07-23T11:00:41+03:00",
@@ -90,6 +91,7 @@ IMOEXF   1.22604    10</pre>
                 "event": "OPEN",
                 "side": "SHORT",
                 "qty_lots": 11,
+                "source": "portfolio_confirmation",
             },
             {
                 "time": "2026-07-23T13:00:00+03:00",

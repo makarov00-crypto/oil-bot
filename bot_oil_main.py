@@ -3606,8 +3606,6 @@ def calculate_daily_perpetual_funding(
             continue
         if str(row.get("event") or "").upper() != "OPEN":
             continue
-        if str(row.get("source") or "").strip() in {"portfolio_confirmation", "portfolio_recovery"}:
-            continue
         symbol = str(row.get("symbol") or "").upper()
         rate_info = rates.get(symbol)
         if not isinstance(rate_info, dict):
