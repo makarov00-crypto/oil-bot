@@ -2907,12 +2907,13 @@ def build_portfolio_view_for_day(
     view["bot_actual_fee_rub"] = round(selected_actual_fee, 2)
     view["bot_actual_cash_effect_rub"] = round(selected_cash_effect, 2)
     if selected_is_today:
-        broker_open_positions_income = 0.0
-        for item in (portfolio.get("broker_open_positions") or []):
-            try:
-                broker_open_positions_income += float(item.get("income_rub", item.get("expected_yield_rub")) or 0.0)
-            except Exception:
-                pass
+        broker_open_positions_income = float(portfolio.get("bot_open_positions_income_rub") or 0.0)
+        if not broker_open_positions_income:
+            for item in (portfolio.get("broker_open_positions") or []):
+                try:
+                    broker_open_positions_income += float(item.get("income_rub", item.get("expected_yield_rub")) or 0.0)
+                except Exception:
+                    pass
         estimated_variation = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
         open_positions_count = portfolio.get("open_positions_count")
         live_varmargin_by_symbol: dict[str, float] = {}

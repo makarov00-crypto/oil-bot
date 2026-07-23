@@ -192,6 +192,7 @@ class AccountSnapshot:
     total_portfolio: float
     free_rub: float
     blocked_guarantee_rub: float
+    daily_yield_rub: float = 0.0
 
 
 @dataclass
@@ -4243,11 +4244,12 @@ def build_portfolio_snapshot_payload(
     closed_totals = calculate_closed_trade_totals()
     open_positions = len(live_positions)
     unrealized_pnl = sum(float(item.get("variation_margin_rub") or 0.0) for item in live_positions.values())
-    broker_open_positions_pnl = sum(float(item.get("expected_yield_rub") or 0.0) for item in live_positions.values())
+    position_income_rub = sum(float(item.get("expected_yield_rub") or 0.0) for item in live_positions.values())
+    broker_daily_yield_rub = float(getattr(snapshot, "daily_yield_rub", position_income_rub) or 0.0)
     realized_pnl = float(closed_totals["net_pnl_rub"])
     realized_gross_pnl = float(closed_totals["gross_pnl_rub"])
     realized_commission = float(closed_totals["commission_rub"])
-    total_income_rub = realized_gross_pnl + broker_open_positions_pnl
+    total_income_rub = realized_gross_pnl + broker_daily_yield_rub
     total_bot_pnl = total_income_rub - float(accounting["actual_fee_expense_rub"])
     calculated_free_cash = max(0.0, snapshot.total_portfolio - snapshot.blocked_guarantee_rub)
 
@@ -4269,12 +4271,15 @@ def build_portfolio_snapshot_payload(
         "bot_actual_fee_rub": float(accounting["actual_fee_expense_rub"]),
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
-        "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
+        # Terminal's top "Вармаржа" is the daily live result plus closed PnL,
+        # less actual broker commissions. The API exposes its components separately.
+        "bot_estimated_variation_margin_rub": round(total_bot_pnl, 2),
+        "bot_open_positions_variation_margin_rub": round(unrealized_pnl, 2),
         # Legacy aliases are retained for clients, but contain income, not clearing VM.
         "bot_total_varmargin_rub": round(total_income_rub, 2),
         "bot_total_variation_margin_rub": round(total_income_rub, 2),
-        "bot_broker_day_pnl_rub": round(broker_open_positions_pnl, 2),
-        "bot_open_positions_income_rub": round(broker_open_positions_pnl, 2),
+        "bot_broker_day_pnl_rub": round(broker_daily_yield_rub, 2),
+        "bot_open_positions_income_rub": round(broker_daily_yield_rub, 2),
         "bot_total_income_rub": round(total_income_rub, 2),
         "bot_total_pnl_rub": round(total_bot_pnl, 2),
         "broker_open_positions": list(live_positions.values()),
@@ -5449,6 +5454,7 @@ def get_account_snapshot(client: Client, config: BotConfig) -> AccountSnapshot:
         total_portfolio=total_portfolio,
         free_rub=free_rub,
         blocked_guarantee_rub=blocked_guarantee_rub,
+        daily_yield_rub=quotation_to_float(getattr(portfolio, "daily_yield", None)),
     )
 
 
