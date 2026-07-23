@@ -2815,6 +2815,41 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
         }
 
     selected_key = target_day.isoformat()
+    if selected_key not in by_day:
+        by_day[selected_key] = {
+            "date": selected_key,
+            "closed_count": 0,
+            "wins": 0,
+            "losses": 0,
+            "pnl_rub": 0.0,
+            "pnl_pct": None,
+            "cumulative_pnl_rub": cumulative,
+            "cumulative_pnl_pct": None,
+        }
+        days = sorted([*days, selected_key])
+    selected_entry = by_day[selected_key]
+    if portfolio.get("selected_is_today"):
+        selected_total = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
+    else:
+        selected_total = float(portfolio.get("bot_total_pnl_rub", selected_entry["pnl_rub"]) or 0.0)
+    if selected_entry is not None:
+        selected_base = float(portfolio.get("total_portfolio_rub") or 0.0)
+        previous_pnl = float(selected_entry["pnl_rub"] or 0.0)
+        delta = selected_total - previous_pnl
+        selected_entry["pnl_rub"] = round(selected_total, 2)
+        selected_entry["pnl_pct"] = round(selected_total / selected_base * 100.0, 2) if selected_base else None
+        for day_key in days[days.index(selected_key):]:
+            point = by_day[day_key]
+            point["cumulative_pnl_rub"] = round(float(point["cumulative_pnl_rub"] or 0.0) + delta, 2)
+
+    chart_days = days[-30:]
+    chart_series = []
+    chart_cumulative = 0.0
+    for day_key in chart_days:
+        point = dict(by_day[day_key])
+        chart_cumulative += float(point["pnl_rub"] or 0.0)
+        point["cumulative_pnl_rub"] = round(chart_cumulative, 2)
+        chart_series.append(point)
     return {
         "selected_date": selected_key,
         "available_dates": days,
@@ -2831,7 +2866,7 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
                 "cumulative_pnl_pct": None,
             },
         ),
-        "series": [by_day[day_key] for day_key in days],
+        "series": chart_series,
     }
 
 
@@ -4596,7 +4631,7 @@ def build_dashboard_html() -> str:
         <canvas id="pnlChart" width="1200" height="280"></canvas>
         <div class="chart-legend">
           <span><span class="legend-dot" style="background:#43c5ff;"></span>Итог за день, RUB</span>
-          <span><span class="legend-dot" style="background:#37e6a4;"></span>Накопленный итог, RUB</span>
+          <span><span class="legend-dot" style="background:#37e6a4;"></span>Накопленный итог за 30 дней, RUB</span>
         </div>
       </div>
     </section>

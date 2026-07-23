@@ -217,7 +217,7 @@ struct OverviewScreen: View {
     private func pnlChartCard(payload: DashboardPayload) -> some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
-                SectionHeader(title: "График PnL", subtitle: "Накопленный результат по дням")
+                SectionHeader(title: "График PnL", subtitle: "Последние 30 дней")
                 MiniPnlChart(series: payload.daily.series, selectedDate: payload.daily.selectedDate)
                 HStack(spacing: 16) {
                     legendChip(color: .cyan, text: "Кривая PnL")
