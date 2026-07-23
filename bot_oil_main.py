@@ -4312,6 +4312,7 @@ def maybe_refresh_portfolio_snapshot(
         "varmargin_by_symbol": payload.get("bot_actual_varmargin_by_symbol", {}),
     }
     save_accounting_history(history)
+    reconcile_previous_accounting_day_if_needed(client, config, watchlist, meta, now=now)
     meta["portfolio_snapshot_refreshed_at"] = now.isoformat()
     save_meta_state(meta)
 
@@ -4335,11 +4336,48 @@ def update_accounting_history_for_day(
         "broker_open_positions_pnl_rub": 0.0,
         "total_pnl_rub": 0.0,
         "varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
+        "source": str(accounting.get("source") or "unknown"),
     }
     history = load_accounting_history()
     history[target_day.isoformat()] = entry
     save_accounting_history(history)
     return entry
+
+
+def reconcile_previous_accounting_day_if_needed(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+    meta: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Refresh yesterday once delayed evening-clearing entries are available."""
+    now_moscow = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
+    if now_moscow.hour == 0 and now_moscow.minute <= 16:
+        return False
+
+    completed_day = now_moscow.date() - timedelta(days=1)
+    completed_key = completed_day.isoformat()
+    if str(meta.get("accounting_reconciled_through") or "") == completed_key:
+        return False
+
+    entry = update_accounting_history_for_day(client, config, watchlist, completed_day)
+    if str(entry.get("source") or "") != "live":
+        logging.warning(
+            "Не подтверждаю сверку ВМ за %s: источник=%s",
+            completed_key,
+            entry.get("source") or "unknown",
+        )
+        return False
+
+    meta["accounting_reconciled_through"] = completed_key
+    logging.info(
+        "Сверен завершённый день по брокерской ВМ: %s, ВМ=%s RUB",
+        completed_key,
+        entry.get("actual_varmargin_rub", 0.0),
+    )
+    return True
 
 
 def maybe_refresh_news_snapshot(refresh_seconds: int = 300) -> None:
@@ -5358,6 +5396,12 @@ def get_accounting_snapshot_for_day(
     target_day: date,
     watchlist: list[InstrumentConfig] | None = None,
 ) -> dict[str, Any]:
+    """Return the accounting view for a trading day.
+
+    Evening clearing belongs to the day that just ended. The broker can post
+    it between 23:55 and 00:15 Moscow time, so early-after-midnight entries
+    are deliberately assigned back to the preceding calendar day.
+    """
     def history_fallback() -> dict[str, Any]:
         history_entry = (load_accounting_history() or {}).get(target_day.isoformat()) or {}
         return {
@@ -5376,7 +5420,9 @@ def get_accounting_snapshot_for_day(
             "source": "history_fallback",
         }
 
-    from_utc, to_utc = get_day_bounds_utc_for_date(target_day)
+    from_utc, _ = get_day_bounds_utc_for_date(target_day)
+    next_day_start_utc, _ = get_day_bounds_utc_for_date(target_day + timedelta(days=1))
+    to_utc = next_day_start_utc + timedelta(minutes=16)
     cursor = ""
     actual_varmargin_rub = 0.0
     actual_fee_expense_rub = 0.0
@@ -5428,13 +5474,23 @@ def get_accounting_snapshot_for_day(
         for item in getattr(response, "items", []) or []:
             op_type = getattr(item, "type", None)
             payment = quotation_to_float(getattr(item, "payment", None))
+            operation_time = getattr(item, "date", None)
+            if not isinstance(operation_time, datetime):
+                continue
+            if operation_time.tzinfo is None:
+                operation_time = operation_time.replace(tzinfo=UTC)
+            operation_moscow = operation_time.astimezone(MOSCOW_TZ)
+            operation_day = operation_moscow.date()
             figi = str(getattr(item, "figi", "") or "")
             symbol = figi_to_symbol.get(figi)
-            if op_type in VARMARGIN_OPERATION_TYPES:
+            varmargin_day = operation_day
+            if op_type in VARMARGIN_OPERATION_TYPES and operation_moscow.hour == 0 and operation_moscow.minute <= 15:
+                varmargin_day -= timedelta(days=1)
+            if op_type in VARMARGIN_OPERATION_TYPES and varmargin_day == target_day:
                 actual_varmargin_rub += payment
                 if symbol:
                     varmargin_by_symbol[symbol] = round(varmargin_by_symbol.get(symbol, 0.0) + payment, 2)
-            elif op_type in FEE_OPERATION_TYPES:
+            elif op_type in FEE_OPERATION_TYPES and operation_day == target_day:
                 actual_fee_cash_effect_rub += payment
                 actual_fee_expense_rub += abs(payment)
 
