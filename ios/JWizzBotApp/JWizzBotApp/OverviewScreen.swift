@@ -78,11 +78,11 @@ struct OverviewScreen: View {
                 }
 
                 LazyVGrid(columns: twoColumns, spacing: 12) {
-                    MetricGlassTile(title: "Итог бота", value: formatRub(payload.portfolio.botAnalyticalTotalPnlRub), tone: statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), help: portfolioHelp("analytical"))
-                    MetricGlassTile(title: "Закрытые сделки", value: formatRub(payload.portfolio.botClosedNetPnlRub), tone: statusTone(for: payload.portfolio.botClosedNetPnlRub), help: portfolioHelp("closed"))
-                    MetricGlassTile(title: "Доход открытых позиций", value: formatRub(payload.portfolio.botOpenPositionsIncomeRub), tone: statusTone(for: payload.portfolio.botOpenPositionsIncomeRub), help: portfolioHelp("open_income"))
+                    MetricGlassTile(title: "Счёт", value: formatRub(payload.portfolio.totalPortfolioRub), help: portfolioHelp("total"))
                     MetricGlassTile(title: "Свободные деньги", value: formatRub(calculatedFreeCash(payload.portfolio)), help: portfolioHelp("free"))
-                    MetricGlassTile(title: "Открытых позиций", value: formatInt(payload.portfolio.openPositionsCount))
+                    MetricGlassTile(title: "За сегодня", value: formatRub(payload.portfolio.botOpenPositionsIncomeRub), tone: statusTone(for: payload.portfolio.botOpenPositionsIncomeRub), help: portfolioHelp("open_income"))
+                    MetricGlassTile(title: "Вар. маржа", value: formatRub(payload.portfolio.botEstimatedVariationMarginRub), tone: statusTone(for: payload.portfolio.botEstimatedVariationMarginRub), help: portfolioHelp("estimated_vm"))
+                    MetricGlassTile(title: "Комиссии", value: formatRub(payload.portfolio.botActualFeeRub), tone: statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)), help: portfolioHelp("fee"))
                 }
             }
         }
@@ -96,40 +96,26 @@ struct OverviewScreen: View {
                     .joined(separator: " | ")
                 SectionHeader(title: "Портфель", subtitle: subtitle.isEmpty ? nil : subtitle)
 
-                Text("Разделено по смыслу: деньги на счёте, результат сделок бота и сверка с брокерской вариационной маржей.")
+                Text("Счёт брокера и три показателя текущего торгового дня.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 portfolioGroup(
                     title: "Счёт брокера",
-                    subtitle: "Сколько денег есть и сколько уже занято под позиции.",
+                    subtitle: "Оценка всего счёта и доступные для новых сделок деньги.",
                     rows: [
                         PortfolioMetric("Стоимость портфеля", formatRub(payload.portfolio.totalPortfolioRub), .white, portfolioHelp("total")),
                         PortfolioMetric("Свободные деньги", formatRub(calculatedFreeCash(payload.portfolio)), .white, portfolioHelp("free")),
-                        PortfolioMetric("Занято под ГО", formatRub(payload.portfolio.blockedGuaranteeRub), .white, portfolioHelp("blocked")),
-                        PortfolioMetric("Режим", displayMode(payload.portfolio.mode), .white, portfolioHelp("mode")),
                     ]
                 )
 
                 portfolioGroup(
-                    title: "Результат бота",
-                    subtitle: "То, что показывает торговая логика: закрытые сделки плюс текущий результат открытых позиций.",
+                    title: "Сегодня",
+                    subtitle: "Три независимых показателя из данных брокера.",
                     rows: [
-                        PortfolioMetric("Итог бота", formatRub(payload.portfolio.botAnalyticalTotalPnlRub), statusTone(for: payload.portfolio.botAnalyticalTotalPnlRub), portfolioHelp("analytical")),
-                        PortfolioMetric("Закрытые сделки", formatRub(payload.portfolio.botClosedNetPnlRub), statusTone(for: payload.portfolio.botClosedNetPnlRub), portfolioHelp("closed")),
-                        PortfolioMetric("Доход открытых позиций", formatRub(payload.portfolio.botOpenPositionsIncomeRub), statusTone(for: payload.portfolio.botOpenPositionsIncomeRub), portfolioHelp("open_income")),
-                        PortfolioMetric("Доход до комиссии", formatRub(payload.portfolio.botTotalVariationMarginRub), statusTone(for: payload.portfolio.botTotalVariationMarginRub), portfolioHelp("gross_live")),
-                    ]
-                )
-
-                portfolioGroup(
-                    title: "Сверка с брокером",
-                    subtitle: "Брокерские движения по вариационной марже, комиссиям и денежному эффекту операций.",
-                    rows: [
-                        PortfolioMetric("Клиринговая ВМ", formatRub(payload.portfolio.botActualVarmarginRub), statusTone(for: payload.portfolio.botActualVarmarginRub), portfolioHelp("actual_vm")),
-                        PortfolioMetric("Комиссия", formatRub(payload.portfolio.botActualFeeRub), statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)), portfolioHelp("fee")),
-                        PortfolioMetric("Факт по счету", formatRub(payload.portfolio.botOperationsCashEffectRub), statusTone(for: payload.portfolio.botOperationsCashEffectRub), portfolioHelp("cash_effect")),
-                        PortfolioMetric("Текущая ВМ", formatRub(payload.portfolio.botEstimatedVariationMarginRub), statusTone(for: payload.portfolio.botEstimatedVariationMarginRub), portfolioHelp("estimated_vm")),
+                        PortfolioMetric("За сегодня", formatRub(payload.portfolio.botOpenPositionsIncomeRub), statusTone(for: payload.portfolio.botOpenPositionsIncomeRub), portfolioHelp("open_income")),
+                        PortfolioMetric("Вар. маржа", formatRub(payload.portfolio.botEstimatedVariationMarginRub), statusTone(for: payload.portfolio.botEstimatedVariationMarginRub), portfolioHelp("estimated_vm")),
+                        PortfolioMetric("Комиссии", formatRub(payload.portfolio.botActualFeeRub), statusTone(for: -(payload.portfolio.botActualFeeRub ?? 0)), portfolioHelp("fee")),
                     ]
                 )
             }
