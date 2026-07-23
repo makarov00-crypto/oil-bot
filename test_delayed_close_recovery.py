@@ -1161,6 +1161,36 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("MACD/AO/RSI", reason)
 
+    def test_unified_reversal_blocks_same_side_reentry_for_one_hour_after_trailing_exit(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="IMOEXF",
+            figi="FIGI",
+            display_name="MOEX",
+            min_price_increment=1.0,
+        )
+        state = mod.InstrumentState(
+            trading_day=datetime.now(timezone.utc).astimezone(mod.MOSCOW_TZ).date().isoformat(),
+            last_exit_time=(datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+            last_exit_side="LONG",
+            last_exit_pnl_rub=250.0,
+            last_exit_price=2640.0,
+            last_exit_reason="Трейлинг-стоп с подтверждением разворота: цена 2640.0000 <= 2642.0000",
+            last_strategy_name="reversal_1h",
+        )
+        signal_df = pd.DataFrame(
+            [
+                {"close": 2641.0, "ema20": 2639.0, "rsi": 55.0, "macd": 0.4, "macd_signal": 0.2, "ao": 0.3, "volume": 100.0, "volume_avg": 100.0, "body": 2.0, "body_avg": 2.0},
+                {"close": 2642.0, "ema20": 2640.0, "rsi": 56.0, "macd": 0.5, "macd_signal": 0.25, "ao": 0.4, "volume": 100.0, "volume_avg": 100.0, "body": 2.0, "body_avg": 2.0},
+                {"close": 2643.0, "ema20": 2641.0, "rsi": 57.0, "macd": 0.6, "macd_signal": 0.3, "ao": 0.5, "volume": 100.0, "volume_avg": 100.0, "body": 2.0, "body_avg": 2.0},
+                {"close": 2644.0, "ema20": 2642.0, "rsi": 58.0, "macd": 0.7, "macd_signal": 0.35, "ao": 0.6, "volume": 100.0, "volume_avg": 100.0, "body": 2.0, "body_avg": 2.0},
+            ]
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "LONG", 2644.0, signal_df)
+
+        self.assertFalse(allowed)
+        self.assertIn("после трейлинг-стопа", reason)
+
     def test_imoexf_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("IMOEXF")
 

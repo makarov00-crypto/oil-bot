@@ -7030,6 +7030,28 @@ def unified_reversal_pressure_intact(df: pd.DataFrame, side: str) -> bool:
         return close < ema20 and macd < macd_signal and ao < 0
     return False
 
+
+def unified_trailing_reversal_confirmed(df: pd.DataFrame, side: str) -> bool:
+    """Require a completed-candle reversal before a profitable reversal trade trails out."""
+    if len(df) < 2:
+        return False
+    last = df.iloc[-1]
+    if not bool(last.get("is_complete", True)):
+        return False
+    prev = df.iloc[-2]
+    close = float(last["close"])
+    prev_close = float(prev["close"])
+    ema20 = float(last["ema20"])
+    macd = float(last["macd"])
+    macd_signal = float(last["macd_signal"])
+    ao = float(last.get("ao", macd - macd_signal))
+    prev_ao = float(prev.get("ao", float(prev["macd"]) - float(prev["macd_signal"])))
+    if side == "LONG":
+        return close < ema20 and close <= prev_close and macd < macd_signal and ao <= prev_ao
+    if side == "SHORT":
+        return close > ema20 and close >= prev_close and macd > macd_signal and ao >= prev_ao
+    return False
+
 def rbm6_sideways_exhaustion_exit_reason(
     instrument: InstrumentConfig,
     state: InstrumentState,
@@ -7249,6 +7271,29 @@ def position_reentry_allowed(
         trading_day = None
     if trading_day and last_exit_at.astimezone(MOSCOW_TZ).date() < trading_day:
         return True, ""
+
+    # A trailing exit is a protection of accumulated profit, not an invitation
+    # to buy the same signal again on the next poll.  One 1h candle is required
+    # unless a new, unusually strong MACD breakout has appeared.
+    if (
+        is_unified_reversal
+        and state.last_exit_side == signal
+        and "трейлинг-стоп" in str(state.last_exit_reason or "").lower()
+        and datetime.now(UTC) < last_exit_at + timedelta(minutes=60)
+    ):
+        fresh_breakout = (
+            unified_reversal_flip_confirmed(signal_df, signal)
+            and signal_df is not None
+            and len(signal_df) >= 1
+            and float(signal_df.iloc[-1].get("volume", 0.0))
+            >= float(signal_df.iloc[-1].get("volume_avg", 0.0)) * 1.15
+            and float(signal_df.iloc[-1].get("body", 0.0))
+            >= float(signal_df.iloc[-1].get("body_avg", 0.0)) * 0.90
+            and strong_same_side_reentry_confirmed(2)
+        )
+        if not fresh_breakout:
+            remaining = int(((last_exit_at + timedelta(minutes=60)) - datetime.now(UTC)).total_seconds() // 60) + 1
+            return False, f"для {instrument.symbol} после трейлинг-стопа ждём закрытия 1ч свечи или нового сильного MACD-пробоя; ещё ~{remaining} мин."
 
     if is_unified_reversal and state.last_exit_side and state.last_exit_side != signal:
         now = datetime.now(UTC)
@@ -8222,12 +8267,14 @@ def check_exit(
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
-            instrument.symbol not in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
-            and not is_natural_gas_symbol(instrument.symbol)
-            and get_instrument_group(instrument.symbol).name != "fx"
-            or state.breakeven_armed
-        ) and price <= trailing_price:
-            close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} <= {trailing_price:.4f}")
+            price <= trailing_price
+            and (
+                not is_unified_reversal
+                or (min_hold_passed and unified_trailing_reversal_confirmed(exit_df, "LONG"))
+            )
+        ):
+            suffix = " с подтверждением разворота" if is_unified_reversal else ""
+            close_position(client, config, instrument, state, f"Трейлинг-стоп{suffix}: цена {price:.4f} <= {trailing_price:.4f}")
         elif (
             min_hold_passed
             and state.breakeven_armed
@@ -8266,12 +8313,14 @@ def check_exit(
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
-            instrument.symbol not in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
-            and not is_natural_gas_symbol(instrument.symbol)
-            and get_instrument_group(instrument.symbol).name != "fx"
-            or state.breakeven_armed
-        ) and price >= trailing_price:
-            close_position(client, config, instrument, state, f"Трейлинг-стоп: цена {price:.4f} >= {trailing_price:.4f}")
+            price >= trailing_price
+            and (
+                not is_unified_reversal
+                or (min_hold_passed and unified_trailing_reversal_confirmed(exit_df, "SHORT"))
+            )
+        ):
+            suffix = " с подтверждением разворота" if is_unified_reversal else ""
+            close_position(client, config, instrument, state, f"Трейлинг-стоп{suffix}: цена {price:.4f} >= {trailing_price:.4f}")
         elif (
             min_hold_passed
             and state.breakeven_armed

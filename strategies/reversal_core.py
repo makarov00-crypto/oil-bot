@@ -258,8 +258,26 @@ def evaluate_signal_core(
 
     breakout_up = close > recent_high and close > ema20
     breakout_down = close < recent_low and close < ema20
-    compression_long_ok = regime == "compression" and breakout_up and volume_ratio >= soft_volume_floor and body_ratio >= soft_impulse_floor
-    compression_short_ok = regime == "compression" and breakout_down and volume_ratio >= soft_volume_floor and body_ratio >= soft_impulse_floor
+    # In compression, a weak cross is usually just another move inside the range.
+    # Admit only a fresh, visible breakout so the bot does not churn in a squeeze.
+    compression_volume_floor = max(profile.min_volume_ratio, 1.10)
+    compression_impulse_floor = max(profile.min_body_ratio, 0.90)
+    compression_long_ok = (
+        regime == "compression"
+        and recent_long_cross
+        and breakout_up
+        and ao_long_ok
+        and volume_ratio >= compression_volume_floor
+        and body_ratio >= compression_impulse_floor
+    )
+    compression_short_ok = (
+        regime == "compression"
+        and recent_short_cross
+        and breakout_down
+        and ao_short_ok
+        and volume_ratio >= compression_volume_floor
+        and body_ratio >= compression_impulse_floor
+    )
 
     rsi_long_ok = _rsi_direction_ok(
         rsi,
@@ -352,6 +370,10 @@ def evaluate_signal_core(
         and evening_short_pressure_ok
         and soft_impulse_ok
     )
+    # A continuation has no fresh MACD crossing to protect the entry.  It must
+    # therefore prove that the current candle carries the trend, not just drift.
+    continuation_volume_floor = max(profile.min_volume_ratio, 1.15)
+    continuation_impulse_floor = max(profile.min_body_ratio, 0.90)
     trend_long_continuation_ok = (
         trend_like_regime
         and close >= ema20
@@ -360,9 +382,9 @@ def evaluate_signal_core(
         and macd_hist >= 0
         and (macd_hist >= prev_hist or rsi >= prev_rsi)
         and rsi_long_ok
-        and ao_long_supported
-        and long_volume_ok
-        and soft_impulse_ok
+        and ao_long_ok
+        and volume_ratio >= continuation_volume_floor
+        and body_ratio >= continuation_impulse_floor
         and soft_volatility_ok
         and not rsi_long_extreme_bad
     )
@@ -374,9 +396,9 @@ def evaluate_signal_core(
         and macd_hist <= 0
         and (macd_hist <= prev_hist or rsi <= prev_rsi)
         and rsi_short_ok
-        and ao_short_supported
-        and short_volume_ok
-        and soft_impulse_ok
+        and ao_short_ok
+        and volume_ratio >= continuation_volume_floor
+        and body_ratio >= continuation_impulse_floor
         and soft_volatility_ok
         and not rsi_short_extreme_bad
     )
@@ -457,15 +479,9 @@ def evaluate_signal_core(
     if regime == "chop":
         long_blockers.append("режим chop: переворот запрещён")
         short_blockers.append("режим chop: переворот запрещён")
-    if regime == "compression" and not (
-        compression_long_ok
-        or (macd_long_ok and ao_long_ok and early_long_ok and long_volume_ok and soft_impulse_ok)
-    ):
+    if regime == "compression" and not compression_long_ok:
         long_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
-    if regime == "compression" and not (
-        compression_short_ok
-        or (macd_short_ok and ao_short_ok and early_short_ok and short_volume_ok and soft_impulse_ok)
-    ):
+    if regime == "compression" and not compression_short_ok:
         short_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
     if rsi_long_extreme_bad and not slow_long_continuation_ok:
         long_blockers.append("RSI не подтверждает рост")
@@ -506,6 +522,7 @@ def evaluate_signal_core(
     regime_allows_short = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and (fresh_impulse_override or (recent_short_cross and ao_short_ok and soft_impulse_ok)))
     long_ok = (
         regime_allows_long
+        and (regime != "compression" or compression_long_ok)
         and (trend_up or expansion_up or compression_long_ok or early_long_ok)
         and recent_long_cross
         and macd_long_ok
@@ -519,6 +536,7 @@ def evaluate_signal_core(
     )
     short_ok = (
         regime_allows_short
+        and (regime != "compression" or compression_short_ok)
         and (trend_down or expansion_down or compression_short_ok or early_short_ok)
         and recent_short_cross
         and macd_short_ok

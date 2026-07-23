@@ -262,7 +262,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "LONG")
         self.assertIn("AO=", reason)
 
-    def test_unified_reversal_allows_trend_long_when_ao_softens_and_cross_is_old(self) -> None:
+    def test_unified_reversal_blocks_weak_trend_continuation_without_fresh_cross(self) -> None:
         df = candle_rows(
             [
                 {"close": 100.0, "ema20": 99.6, "ema50": 99.1, "rsi": 51.0, "macd": 0.08, "macd_signal": 0.02, "ao": 0.16},
@@ -299,12 +299,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "LONG")
-        self.assertIn("продолжение тренда вверх", reason)
-        self.assertIn("AO нейтрален", reason)
-        self.assertIn("late entry мягкий", reason)
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("long не подтверждён", reason)
 
-    def test_unified_reversal_allows_trend_short_when_ao_softens_and_cross_is_old(self) -> None:
+    def test_unified_reversal_allows_strong_trend_short_continuation_without_fresh_cross(self) -> None:
         df = candle_rows(
             [
                 {"close": 100.0, "ema20": 100.4, "ema50": 100.9, "rsi": 49.0, "macd": -0.08, "macd_signal": -0.02, "ao": -0.16},
@@ -324,10 +322,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
                     "rsi": 31.0,
                     "macd": -0.31,
                     "macd_signal": -0.20,
-                    "ao": -0.27,
-                    "volume": 96.0,
+                    "ao": -0.38,
+                    "volume": 125.0,
                     "volume_avg": 100.0,
-                    "body": 0.50,
+                    "body": 0.60,
                     "body_avg": 0.60,
                     "atr": 0.30,
                     "bb_upper": 100.3,
@@ -343,7 +341,6 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(signal, "SHORT")
         self.assertIn("продолжение тренда вниз", reason)
-        self.assertIn("AO нейтрален", reason)
         self.assertIn("late entry мягкий", reason)
 
     def test_unified_reversal_entry_edge_is_not_crushed_by_early_compression(self) -> None:
@@ -376,6 +373,23 @@ class StrategyQualityFilterTests(unittest.TestCase):
         )
 
         self.assertTrue(mod.unified_reversal_pressure_intact(df, "SHORT"))
+
+    def test_unified_trailing_exit_requires_completed_candle_reversal(self) -> None:
+        intact = candle_rows(
+            [
+                {"close": 102.0, "ema20": 100.0, "macd": 0.30, "macd_signal": 0.15, "ao": 0.20},
+                {"close": 101.5, "ema20": 100.5, "macd": 0.24, "macd_signal": 0.14, "ao": 0.16},
+            ]
+        )
+        reversed_df = candle_rows(
+            [
+                {"close": 102.0, "ema20": 100.0, "macd": 0.30, "macd_signal": 0.15, "ao": 0.20},
+                {"close": 99.8, "ema20": 100.5, "macd": 0.08, "macd_signal": 0.13, "ao": 0.04},
+            ]
+        )
+
+        self.assertFalse(mod.unified_trailing_reversal_confirmed(intact, "LONG"))
+        self.assertTrue(mod.unified_trailing_reversal_confirmed(reversed_df, "LONG"))
 
     def test_recovery_mode_allows_only_unified_reversal(self) -> None:
         state = mod.InstrumentState(last_setup_quality_label="strong", last_market_regime="trend_expansion")
