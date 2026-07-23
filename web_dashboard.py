@@ -4570,9 +4570,10 @@ def build_dashboard_html() -> str:
               <div class="portfolio-label">За сегодня <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioOpenLive">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Текущая вариационная маржа по полю var_margin брокера. После вечернего клиринга она может отличаться от дохода." tabindex="0">
+            <div class="portfolio-metric" data-help="Расчёт текущей вариационной маржи: результат открытых и закрытых сделок за день, комиссии и фандинг вечных фьючерсов. Ставка фандинга берётся из вечерней публикации MOEX." tabindex="0">
               <div class="portfolio-label">Вар. маржа <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioVariation">-</div>
+              <div class="portfolio-secondary-value">Фандинг: <strong id="portfolioFunding">-</strong></div>
             </div>
             <div class="portfolio-metric" data-help="Комиссии брокера по операциям счёта за текущий день." tabindex="0">
               <div class="portfolio-label">Комиссии <span class="portfolio-help-icon">?</span></div>
@@ -5740,6 +5741,7 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_cash_rub ?? calculatedFreeCash);
       document.getElementById('portfolioActualFee').textContent = formatRub(portfolio.bot_actual_fee_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
+      document.getElementById('portfolioFunding').textContent = formatRub(portfolio.bot_funding_rub);
       document.getElementById('portfolioOpenLive').textContent = formatRub(portfolio.bot_open_positions_income_rub ?? portfolio.bot_open_positions_live_pnl_rub ?? portfolio.bot_broker_day_pnl_rub);
 
       try {

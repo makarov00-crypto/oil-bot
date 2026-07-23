@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+from html import unescape as html_unescape
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
@@ -98,6 +99,7 @@ STATE_DIR = Path(__file__).with_name("bot_state")
 META_STATE_PATH = STATE_DIR / "_bot_meta.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
+FUNDING_HISTORY_PATH = STATE_DIR / "_funding_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 NEWS_SEEN_PATH = STATE_DIR / "_news_seen.json"
@@ -112,6 +114,8 @@ NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
+MOEX_DERIVATIVES_BLOG_URL = "https://teletype.in/@moex_derivatives"
+MOEX_FUNDING_FETCH_HOUR_MOSCOW = 20
 SUPPORTED_INTERVALS = {
     1: CandleInterval.CANDLE_INTERVAL_1_MIN,
     2: CandleInterval.CANDLE_INTERVAL_2_MIN,
@@ -363,6 +367,24 @@ def load_accounting_history() -> dict[str, Any]:
 def save_accounting_history(history: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     ACCOUNTING_HISTORY_PATH.write_text(
+        json.dumps(history, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_funding_history() -> dict[str, Any]:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if not FUNDING_HISTORY_PATH.exists():
+        return {}
+    try:
+        return json.loads(FUNDING_HISTORY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_funding_history(history: dict[str, Any]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    FUNDING_HISTORY_PATH.write_text(
         json.dumps(history, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
@@ -3487,6 +3509,139 @@ def current_moscow_time() -> datetime:
     return datetime.now(MOSCOW_TZ)
 
 
+def find_moex_funding_article_url(feed_html: str, target_day: date) -> str:
+    target_label = target_day.strftime("%d.%m")
+    title = f"Статистика Срочного рынка {target_label}"
+    title_index = feed_html.find(title)
+    if title_index < 0:
+        return ""
+    uri_index = feed_html.rfind('"uri":"', 0, title_index)
+    if uri_index < 0:
+        return ""
+    uri_match = re.match(r'"uri":"(?P<uri>[^"]+)"', feed_html[uri_index:])
+    article_id = str(uri_match.group("uri") if uri_match else "").strip()
+    if not article_id:
+        return ""
+    return f"{MOEX_DERIVATIVES_BLOG_URL}/{article_id}"
+
+
+def parse_moex_funding_rates(article_html: str) -> dict[str, dict[str, float | int]]:
+    blocks = re.findall(r"<pre[^>]*>(.*?)</pre>", article_html, flags=re.DOTALL | re.IGNORECASE)
+    for block in blocks:
+        text = html_unescape(re.sub(r"<[^>]+>", "", block))
+        if "Funding" not in text:
+            continue
+        rates: dict[str, dict[str, float | int]] = {}
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) != 3 or not re.fullmatch(r"[A-Z0-9]+", parts[0]):
+                continue
+            try:
+                rate = float(parts[1].replace(",", "."))
+                lot = int(parts[2])
+            except ValueError:
+                continue
+            if lot > 0:
+                rates[parts[0]] = {"rate_rub": rate, "lot": lot}
+        if rates:
+            return rates
+    return {}
+
+
+def get_moex_funding_for_day(target_day: date, now: datetime | None = None) -> dict[str, Any]:
+    """Load the post-clearing MOEX funding table and retain it for reconciliation."""
+    history = load_funding_history()
+    key = target_day.isoformat()
+    cached = history.get(key)
+    if isinstance(cached, dict) and cached.get("rates"):
+        return cached
+
+    now_moscow = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
+    if target_day == now_moscow.date() and now_moscow.hour < MOEX_FUNDING_FETCH_HOUR_MOSCOW:
+        return {"date": key, "rates": {}, "source": "waiting_for_moex_publication"}
+
+    try:
+        feed_response = requests.get(MOEX_DERIVATIVES_BLOG_URL, timeout=15)
+        feed_response.raise_for_status()
+        feed_html = feed_response.content.decode("utf-8", errors="replace")
+        article_url = find_moex_funding_article_url(feed_html, target_day)
+        if not article_url:
+            raise ValueError("не найдена публикация MOEX за дату")
+        article_response = requests.get(article_url, timeout=15)
+        article_response.raise_for_status()
+        article_html = article_response.content.decode("utf-8", errors="replace")
+        rates = parse_moex_funding_rates(article_html)
+        if not rates:
+            raise ValueError("не найдена таблица фандинга в публикации MOEX")
+    except (requests.RequestException, ValueError) as error:
+        logging.warning("Не удалось загрузить фандинг MOEX за %s: %s", key, error)
+        return {"date": key, "rates": {}, "source": "moex_unavailable", "error": str(error)}
+
+    entry = {
+        "date": key,
+        "rates": rates,
+        "source": "moex_derivatives",
+        "source_url": article_url,
+        "fetched_at": now_moscow.isoformat(),
+    }
+    history[key] = entry
+    save_funding_history(history)
+    return entry
+
+
+def calculate_daily_perpetual_funding(
+    target_day: date,
+    funding_entry: dict[str, Any],
+    rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rates = funding_entry.get("rates") if isinstance(funding_entry, dict) else {}
+    if not isinstance(rates, dict) or not rates:
+        return {"total_rub": 0.0, "by_symbol": {}, "source": str(funding_entry.get("source") or "")}
+
+    source_rows = rows if rows is not None else load_trade_journal()
+    by_symbol: dict[str, dict[str, Any]] = {}
+    for row in source_rows:
+        row_time = parse_state_datetime(str(row.get("time") or ""))
+        if row_time is None or row_time.astimezone(MOSCOW_TZ).date() != target_day:
+            continue
+        if str(row.get("event") or "").upper() != "OPEN":
+            continue
+        if str(row.get("source") or "").strip() in {"portfolio_confirmation", "portfolio_recovery"}:
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        rate_info = rates.get(symbol)
+        if not isinstance(rate_info, dict):
+            continue
+        try:
+            quantity = abs(int(row.get("qty_lots") or 0))
+            rate_rub = float(rate_info.get("rate_rub") or 0.0)
+            lot = int(rate_info.get("lot") or 0)
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0 or lot <= 0:
+            continue
+        side = str(row.get("side") or "").upper()
+        if side not in {"LONG", "SHORT"}:
+            continue
+        # Positive MOEX funding is paid by longs and received by shorts.
+        direction = -1.0 if side == "LONG" else 1.0
+        amount = quantity * lot * rate_rub * direction
+        item = by_symbol.setdefault(
+            symbol,
+            {"funding_rub": 0.0, "rate_rub": rate_rub, "lot": lot, "long_lots": 0, "short_lots": 0},
+        )
+        item["funding_rub"] = round(float(item["funding_rub"]) + amount, 2)
+        item["long_lots" if side == "LONG" else "short_lots"] += quantity
+
+    total = round(sum(float(item["funding_rub"]) for item in by_symbol.values()), 2)
+    return {
+        "total_rub": total,
+        "by_symbol": by_symbol,
+        "source": str(funding_entry.get("source") or ""),
+        "source_url": str(funding_entry.get("source_url") or ""),
+    }
+
+
 def get_moscow_day_bounds_utc(now: datetime | None = None) -> tuple[datetime, datetime]:
     now_msk = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
     start_msk = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -4259,7 +4414,10 @@ def build_portfolio_snapshot_payload(
     realized_pnl = float(closed_totals["net_pnl_rub"])
     realized_gross_pnl = float(closed_totals["gross_pnl_rub"])
     realized_commission = float(closed_totals["commission_rub"])
-    total_income_rub = realized_gross_pnl + broker_daily_yield_rub
+    funding_entry = get_moex_funding_for_day(current_moscow_time().date())
+    funding = calculate_daily_perpetual_funding(current_moscow_time().date(), funding_entry)
+    funding_rub = float(funding["total_rub"])
+    total_income_rub = realized_gross_pnl + broker_daily_yield_rub + funding_rub
     total_bot_pnl = total_income_rub - float(accounting["actual_fee_expense_rub"])
     calculated_free_cash = max(0.0, snapshot.total_portfolio - snapshot.blocked_guarantee_rub)
 
@@ -4281,10 +4439,13 @@ def build_portfolio_snapshot_payload(
         "bot_actual_fee_rub": float(accounting["actual_fee_expense_rub"]),
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
-        # Terminal's top "Вармаржа" is the daily live result plus closed PnL,
-        # less actual broker commissions. The API exposes its components separately.
+        # Terminal's top "Вармаржа" includes the clearing funding of perpetual futures.
         "bot_estimated_variation_margin_rub": round(total_bot_pnl, 2),
         "bot_open_positions_variation_margin_rub": round(unrealized_pnl, 2),
+        "bot_funding_rub": round(funding_rub, 2),
+        "bot_funding_by_symbol": dict(funding["by_symbol"]),
+        "bot_funding_source": str(funding.get("source") or ""),
+        "bot_funding_source_url": str(funding.get("source_url") or ""),
         # Legacy aliases are retained for clients, but contain income, not clearing VM.
         "bot_total_varmargin_rub": round(total_income_rub, 2),
         "bot_total_variation_margin_rub": round(total_income_rub, 2),

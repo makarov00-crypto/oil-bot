@@ -62,6 +62,66 @@ class AccountingReconciliationTests(unittest.TestCase):
         self.assertEqual(result["variation_margin_rub"], 123.45)
         self.assertEqual(result["variation_margin_source"], "broker_var_margin")
 
+    def test_parses_moex_funding_table_with_rates_and_lots(self) -> None:
+        article = """
+        <pre>Asset    Funding   Lot
+USDRUBF  0.00225  1000
+CNYRUBF  0.00497  1000
+IMOEXF   1.22604    10</pre>
+        """
+
+        result = mod.parse_moex_funding_rates(article)
+
+        self.assertEqual(result["CNYRUBF"], {"rate_rub": 0.00497, "lot": 1000})
+        self.assertEqual(result["IMOEXF"], {"rate_rub": 1.22604, "lot": 10})
+
+    def test_funding_uses_opening_volume_and_position_direction(self) -> None:
+        rows = [
+            {
+                "time": "2026-07-23T08:50:16+03:00",
+                "symbol": "CNYRUBF",
+                "event": "OPEN",
+                "side": "SHORT",
+                "qty_lots": 59,
+            },
+            {
+                "time": "2026-07-23T11:00:41+03:00",
+                "symbol": "IMOEXF",
+                "event": "OPEN",
+                "side": "SHORT",
+                "qty_lots": 11,
+            },
+            {
+                "time": "2026-07-23T13:00:00+03:00",
+                "symbol": "CNYRUBF",
+                "event": "CLOSE",
+                "side": "SHORT",
+                "qty_lots": 59,
+            },
+            {
+                "time": "2026-07-23T14:00:00+03:00",
+                "symbol": "USDRUBF",
+                "event": "OPEN",
+                "side": "LONG",
+                "qty_lots": 2,
+            },
+        ]
+        funding_entry = {
+            "source": "moex_derivatives",
+            "rates": {
+                "CNYRUBF": {"rate_rub": 0.00497, "lot": 1000},
+                "IMOEXF": {"rate_rub": 1.22604, "lot": 10},
+                "USDRUBF": {"rate_rub": 0.00225, "lot": 1000},
+            },
+        }
+
+        result = mod.calculate_daily_perpetual_funding(date(2026, 7, 23), funding_entry, rows)
+
+        self.assertEqual(result["by_symbol"]["CNYRUBF"]["funding_rub"], 293.23)
+        self.assertEqual(result["by_symbol"]["IMOEXF"]["funding_rub"], 134.86)
+        self.assertEqual(result["by_symbol"]["USDRUBF"]["funding_rub"], -4.5)
+        self.assertEqual(result["total_rub"], 423.59)
+
     def test_reconciles_previous_day_once_after_clearing_window(self) -> None:
         meta: dict[str, str] = {}
         now = datetime(2026, 7, 22, 21, 17, tzinfo=timezone.utc)  # 00:17 Moscow
