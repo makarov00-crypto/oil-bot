@@ -446,7 +446,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 11.0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_daily_performance_uses_top_variation_margin_and_limits_chart_to_30_days(self) -> None:
+    def test_daily_performance_uses_total_bot_pnl_and_limits_chart_to_30_days(self) -> None:
         rows = [
             {"_date": f"2026-03-{day:02d}", "event": "CLOSE", "pnl_rub": 10.0}
             for day in range(1, 32)
@@ -457,7 +457,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         portfolio = {
             "selected_is_today": True,
             "total_portfolio_rub": 100_000.0,
-            "bot_estimated_variation_margin_rub": 2_990.89,
+            "bot_estimated_variation_margin_rub": 220.0,
+            "bot_total_pnl_rub": 2_990.89,
         }
 
         with patch.object(dashboard, "load_all_trade_rows", return_value=rows), patch.object(

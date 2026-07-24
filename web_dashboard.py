@@ -2829,7 +2829,7 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
         days = sorted([*days, selected_key])
     selected_entry = by_day[selected_key]
     if portfolio.get("selected_is_today"):
-        selected_total = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
+        selected_total = float(portfolio.get("bot_total_pnl_rub", portfolio.get("bot_estimated_variation_margin_rub")) or 0.0)
     else:
         selected_total = float(portfolio.get("bot_total_pnl_rub", selected_entry["pnl_rub"]) or 0.0)
     if selected_entry is not None:
@@ -2949,7 +2949,10 @@ def build_portfolio_view_for_day(
                     broker_open_positions_income += float(item.get("income_rub", item.get("expected_yield_rub")) or 0.0)
                 except Exception:
                     pass
-        estimated_variation = float(portfolio.get("bot_estimated_variation_margin_rub") or 0.0)
+        estimated_variation = float(
+            portfolio.get("bot_open_positions_variation_margin_rub", portfolio.get("bot_estimated_variation_margin_rub"))
+            or 0.0
+        )
         open_positions_count = portfolio.get("open_positions_count")
         live_varmargin_by_symbol: dict[str, float] = {}
         for item in (portfolio.get("broker_open_positions") or []):
@@ -2967,6 +2970,7 @@ def build_portfolio_view_for_day(
         open_positions_count = 0
         live_varmargin_by_symbol = {}
     view["bot_estimated_variation_margin_rub"] = round(estimated_variation, 2)
+    view["bot_open_positions_variation_margin_rub"] = round(estimated_variation, 2)
     view["open_positions_count"] = open_positions_count
     view["bot_broker_day_pnl_rub"] = round(broker_open_positions_income, 2)
     view["bot_open_positions_live_pnl_rub"] = round(broker_open_positions_income, 2)
@@ -4570,8 +4574,8 @@ def build_dashboard_html() -> str:
               <div class="portfolio-label">За сегодня <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioOpenLive">-</div>
             </div>
-            <div class="portfolio-metric" data-help="Расчёт текущей вариационной маржи: результат открытых и закрытых сделок за день, комиссии и фандинг вечных фьючерсов. Ставка фандинга берётся из вечерней публикации MOEX." tabindex="0">
-              <div class="portfolio-label">Вар. маржа <span class="portfolio-help-icon">?</span></div>
+            <div class="portfolio-metric" data-help="Текущая вариационная маржа только по открытым позициям из брокерского портфеля. Итог бота и закрытые сделки считаются отдельно." tabindex="0">
+              <div class="portfolio-label">ВМ открытых <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioVariation">-</div>
               <div class="portfolio-secondary-value">Фандинг: <strong id="portfolioFunding">-</strong></div>
             </div>

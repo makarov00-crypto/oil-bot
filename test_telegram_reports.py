@@ -10,7 +10,8 @@ class TelegramReportsTest(unittest.TestCase):
         portfolio = {
             "generated_at_moscow": "06.07 12:00:00 МСК",
             "bot_realized_pnl_rub": 150.0,
-            "bot_estimated_variation_margin_rub": 25.0,
+            "bot_estimated_variation_margin_rub": 175.0,
+            "bot_open_positions_variation_margin_rub": 25.0,
             "bot_total_pnl_rub": 175.0,
             "total_portfolio_rub": 10000.0,
             "free_rub": 5000.0,

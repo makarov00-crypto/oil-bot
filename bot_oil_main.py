@@ -4388,7 +4388,7 @@ def build_portfolio_snapshot_message(
         f"📒 NET закрытых сделок: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
         f"💸 Комиссия по счёту: {float(payload['bot_actual_fee_rub']):.2f} RUB",
         f"🏦 Клиринговая ВМ: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
-        f"📈 Текущая вар. маржа позиций: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"📈 Текущая вар. маржа позиций: {float(payload['bot_open_positions_variation_margin_rub']):.2f} RUB",
         f"🧾 Доход до комиссии: {float(payload['bot_total_income_rub']):.2f} RUB",
         f"🧮 Итог по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
         f"📌 Открытых позиций: {int(payload['open_positions_count'])}",
@@ -4437,8 +4437,8 @@ def build_portfolio_snapshot_payload(
         "bot_actual_fee_rub": float(accounting["actual_fee_expense_rub"]),
         "bot_actual_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
         "bot_actual_varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
-        # Terminal's top "Вармаржа" includes the clearing funding of perpetual futures.
-        "bot_estimated_variation_margin_rub": round(total_bot_pnl, 2),
+        # Legacy name retained for clients: this is live variation margin of open positions.
+        "bot_estimated_variation_margin_rub": round(unrealized_pnl, 2),
         "bot_open_positions_variation_margin_rub": round(unrealized_pnl, 2),
         "bot_funding_rub": round(funding_rub, 2),
         "bot_funding_by_symbol": dict(funding["by_symbol"]),
@@ -4667,7 +4667,7 @@ def build_trade_results_message(
         f"📒 NET сделок: {float(payload['bot_realized_pnl_rub']):.2f} RUB",
         f"💸 Комиссия по счёту: {float(payload['bot_actual_fee_rub']):.2f} RUB",
         f"🏦 Клиринговая ВМ: {float(payload['bot_actual_varmargin_rub']):.2f} RUB",
-        f"📈 Текущая вар. маржа: {float(payload['bot_estimated_variation_margin_rub']):.2f} RUB",
+        f"📈 Текущая вар. маржа: {float(payload['bot_open_positions_variation_margin_rub']):.2f} RUB",
         f"🧮 Итог по боту: {float(payload['bot_total_pnl_rub']):.2f} RUB",
         "",
         "Открытые позиции:",
@@ -4780,8 +4780,8 @@ def build_hourly_summary_message(
         "",
         f"📊 Закрыто: {len(closed_reviews)} | ✅ {wins} | ⚠️ {losses}",
         f"💰 NET закрытых: {profit_indicator(closed_total_net)} {format_rub(closed_total_net, signed=True)}",
-        f"📈 ВМ открытых: {profit_indicator(portfolio['bot_estimated_variation_margin_rub'])} "
-        f"{format_rub(portfolio['bot_estimated_variation_margin_rub'], signed=True)}",
+        f"📈 ВМ открытых: {profit_indicator(open_total_var_margin)} "
+        f"{format_rub(open_total_var_margin, signed=True)}",
         f"🧮 Итог бота: {profit_indicator(portfolio['bot_total_pnl_rub'])} "
         f"{format_rub(portfolio['bot_total_pnl_rub'], signed=True)}",
         f"💼 Портфель: {format_rub(portfolio['total_portfolio_rub'])} | "
