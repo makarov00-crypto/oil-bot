@@ -33,6 +33,7 @@
 - `BMM6`
 - `NGJ6`
 - `NGK6`
+- `NGN6`
 - `GNM6`
 - `UCM6`
 - `RNM6`
