@@ -114,7 +114,10 @@ NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
 MOEX_DERIVATIVES_BLOG_URL = "https://teletype.in/@moex_derivatives"
+MOEX_ISS_FUTURES_HISTORY_URL = "https://iss.moex.com/iss/history/engines/futures/markets/forts/securities"
+MOEX_ISS_FUTURES_SECURITIES_URL = "https://iss.moex.com/iss/engines/futures/markets/forts/securities"
 MOEX_FUNDING_FETCH_HOUR_MOSCOW = 20
+PERPETUAL_FUNDING_SYMBOLS = ("USDRUBF", "CNYRUBF", "IMOEXF")
 SUPPORTED_INTERVALS = {
     1: CandleInterval.CANDLE_INTERVAL_1_MIN,
     2: CandleInterval.CANDLE_INTERVAL_2_MIN,
@@ -3547,8 +3550,66 @@ def parse_moex_funding_rates(article_html: str) -> dict[str, dict[str, float | i
     return {}
 
 
+def parse_moex_iss_funding_rates(payload_by_symbol: dict[str, dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    """Extract final funding rates from the official MOEX ISS daily history response."""
+    rates: dict[str, dict[str, float | int]] = {}
+    for symbol, payload in payload_by_symbol.items():
+        history = payload.get("history") if isinstance(payload, dict) else None
+        securities = payload.get("securities") if isinstance(payload, dict) else None
+        if not isinstance(history, dict) or not isinstance(securities, dict):
+            continue
+        history_columns = history.get("columns")
+        history_rows = history.get("data")
+        security_columns = securities.get("columns")
+        security_rows = securities.get("data")
+        if (
+            not isinstance(history_columns, list)
+            or not isinstance(history_rows, list)
+            or not history_rows
+            or not isinstance(security_columns, list)
+            or not isinstance(security_rows, list)
+            or not security_rows
+        ):
+            continue
+        try:
+            history_row = dict(zip(history_columns, history_rows[0]))
+            security_row = dict(zip(security_columns, security_rows[0]))
+            rate = float(history_row.get("SWAPRATE"))
+            lot = int(security_row.get("LOTVOLUME"))
+        except (TypeError, ValueError):
+            continue
+        if lot > 0:
+            rates[str(symbol).upper()] = {"rate_rub": rate, "lot": lot}
+    return rates
+
+
+def fetch_moex_iss_funding_rates(target_day: date) -> dict[str, dict[str, float | int]]:
+    payload_by_symbol: dict[str, dict[str, Any]] = {}
+    for symbol in PERPETUAL_FUNDING_SYMBOLS:
+        response = requests.get(
+            f"{MOEX_ISS_FUTURES_HISTORY_URL}/{symbol}.json",
+            params={"from": target_day.isoformat(), "till": target_day.isoformat(), "iss.meta": "off"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        history_payload = response.json()
+        security_response = requests.get(
+            f"{MOEX_ISS_FUTURES_SECURITIES_URL}/{symbol}.json",
+            params={"iss.meta": "off"},
+            timeout=15,
+        )
+        security_response.raise_for_status()
+        security_payload = security_response.json()
+        if isinstance(history_payload, dict) and isinstance(security_payload, dict):
+            payload_by_symbol[symbol] = {
+                "history": history_payload.get("history"),
+                "securities": security_payload.get("securities"),
+            }
+    return parse_moex_iss_funding_rates(payload_by_symbol)
+
+
 def get_moex_funding_for_day(target_day: date, now: datetime | None = None) -> dict[str, Any]:
-    """Load the post-clearing MOEX funding table and retain it for reconciliation."""
+    """Load final funding rates after clearing and retain them for reconciliation."""
     history = load_funding_history()
     key = target_day.isoformat()
     cached = history.get(key)
@@ -3558,6 +3619,22 @@ def get_moex_funding_for_day(target_day: date, now: datetime | None = None) -> d
     now_moscow = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
     if target_day == now_moscow.date() and now_moscow.hour < MOEX_FUNDING_FETCH_HOUR_MOSCOW:
         return {"date": key, "rates": {}, "source": "waiting_for_moex_publication"}
+
+    try:
+        rates = fetch_moex_iss_funding_rates(target_day)
+        if rates:
+            entry = {
+                "date": key,
+                "rates": rates,
+                "source": "moex_iss",
+                "source_url": MOEX_ISS_FUTURES_HISTORY_URL,
+                "fetched_at": now_moscow.isoformat(),
+            }
+            history[key] = entry
+            save_funding_history(history)
+            return entry
+    except (requests.RequestException, ValueError, TypeError) as error:
+        logging.warning("Не удалось загрузить фандинг ISS Мосбиржи за %s: %s", key, error)
 
     try:
         feed_response = requests.get(MOEX_DERIVATIVES_BLOG_URL, timeout=15)
@@ -3598,12 +3675,18 @@ def calculate_daily_perpetual_funding(
         return {"total_rub": 0.0, "by_symbol": {}, "source": str(funding_entry.get("source") or "")}
 
     source_rows = rows if rows is not None else load_trade_journal()
-    by_symbol: dict[str, dict[str, Any]] = {}
+    clearing_at = datetime.combine(target_day, datetime.min.time(), tzinfo=MOSCOW_TZ).replace(hour=19)
+    positions: dict[tuple[str, str], int] = defaultdict(int)
+    dated_rows: list[tuple[datetime, dict[str, Any]]] = []
     for row in source_rows:
         row_time = parse_state_datetime(str(row.get("time") or ""))
-        if row_time is None or row_time.astimezone(MOSCOW_TZ).date() != target_day:
+        if row_time is None or row_time.astimezone(MOSCOW_TZ) > clearing_at:
             continue
-        if str(row.get("event") or "").upper() != "OPEN":
+        dated_rows.append((row_time.astimezone(MOSCOW_TZ), row))
+
+    for _, row in sorted(dated_rows, key=lambda item: item[0]):
+        event = str(row.get("event") or "").upper()
+        if event not in {"OPEN", "CLOSE"}:
             continue
         symbol = str(row.get("symbol") or "").upper()
         rate_info = rates.get(symbol)
@@ -3619,6 +3702,23 @@ def calculate_daily_perpetual_funding(
             continue
         side = str(row.get("side") or "").upper()
         if side not in {"LONG", "SHORT"}:
+            continue
+        position_key = (symbol, side)
+        if event == "OPEN":
+            positions[position_key] += quantity
+        else:
+            positions[position_key] = max(0, positions[position_key] - quantity)
+
+    by_symbol: dict[str, dict[str, Any]] = {}
+    for (symbol, side), quantity in positions.items():
+        if quantity <= 0:
+            continue
+        rate_info = rates.get(symbol)
+        if not isinstance(rate_info, dict):
+            continue
+        rate_rub = float(rate_info.get("rate_rub") or 0.0)
+        lot = int(rate_info.get("lot") or 0)
+        if lot <= 0:
             continue
         # Positive MOEX funding is paid by longs and received by shorts.
         direction = -1.0 if side == "LONG" else 1.0

@@ -75,8 +75,38 @@ IMOEXF   1.22604    10</pre>
         self.assertEqual(result["CNYRUBF"], {"rate_rub": 0.00497, "lot": 1000})
         self.assertEqual(result["IMOEXF"], {"rate_rub": 1.22604, "lot": 10})
 
-    def test_funding_uses_opening_volume_and_position_direction(self) -> None:
+    def test_parses_moex_iss_funding_rates_with_final_lots(self) -> None:
+        payload = {
+            "USDRUBF": {
+                "history": {
+                    "columns": ["SECID", "SWAPRATE"],
+                    "data": [["USDRUBF", -0.06545]],
+                },
+                "securities": {"columns": ["SECID", "LOTVOLUME"], "data": [["USDRUBF", 1000]]},
+            },
+            "IMOEXF": {
+                "history": {
+                    "columns": ["SECID", "SWAPRATE"],
+                    "data": [["IMOEXF", 1.22604]],
+                },
+                "securities": {"columns": ["SECID", "LOTVOLUME"], "data": [["IMOEXF", 10]]},
+            },
+        }
+
+        result = mod.parse_moex_iss_funding_rates(payload)
+
+        self.assertEqual(result["USDRUBF"], {"rate_rub": -0.06545, "lot": 1000})
+        self.assertEqual(result["IMOEXF"], {"rate_rub": 1.22604, "lot": 10})
+
+    def test_funding_uses_position_at_clearing_and_direction(self) -> None:
         rows = [
+            {
+                "time": "2026-07-22T18:00:00+03:00",
+                "symbol": "CNYRUBF",
+                "event": "OPEN",
+                "side": "SHORT",
+                "qty_lots": 10,
+            },
             {
                 "time": "2026-07-23T08:50:16+03:00",
                 "symbol": "CNYRUBF",
@@ -119,10 +149,10 @@ IMOEXF   1.22604    10</pre>
 
         result = mod.calculate_daily_perpetual_funding(date(2026, 7, 23), funding_entry, rows)
 
-        self.assertEqual(result["by_symbol"]["CNYRUBF"]["funding_rub"], 293.23)
+        self.assertEqual(result["by_symbol"]["CNYRUBF"]["funding_rub"], 49.7)
         self.assertEqual(result["by_symbol"]["IMOEXF"]["funding_rub"], 134.86)
         self.assertEqual(result["by_symbol"]["USDRUBF"]["funding_rub"], -4.5)
-        self.assertEqual(result["total_rub"], 423.59)
+        self.assertEqual(result["total_rub"], 180.06)
 
     def test_reconciles_previous_day_once_after_clearing_window(self) -> None:
         meta: dict[str, str] = {}
