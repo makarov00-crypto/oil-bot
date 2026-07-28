@@ -21,7 +21,6 @@ from dotenv import load_dotenv
 from active_contracts import replace_with_active_symbols
 from custom_instruments import merge_with_custom_symbols
 from instrument_groups import (
-    BOND_INDEX,
     DEFAULT_SYMBOLS,
     EQUITY_FUTURES,
     EQUITY_INDEX,
@@ -6295,8 +6294,6 @@ def get_candidate_correlation_bucket(candidate: dict[str, Any]) -> str:
         family = "fx"
     elif get_instrument_group(symbol).name in {EQUITY_INDEX.name, EQUITY_FUTURES.name}:
         family = "equity"
-    elif get_instrument_group(symbol).name == BOND_INDEX.name:
-        family = "bond"
     else:
         family = get_instrument_group(symbol).name
     return f"{family}:{signal}"
@@ -7194,7 +7191,7 @@ def select_exit_indicator_df(
 ) -> pd.DataFrame:
     if str(strategy_name or "").strip().lower() in UNIFIED_REVERSAL_STRATEGIES:
         return lower_df
-    higher_tf_exit_symbols = {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
+    higher_tf_exit_symbols = {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
     if (
         (
             instrument.symbol in higher_tf_exit_symbols
@@ -7284,61 +7281,6 @@ def unified_trailing_reversal_confirmed(df: pd.DataFrame, side: str) -> bool:
     if side == "SHORT":
         return close > ema20 and close >= prev_close and macd > macd_signal and ao >= prev_ao
     return False
-
-def rbm6_sideways_exhaustion_exit_reason(
-    instrument: InstrumentConfig,
-    state: InstrumentState,
-    df: pd.DataFrame,
-    current_price: float,
-) -> str:
-    if state.entry_price is None or state.position_qty <= 0 or state.position_side == "FLAT":
-        return ""
-    if len(df) < 8:
-        return ""
-    best_price = max(float(state.max_price or current_price), current_price) if state.position_side == "LONG" else min(float(state.min_price or current_price), current_price)
-    best_gross = calculate_futures_pnl_rub(
-        instrument,
-        state.entry_price,
-        best_price,
-        state.position_qty,
-        state.position_side,
-    )
-    current_gross = calculate_futures_pnl_rub(
-        instrument,
-        state.entry_price,
-        current_price,
-        state.position_qty,
-        state.position_side,
-    )
-    round_trip_commission = estimate_round_trip_commission_rub(state)
-    if best_gross < max(round_trip_commission * 2.0, 25.0):
-        return ""
-    recent = df.iloc[-5:]
-    previous = df.iloc[-8:-5]
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    macd_hist = float(last["macd"]) - float(last["macd_signal"])
-    prev_hist = float(prev["macd"]) - float(prev["macd_signal"])
-    if state.position_side == "LONG":
-        no_new_high = float(recent["high"].max()) <= float(previous["high"].max()) * 1.0004
-        momentum_fades = macd_hist <= prev_hist and float(last["rsi"]) <= 58.0
-        gave_back = current_gross <= best_gross * 0.65
-        if no_new_high and momentum_fades and gave_back:
-            return (
-                "RBM6 profit-lock: после импульса нет нового high на рабочем графике, "
-                f"MACD затухает; фиксируем {current_gross:.2f} из max {best_gross:.2f} RUB gross."
-            )
-    else:
-        no_new_low = float(recent["low"].min()) >= float(previous["low"].min()) * 0.9996
-        momentum_fades = macd_hist >= prev_hist and float(last["rsi"]) >= 42.0
-        gave_back = current_gross <= best_gross * 0.65
-        if no_new_low and momentum_fades and gave_back:
-            return (
-                "RBM6 profit-lock: после импульса нет нового low на рабочем графике, "
-                f"MACD затухает; фиксируем {current_gross:.2f} из max {best_gross:.2f} RUB gross."
-            )
-    return ""
-
 
 def price_has_new_extreme_since_exit(
     instrument: InstrumentConfig,
@@ -8481,7 +8423,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = max(stop_price, state.entry_price)
         trailing_price = (state.max_price or price) * (1 - exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (instrument.symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_down = macd_crossed_down_with_ema_loss(exit_df)
         else:
             macd_down = (
@@ -8493,8 +8435,6 @@ def check_exit(
         opposite_signal_confirmed = fresh_signal == "SHORT" and close < ema20 and close <= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
-        if instrument.symbol == "RBM6" and higher_tf_df is not None:
-            profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)
         if price <= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
         elif min_hold_passed and profit_lock_reason:
@@ -8527,7 +8467,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = min(stop_price, state.entry_price)
         trailing_price = (state.min_price or price) * (1 + exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (instrument.symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_up = macd_crossed_up_with_ema_reclaim(exit_df)
         else:
             macd_up = (
@@ -8539,8 +8479,6 @@ def check_exit(
         opposite_signal_confirmed = fresh_signal == "LONG" and close > ema20 and close >= prev_close
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
-        if instrument.symbol == "RBM6" and higher_tf_df is not None:
-            profit_lock_reason = profit_lock_reason or rbm6_sideways_exhaustion_exit_reason(instrument, state, exit_df, price)
         if price >= stop_price:
             close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
         elif min_hold_passed and profit_lock_reason:
@@ -8659,7 +8597,7 @@ def process_instrument(
     if (
         not uses_unified_reversal(instrument.symbol)
         and (
-            instrument.symbol in {"GNM6", "RBM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
+            instrument.symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
             or is_natural_gas_symbol(instrument.symbol)
             or get_instrument_group(instrument.symbol).name == "fx"
         )

@@ -26,22 +26,22 @@ class NewsBiasTests(unittest.TestCase):
         self.assertEqual(brent.actionability, "BLOCK")
         self.assertEqual(brent.category, "нефть")
 
-    def test_detects_ucny_rule_and_topics(self) -> None:
+    def test_detects_ozon_rule_and_topics(self) -> None:
         message = NewsMessage(
             channel="marketsnapshot",
-            text="USD/CNY выше после давления на CNY и слабого юаня на рынке Китая.",
+            text="Озон представил сильную отчетность: рост оборота, заказов и прибыли.",
             created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
         )
 
         items = detect_news_bias(message)
-        ucny = next(item for item in items if item.symbol == "UCU6")
+        ozon = next(item for item in items if item.symbol == "ONU6")
 
-        self.assertEqual(ucny.bias, "LONG")
-        self.assertEqual(ucny.category, "валюта")
-        self.assertTrue(ucny.summary.startswith("UCU6:"))
-        self.assertTrue(len(ucny.topics) >= 1)
-        self.assertGreater(ucny.source_speed, 0.8)
-        self.assertGreater(ucny.source_reliability, 0.7)
+        self.assertEqual(ozon.bias, "LONG")
+        self.assertEqual(ozon.category, "ритейл")
+        self.assertTrue(ozon.summary.startswith("ONU6:"))
+        self.assertTrue(len(ozon.topics) >= 1)
+        self.assertGreater(ozon.source_speed, 0.8)
+        self.assertGreater(ozon.source_reliability, 0.7)
 
     def test_fast_telegram_can_make_strong_intraday_news_actionable(self) -> None:
         message = NewsMessage(
@@ -121,7 +121,7 @@ class NewsBiasTests(unittest.TestCase):
     def test_human_readable_market_terms_map_to_traded_symbols(self) -> None:
         cases = [
             ("marketsnapshot", "Баррель нефти выше после сокращения добычи ОПЕК+.", "нефть"),
-            ("marketsnapshot", "Ключевая ставка давит на долговой рынок и ОФЗ.", "облигации"),
+            ("marketsnapshot", "Озон опубликовал сильную отчетность: рост оборота, заказов и прибыли.", "ритейл"),
             ("bcs_express_tg", "Банковский сектор под давлением, акции Сбера снижаются.", "банки"),
             ("finam_invest", "Газовый рынок растёт, запасы газа снижаются.", "газ"),
         ]

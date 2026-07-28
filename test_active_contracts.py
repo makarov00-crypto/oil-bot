@@ -44,9 +44,9 @@ class ActiveContractsTest(unittest.TestCase):
         self.assertTrue(uses_unified_reversal_1h("BMN6"))
 
     def test_disabled_template_is_removed_from_watchlist(self) -> None:
-        upsert_active_contract("RBM6", None, disabled=True)
+        upsert_active_contract("ONU6", None, disabled=True)
 
-        symbols = replace_with_active_symbols(["RBM6", "GNM6"])
+        symbols = replace_with_active_symbols(["ONU6", "GNM6"])
 
         self.assertEqual(symbols, ["GNM6"])
 

@@ -14,7 +14,6 @@ COMMODITIES = InstrumentGroup(name="commodities", description="Commodities and e
 FX = InstrumentGroup(name="fx", description="Currency futures")
 EQUITY_INDEX = InstrumentGroup(name="equity_index", description="Equity index futures")
 EQUITY_FUTURES = InstrumentGroup(name="equity_futures", description="Single-stock futures")
-BOND_INDEX = InstrumentGroup(name="bond_index", description="Government bond index futures")
 
 
 BRENT_SYMBOLS = {"BRK6", "BMM6"}
@@ -32,7 +31,7 @@ UNIFIED_REVERSAL_1H_SYMBOLS = {
     "IMOEXF",
     "SRM6",
     "VBM6",
-    "RBM6",
+    "ONU6",
 }
 
 GROUP_BY_SYMBOL = {
@@ -48,7 +47,7 @@ GROUP_BY_SYMBOL = {
     "RNM6": EQUITY_FUTURES,
     "SRM6": EQUITY_FUTURES,
     "VBM6": EQUITY_FUTURES,
-    "RBM6": BOND_INDEX,
+    "ONU6": EQUITY_FUTURES,
 }
 
 DEFAULT_SYMBOLS = ",".join(
@@ -63,7 +62,7 @@ DEFAULT_SYMBOLS = ",".join(
         "RNM6",
         "SRM6",
         "VBM6",
-        "RBM6",
+        "ONU6",
     ]
 )
 

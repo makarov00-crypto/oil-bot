@@ -37,10 +37,10 @@
       "updated_at": ""
     },
     {
-      "template_symbol": "RBM6",
-      "active_symbol": "RBU6",
+      "template_symbol": "ONU6",
+      "active_symbol": "ONU6",
       "disabled": false,
-      "updated_at": ""
+      "updated_at": "2026-07-29T00:00:00+00:00"
     },
     {
       "template_symbol": "RNM6",

@@ -1201,8 +1201,8 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
         self.assertEqual(strategies, ["reversal_1h"])
 
-    def test_rbm6_uses_unified_reversal_primary_strategy(self) -> None:
-        strategies = strategy_registry.get_primary_strategies("RBM6")
+    def test_onu6_uses_unified_reversal_primary_strategy(self) -> None:
+        strategies = strategy_registry.get_primary_strategies("ONU6")
 
         self.assertEqual(strategies, ["reversal_1h"])
 

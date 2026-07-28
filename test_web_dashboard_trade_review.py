@@ -30,9 +30,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertFalse(payload["missing_symbols"])
         self.assertIn("BMQ6", payload["news_symbols"])
-        self.assertIn("RBU6", payload["news_symbols"])
+        self.assertIn("ONU6", payload["news_symbols"])
         self.assertIn("баррель", payload["keyword_samples"]["BMQ6"])
-        self.assertIn("ключевая ставка", payload["keyword_samples"]["RBU6"])
+        self.assertIn("озон", payload["keyword_samples"]["ONU6"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_dashboard_hides_internal_news_keyword_dictionary(self) -> None:
@@ -600,7 +600,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
         catalog = dashboard.build_instrument_catalog()
 
-        for symbol in ["BMM6", "NGK6", "RBM6", "SRM6", "UCM6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
+        for symbol in ["BMM6", "NGK6", "ONU6", "SRM6", "UCM6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
             with self.subTest(symbol=symbol):
                 self.assertIn(symbol, catalog)
                 self.assertNotEqual(catalog[symbol], symbol)
