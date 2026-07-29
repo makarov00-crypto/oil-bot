@@ -3567,6 +3567,39 @@ def parse_moex_iss_funding_rates(payload_by_symbol: dict[str, dict[str, Any]]) -
     return rates
 
 
+def parse_moex_iss_live_funding_rates(payload_by_symbol: dict[str, dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    """Extract the post-clearing indicative funding from the live MOEX market table."""
+    rates: dict[str, dict[str, float | int]] = {}
+    for symbol, payload in payload_by_symbol.items():
+        marketdata = payload.get("marketdata") if isinstance(payload, dict) else None
+        securities = payload.get("securities") if isinstance(payload, dict) else None
+        if not isinstance(marketdata, dict) or not isinstance(securities, dict):
+            continue
+        marketdata_columns = marketdata.get("columns")
+        marketdata_rows = marketdata.get("data")
+        security_columns = securities.get("columns")
+        security_rows = securities.get("data")
+        if (
+            not isinstance(marketdata_columns, list)
+            or not isinstance(marketdata_rows, list)
+            or not marketdata_rows
+            or not isinstance(security_columns, list)
+            or not isinstance(security_rows, list)
+            or not security_rows
+        ):
+            continue
+        try:
+            marketdata_row = dict(zip(marketdata_columns, marketdata_rows[0]))
+            security_row = dict(zip(security_columns, security_rows[0]))
+            rate = float(marketdata_row.get("SWAPRATE"))
+            lot = int(security_row.get("LOTVOLUME"))
+        except (TypeError, ValueError):
+            continue
+        if lot > 0:
+            rates[str(symbol).upper()] = {"rate_rub": rate, "lot": lot}
+    return rates
+
+
 def fetch_moex_iss_funding_rates(target_day: date) -> dict[str, dict[str, float | int]]:
     payload_by_symbol: dict[str, dict[str, Any]] = {}
     for symbol in PERPETUAL_FUNDING_SYMBOLS:
@@ -3592,15 +3625,34 @@ def fetch_moex_iss_funding_rates(target_day: date) -> dict[str, dict[str, float 
     return parse_moex_iss_funding_rates(payload_by_symbol)
 
 
+def fetch_moex_iss_live_funding_rates() -> dict[str, dict[str, float | int]]:
+    payload_by_symbol: dict[str, dict[str, Any]] = {}
+    for symbol in PERPETUAL_FUNDING_SYMBOLS:
+        response = requests.get(
+            f"{MOEX_ISS_FUTURES_SECURITIES_URL}/{symbol}.json",
+            params={"iss.meta": "off"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload_by_symbol[symbol] = {
+                "marketdata": payload.get("marketdata"),
+                "securities": payload.get("securities"),
+            }
+    return parse_moex_iss_live_funding_rates(payload_by_symbol)
+
+
 def get_moex_funding_for_day(target_day: date, now: datetime | None = None) -> dict[str, Any]:
     """Load final funding rates after clearing and retain them for reconciliation."""
     history = load_funding_history()
     key = target_day.isoformat()
     cached = history.get(key)
-    if isinstance(cached, dict) and cached.get("rates"):
+    now_moscow = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
+    cached_is_live = isinstance(cached, dict) and cached.get("source") == "moex_iss_live"
+    if isinstance(cached, dict) and cached.get("rates") and (not cached_is_live or target_day == now_moscow.date()):
         return cached
 
-    now_moscow = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
     if target_day == now_moscow.date() and now_moscow.hour < MOEX_FUNDING_FETCH_HOUR_MOSCOW:
         return {"date": key, "rates": {}, "source": "waiting_for_moex_publication"}
 
@@ -3620,6 +3672,23 @@ def get_moex_funding_for_day(target_day: date, now: datetime | None = None) -> d
     except (requests.RequestException, ValueError, TypeError) as error:
         logging.warning("Не удалось загрузить фандинг ISS Мосбиржи за %s: %s", key, error)
 
+    if target_day == now_moscow.date():
+        try:
+            rates = fetch_moex_iss_live_funding_rates()
+            if rates:
+                entry = {
+                    "date": key,
+                    "rates": rates,
+                    "source": "moex_iss_live",
+                    "source_url": MOEX_ISS_FUTURES_SECURITIES_URL,
+                    "fetched_at": now_moscow.isoformat(),
+                }
+                history[key] = entry
+                save_funding_history(history)
+                return entry
+        except (requests.RequestException, ValueError, TypeError) as error:
+            logging.warning("Не удалось загрузить текущий фандинг ISS Мосбиржи за %s: %s", key, error)
+
     try:
         feed_response = requests.get(MOEX_DERIVATIVES_BLOG_URL, timeout=15)
         feed_response.raise_for_status()
@@ -3635,6 +3704,8 @@ def get_moex_funding_for_day(target_day: date, now: datetime | None = None) -> d
             raise ValueError("не найдена таблица фандинга в публикации MOEX")
     except (requests.RequestException, ValueError) as error:
         logging.warning("Не удалось загрузить фандинг MOEX за %s: %s", key, error)
+        if cached_is_live and isinstance(cached, dict):
+            return cached
         return {"date": key, "rates": {}, "source": "moex_unavailable", "error": str(error)}
 
     entry = {

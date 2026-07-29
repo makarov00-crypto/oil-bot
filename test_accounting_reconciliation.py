@@ -98,6 +98,34 @@ IMOEXF   1.22604    10</pre>
         self.assertEqual(result["USDRUBF"], {"rate_rub": -0.06545, "lot": 1000})
         self.assertEqual(result["IMOEXF"], {"rate_rub": 1.22604, "lot": 10})
 
+    def test_parses_live_moex_iss_funding_rates_with_lots(self) -> None:
+        payload = {
+            "CNYRUBF": {
+                "marketdata": {
+                    "columns": ["SECID", "SWAPRATE"],
+                    "data": [["CNYRUBF", 0.00229]],
+                },
+                "securities": {"columns": ["SECID", "LOTVOLUME"], "data": [["CNYRUBF", 1000]]},
+            }
+        }
+
+        result = mod.parse_moex_iss_live_funding_rates(payload)
+
+        self.assertEqual(result, {"CNYRUBF": {"rate_rub": 0.00229, "lot": 1000}})
+
+    def test_uses_live_iss_funding_when_history_is_not_ready_after_clearing(self) -> None:
+        live_rates = {"USDRUBF": {"rate_rub": -0.06545, "lot": 1000}}
+        now = datetime(2026, 7, 29, 21, 0, tzinfo=mod.MOSCOW_TZ)
+
+        with patch.object(mod, "load_funding_history", return_value={}), patch.object(mod, "save_funding_history") as save, patch.object(
+            mod, "fetch_moex_iss_funding_rates", return_value={}
+        ), patch.object(mod, "fetch_moex_iss_live_funding_rates", return_value=live_rates):
+            result = mod.get_moex_funding_for_day(date(2026, 7, 29), now=now)
+
+        self.assertEqual(result["source"], "moex_iss_live")
+        self.assertEqual(result["rates"], live_rates)
+        save.assert_called_once()
+
     def test_funding_uses_position_at_clearing_and_direction(self) -> None:
         rows = [
             {
