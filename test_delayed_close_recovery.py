@@ -1022,9 +1022,9 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
     def test_fx_reentry_after_macd_exit_requires_new_extreme(self) -> None:
         instrument = mod.InstrumentConfig(
-            symbol="UCM6",
+            symbol="USDRUBF",
             figi="FIGI",
-            display_name="USD/CNY",
+            display_name="USD/RUB",
             min_price_increment=0.001,
         )
         state = mod.InstrumentState(
@@ -1043,9 +1043,9 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
     def test_fx_reentry_after_macd_exit_allows_new_extreme(self) -> None:
         instrument = mod.InstrumentConfig(
-            symbol="UCM6",
+            symbol="USDRUBF",
             figi="FIGI",
-            display_name="USD/CNY",
+            display_name="USD/RUB",
             min_price_increment=0.001,
         )
         state = mod.InstrumentState(

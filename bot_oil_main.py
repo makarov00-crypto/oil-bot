@@ -3376,22 +3376,6 @@ def get_strategy_profile(config: BotConfig, instrument: InstrumentConfig) -> Str
             allow_short=True,
         )
 
-    if symbol == "UCM6":
-        return StrategyProfile(
-            ema_slope_threshold=0.0,
-            near_ema20_pct=0.0038,
-            volume_factor=0.80,
-            atr_min_pct=0.00045,
-            impulse_body_factor=0.55,
-            long_rsi_min=42.0,
-            long_rsi_max=64.0,
-            short_rsi_min=30.0,
-            short_rsi_max=58.0,
-            rsi_exit_long=config.rsi_exit_long,
-            rsi_exit_short=config.rsi_exit_short,
-            allow_short=True,
-        )
-
     if group == "fx":
         return StrategyProfile(
             ema_slope_threshold=config.ema_slope_threshold,
@@ -7529,7 +7513,7 @@ def position_reentry_allowed(
         return False
 
     group_name = get_instrument_group(instrument.symbol).name
-    guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "RNM6", "IMOEXF", "CNYRUBF", "UCM6", "VBM6"}
+    guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "RNM6", "IMOEXF", "CNYRUBF", "VBM6"}
     if instrument.symbol not in guarded_symbols and not is_brent_symbol(instrument.symbol) and not is_natural_gas_symbol(instrument.symbol) and group_name not in {"fx", "equity_index", "equity_futures"}:
         return True, ""
     if not state.last_exit_time:

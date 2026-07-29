@@ -43,6 +43,20 @@ class NewsBiasTests(unittest.TestCase):
         self.assertGreater(ozon.source_speed, 0.8)
         self.assertGreater(ozon.source_reliability, 0.7)
 
+    def test_detects_lukoil_rule_and_topics(self) -> None:
+        message = NewsMessage(
+            channel="marketsnapshot",
+            text="Лукойл сообщил о сильной отчетности, росте прибыли и дивидендах.",
+            created_at=datetime(2026, 5, 12, 10, 15, tzinfo=UTC),
+        )
+
+        items = detect_news_bias(message)
+        lukoil = next(item for item in items if item.symbol == "LKU6")
+
+        self.assertEqual(lukoil.bias, "LONG")
+        self.assertEqual(lukoil.category, "нефть")
+        self.assertTrue(lukoil.summary.startswith("LKU6:"))
+
     def test_fast_telegram_can_make_strong_intraday_news_actionable(self) -> None:
         message = NewsMessage(
             channel="marketsnapshot",

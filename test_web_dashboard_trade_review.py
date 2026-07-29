@@ -600,7 +600,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
         catalog = dashboard.build_instrument_catalog()
 
-        for symbol in ["BMM6", "NGK6", "ONU6", "SRM6", "UCM6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
+        for symbol in ["BMM6", "NGK6", "ONU6", "SRM6", "LKU6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
             with self.subTest(symbol=symbol):
                 self.assertIn(symbol, catalog)
                 self.assertNotEqual(catalog[symbol], symbol)
