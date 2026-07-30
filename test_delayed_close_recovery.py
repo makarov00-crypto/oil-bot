@@ -1191,6 +1191,46 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("после трейлинг-стопа", reason)
 
+    def test_unified_reversal_blocks_reentry_after_observed_broker_close(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="IMOEXF",
+            figi="FIGI",
+            display_name="MOEX",
+            min_price_increment=1.0,
+        )
+        state = mod.InstrumentState(
+            trading_day=datetime.now(timezone.utc).astimezone(mod.MOSCOW_TZ).date().isoformat(),
+            last_exit_time=(datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            last_exit_side="SHORT",
+            last_exit_price=2600.0,
+            last_exit_reason="Брокер подтвердил закрытие позиции; ожидается сверка причины",
+            last_strategy_name="reversal_1h",
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "SHORT", 2599.0)
+
+        self.assertFalse(allowed)
+        self.assertIn("подтверждённого брокером закрытия", reason)
+
+    def test_portfolio_sync_marks_unexpected_broker_close_for_reentry_guard(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="MOEX")
+        state = mod.InstrumentState(
+            position_qty=3,
+            position_side="SHORT",
+            entry_price=2600.0,
+            entry_time=(datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(),
+            last_market_price=2590.0,
+        )
+
+        with patch.object(mod, "extract_position_data", return_value=(0, None, 2588.0, None, None)):
+            synced_qty = mod.sync_state_with_portfolio(None, SimpleNamespace(), instrument, state)
+
+        self.assertEqual(synced_qty, 0)
+        self.assertEqual(state.position_side, "FLAT")
+        self.assertEqual(state.last_exit_side, "SHORT")
+        self.assertEqual(state.last_exit_price, 2588.0)
+        self.assertIn("Брокер подтвердил закрытие", state.last_exit_reason)
+
     def test_imoexf_uses_unified_reversal_primary_strategy(self) -> None:
         strategies = strategy_registry.get_primary_strategies("IMOEXF")
 

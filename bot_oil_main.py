@@ -5159,8 +5159,26 @@ def sync_state_with_portfolio(
     qty, avg, broker_current_price, broker_var_margin, broker_expected_yield = extract_position_data(client, config, instrument)
     if state.delayed_close_recovery_needed:
         reconcile_delayed_close_from_broker(client, config, instrument, state)
+    previous_side = state.position_side
+    previous_qty = int(state.position_qty or 0)
+    previous_entry_at = parse_state_datetime(state.entry_time)
+    previous_exit_at = parse_state_datetime(state.last_exit_time)
     state.position_qty = abs(qty)
     if qty == 0:
+        # A broker-side close can be observed before the order reconciliation
+        # receives its execution details.  Preserve an exit marker so the next
+        # poll cannot immediately reopen the same side on stale indicators.
+        if (
+            previous_side in {"LONG", "SHORT"}
+            and previous_qty > 0
+            and (previous_exit_at is None or (previous_entry_at is not None and previous_exit_at < previous_entry_at))
+        ):
+            observed_price = broker_current_price or state.last_market_price or state.entry_price or 0.0
+            state.last_exit_time = datetime.now(UTC).isoformat()
+            state.last_exit_side = previous_side
+            state.last_exit_price = float(observed_price)
+            state.last_exit_pnl_rub = 0.0
+            state.last_exit_reason = "Брокер подтвердил закрытие позиции; ожидается сверка причины"
         state.entry_price = None
         state.entry_commission_rub = 0.0
         state.entry_commission_accounted = False
@@ -7253,6 +7271,7 @@ def get_adaptive_exit_profile(
 ) -> tuple[ExitProfile, str]:
     profile = base_profile
     reasons: list[str] = []
+    is_hourly_reversal = str(state.entry_strategy or "").strip().lower() == "reversal_1h"
     regime = str(state.last_market_regime or "").strip().lower()
     regime_confidence = float(state.last_market_regime_confidence or 0.0)
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
@@ -7262,7 +7281,7 @@ def get_adaptive_exit_profile(
     if state.entry_strategy:
         recovery_active = bool(get_recovery_mode_status(instrument.symbol, state.entry_strategy)["active"])
 
-    if regime in {"compression", "chop"} or setup_label == "weak" or recovery_active or (0.0 < regime_confidence < 0.48):
+    if not is_hourly_reversal and (regime in {"compression", "chop"} or setup_label == "weak" or recovery_active or (0.0 < regime_confidence < 0.48)):
         if is_brent_symbol(instrument.symbol):
             profile = ExitProfile(
                 min_hold_minutes=min(profile.min_hold_minutes, 25),
@@ -7299,7 +7318,7 @@ def get_adaptive_exit_profile(
         )
         reasons.append("откат в тренде")
 
-    if 0.0 < edge_score < 0.45:
+    if not is_hourly_reversal and 0.0 < edge_score < 0.45:
         profile = ExitProfile(
             min_hold_minutes=min(profile.min_hold_minutes, 18),
             breakeven_profit_pct=min(profile.breakeven_profit_pct, 0.0040),
@@ -7650,6 +7669,16 @@ def position_reentry_allowed(
             return (
                 False,
                 f"для {instrument.symbol} повторный вход по unified reversal разрешён только после нового экстремума цены.",
+            )
+
+    observed_broker_close = "брокер подтвердил закрытие" in str(state.last_exit_reason or "").lower()
+    if is_unified_reversal and state.last_exit_side == signal and observed_broker_close:
+        fresh_reentry = unified_reversal_flip_confirmed(signal_df, signal) and strong_same_side_reentry_confirmed(2)
+        if datetime.now(UTC) < last_exit_at + timedelta(minutes=60) or not fresh_reentry:
+            return (
+                False,
+                f"для {instrument.symbol} после подтверждённого брокером закрытия повторный вход возможен "
+                "только через 1ч и после нового подтверждённого MACD/AO/RSI-импульса.",
             )
 
     if (

@@ -307,6 +307,11 @@ def evaluate_signal_core(
     soft_volume_ok = volume_ratio >= soft_volume_floor
     impulse_ok = body_ratio >= profile.min_body_ratio
     soft_impulse_ok = body_ratio >= soft_impulse_floor
+    # A new hourly position must be backed by the current candle, rather than
+    # by a weak continuation of an earlier move.  This is deliberately shared
+    # by every unified-reversal instrument.
+    entry_volume_ok = volume_ratio >= max(profile.min_volume_ratio, 1.0)
+    entry_impulse_ok = body_ratio >= max(profile.min_body_ratio, 0.75)
     volatility_ok = atr_pct >= profile.min_atr_pct
     soft_volatility_ok = atr_pct >= soft_volatility_floor
     macd_long_ok = (
@@ -479,10 +484,13 @@ def evaluate_signal_core(
     if regime == "chop":
         long_blockers.append("режим chop: переворот запрещён")
         short_blockers.append("режим chop: переворот запрещён")
-    if regime == "compression" and not compression_long_ok:
-        long_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
-    if regime == "compression" and not compression_short_ok:
-        short_blockers.append("режим compression: нет пробоя с объёмом и импульсом")
+    if regime in {"compression", "mixed"}:
+        long_blockers.append(f"режим {regime}: новые позиции запрещены")
+        short_blockers.append(f"режим {regime}: новые позиции запрещены")
+    if not recent_long_cross:
+        long_blockers.append("нет свежего MACD cross вверх")
+    if not recent_short_cross:
+        short_blockers.append("нет свежего MACD cross вниз")
     if rsi_long_extreme_bad and not slow_long_continuation_ok:
         long_blockers.append("RSI не подтверждает рост")
     if rsi_short_extreme_bad and not slow_short_continuation_ok:
@@ -491,76 +499,57 @@ def evaluate_signal_core(
         long_blockers.append("RSI ещё не развернулся достаточно уверенно")
     if not rsi_short_ok and not slow_short_continuation_ok:
         short_blockers.append("RSI ещё не развернулся достаточно уверенно")
-    if not ao_long_supported and not slow_long_continuation_ok and not trend_long_continuation_ok:
+    if not ao_long_ok:
         long_blockers.append("AO не подтверждает рост")
-    elif not ao_long_ok:
-        long_warnings.append("AO нейтрален: тренд допускает осторожный вход")
-    if not ao_short_supported and not slow_short_continuation_ok and not trend_short_continuation_ok:
+    if not ao_short_ok:
         short_blockers.append("AO не подтверждает снижение")
-    elif not ao_short_ok:
-        short_warnings.append("AO нейтрален: тренд допускает осторожный вход")
-    if not long_volume_ok:
+    if not entry_volume_ok:
         long_blockers.append("объём слишком слабый")
-    if not short_volume_ok:
+    if not entry_volume_ok:
         short_blockers.append("объём слишком слабый")
-    if not soft_impulse_ok and not (slow_long_continuation_ok or slow_short_continuation_ok):
+    if not entry_impulse_ok:
         long_blockers.append("импульс свечи слишком слабый")
         short_blockers.append("импульс свечи слишком слабый")
-    if not soft_volatility_ok and not (slow_long_continuation_ok or slow_short_continuation_ok):
+    if not soft_volatility_ok:
         long_blockers.append("волатильность слишком низкая")
         short_blockers.append("волатильность слишком низкая")
-    if hard_late_long and not slow_long_continuation_ok and not trend_long_continuation_ok:
+    if hard_late_long:
         long_blockers.append("late entry: движение уже ушло")
     elif late_long:
-        long_warnings.append("late entry мягкий: вход только как продолжение тренда")
-    if hard_late_short and not slow_short_continuation_ok and not trend_short_continuation_ok:
+        long_warnings.append("late entry мягкий: требуется свежий подтверждённый cross")
+    if hard_late_short:
         short_blockers.append("late entry: движение уже ушло")
     elif late_short:
-        short_warnings.append("late entry мягкий: вход только как продолжение тренда")
+        short_warnings.append("late entry мягкий: требуется свежий подтверждённый cross")
 
-    regime_allows_long = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and (fresh_impulse_override or (recent_long_cross and ao_long_ok and soft_impulse_ok)))
-    regime_allows_short = regime in {"trend", "expansion", "compression", "mixed"} or (regime == "chop" and (fresh_impulse_override or (recent_short_cross and ao_short_ok and soft_impulse_ok)))
+    regime_allows_long = regime in {"trend", "expansion"}
+    regime_allows_short = regime in {"trend", "expansion"}
     long_ok = (
         regime_allows_long
-        and (regime != "compression" or compression_long_ok)
-        and (trend_up or expansion_up or compression_long_ok or early_long_ok)
+        and (trend_up or expansion_up or early_long_ok)
         and recent_long_cross
         and macd_long_ok
-        and ao_long_supported
+        and ao_long_ok
         and rsi_long_ok
-        and long_volume_ok
-        and soft_impulse_ok
+        and entry_volume_ok
+        and entry_impulse_ok
         and soft_volatility_ok
         and not hard_late_long
         and not rsi_long_extreme_bad
     )
     short_ok = (
         regime_allows_short
-        and (regime != "compression" or compression_short_ok)
-        and (trend_down or expansion_down or compression_short_ok or early_short_ok)
+        and (trend_down or expansion_down or early_short_ok)
         and recent_short_cross
         and macd_short_ok
-        and ao_short_supported
+        and ao_short_ok
         and rsi_short_ok
-        and short_volume_ok
-        and soft_impulse_ok
+        and entry_volume_ok
+        and entry_impulse_ok
         and soft_volatility_ok
         and not hard_late_short
         and not rsi_short_extreme_bad
     )
-    if not long_ok and slow_long_continuation_ok:
-        long_ok = True
-        long_reasons.append("медленное продолжение вверх по MACD")
-    if not short_ok and slow_short_continuation_ok:
-        short_ok = True
-        short_reasons.append("медленное продолжение вниз по MACD")
-    if not long_ok and trend_long_continuation_ok:
-        long_ok = True
-        long_reasons.append("продолжение тренда вверх без свежего MACD cross")
-    if not short_ok and trend_short_continuation_ok:
-        short_ok = True
-        short_reasons.append("продолжение тренда вниз без свежего MACD cross")
-
     if long_warnings:
         long_reasons.extend(long_warnings)
     if short_warnings:

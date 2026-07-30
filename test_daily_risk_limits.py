@@ -1326,6 +1326,28 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertLessEqual(adapted.trailing_stop_pct, 0.0038)
         self.assertIn("качество входа fragile", reason)
 
+    def test_adaptive_exit_profile_keeps_hourly_reversal_protection(self) -> None:
+        config = SimpleNamespace(
+            min_hold_minutes=20,
+            breakeven_profit_pct=0.004,
+            trailing_stop_pct=0.004,
+        )
+        instrument = mod.InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="Index")
+        state = mod.InstrumentState(
+            entry_strategy="reversal_1h",
+            last_market_regime="chop",
+            last_setup_quality_label="weak",
+            last_entry_edge_score=0.34,
+            last_entry_edge_label="fragile",
+        )
+        base_profile = mod.ExitProfile(min_hold_minutes=90, breakeven_profit_pct=0.0100, trailing_stop_pct=0.0100)
+
+        with patch.object(mod, "get_recovery_mode_status", return_value={"active": True}):
+            adapted, reason = mod.get_adaptive_exit_profile(config, instrument, state, base_profile)
+
+        self.assertEqual(adapted, base_profile)
+        self.assertEqual(reason, "")
+
     def test_adaptive_exit_profile_extends_room_for_high_edge(self) -> None:
         config = SimpleNamespace(
             min_hold_minutes=22,
