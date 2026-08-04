@@ -565,6 +565,78 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(sizing["broker_leverage_target_lots"], 5)
         self.assertEqual(sizing["quantity"], 5)
 
+    def test_stop_risk_is_a_hard_cap_after_broker_leverage(self) -> None:
+        self.config.risk_per_trade_pct = 0.05
+        self.config.max_open_risk_pct = 0.20
+        self.config.symbols = ["CNYRUBF"]
+        self.instrument.initial_margin_on_buy = 100.0
+        self.instrument.initial_margin_on_sell = 100.0
+        self.instrument.min_price_increment = 0.01
+        self.instrument.min_price_increment_amount = 100.0
+        self.state.last_entry_edge_score = 0.9
+        self.state.last_entry_edge_label = "high"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_broker_max_lots", return_value=100
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.4
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.35)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.05, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 10.0, "LONG", self.live_strategy
+            )
+
+        self.assertEqual(sizing["qty_by_risk"], 1)
+        self.assertEqual(sizing["quantity"], 1)
+
+    def test_open_positions_consume_the_shared_stop_risk_budget(self) -> None:
+        self.config.risk_per_trade_pct = 0.05
+        self.config.max_open_risk_pct = 0.10
+        self.config.symbols = ["CNYRUBF", "GNU6"]
+        self.instrument.initial_margin_on_buy = 100.0
+        self.instrument.initial_margin_on_sell = 100.0
+        self.instrument.min_price_increment = 0.01
+        self.instrument.min_price_increment_amount = 100.0
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+        active_state = mod.InstrumentState(position_side="SHORT", position_qty=1, entry_risk_rub=2000.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_broker_max_lots", return_value=100
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.4
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.35)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.05, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ), patch.object(
+            mod, "load_state", return_value=active_state
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 10.0, "LONG", self.live_strategy
+            )
+
+        self.assertEqual(sizing["reserved_open_risk_rub"], 2000.0)
+        self.assertEqual(sizing["available_open_risk_rub"], 500.0)
+        self.assertEqual(sizing["quantity"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

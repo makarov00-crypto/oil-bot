@@ -161,6 +161,7 @@ class BotConfig:
     order_quantity: int
     max_order_quantity: int
     risk_per_trade_pct: float
+    max_open_risk_pct: float
     max_margin_usage_pct: float
     portfolio_usage_pct: float
     capital_reserve_pct: float
@@ -283,6 +284,8 @@ class InstrumentState:
     last_exit_pnl_rub: float = 0.0
     last_exit_price: float | None = None
     entry_commission_rub: float = 0.0
+    entry_risk_rub: float = 0.0
+    entry_risk_budget_rub: float = 0.0
     entry_commission_accounted: bool = False
     realized_gross_pnl_rub: float = 0.0
     realized_commission_rub: float = 0.0
@@ -2711,6 +2714,7 @@ def load_config() -> BotConfig:
         order_quantity=parse_int_env("OIL_ORDER_QUANTITY", 1),
         max_order_quantity=parse_int_env("OIL_MAX_ORDER_QUANTITY", parse_int_env("OIL_ORDER_QUANTITY", 1)),
         risk_per_trade_pct=parse_float_env("OIL_RISK_PER_TRADE_PCT", 0.0),
+        max_open_risk_pct=parse_float_env("OIL_MAX_OPEN_RISK_PCT", 0.01),
         max_margin_usage_pct=parse_float_env("OIL_MAX_MARGIN_USAGE_PCT", 0.35),
         portfolio_usage_pct=parse_float_env("OIL_PORTFOLIO_USAGE_PCT", 0.85),
         capital_reserve_pct=parse_float_env("OIL_CAPITAL_RESERVE_PCT", 0.35),
@@ -5182,6 +5186,8 @@ def sync_state_with_portfolio(
         state.entry_price = None
         state.entry_commission_rub = 0.0
         state.entry_commission_accounted = False
+        state.entry_risk_rub = 0.0
+        state.entry_risk_budget_rub = 0.0
         state.max_price = None
         state.min_price = None
         state.position_side = "FLAT"
@@ -6880,6 +6886,30 @@ def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> Non
     save_state(symbol, state)
 
 
+def calculate_reserved_open_risk_rub(
+    config: BotConfig,
+    current_symbol: str,
+    fallback_risk_per_position_rub: float,
+) -> tuple[float, int]:
+    """Returns stop-risk already reserved by other open bot positions.
+
+    Older positions have no stored entry risk. Reserve one current per-trade
+    budget for them so a deployment cannot suddenly overcommit the account.
+    """
+    reserved_risk = 0.0
+    open_positions = 0
+    for symbol in getattr(config, "symbols", []):
+        if symbol.upper() == current_symbol.upper():
+            continue
+        open_state = load_state(symbol)
+        if open_state.position_side not in {"LONG", "SHORT"} or open_state.position_qty <= 0:
+            continue
+        open_positions += 1
+        stored_risk = max(0.0, float(open_state.entry_risk_rub or 0.0))
+        reserved_risk += stored_risk if stored_risk > 0.0 else fallback_risk_per_position_rub
+    return reserved_risk, open_positions
+
+
 def calculate_position_sizing_context(
     client: Client,
     config: BotConfig,
@@ -6961,6 +6991,27 @@ def calculate_position_sizing_context(
         risk_budget = equity * config.risk_per_trade_pct * max(session_multiplier, 0.0)
         money_risk_per_contract = (stop_distance / step_price) * step_money
 
+    qty_by_risk = 0
+    max_open_risk_budget = 0.0
+    reserved_open_risk = 0.0
+    open_positions_with_risk = 0
+    available_open_risk = 0.0
+    qty_by_open_risk = 0
+    if money_risk_per_contract > 0.0 and risk_budget > 0.0:
+        qty_by_risk = int(risk_budget // money_risk_per_contract)
+        max_open_risk_pct = max(
+            config.risk_per_trade_pct,
+            float(getattr(config, "max_open_risk_pct", config.risk_per_trade_pct * 4) or 0.0),
+        )
+        max_open_risk_budget = equity * max_open_risk_pct
+        reserved_open_risk, open_positions_with_risk = calculate_reserved_open_risk_rub(
+            config,
+            instrument.symbol,
+            risk_budget,
+        )
+        available_open_risk = max(0.0, max_open_risk_budget - reserved_open_risk)
+        qty_by_open_risk = int(available_open_risk // money_risk_per_contract)
+
     raw_qty = min(qty_by_target, qty_by_allocatable) if qty_by_allocatable > 0 else 0
     if raw_qty < 1 and margin_per_lot > 0:
         can_afford_min_lot = qty_by_working >= 1
@@ -7032,6 +7083,14 @@ def calculate_position_sizing_context(
 
     if broker_limit > 0:
         raw_qty = min(raw_qty, broker_limit)
+    if qty_by_risk > 0:
+        raw_qty = min(raw_qty, qty_by_risk)
+    elif risk_budget > 0.0:
+        raw_qty = 0
+    if qty_by_open_risk > 0:
+        raw_qty = min(raw_qty, qty_by_open_risk)
+    elif max_open_risk_budget > 0.0:
+        raw_qty = 0
 
     return {
         "session_name": session_name,
@@ -7075,6 +7134,12 @@ def calculate_position_sizing_context(
         "broker_leverage_reason": broker_leverage_reason,
         "money_risk_per_contract_rub": money_risk_per_contract,
         "risk_budget_rub": risk_budget,
+        "qty_by_risk": qty_by_risk,
+        "max_open_risk_budget_rub": max_open_risk_budget,
+        "reserved_open_risk_rub": reserved_open_risk,
+        "open_positions_with_risk": open_positions_with_risk,
+        "available_open_risk_rub": available_open_risk,
+        "qty_by_open_risk": qty_by_open_risk,
         "quantity": max(0, raw_qty),
     }
 
@@ -7125,8 +7190,13 @@ def build_position_sizing_lines(
         lines.append(f"ГО на 1 лот: {sizing['margin_per_lot_rub']:.2f} RUB")
     lines.append(f"Целевой бюджет сделки: {sizing['target_trade_margin_rub']:.2f} RUB")
     if sizing["risk_budget_rub"] > 0 and sizing["money_risk_per_contract_rub"] > 0:
-        lines.append(f"Риск-бюджет (справочно): {sizing['risk_budget_rub']:.2f} RUB")
-        lines.append(f"Риск на 1 контракт (справочно): {sizing['money_risk_per_contract_rub']:.2f} RUB")
+        lines.append(f"Риск-бюджет сделки: {sizing['risk_budget_rub']:.2f} RUB")
+        lines.append(f"Риск на 1 контракт до стопа: {sizing['money_risk_per_contract_rub']:.2f} RUB")
+        lines.append(f"Потолок по риску сделки: {int(sizing['qty_by_risk'])} лот(а)")
+        lines.append(
+            f"Общий риск: занято {sizing['reserved_open_risk_rub']:.2f} из "
+            f"{sizing['max_open_risk_budget_rub']:.2f} RUB; доступно {sizing['available_open_risk_rub']:.2f} RUB"
+        )
     if sizing["broker_limit"] > 0:
         lines.append(f"Максимум у брокера: {sizing['broker_limit']} лотов")
     if int(sizing.get("broker_leverage_target_lots") or 0) > 0:
@@ -7167,12 +7237,26 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
         else ""
     )
     broker_leverage_reason_hint = f", {broker_leverage_reason}" if broker_leverage_reason and quantity > 0 else ""
+    risk_budget = float(sizing.get("risk_budget_rub") or 0.0)
+    qty_by_risk = int(sizing.get("qty_by_risk") or 0)
+    max_open_risk_budget = float(sizing.get("max_open_risk_budget_rub") or 0.0)
+    reserved_open_risk = float(sizing.get("reserved_open_risk_rub") or 0.0)
+    available_open_risk = float(sizing.get("available_open_risk_rub") or 0.0)
+    qty_by_open_risk = int(sizing.get("qty_by_open_risk") or 0)
+    risk_hint = ""
+    if risk_budget > 0.0:
+        risk_hint = f", риск сделки {risk_budget:.0f} RUB ({qty_by_risk} лот.)"
+    if max_open_risk_budget > 0.0:
+        risk_hint += (
+            f", общий риск {reserved_open_risk:.0f}/{max_open_risk_budget:.0f} RUB "
+            f"(доступно {available_open_risk:.0f}, {qty_by_open_risk} лот.)"
+        )
     if quantity <= 0:
         return (
             f"Аллокатор: вход не проходит. Класс {instrument_class}, "
             f"вес сигнала {conviction_weight:.2f}, форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}, запас {margin_headroom:.0f} RUB, "
             f"доступно {allocatable_margin:.0f} RUB, цель {target_trade_margin:.0f} RUB, "
-            f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а)."
+            f"ГО 1 лота {margin_per_lot:.0f} RUB, глубина {qty_by_headroom} лот(а){risk_hint}."
         )
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
@@ -7180,7 +7264,7 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
         f"форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
-        f"глубина {qty_by_headroom} лот(а){broker_hint} -> {quantity} лот(а)."
+        f"глубина {qty_by_headroom} лот(а){risk_hint}{broker_hint} -> {quantity} лот(а)."
     )
 
 
@@ -8182,6 +8266,8 @@ def sync_pending_order(
             state.entry_price = None
             state.entry_commission_rub = 0.0
             state.entry_commission_accounted = False
+            state.entry_risk_rub = 0.0
+            state.entry_risk_budget_rub = 0.0
             state.max_price = None
             state.min_price = None
             state.position_qty = 0
@@ -8341,10 +8427,17 @@ def open_position(
         state.last_entry_allocator_quantity = quantity
         state.last_entry_allocator_summary = build_allocator_summary_text(allocator_sizing)
         state.last_entry_allocator_time = datetime.now(UTC).isoformat()
+        state.entry_risk_rub = round(
+            quantity * float(allocator_sizing.get("money_risk_per_contract_rub") or 0.0),
+            2,
+        )
+        state.entry_risk_budget_rub = round(float(allocator_sizing.get("risk_budget_rub") or 0.0), 2)
     except Exception:
         state.last_entry_allocator_quantity = quantity
         state.last_entry_allocator_summary = f"Последний вход: {quantity} лот(а), подробный расчёт аллокатора недоступен."
         state.last_entry_allocator_time = datetime.now(UTC).isoformat()
+        state.entry_risk_rub = 0.0
+        state.entry_risk_budget_rub = 0.0
     side = "LONG" if signal == "LONG" else "SHORT"
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
@@ -8486,6 +8579,8 @@ def close_position(
         state.entry_price = None
         state.entry_commission_rub = 0.0
         state.entry_commission_accounted = False
+        state.entry_risk_rub = 0.0
+        state.entry_risk_budget_rub = 0.0
         state.max_price = None
         state.min_price = None
         state.position_qty = 0
