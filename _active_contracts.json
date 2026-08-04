@@ -2,21 +2,21 @@
   "contracts": [
     {
       "template_symbol": "BRK6",
-      "active_symbol": "BMQ6",
+      "active_symbol": "BMU6",
       "disabled": false,
-      "updated_at": ""
+      "updated_at": "2026-08-04T00:00:00+00:00"
     },
     {
       "template_symbol": "BMM6",
-      "active_symbol": "BMQ6",
+      "active_symbol": "BMU6",
       "disabled": false,
-      "updated_at": ""
+      "updated_at": "2026-08-04T00:00:00+00:00"
     },
     {
       "template_symbol": "BMN6",
-      "active_symbol": "BMQ6",
+      "active_symbol": "BMU6",
       "disabled": false,
-      "updated_at": ""
+      "updated_at": "2026-08-04T00:00:00+00:00"
     },
     {
       "template_symbol": "NGJ6",

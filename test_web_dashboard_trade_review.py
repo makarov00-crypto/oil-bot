@@ -29,9 +29,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
         payload = dashboard.build_news_coverage_payload()
 
         self.assertFalse(payload["missing_symbols"])
-        self.assertIn("BMQ6", payload["news_symbols"])
+        self.assertIn("BMU6", payload["news_symbols"])
         self.assertIn("ONU6", payload["news_symbols"])
-        self.assertIn("баррель", payload["keyword_samples"]["BMQ6"])
+        self.assertIn("баррель", payload["keyword_samples"]["BMU6"])
         self.assertIn("озон", payload["keyword_samples"]["ONU6"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
