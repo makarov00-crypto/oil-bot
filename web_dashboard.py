@@ -4570,6 +4570,11 @@ def build_dashboard_html() -> str:
               <div class="metric" id="portfolioTotal">-</div>
               <div class="portfolio-secondary-value">Доступно: <strong id="portfolioFree">-</strong></div>
             </div>
+            <div class="portfolio-metric" data-help="Средства, временно размещённые cash manager в ликвидном фонде денежного рынка. Они не являются позицией торговой стратегии и не входят в число фьючерсных сделок." tabindex="0">
+              <div class="portfolio-label">Cash manager <span class="portfolio-help-icon">?</span></div>
+              <div class="metric" id="portfolioCashFund">-</div>
+              <div class="portfolio-secondary-value"><strong id="portfolioCashFundDetail">-</strong></div>
+            </div>
           </div>
         </div>
         <div class="portfolio-group">
@@ -5755,6 +5760,18 @@ def build_dashboard_html() -> str:
       document.getElementById('portfolioGeneratedAt').textContent = `Срез портфеля: ${portfolio.generated_at_moscow || '-'}${selectedDateLabel}`;
       document.getElementById('portfolioTotal').textContent = formatRub(portfolio.total_portfolio_rub);
       document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_cash_rub ?? calculatedFreeCash);
+      const cashManager = portfolio.cash_manager || {};
+      const cashFundValue = Number(cashManager.value_rub || 0);
+      document.getElementById('portfolioCashFund').textContent = cashManager.enabled ? formatRub(cashFundValue) : 'Выключен';
+      if (!cashManager.enabled) {
+        document.getElementById('portfolioCashFundDetail').textContent = 'LQDT не используется';
+      } else if (cashManager.status === 'unavailable') {
+        document.getElementById('portfolioCashFundDetail').textContent = cashManager.last_error || 'Фонд недоступен';
+      } else if (cashManager.status === 'pending') {
+        document.getElementById('portfolioCashFundDetail').textContent = `Заявка: ${cashManager.pending_action || '-'}`;
+      } else {
+        document.getElementById('portfolioCashFundDetail').textContent = `${cashManager.fund_symbol || 'LQDT'} | ${Number(cashManager.qty || 0)} шт.`;
+      }
       document.getElementById('portfolioActualFee').textContent = formatRub(portfolio.bot_actual_fee_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
       document.getElementById('portfolioFunding').textContent = formatRub(portfolio.bot_funding_rub);
