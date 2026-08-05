@@ -35,13 +35,21 @@ class ActiveContractsTest(unittest.TestCase):
         self.assertEqual(symbols, ["BMN6", "NGM6", "GNM6"])
 
     def test_active_symbol_inherits_template_group_and_strategy(self) -> None:
-        upsert_active_contract("BMM6", "BMU6")
+        upsert_active_contract("BMM6", "BRU6")
 
-        self.assertEqual(get_active_contract_symbol("BMM6"), "BMU6")
-        self.assertEqual(get_active_contract_template("BMU6"), "BMM6")
-        self.assertEqual(get_instrument_group("BMU6").name, get_instrument_group("BMM6").name)
-        self.assertEqual(get_primary_strategies("BMU6"), get_primary_strategies("BMM6"))
-        self.assertTrue(uses_unified_reversal_1h("BMU6"))
+        self.assertEqual(get_active_contract_symbol("BMM6"), "BRU6")
+        self.assertEqual(get_active_contract_template("BRU6"), "BMM6")
+        self.assertEqual(get_instrument_group("BRU6").name, get_instrument_group("BMM6").name)
+        self.assertEqual(get_primary_strategies("BRU6"), get_primary_strategies("BMM6"))
+        self.assertTrue(uses_unified_reversal_1h("BRU6"))
+
+    def test_full_gold_contract_inherits_template_group_and_strategy(self) -> None:
+        upsert_active_contract("GNM6", "GLU6")
+
+        self.assertEqual(get_active_contract_template("GLU6"), "GNM6")
+        self.assertEqual(get_instrument_group("GLU6").name, get_instrument_group("GNM6").name)
+        self.assertEqual(get_primary_strategies("GLU6"), get_primary_strategies("GNM6"))
+        self.assertTrue(uses_unified_reversal_1h("GLU6"))
 
     def test_disabled_template_is_removed_from_watchlist(self) -> None:
         upsert_active_contract("ONU6", None, disabled=True)
