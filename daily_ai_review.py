@@ -21,7 +21,8 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+DEFAULT_AI_API_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_AI_API_MODE = "responses"
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 DEFAULT_OUTPUT_PATH = BASE_DIR / "logs" / "ai_reviews" / "latest_review.md"
@@ -1083,20 +1084,56 @@ def request_openai_review(api_key: str, model: str, prompt: str) -> str:
     return request_openai_text(api_key, model, SYSTEM_INSTRUCTIONS, prompt)
 
 
+def get_ai_api_mode(api_mode: str | None = None) -> str:
+    mode = (api_mode or os.getenv("OIL_AI_API_MODE", DEFAULT_AI_API_MODE)).strip().lower()
+    if mode not in {"responses", "chat_completions"}:
+        raise ValueError(f"Неподдерживаемый режим AI API: {mode}")
+    return mode
+
+
+def get_ai_api_url(api_base_url: str | None = None, api_mode: str | None = None) -> str:
+    base_url = (api_base_url or os.getenv("OIL_AI_API_BASE_URL", DEFAULT_AI_API_BASE_URL)).strip()
+    if not base_url:
+        base_url = DEFAULT_AI_API_BASE_URL
+    endpoint = "responses" if get_ai_api_mode(api_mode) == "responses" else "chat/completions"
+    return f"{base_url.rstrip('/')}/{endpoint}"
+
+
+def extract_chat_completion_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    return content.strip() if isinstance(content, str) else ""
+
+
 def request_openai_text(api_key: str, model: str, instructions: str, prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "model": model,
-        "instructions": instructions,
-        "input": prompt,
-    }
-    response = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=payload, timeout=120)
+    api_mode = get_ai_api_mode()
+    if api_mode == "chat_completions":
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": prompt},
+            ],
+        }
+    else:
+        payload = {
+            "model": model,
+            "instructions": instructions,
+            "input": prompt,
+        }
+    response = requests.post(get_ai_api_url(api_mode=api_mode), headers=headers, json=payload, timeout=120)
     response.raise_for_status()
     data = response.json()
-    text = extract_output_text(data)
+    text = extract_chat_completion_text(data) if api_mode == "chat_completions" else extract_output_text(data)
     if not text:
         raise RuntimeError("OpenAI вернул пустой текст ответа")
     return text

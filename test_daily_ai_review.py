@@ -7,6 +7,22 @@ import daily_ai_review as review
 
 
 class DailyAiReviewTests(unittest.TestCase):
+    def test_get_ai_api_url_supports_openai_compatible_provider(self) -> None:
+        self.assertEqual(
+            review.get_ai_api_url("https://neuroapi.host/v1/", "responses"),
+            "https://neuroapi.host/v1/responses",
+        )
+        self.assertEqual(
+            review.get_ai_api_url("https://neuroapi.host/v1/", "chat_completions"),
+            "https://neuroapi.host/v1/chat/completions",
+        )
+
+    def test_extract_chat_completion_text(self) -> None:
+        self.assertEqual(
+            review.extract_chat_completion_text({"choices": [{"message": {"content": "  Разбор  "}}]}),
+            "Разбор",
+        )
+
     def test_build_review_prompt_for_historical_day_ignores_current_live_state(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)

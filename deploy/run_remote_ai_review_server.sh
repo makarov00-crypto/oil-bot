@@ -40,11 +40,6 @@ if [ ! -f "$SCRIPT_PATH" ]; then
   exit 1
 fi
 
-if ! /usr/bin/curl -Is --max-time 15 https://api.openai.com/v1/models >/dev/null 2>&1; then
-  log "Пропуск: нет доступа к OpenAI API"
-  exit 0
-fi
-
 if [ -n "$TARGET_DATE" ]; then
   log "Старт AI-разбора на сервере для даты $TARGET_DATE."
   REVIEW_ARGS=(--base-dir "$APP_DIR" --date "$TARGET_DATE")
