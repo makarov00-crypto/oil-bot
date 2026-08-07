@@ -1212,6 +1212,22 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("внешнего закрытия", reason)
 
+    def test_unified_reversal_does_not_keep_old_external_close_as_permanent_block(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="MOEX", min_price_increment=1.0)
+        state = mod.InstrumentState(
+            trading_day=datetime.now(timezone.utc).astimezone(mod.MOSCOW_TZ).date().isoformat(),
+            last_exit_time=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+            last_exit_side="SHORT",
+            last_exit_price=2600.0,
+            last_exit_reason="Внешнее закрытие у брокера: API не передал торговую причину операции.",
+            last_strategy_name="reversal_1h",
+        )
+
+        allowed, reason = mod.position_reentry_allowed(state, instrument, "SHORT", 2599.0)
+
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+
     def test_portfolio_sync_marks_unexpected_broker_close_for_reentry_guard(self) -> None:
         instrument = mod.InstrumentConfig(symbol="IMOEXF", figi="FIGI", display_name="MOEX")
         state = mod.InstrumentState(

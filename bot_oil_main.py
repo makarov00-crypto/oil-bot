@@ -8199,8 +8199,7 @@ def position_reentry_allowed(
         or "внешнее закрытие у брокера" in exit_reason_text
     )
     if is_unified_reversal and state.last_exit_side == signal and external_broker_close:
-        fresh_reentry = unified_reversal_flip_confirmed(signal_df, signal) and strong_same_side_reentry_confirmed(2)
-        if datetime.now(UTC) < last_exit_at + timedelta(minutes=60) or not fresh_reentry:
+        if datetime.now(UTC) < last_exit_at + timedelta(minutes=60):
             return (
                 False,
                 f"для {instrument.symbol} после внешнего закрытия у брокера повторный вход возможен "
