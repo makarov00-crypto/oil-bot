@@ -97,6 +97,25 @@ class NewsAiAnalyzerTests(unittest.TestCase):
         self.assertEqual(signals, [])
         self.assertEqual(mocked_post.call_count, 2)
 
+    def test_request_news_ai_signals_uses_configured_chat_compatible_provider(self) -> None:
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {"choices": [{"message": {"content": json.dumps({"signals": []})}}]}
+
+        with (
+            patch.dict(os.environ, {"OIL_AI_API_MODE": "chat_completions", "OIL_AI_API_BASE_URL": "https://provider.example/v1/"}),
+            patch("news_ai_analyzer.requests.post", return_value=FakeResponse()) as mocked_post,
+        ):
+            self.assertEqual(request_news_ai_signals("test-key", "provider-model", [sample_bias()]), [])
+
+        self.assertEqual(mocked_post.call_args.args[0], "https://provider.example/v1/chat/completions")
+        payload = mocked_post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "provider-model")
+        self.assertEqual(payload["response_format"]["type"], "json_schema")
+
     def test_ai_confirmation_boosts_matching_news_bias(self) -> None:
         bias = sample_bias()
         ai_signal = bot.NewsAiSignal(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -11,6 +12,8 @@ from news_bias import NewsBias
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+DEFAULT_AI_API_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_AI_API_MODE = "responses"
 
 SYSTEM_INSTRUCTIONS = """Ты новостной аналитик для фьючерсного бота на Мосбирже.
 
@@ -89,6 +92,29 @@ def extract_output_text(payload: dict[str, Any]) -> str:
     return "\n\n".join(texts).strip()
 
 
+def extract_chat_completion_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        return ""
+    return str(message.get("content") or "").strip()
+
+
+def get_news_ai_api_mode() -> str:
+    mode = os.getenv("OIL_AI_API_MODE", DEFAULT_AI_API_MODE).strip().lower()
+    if mode not in {"responses", "chat_completions"}:
+        raise ValueError(f"Неподдерживаемый режим AI API: {mode}")
+    return mode
+
+
+def get_news_ai_api_url(api_mode: str) -> str:
+    base_url = os.getenv("OIL_AI_API_BASE_URL", DEFAULT_AI_API_BASE_URL).strip() or DEFAULT_AI_API_BASE_URL
+    endpoint = "responses" if api_mode == "responses" else "chat/completions"
+    return f"{base_url.rstrip('/')}/{endpoint}"
+
+
 def build_news_ai_prompt(items: Iterable[NewsBias]) -> str:
     rows: list[dict[str, Any]] = []
     for item in items:
@@ -161,22 +187,36 @@ def request_news_ai_signals(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "model": model,
-        "instructions": SYSTEM_INSTRUCTIONS,
-        "input": prompt,
-        "text": {
-            "format": {
+    api_mode = get_news_ai_api_mode()
+    if api_mode == "chat_completions":
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {
                 "type": "json_schema",
-                "name": "news_ai_signals",
-                "schema": NEWS_AI_SCHEMA,
-                "strict": True,
-            }
-        },
-    }
+                "json_schema": {"name": "news_ai_signals", "schema": NEWS_AI_SCHEMA, "strict": True},
+            },
+        }
+    else:
+        payload = {
+            "model": model,
+            "instructions": SYSTEM_INSTRUCTIONS,
+            "input": prompt,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "news_ai_signals",
+                    "schema": NEWS_AI_SCHEMA,
+                    "strict": True,
+                }
+            },
+        }
     response = None
     for attempt in range(max(1, attempts)):
-        response = requests.post(OPENAI_RESPONSES_URL, headers=headers, json=payload, timeout=timeout)
+        response = requests.post(get_news_ai_api_url(api_mode), headers=headers, json=payload, timeout=timeout)
         try:
             response.raise_for_status()
             break
@@ -186,7 +226,7 @@ def request_news_ai_signals(
             time.sleep(1.5 * (attempt + 1))
     if response is None:
         return []
-    text = extract_output_text(response.json())
+    text = extract_chat_completion_text(response.json()) if api_mode == "chat_completions" else extract_output_text(response.json())
     if not text:
         return []
     return parse_ai_signals(json.loads(text))

@@ -2948,7 +2948,11 @@ def get_news_ai_enabled() -> bool:
 
 
 def get_news_ai_model() -> str:
-    return os.getenv("OIL_NEWS_AI_MODEL", NEWS_AI_DEFAULT_MODEL).strip() or NEWS_AI_DEFAULT_MODEL
+    return (
+        os.getenv("OIL_NEWS_AI_MODEL", "").strip()
+        or os.getenv("OIL_AI_MODEL", "").strip()
+        or NEWS_AI_DEFAULT_MODEL
+    )
 
 
 def get_news_ai_trade_min_confidence() -> float:
