@@ -3,10 +3,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import bot_oil_main as bot
 import signal_ai_reviewer as reviewer
+from trade_storage import append_signal_observation, load_signal_observations
 
 
 class SignalAiReviewerTests(unittest.TestCase):
@@ -43,6 +45,40 @@ class SignalAiReviewerTests(unittest.TestCase):
         self.assertEqual(candidate["shadow_ai"]["action"], "ВХОД")
         self.assertEqual(state.last_shadow_ai_action, "ВХОД")
         save.assert_called_once_with("BRU6", state)
+
+    def test_shadow_outcomes_are_saved_for_each_due_hour(self) -> None:
+        observed_at = "2026-08-01T10:00:00+03:00"
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "trade.sqlite3"
+            uid = append_signal_observation(
+                db_path,
+                {
+                    "observed_at": observed_at,
+                    "observation_key": "2026-08-01 10:00",
+                    "symbol": "BRU6",
+                    "signal": "LONG",
+                    "strategy": "reversal_1h",
+                    "decision": "selected",
+                    "observed_price": 100.0,
+                    "horizon_minutes": 60,
+                    "context": {"shadow_ai": {"action": "ВХОД"}},
+                },
+            )
+            instrument = bot.InstrumentConfig(symbol="BRU6", figi="FIGI", display_name="Brent")
+            evaluated_at = bot.datetime.fromisoformat("2026-08-01T18:05:00+03:00")
+            with patch.object(bot, "TRADE_DB_PATH", db_path), patch.object(
+                bot,
+                "get_price_near_observation_horizon",
+                return_value=(101.0, evaluated_at),
+            ):
+                updated = bot.update_signal_ai_shadow_outcomes(None, SimpleNamespace(), [instrument])
+
+            row = load_signal_observations(db_path)[0]
+            outcomes = row["context"]["shadow_ai_outcomes"]
+            self.assertEqual(uid, row["observation_uid"])
+            self.assertEqual(updated, 1)
+            self.assertEqual(set(outcomes), {"1h", "2h", "4h", "8h"})
+            self.assertTrue(outcomes["4h"]["favorable"])
 
 
 if __name__ == "__main__":

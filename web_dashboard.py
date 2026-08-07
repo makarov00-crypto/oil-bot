@@ -1350,8 +1350,38 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
 
 
 def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
+    enabled = os.getenv("OIL_SIGNAL_AI_SHADOW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    performance = {
+        "evaluated_1h": 0,
+        "evaluated_2h": 0,
+        "evaluated_4h": 0,
+        "evaluated_8h": 0,
+        "correct_4h": 0,
+        "executed": 0,
+    }
+    for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800):
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
+        if not shadow_ai:
+            continue
+        execution_status = str(context.get("execution_status") or "").lower()
+        if execution_status in {"confirmed_open", "recovered_open", "submitted_open"}:
+            performance["executed"] += 1
+        outcomes = context.get("shadow_ai_outcomes") if isinstance(context.get("shadow_ai_outcomes"), dict) else {}
+        for hours in (1, 2, 4, 8):
+            outcome = outcomes.get(f"{hours}h") if isinstance(outcomes, dict) else None
+            if not isinstance(outcome, dict) or "favorable" not in outcome:
+                continue
+            performance[f"evaluated_{hours}h"] += 1
+            if hours == 4:
+                action = str(shadow_ai.get("action") or "")
+                favorable = bool(outcome.get("favorable"))
+                if (action in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"} and favorable) or (
+                    action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"} and not favorable
+                ):
+                    performance["correct_4h"] += 1
     if not SIGNAL_AI_SHADOW_PATH.exists():
-        return {"enabled": False, "count": 0, "supporting": 0, "abstaining": 0, "reviews": []}
+        return {"enabled": enabled, "count": 0, "supporting": 0, "abstaining": 0, "reviews": [], **performance}
     latest: dict[str, dict[str, Any]] = {}
     try:
         lines = SIGNAL_AI_SHADOW_PATH.read_text(encoding="utf-8").splitlines()[-300:]
@@ -1369,11 +1399,12 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
     supporting = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"})
     abstaining = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"})
     return {
-        "enabled": True,
+        "enabled": enabled,
         "count": len(reviews),
         "supporting": supporting,
         "abstaining": abstaining,
         "reviews": reviews,
+        **performance,
     }
 
 
@@ -4708,6 +4739,8 @@ def build_dashboard_html() -> str:
         <div><div class="muted">Разобрано</div><div class="metric" id="shadowAiCount">0</div></div>
         <div><div class="muted">Поддержал</div><div class="metric good" id="shadowAiSupporting">0</div></div>
         <div><div class="muted">Воздержался</div><div class="metric" id="shadowAiAbstaining">0</div></div>
+        <div><div class="muted">Проверено через 4ч</div><div class="metric" id="shadowAiEvaluated4h">0</div></div>
+        <div><div class="muted">Точность через 4ч</div><div class="metric" id="shadowAiAccuracy4h">-</div></div>
       </div>
       <div id="shadowAiRows" class="review-list" style="margin-top:12px;"></div>
     </section>
@@ -6229,6 +6262,10 @@ def build_dashboard_html() -> str:
       document.getElementById('shadowAiCount').textContent = shadowAi.count ?? 0;
       document.getElementById('shadowAiSupporting').textContent = shadowAi.supporting ?? 0;
       document.getElementById('shadowAiAbstaining').textContent = shadowAi.abstaining ?? 0;
+      const shadowAiEvaluated4h = Number(shadowAi.evaluated_4h || 0);
+      const shadowAiCorrect4h = Number(shadowAi.correct_4h || 0);
+      document.getElementById('shadowAiEvaluated4h').textContent = shadowAiEvaluated4h;
+      document.getElementById('shadowAiAccuracy4h').textContent = shadowAiEvaluated4h ? `${(shadowAiCorrect4h / shadowAiEvaluated4h * 100).toFixed(1)}%` : '-';
       const shadowAiRows = document.getElementById('shadowAiRows');
       const shadowAiReviews = Array.isArray(shadowAi.reviews) ? shadowAi.reviews : [];
       shadowAiRows.innerHTML = shadowAiReviews.length

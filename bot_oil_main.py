@@ -1058,6 +1058,72 @@ def update_signal_observation_outcomes(
     return updated
 
 
+def update_signal_ai_shadow_outcomes(
+    client: Client,
+    config: BotConfig,
+    watchlist: Sequence[InstrumentConfig],
+    *,
+    limit: int = 500,
+) -> int:
+    """Evaluate shadow AI opinions at several hourly horizons without touching trading."""
+    instruments_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
+    now = datetime.now(UTC)
+    updated = 0
+    for row in load_signal_observations(TRADE_DB_PATH, limit=limit):
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
+        if not shadow_ai:
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        instrument = instruments_by_symbol.get(symbol)
+        observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
+        observed_price = float(row.get("observed_price") or 0.0)
+        signal = str(row.get("signal") or "").upper()
+        if instrument is None or observed_at is None or observed_price <= 0.0 or signal not in {"LONG", "SHORT"}:
+            continue
+        outcomes = context.get("shadow_ai_outcomes") if isinstance(context.get("shadow_ai_outcomes"), dict) else {}
+        changed = False
+        for hours in (1, 2, 4, 8):
+            key = f"{hours}h"
+            if key in outcomes:
+                continue
+            target_time = observed_at + timedelta(hours=hours)
+            if now < target_time:
+                continue
+            horizon_snapshot = get_price_near_observation_horizon(
+                client,
+                config,
+                instrument,
+                target_time,
+                window_minutes=10,
+            )
+            if horizon_snapshot is None:
+                continue
+            current_price, evaluated_at = horizon_snapshot
+            move_pct = (
+                (current_price - observed_price) / observed_price * 100.0
+                if signal == "LONG"
+                else (observed_price - current_price) / observed_price * 100.0
+            )
+            outcomes[key] = {
+                "evaluated_at": evaluated_at.isoformat(),
+                "current_price": round(current_price, 6),
+                "move_pct": round(move_pct, 4),
+                "favorable": move_pct > 0.0,
+            }
+            changed = True
+        if changed:
+            update_signal_observation_context(
+                TRADE_DB_PATH,
+                str(row.get("observation_uid") or ""),
+                {"shadow_ai_outcomes": outcomes},
+            )
+            updated += 1
+    if updated:
+        logging.info("signal_ai_shadow_outcomes_updated count=%s", updated)
+    return updated
+
+
 def get_news_event_horizon_minutes(news_bias: NewsBias) -> int:
     if news_bias.horizon == "NOW":
         return 60
@@ -9967,6 +10033,7 @@ def run_bot() -> int:
                             if journal_integrity_alert:
                                 logging.warning(journal_integrity_alert)
                         update_signal_observation_outcomes(client, config, watchlist)
+                        update_signal_ai_shadow_outcomes(client, config, watchlist)
                         update_news_event_outcomes(client, config, watchlist)
                         maybe_park_free_cash_in_fund(client, config, watchlist, cash_fund, cycle_candidates)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist, cash_fund=cash_fund)
