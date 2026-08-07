@@ -3818,7 +3818,25 @@ def maybe_release_cash_fund_for_entry(
         return ""
     state = load_cash_manager_state()
     if state.pending_order_id:
-        return f"Cash manager: ожидается {state.pending_action} {fund.symbol}; вход отложен до исполнения заявки."
+        if state.pending_action == "BUY":
+            order_id = state.pending_order_id
+            try:
+                client.orders.cancel_order(account_id=config.account_id, order_id=order_id)
+            except RequestError as error:
+                return f"Cash manager: не удалось отменить покупку {fund.symbol} {order_id}: {error}"
+            state.pending_order_id = ""
+            state.pending_action = ""
+            state.pending_qty = 0
+            state.pending_submitted_at = ""
+            state.last_error = ""
+            save_cash_manager_state(state)
+            logging.info(
+                "cash_manager_cancelled_pending_buy_for_entry symbol=%s order_id=%s",
+                fund.symbol,
+                order_id,
+            )
+        else:
+            return f"Cash manager: ожидается {state.pending_action} {fund.symbol}; вход отложен до исполнения заявки."
     holding = get_cash_fund_holding(client, config, fund)
     held_qty = int(holding["qty"])
     if held_qty <= 0:

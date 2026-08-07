@@ -113,6 +113,21 @@ class CashManagerTests(unittest.TestCase):
         self.assertTrue(mod.cash_manager_missing_order_is_stale(stale_state, error))
         self.assertFalse(mod.cash_manager_missing_order_is_stale(fresh_state, error))
 
+    def test_entry_cancels_pending_cash_fund_buy_instead_of_waiting(self) -> None:
+        state = mod.CashManagerState(pending_order_id="buy-order", pending_action="BUY", pending_qty=100)
+        instrument = mod.InstrumentConfig(symbol="BRU6", figi="FUT", display_name="Brent", initial_margin_on_buy=10_000.0)
+        client = SimpleNamespace(orders=SimpleNamespace(cancel_order=lambda **_: None))
+        with (
+            patch.object(mod, "load_cash_manager_state", return_value=state),
+            patch.object(mod, "save_cash_manager_state") as save,
+            patch.object(mod, "get_cash_fund_holding", return_value={"qty": 0}),
+        ):
+            message = mod.maybe_release_cash_fund_for_entry(client, self.config, self.fund, instrument, "LONG")
+
+        self.assertEqual(message, "")
+        self.assertFalse(state.pending_order_id)
+        save.assert_called_once_with(state)
+
 
 if __name__ == "__main__":
     unittest.main()
