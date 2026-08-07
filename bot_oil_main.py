@@ -7385,13 +7385,22 @@ def calculate_position_sizing_context(
     qty_by_working = int(working_margin_budget // margin_per_lot) if margin_per_lot > 0 else 0
     qty_by_headroom = int(margin_headroom // margin_per_lot) if margin_per_lot > 0 else 0
 
+    risk_multiplier = 1.0
+    risk_tier = "обычный"
+    if entry_edge_score >= 0.80 and entry_edge_label in {"confirmed", "high"}:
+        risk_multiplier = 1.80
+        risk_tier = "сильный"
+    elif entry_edge_score >= 0.70 and entry_edge_label in {"moderate", "confirmed", "high"}:
+        risk_multiplier = 1.40
+        risk_tier = "хороший"
+
     step_price = instrument.min_price_increment
     step_money = instrument.min_price_increment_amount
     stop_distance = entry_price * config.stop_loss_pct
     money_risk_per_contract = 0.0
     risk_budget = 0.0
     if step_price > 0 and step_money > 0 and stop_distance > 0 and equity > 0 and config.risk_per_trade_pct > 0:
-        risk_budget = equity * config.risk_per_trade_pct * max(session_multiplier, 0.0)
+        risk_budget = equity * config.risk_per_trade_pct * risk_multiplier * max(session_multiplier, 0.0)
         money_risk_per_contract = (stop_distance / step_price) * step_money
 
     qty_by_risk = 0
@@ -7536,6 +7545,8 @@ def calculate_position_sizing_context(
         "broker_leverage_target_lots": broker_leverage_target_lots,
         "broker_leverage_reason": broker_leverage_reason,
         "money_risk_per_contract_rub": money_risk_per_contract,
+        "risk_multiplier": risk_multiplier,
+        "risk_tier": risk_tier,
         "risk_budget_rub": risk_budget,
         "qty_by_risk": qty_by_risk,
         "max_open_risk_budget_rub": max_open_risk_budget,

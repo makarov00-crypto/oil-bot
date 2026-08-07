@@ -597,8 +597,8 @@ class PositionSizingTests(unittest.TestCase):
                 None, self.config, self.instrument, self.state, 10.0, "LONG", self.live_strategy
             )
 
-        self.assertEqual(sizing["qty_by_risk"], 1)
-        self.assertEqual(sizing["quantity"], 1)
+        self.assertEqual(sizing["qty_by_risk"], 2)
+        self.assertEqual(sizing["quantity"], 2)
 
     def test_open_positions_consume_the_shared_stop_risk_budget(self) -> None:
         self.config.risk_per_trade_pct = 0.05

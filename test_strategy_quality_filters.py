@@ -308,7 +308,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "HOLD")
         self.assertIn("long не подтверждён", reason)
 
-    def test_unified_reversal_blocks_strong_trend_continuation_without_fresh_cross(self) -> None:
+    def test_unified_reversal_rejects_unconfirmed_trend_continuation_without_fresh_cross(self) -> None:
         df = candle_rows(
             [
                 {"close": 100.0, "ema20": 100.4, "ema50": 100.9, "rsi": 49.0, "macd": -0.08, "macd_signal": -0.02, "ao": -0.16},
@@ -346,7 +346,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
         self.assertEqual(signal, "HOLD")
-        self.assertIn("нет свежего MACD cross вниз", reason)
+        self.assertIn("RSI ещё не развернулся достаточно уверенно", reason)
 
     def test_unified_reversal_entry_edge_is_not_crushed_by_early_compression(self) -> None:
         state = mod.InstrumentState(

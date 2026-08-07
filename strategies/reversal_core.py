@@ -501,9 +501,9 @@ def evaluate_signal_core(
     if regime in {"compression", "mixed"}:
         long_blockers.append(f"режим {regime}: новые позиции запрещены")
         short_blockers.append(f"режим {regime}: новые позиции запрещены")
-    if not recent_long_cross:
+    if not recent_long_cross and not trend_long_continuation_ok:
         long_blockers.append("нет свежего MACD cross вверх")
-    if not recent_short_cross:
+    if not recent_short_cross and not trend_short_continuation_ok:
         short_blockers.append("нет свежего MACD cross вниз")
     if rsi_long_extreme_bad and not slow_long_continuation_ok:
         long_blockers.append("RSI не подтверждает рост")
@@ -545,7 +545,7 @@ def evaluate_signal_core(
     long_ok = (
         regime_allows_long
         and (trend_up or expansion_up or early_long_ok)
-        and recent_long_cross
+        and (recent_long_cross or trend_long_continuation_ok)
         and macd_long_ok
         and ao_long_ok
         and rsi_long_ok
@@ -559,7 +559,7 @@ def evaluate_signal_core(
     short_ok = (
         regime_allows_short
         and (trend_down or expansion_down or early_short_ok)
-        and recent_short_cross
+        and (recent_short_cross or trend_short_continuation_ok)
         and macd_short_ok
         and ao_short_ok
         and rsi_short_ok
