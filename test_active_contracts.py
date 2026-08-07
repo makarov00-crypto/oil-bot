@@ -45,11 +45,13 @@ class ActiveContractsTest(unittest.TestCase):
 
     def test_full_gold_contract_inherits_template_group_and_strategy(self) -> None:
         upsert_active_contract("GNM6", "GLU6")
+        upsert_active_contract("GNU6", "GLU6")
 
         self.assertEqual(get_active_contract_template("GLU6"), "GNM6")
         self.assertEqual(get_instrument_group("GLU6").name, get_instrument_group("GNM6").name)
         self.assertEqual(get_primary_strategies("GLU6"), get_primary_strategies("GNM6"))
         self.assertTrue(uses_unified_reversal_1h("GLU6"))
+        self.assertEqual(replace_with_active_symbols(["GNU6"]), ["GLU6"])
 
     def test_disabled_template_is_removed_from_watchlist(self) -> None:
         upsert_active_contract("ONU6", None, disabled=True)

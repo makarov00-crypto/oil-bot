@@ -449,6 +449,20 @@ def evaluate_signal_core(
             and not ao_short_supported
         )
     )
+    # RSI and stochastic are not exit triggers for an open trend position.
+    # For a *new* entry, however, their joint extreme far from EMA20 usually
+    # means the impulse has already spent its easy part.
+    exhaustion_distance_floor = 0.005
+    exhausted_long_entry = (
+        rsi >= profile.late_rsi_long + 2.0
+        and stoch_k >= profile.late_stoch_high - 10.0
+        and distance_to_ema20_pct >= exhaustion_distance_floor
+    )
+    exhausted_short_entry = (
+        rsi <= profile.late_rsi_short - 2.0
+        and stoch_k <= profile.late_stoch_low + 10.0
+        and distance_to_ema20_pct >= exhaustion_distance_floor
+    )
 
     long_reasons = [
         f"режим={regime}",
@@ -515,10 +529,14 @@ def evaluate_signal_core(
         short_blockers.append("волатильность слишком низкая")
     if hard_late_long:
         long_blockers.append("late entry: движение уже ушло")
+    elif exhausted_long_entry:
+        long_blockers.append("вход перегрет: RSI и Stochastic высоки далеко от EMA20")
     elif late_long:
         long_warnings.append("late entry мягкий: требуется свежий подтверждённый cross")
     if hard_late_short:
         short_blockers.append("late entry: движение уже ушло")
+    elif exhausted_short_entry:
+        short_blockers.append("вход перегрет: RSI и Stochastic низки далеко от EMA20")
     elif late_short:
         short_warnings.append("late entry мягкий: требуется свежий подтверждённый cross")
 
@@ -535,6 +553,7 @@ def evaluate_signal_core(
         and entry_impulse_ok
         and soft_volatility_ok
         and not hard_late_long
+        and not exhausted_long_entry
         and not rsi_long_extreme_bad
     )
     short_ok = (
@@ -548,6 +567,7 @@ def evaluate_signal_core(
         and entry_impulse_ok
         and soft_volatility_ok
         and not hard_late_short
+        and not exhausted_short_entry
         and not rsi_short_extreme_bad
     )
     if long_warnings:

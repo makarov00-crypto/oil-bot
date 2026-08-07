@@ -2321,7 +2321,7 @@ def infer_close_reason_for_recovery(symbol: str, side: str, qty: int, close_dt: 
     if pending_reason:
         return pending_reason
 
-    return "Торговая причина выхода не сохранилась, закрытие подтверждено брокерскими операциями."
+    return "Внешнее закрытие у брокера: API не передал торговую причину операции."
 
 
 def _normalize_recovery_price(price: float, instrument: InstrumentConfig | None) -> float:
@@ -5552,11 +5552,16 @@ def sync_state_with_portfolio(
             and (previous_exit_at is None or (previous_entry_at is not None and previous_exit_at < previous_entry_at))
         ):
             observed_price = broker_current_price or state.last_market_price or state.entry_price or 0.0
+            broker_close_reason = compact_reason(str(state.pending_exit_reason or ""))
+            if broker_close_reason:
+                broker_close_reason = f"{broker_close_reason} (исполнено брокером)"
+            else:
+                broker_close_reason = "Внешнее закрытие у брокера: API не передал торговую причину операции."
             state.last_exit_time = datetime.now(UTC).isoformat()
             state.last_exit_side = previous_side
             state.last_exit_price = float(observed_price)
             state.last_exit_pnl_rub = 0.0
-            state.last_exit_reason = "Брокер подтвердил закрытие позиции; ожидается сверка причины"
+            state.last_exit_reason = broker_close_reason
         state.entry_price = None
         state.entry_commission_rub = 0.0
         state.entry_commission_accounted = False
@@ -7531,6 +7536,23 @@ def calculate_order_quantity(
     return int(sizing.get("quantity") or 0)
 
 
+def sizing_requires_margin_release(sizing: dict[str, Any]) -> bool:
+    """True only when an otherwise admissible entry lacks broker margin.
+
+    The cash manager must not liquidate LQDT for a signal already rejected by
+    the stop-risk budget, the aggregate risk budget, or the broker lot limit.
+    """
+    if int(sizing.get("broker_limit") or 0) <= 0:
+        return False
+    if float(sizing.get("margin_per_lot_rub") or 0.0) <= 0.0:
+        return False
+    if float(sizing.get("risk_budget_rub") or 0.0) > 0.0 and int(sizing.get("qty_by_risk") or 0) < 1:
+        return False
+    if float(sizing.get("max_open_risk_budget_rub") or 0.0) > 0.0 and int(sizing.get("qty_by_open_risk") or 0) < 1:
+        return False
+    return int(sizing.get("qty_by_working") or 0) < 1
+
+
 def build_position_sizing_lines(
     client: Client,
     config: BotConfig,
@@ -8129,13 +8151,17 @@ def position_reentry_allowed(
                 f"для {instrument.symbol} повторный вход по unified reversal разрешён только после нового экстремума цены.",
             )
 
-    observed_broker_close = "брокер подтвердил закрытие" in str(state.last_exit_reason or "").lower()
-    if is_unified_reversal and state.last_exit_side == signal and observed_broker_close:
+    exit_reason_text = str(state.last_exit_reason or "").lower()
+    external_broker_close = (
+        "брокер подтвердил закрытие" in exit_reason_text
+        or "внешнее закрытие у брокера" in exit_reason_text
+    )
+    if is_unified_reversal and state.last_exit_side == signal and external_broker_close:
         fresh_reentry = unified_reversal_flip_confirmed(signal_df, signal) and strong_same_side_reentry_confirmed(2)
         if datetime.now(UTC) < last_exit_at + timedelta(minutes=60) or not fresh_reentry:
             return (
                 False,
-                f"для {instrument.symbol} после подтверждённого брокером закрытия повторный вход возможен "
+                f"для {instrument.symbol} после внешнего закрытия у брокера повторный вход возможен "
                 "только через 1ч и после нового подтверждённого MACD/AO/RSI-импульса.",
             )
 
@@ -8780,15 +8806,26 @@ def open_position(
         )
         return
     price = get_last_price(client, instrument)
-    quantity = calculate_order_quantity(client, config, instrument, state, price, signal, strategy_name)
+    allocator_sizing = calculate_position_sizing_context(
+        client,
+        config,
+        instrument,
+        state,
+        price,
+        signal,
+        strategy_name,
+    )
+    quantity = int(allocator_sizing.get("quantity") or 0)
     if quantity <= 0:
-        release_reason = maybe_release_cash_fund_for_entry(
-            client,
-            config,
-            cash_fund,
-            instrument,
-            signal,
-        )
+        release_reason = ""
+        if sizing_requires_margin_release(allocator_sizing):
+            release_reason = maybe_release_cash_fund_for_entry(
+                client,
+                config,
+                cash_fund,
+                instrument,
+                signal,
+            )
         if release_reason:
             state.last_error = release_reason
             state.last_signal_summary = [release_reason, *state.last_signal_summary[:2]]
@@ -8804,15 +8841,6 @@ def open_position(
         return
     sizing_lines = build_position_sizing_lines(client, config, instrument, state, price, signal, quantity, strategy_name)
     try:
-        allocator_sizing = calculate_position_sizing_context(
-            client,
-            config,
-            instrument,
-            state,
-            price,
-            signal,
-            strategy_name,
-        )
         state.last_entry_allocator_quantity = quantity
         state.last_entry_allocator_summary = build_allocator_summary_text(allocator_sizing)
         state.last_entry_allocator_time = datetime.now(UTC).isoformat()

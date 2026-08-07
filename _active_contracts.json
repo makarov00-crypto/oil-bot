@@ -37,6 +37,12 @@
       "updated_at": "2026-08-05T00:00:00+00:00"
     },
     {
+      "template_symbol": "GNU6",
+      "active_symbol": "GLU6",
+      "disabled": false,
+      "updated_at": "2026-08-07T00:00:00+00:00"
+    },
+    {
       "template_symbol": "ONU6",
       "active_symbol": "ONU6",
       "disabled": false,

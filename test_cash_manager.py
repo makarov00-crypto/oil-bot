@@ -70,6 +70,32 @@ class CashManagerTests(unittest.TestCase):
         self.assertEqual(submit.call_args.args[3], 4_600)
         self.assertEqual(submit.call_args.args[5], "SELL")
 
+    def test_cash_manager_does_not_release_fund_for_risk_limited_entry(self) -> None:
+        sizing = {
+            "broker_limit": 12,
+            "margin_per_lot_rub": 10_000.0,
+            "qty_by_working": 0,
+            "risk_budget_rub": 250.0,
+            "qty_by_risk": 0,
+            "max_open_risk_budget_rub": 1_000.0,
+            "qty_by_open_risk": 1,
+        }
+
+        self.assertFalse(mod.sizing_requires_margin_release(sizing))
+
+    def test_cash_manager_releases_fund_only_for_margin_limited_entry(self) -> None:
+        sizing = {
+            "broker_limit": 12,
+            "margin_per_lot_rub": 10_000.0,
+            "qty_by_working": 0,
+            "risk_budget_rub": 250.0,
+            "qty_by_risk": 1,
+            "max_open_risk_budget_rub": 1_000.0,
+            "qty_by_open_risk": 2,
+        }
+
+        self.assertTrue(mod.sizing_requires_margin_release(sizing))
+
 
 if __name__ == "__main__":
     unittest.main()

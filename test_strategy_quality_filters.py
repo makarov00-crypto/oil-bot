@@ -202,7 +202,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "SHORT")
         self.assertIn("reversal_1h", reason)
 
-    def test_unified_reversal_allows_short_when_ao_confirms_even_with_oversold_rsi(self) -> None:
+    def test_unified_reversal_blocks_new_short_when_oscillators_are_exhausted(self) -> None:
         df = candle_rows(
             [
                 {"close": 100.8, "ema20": 100.6, "ema50": 100.35, "rsi": 60.0, "macd": 0.08, "macd_signal": 0.05, "ao": 0.06, "stoch_k": 74.0, "stoch_d": 68.0},
@@ -219,8 +219,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("AO=", reason)
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("вход перегрет", reason)
 
     def test_unified_reversal_allows_long_with_high_stochastic_when_macd_and_ao_confirm(self) -> None:
         df = candle_rows(
@@ -241,6 +241,12 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(signal, "LONG")
         self.assertIn("Stochastic", reason)
+
+        df.loc[df.index[-1], "rsi"] = 75.0
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("вход перегрет", reason)
 
     def test_unified_reversal_blocks_early_long_with_weak_volume_and_impulse(self) -> None:
         df = candle_rows(
