@@ -3673,6 +3673,13 @@ def submit_cash_fund_order(
     return True
 
 
+def cash_manager_missing_order_is_stale(state: CashManagerState, error: RequestError) -> bool:
+    submitted_at = parse_state_datetime(state.pending_submitted_at)
+    if submitted_at is None or not is_order_not_found_error(error):
+        return False
+    return (datetime.now(UTC) - submitted_at).total_seconds() >= 5 * 60
+
+
 def refresh_cash_manager_pending_order(
     client: Client,
     config: BotConfig,
@@ -3684,6 +3691,19 @@ def refresh_cash_manager_pending_order(
     try:
         order = client.orders.get_order_state(account_id=config.account_id, order_id=state.pending_order_id)
     except RequestError as error:
+        if cash_manager_missing_order_is_stale(state, error):
+            order_id = state.pending_order_id
+            state.last_error = (
+                f"Cash manager: заявка {state.pending_action} {fund.symbol} {order_id} не найдена у брокера "
+                "через 5 минут; ожидание снято без подтверждения исполнения."
+            )
+            state.pending_order_id = ""
+            state.pending_action = ""
+            state.pending_qty = 0
+            state.pending_submitted_at = ""
+            save_cash_manager_state(state)
+            logging.warning(state.last_error)
+            return
         logging.warning("Cash manager: не удалось получить статус заявки %s: %s", state.pending_order_id, error)
         return
     status = order.execution_report_status

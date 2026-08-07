@@ -3,6 +3,9 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from grpc import StatusCode
+from tinkoff.invest.exceptions import RequestError
+
 import bot_oil_main as mod
 
 
@@ -95,6 +98,20 @@ class CashManagerTests(unittest.TestCase):
         }
 
         self.assertTrue(mod.sizing_requires_margin_release(sizing))
+
+    def test_missing_cash_fund_order_is_cleared_only_after_grace_period(self) -> None:
+        stale_state = mod.CashManagerState(
+            pending_order_id="missing-order",
+            pending_submitted_at=(datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(),
+        )
+        fresh_state = mod.CashManagerState(
+            pending_order_id="missing-order",
+            pending_submitted_at=datetime.now(timezone.utc).isoformat(),
+        )
+        error = RequestError(StatusCode.NOT_FOUND, "50005 NOT_FOUND: Order not found", None)
+
+        self.assertTrue(mod.cash_manager_missing_order_is_stale(stale_state, error))
+        self.assertFalse(mod.cash_manager_missing_order_is_stale(fresh_state, error))
 
 
 if __name__ == "__main__":
