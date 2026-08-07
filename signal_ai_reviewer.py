@@ -21,6 +21,7 @@ SYSTEM_INSTRUCTIONS = """Ты второй, теневой аналитичес�
 
 Оцени, стоит ли поддержать вход, удержание или выход. Учитывай направление MACD и
 AO, RSI, объём, волатильность, режим рынка, новости и уже открытую позицию.
+Используй только русские значения из схемы.
 """
 
 SIGNAL_AI_SCHEMA: dict[str, Any] = {
@@ -34,8 +35,8 @@ SIGNAL_AI_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "symbol": {"type": "string"},
-                    "action": {"type": "string", "enum": ["ENTER", "HOLD", "EXIT", "REVERSE", "ABSTAIN"]},
-                    "direction": {"type": "string", "enum": ["LONG", "SHORT", "NEUTRAL"]},
+                    "action": {"type": "string", "enum": ["ВХОД", "УДЕРЖИВАТЬ", "ВЫЙТИ", "ПЕРЕВОРОТ", "ВОЗДЕРЖАТЬСЯ"]},
+                    "direction": {"type": "string", "enum": ["ЛОНГ", "ШОРТ", "НЕЙТРАЛЬНО"]},
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                     "reason": {"type": "string"},
                     "risk_note": {"type": "string"},
@@ -96,8 +97,8 @@ def build_signal_ai_prompt(candidates: Iterable[dict[str, Any]]) -> str:
             }
         )
     return (
-        "Верни один объект reviews для каждого кандидата. ENTER означает, что ты поддерживаешь "
-        "вход текущей стратегии; ABSTAIN означает не поддерживаешь без достаточного преимущества.\n\n"
+        "Верни один объект reviews для каждого кандидата. ВХОД означает, что ты поддерживаешь "
+        "вход текущей стратегии; ВОЗДЕРЖАТЬСЯ означает, что преимущества недостаточно.\n\n"
         + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -119,8 +120,8 @@ def parse_signal_ai_reviews(payload: dict[str, Any]) -> dict[str, SignalAiReview
             confidence = 0.0
         parsed[symbol] = SignalAiReview(
             symbol=symbol,
-            action=str(item.get("action") or "ABSTAIN").upper(),
-            direction=str(item.get("direction") or "NEUTRAL").upper(),
+            action=str(item.get("action") or "ВОЗДЕРЖАТЬСЯ").upper(),
+            direction=str(item.get("direction") or "НЕЙТРАЛЬНО").upper(),
             confidence=confidence,
             reason=str(item.get("reason") or "").strip(),
             risk_note=str(item.get("risk_note") or "").strip(),

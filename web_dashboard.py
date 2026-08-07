@@ -1366,8 +1366,8 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         if key:
             latest[key] = row
     reviews = sorted(latest.values(), key=lambda item: str(item.get("time") or ""), reverse=True)[:limit]
-    supporting = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ENTER", "HOLD"})
-    abstaining = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") == "ABSTAIN")
+    supporting = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"})
+    abstaining = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"})
     return {
         "enabled": True,
         "count": len(reviews),
@@ -6234,7 +6234,7 @@ def build_dashboard_html() -> str:
       shadowAiRows.innerHTML = shadowAiReviews.length
         ? shadowAiReviews.map((item) => {
             const ai = item.review || {};
-            const action = ai.action || 'ABSTAIN';
+            const action = ({ENTER: 'ВХОД', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВОРОТ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[ai.action] || ai.action || 'ВОЗДЕРЖАТЬСЯ';
             const signal = item.signal || '-';
             const confidence = Number(ai.confidence || 0).toFixed(2);
             const title = `${instrumentText(item.symbol || '-')} · ${signal} → ${action}`;
