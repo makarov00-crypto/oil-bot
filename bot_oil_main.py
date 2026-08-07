@@ -3575,12 +3575,17 @@ def get_cash_fund_holding(
             response = client.market_data.get_last_prices(figi=[fund.figi])
             if response.last_prices:
                 price = quotation_to_float(response.last_prices[0].price)
+        average_price = quotation_to_float(getattr(position, "average_position_price", None))
+        expected_yield = quotation_to_float(getattr(position, "expected_yield", None))
         return {
             "qty": qty,
             "price_rub": price,
             "value_rub": qty * price * fund.lot,
+            "average_price_rub": average_price,
+            "cost_basis_rub": qty * average_price * fund.lot,
+            "pnl_rub": expected_yield,
         }
-    return {"qty": 0, "price_rub": 0.0, "value_rub": 0.0}
+    return {"qty": 0, "price_rub": 0.0, "value_rub": 0.0, "average_price_rub": 0.0, "cost_basis_rub": 0.0, "pnl_rub": 0.0}
 
 
 def get_cash_manager_status(
@@ -3609,6 +3614,8 @@ def get_cash_manager_status(
         "qty": int(holding["qty"]),
         "price_rub": round(float(holding["price_rub"]), 6),
         "value_rub": round(float(holding["value_rub"]), 2),
+        "cost_basis_rub": round(float(holding["cost_basis_rub"]), 2),
+        "pnl_rub": round(float(holding["pnl_rub"]), 2),
         "pending_action": state.pending_action,
         "last_action": state.last_action,
         "last_completed_at": state.last_completed_at,

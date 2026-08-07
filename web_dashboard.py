@@ -4570,8 +4570,8 @@ def build_dashboard_html() -> str:
               <div class="metric" id="portfolioTotal">-</div>
               <div class="portfolio-secondary-value">Доступно: <strong id="portfolioFree">-</strong></div>
             </div>
-            <div class="portfolio-metric" data-help="Средства, временно размещённые cash manager в ликвидном фонде денежного рынка. Они не являются позицией торговой стратегии и не входят в число фьючерсных сделок." tabindex="0">
-              <div class="portfolio-label">Cash manager <span class="portfolio-help-icon">?</span></div>
+            <div class="portfolio-metric" data-help="Средства, временно размещённые в ликвидном фонде денежного рынка. Стоимость и результат берутся из брокерской позиции LQDT." tabindex="0">
+              <div class="portfolio-label">Фонд ликвидности <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioCashFund">-</div>
               <div class="portfolio-secondary-value"><strong id="portfolioCashFundDetail">-</strong></div>
             </div>
@@ -5770,7 +5770,9 @@ def build_dashboard_html() -> str:
       } else if (cashManager.status === 'pending') {
         document.getElementById('portfolioCashFundDetail').textContent = `Заявка: ${cashManager.pending_action || '-'}`;
       } else {
-        document.getElementById('portfolioCashFundDetail').textContent = `${cashManager.fund_symbol || 'LQDT'} | ${Number(cashManager.qty || 0)} шт.`;
+        const cost = Number(cashManager.cost_basis_rub || 0);
+        const pnl = Number(cashManager.pnl_rub || 0);
+        document.getElementById('portfolioCashFundDetail').textContent = `${cashManager.fund_symbol || 'LQDT'} | ${Number(cashManager.qty || 0)} шт. | вложено ${formatRub(cost)} | результат ${formatRub(pnl)}`;
       }
       document.getElementById('portfolioActualFee').textContent = formatRub(portfolio.bot_actual_fee_rub);
       document.getElementById('portfolioVariation').textContent = formatRub(portfolio.bot_estimated_variation_margin_rub);
