@@ -52,6 +52,7 @@ STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
+SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
@@ -1348,6 +1349,34 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
     return normalized
 
 
+def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
+    if not SIGNAL_AI_SHADOW_PATH.exists():
+        return {"enabled": False, "count": 0, "supporting": 0, "abstaining": 0, "reviews": []}
+    latest: dict[str, dict[str, Any]] = {}
+    try:
+        lines = SIGNAL_AI_SHADOW_PATH.read_text(encoding="utf-8").splitlines()[-300:]
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        key = str(row.get("key") or "")
+        if key:
+            latest[key] = row
+    reviews = sorted(latest.values(), key=lambda item: str(item.get("time") or ""), reverse=True)[:limit]
+    supporting = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ENTER", "HOLD"})
+    abstaining = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") == "ABSTAIN")
+    return {
+        "enabled": True,
+        "count": len(reviews),
+        "supporting": supporting,
+        "abstaining": abstaining,
+        "reviews": reviews,
+    }
+
+
 def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[dict[str, Any]]:
     if not ALLOCATOR_DECISIONS_PATH.exists():
         return []
@@ -2314,6 +2343,9 @@ def format_trade_review_row(
     exit_dt = close_row.get("_dt")
     entry_time = format_review_time_value(entry_dt or ((open_row or {}).get("time") if open_row else ""))
     exit_time = format_review_time_value(exit_dt or close_row.get("time"))
+    hold_minutes = 0
+    if isinstance(entry_dt, datetime) and isinstance(exit_dt, datetime):
+        hold_minutes = max(0, round((exit_dt - entry_dt).total_seconds() / 60))
     resolved_context_display = resolve_trade_context_display(close_row, open_row)
     entry_context_display = trade_context_display(open_row or {})
     if entry_context_display == "-":
@@ -2365,6 +2397,7 @@ def format_trade_review_row(
         "entry_price": f"{float(open_row['price']):.4f}" if open_row and open_row.get("price") is not None else "-",
         "exit_price": f"{float(close_row['price']):.4f}" if close_row.get("price") is not None else "-",
         "qty_lots": close_row.get("qty_lots") or (open_row.get("qty_lots") if open_row else 0),
+        "hold_minutes": hold_minutes,
         "pnl_rub": f"{pnl_numeric:.2f}",
         "gross_pnl_rub": stringify_money(close_row.get("gross_pnl_rub")),
         "commission_rub": stringify_money(close_row.get("commission_rub")),
@@ -2559,6 +2592,15 @@ def build_trade_review(
     best_strategy_regime = max(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
     worst_strategy_regime = min(by_strategy_regime.items(), key=lambda x: x[1]) if by_strategy_regime else None
     signal_flip_count = sum(1 for item in closed_reviews if item.get("is_signal_flip"))
+    holds = [int(item.get("hold_minutes") or 0) for item in closed_reviews if int(item.get("hold_minutes") or 0) > 0]
+    short_holds = sum(1 for minutes in holds if minutes < 90)
+    def review_commission_value(item: dict[str, Any]) -> float:
+        try:
+            return abs(float(item.get("commission_rub") or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    total_commission = sum(review_commission_value(item) for item in closed_reviews)
 
     return {
         "closed_count": len(closed_reviews),
@@ -2567,6 +2609,9 @@ def build_trade_review(
         "win_rate": win_rate,
         "closed_total_pnl_rub": round(total, 2),
         "signal_flip_count": signal_flip_count,
+        "average_hold_minutes": round(sum(holds) / len(holds)) if holds else 0,
+        "short_hold_count": short_holds,
+        "closed_commission_rub": round(total_commission, 2),
         "best_symbol": {"symbol": best_symbol[0], "pnl_rub": round(best_symbol[1], 2)} if best_symbol else None,
         "worst_symbol": {"symbol": worst_symbol[0], "pnl_rub": round(worst_symbol[1], 2)} if worst_symbol else None,
         "best_strategy": {"strategy": best_strategy[0], "pnl_rub": round(best_strategy[1], 2)} if best_strategy else None,
@@ -4652,6 +4697,21 @@ def build_dashboard_html() -> str:
       </div>
     </section>
 
+    <section class="panel" style="margin-bottom:16px;">
+      <div class="section-title">
+        <div>
+          <h2>Теневой ИИ-разбор</h2>
+          <p class="muted">Наблюдает за кандидатами и не влияет на реальные заявки.</p>
+        </div>
+      </div>
+      <div class="grid">
+        <div><div class="muted">Разобрано</div><div class="metric" id="shadowAiCount">0</div></div>
+        <div><div class="muted">Поддержал</div><div class="metric good" id="shadowAiSupporting">0</div></div>
+        <div><div class="muted">Воздержался</div><div class="metric" id="shadowAiAbstaining">0</div></div>
+      </div>
+      <div id="shadowAiRows" class="review-list" style="margin-top:12px;"></div>
+    </section>
+
     <div class="grid">
       <section class="panel">
         <h2>Позиции</h2>
@@ -6165,6 +6225,24 @@ def build_dashboard_html() -> str:
         tradeCards.insertAdjacentHTML('beforeend', '<div class="muted">Журнал сделок пока пуст.</div>');
       }
 
+      const shadowAi = data.signal_ai_shadow || {};
+      document.getElementById('shadowAiCount').textContent = shadowAi.count ?? 0;
+      document.getElementById('shadowAiSupporting').textContent = shadowAi.supporting ?? 0;
+      document.getElementById('shadowAiAbstaining').textContent = shadowAi.abstaining ?? 0;
+      const shadowAiRows = document.getElementById('shadowAiRows');
+      const shadowAiReviews = Array.isArray(shadowAi.reviews) ? shadowAi.reviews : [];
+      shadowAiRows.innerHTML = shadowAiReviews.length
+        ? shadowAiReviews.map((item) => {
+            const ai = item.review || {};
+            const action = ai.action || 'ABSTAIN';
+            const signal = item.signal || '-';
+            const confidence = Number(ai.confidence || 0).toFixed(2);
+            const title = `${instrumentText(item.symbol || '-')} · ${signal} → ${action}`;
+            const detail = [ai.reason || 'без пояснения', ai.risk_note || '', `уверенность ${confidence}`].filter(Boolean).join(' · ');
+            return buildReviewRowRich(item.candle_time || item.time || '-', title, detail, '');
+          }).join('')
+        : '<div class="muted">Ждём следующий подтверждённый кандидат на вход. ИИ пока не участвует в торговле.</div>';
+
       const review = data.trade_review || {};
       document.getElementById('reviewClosed').textContent = review.closed_count ?? 0;
       document.getElementById('reviewWins').textContent = review.wins ?? 0;
@@ -6213,6 +6291,8 @@ def build_dashboard_html() -> str:
           buildTradeSummaryCard('Сделок', String(review.closed_count ?? 0), `в плюс ${review.wins ?? 0} · win rate ${Number(review.win_rate ?? 0).toFixed(1)}%`),
           buildTradeSummaryCard('Итог дня', formatSignedRub(review.closed_total_pnl_rub), `убытков ${review.losses ?? 0}`, Number(review.closed_total_pnl_rub) >= 0 ? 'good' : 'bad'),
           buildTradeSummaryCard('Переворотов', String(review.signal_flip_count ?? 0), 'закрытия по смене сигнала'),
+          buildTradeSummaryCard('Среднее удержание', `${review.average_hold_minutes ?? 0} мин`, `коротких до 90 мин: ${review.short_hold_count ?? 0}`),
+          buildTradeSummaryCard('Комиссии закрытых', formatRub(review.closed_commission_rub), 'для оценки цены переворотов', 'bad'),
           buildTradeSummaryCard('Лучший инструмент', bestSymbolLabel, review.best_symbol ? formatSignedRub(review.best_symbol.pnl_rub) : ''),
           buildTradeSummaryCard('Худший инструмент', worstSymbolLabel, review.worst_symbol ? formatSignedRub(review.worst_symbol.pnl_rub) : ''),
         ].join('');
@@ -6568,6 +6648,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "portfolio": portfolio_view,
         "runtime": runtime,
         "news": load_news_snapshot(),
+        "signal_ai_shadow": load_signal_ai_shadow_summary(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "allocator_decisions": load_allocator_decisions_for_day(target_day, 20),
         "signal_observations": load_signal_observation_summary_for_day(target_day, 20),

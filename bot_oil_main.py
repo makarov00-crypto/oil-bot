@@ -35,6 +35,7 @@ from instrument_groups import (
 )
 from news_bias import NewsBias, detect_news_bias, select_active_biases
 from news_ai_analyzer import NewsAiSignal, request_news_ai_signals
+from signal_ai_reviewer import SignalAiReview, request_signal_ai_reviews
 from news_ingest import (
     CHANNEL_URLS,
     WEB_SOURCE_URLS,
@@ -104,6 +105,7 @@ NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 NEWS_SEEN_PATH = STATE_DIR / "_news_seen.json"
 CASH_MANAGER_STATE_PATH = STATE_DIR / "_cash_manager.json"
 LOG_DIR = Path(__file__).with_name("logs")
+SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
@@ -303,6 +305,10 @@ class InstrumentState:
     last_atr_pct: float = 0.0
     last_range_width_pct: float = 0.0
     last_signal_summary: list[str] = field(default_factory=list)
+    last_shadow_ai_action: str = ""
+    last_shadow_ai_direction: str = ""
+    last_shadow_ai_confidence: float = 0.0
+    last_shadow_ai_reason: str = ""
     last_allocator_summary: str = ""
     last_allocator_quantity: int = 0
     last_entry_allocator_summary: str = ""
@@ -842,6 +848,15 @@ def append_signal_observation_decision(
         "execution_status": str(candidate.get("execution_status") or ""),
         "execution_note": str(candidate.get("execution_note") or ""),
     }
+    shadow_ai = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
+    if shadow_ai:
+        context["shadow_ai"] = {
+            "action": str(shadow_ai.get("action") or ""),
+            "direction": str(shadow_ai.get("direction") or ""),
+            "confidence": round(float(shadow_ai.get("confidence") or 0.0), 3),
+            "reason": str(shadow_ai.get("reason") or ""),
+            "risk_note": str(shadow_ai.get("risk_note") or ""),
+        }
     observation_key = str(
         candidate.get("observation_key")
         or context.get("candle_time")
@@ -3061,6 +3076,99 @@ def enrich_news_biases_with_ai(active: dict[str, NewsBias]) -> dict[str, NewsBia
         ai_signal = by_symbol.get(symbol)
         enriched[symbol] = apply_ai_signal_to_news_bias(item, ai_signal) if ai_signal else item
     return enriched
+
+
+def get_signal_ai_shadow_enabled() -> bool:
+    return parse_bool_env("OIL_SIGNAL_AI_SHADOW_ENABLED", False)
+
+
+def load_signal_ai_shadow_index() -> dict[str, dict[str, Any]]:
+    if not SIGNAL_AI_SHADOW_PATH.exists():
+        return {}
+    index: dict[str, dict[str, Any]] = {}
+    try:
+        lines = SIGNAL_AI_SHADOW_PATH.read_text(encoding="utf-8").splitlines()[-300:]
+    except OSError:
+        return {}
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        key = str(row.get("key") or "").strip()
+        if key:
+            index[key] = row
+    return index
+
+
+def build_shadow_ai_key(candidate: dict[str, Any]) -> str:
+    return ":".join(
+        [
+            str(candidate.get("symbol") or "").upper(),
+            str(candidate.get("signal") or "").upper(),
+            str(candidate.get("candle_time") or ""),
+        ]
+    )
+
+
+def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
+    """Attach AI opinions for later comparison; never change live trade decisions."""
+    if not candidates or not get_signal_ai_shadow_enabled():
+        return
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        logging.warning("OIL_SIGNAL_AI_SHADOW_ENABLED включён, но OPENAI_API_KEY не задан")
+        return
+    previous = load_signal_ai_shadow_index()
+    pending: list[dict[str, Any]] = []
+    for candidate in candidates:
+        key = build_shadow_ai_key(candidate)
+        candidate["shadow_ai_key"] = key
+        existing = previous.get(key)
+        if existing:
+            candidate["shadow_ai"] = dict(existing.get("review") or {})
+        else:
+            pending.append(candidate)
+    if not pending:
+        return
+    try:
+        reviews = request_signal_ai_reviews(api_key, pending)
+    except Exception as error:
+        logging.warning("Теневой ИИ-разбор сигналов не выполнен: %s", error)
+        return
+    SIGNAL_AI_SHADOW_PATH.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
+    with SIGNAL_AI_SHADOW_PATH.open("a", encoding="utf-8") as handle:
+        for candidate in pending:
+            symbol = str(candidate.get("symbol") or "").upper()
+            review = reviews.get(symbol)
+            if review is None:
+                continue
+            review_payload = review.as_dict()
+            candidate["shadow_ai"] = review_payload
+            row = {
+                "time": now,
+                "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
+                "symbol": symbol,
+                "signal": str(candidate.get("signal") or "").upper(),
+                "strategy": str(candidate.get("strategy_name") or ""),
+                "candle_time": str(candidate.get("candle_time") or ""),
+                "review": review_payload,
+            }
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            state = load_state(symbol)
+            state.last_shadow_ai_action = review.action
+            state.last_shadow_ai_direction = review.direction
+            state.last_shadow_ai_confidence = review.confidence
+            state.last_shadow_ai_reason = review.reason
+            save_state(symbol, state)
+            logging.info(
+                "symbol=%s signal_ai_shadow action=%s direction=%s confidence=%.2f",
+                symbol,
+                review.action,
+                review.direction,
+                review.confidence,
+            )
 
 
 def floor_time_slot(dt: datetime, minutes: int) -> datetime:
@@ -9690,6 +9798,24 @@ def process_instrument(
                                                     ((allocator_sizing or {}).get("margin_per_lot_rub") or 0.0)
                                                     * max(1, int((allocator_sizing or {}).get("quantity") or 0))
                                                 ),
+                                                "shadow_ai_context": {
+                                                    "close": round(float(lower_df.iloc[-1].get("close") or 0.0), 6),
+                                                    "macd": round(float(lower_df.iloc[-1].get("macd") or 0.0), 6),
+                                                    "macd_signal": round(float(lower_df.iloc[-1].get("macd_signal") or 0.0), 6),
+                                                    "macd_histogram": round(
+                                                        float(lower_df.iloc[-1].get("macd") or 0.0)
+                                                        - float(lower_df.iloc[-1].get("macd_signal") or 0.0),
+                                                        6,
+                                                    ),
+                                                    "ao": round(float(lower_df.iloc[-1].get("ao") or 0.0), 6),
+                                                    "rsi": round(float(lower_df.iloc[-1].get("rsi") or 0.0), 3),
+                                                    "volume_ratio": round(float(regime_metrics.get("volume_ratio") or 0.0), 3),
+                                                    "atr_pct": round(float(regime_metrics.get("atr_pct") or 0.0), 5),
+                                                    "session": session_name,
+                                                    "news_bias": format_trading_news_bias_label(news_bias),
+                                                    "news_impact": describe_news_bias_impact(signal, news_bias),
+                                                    "position": "FLAT",
+                                                },
                                             }
                                             state.last_allocator_summary = (
                                                 f"{state.last_allocator_summary} "
@@ -9778,6 +9904,7 @@ def run_bot() -> int:
                             )
                             if candidate:
                                 cycle_candidates.append(candidate)
+                        apply_signal_ai_shadow_reviews(cycle_candidates)
                         selected_candidates, deferred_candidates = rank_cycle_entry_candidates(cycle_candidates)
                         for item in deferred_candidates:
                             append_signal_observation_decision(
