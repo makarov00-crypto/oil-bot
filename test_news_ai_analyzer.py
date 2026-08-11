@@ -62,7 +62,10 @@ class NewsAiAnalyzerTests(unittest.TestCase):
                     )
                 }
 
-        with patch("news_ai_analyzer.requests.post", return_value=FakeResponse()) as mocked_post:
+        with (
+            patch.dict(os.environ, {"OIL_AI_API_MODE": "responses"}),
+            patch("news_ai_analyzer.requests.post", return_value=FakeResponse()) as mocked_post,
+        ):
             signals = request_news_ai_signals("test-key", "gpt-4.1-mini", [sample_bias()])
 
         self.assertEqual(len(signals), 1)

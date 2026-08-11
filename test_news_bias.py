@@ -210,7 +210,8 @@ class NewsBiasTests(unittest.TestCase):
             score=1,
         )
 
-        signal, reason = bot.apply_news_bias_to_signal("LONG", "Базовый long", bias)
+        with patch.dict("os.environ", {"OIL_NEWS_AI_ENABLED": "0"}):
+            signal, reason = bot.apply_news_bias_to_signal("LONG", "Базовый long", bias)
 
         self.assertEqual(signal, "LONG")
         self.assertIn("не влияют на сделку", reason)
