@@ -1001,6 +1001,53 @@ def get_price_near_observation_horizon(
     return closest[0], closest[1].astimezone(MOSCOW_TZ)
 
 
+def get_shadow_ai_horizon_price(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    target_time: datetime,
+) -> tuple[float, datetime, str] | None:
+    """Prefer a precise minute close, then the first available hourly close."""
+    exact_snapshot = get_price_near_observation_horizon(
+        client,
+        config,
+        instrument,
+        target_time,
+        window_minutes=10,
+    )
+    if exact_snapshot is not None:
+        return exact_snapshot[0], exact_snapshot[1], "minute"
+
+    now = datetime.now(UTC)
+    target_utc = target_time.astimezone(UTC)
+    if now <= target_utc:
+        return None
+    try:
+        candles = client.market_data.get_candles(
+            figi=instrument.figi,
+            from_=target_utc,
+            to=min(now, target_utc + timedelta(days=3)),
+            interval=CandleInterval.CANDLE_INTERVAL_HOUR,
+        )
+    except Exception as error:
+        logging.info("symbol=%s signal_ai_shadow_hourly_price_unavailable error=%s", instrument.symbol, error)
+        return None
+
+    for candle in getattr(candles, "candles", []) or []:
+        candle_time = getattr(candle, "time", None)
+        if candle_time is None:
+            continue
+        if candle_time.tzinfo is None:
+            candle_time = candle_time.replace(tzinfo=UTC)
+        candle_time = candle_time.astimezone(UTC)
+        if candle_time < target_utc:
+            continue
+        close_price = quotation_to_float(getattr(candle, "close", None))
+        if close_price > 0.0:
+            return close_price, candle_time.astimezone(MOSCOW_TZ), "hour"
+    return None
+
+
 def update_signal_observation_outcomes(
     client: Client,
     config: BotConfig,
@@ -1069,7 +1116,7 @@ def update_signal_ai_shadow_outcomes(
     instruments_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
     now = datetime.now(UTC)
     updated = 0
-    for row in load_signal_observations(TRADE_DB_PATH, limit=limit):
+    for row in load_signal_observations(TRADE_DB_PATH, limit=limit, newest_first=True):
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
         if not shadow_ai:
@@ -1090,16 +1137,28 @@ def update_signal_ai_shadow_outcomes(
             target_time = observed_at + timedelta(hours=hours)
             if now < target_time:
                 continue
-            horizon_snapshot = get_price_near_observation_horizon(
+            horizon_snapshot = get_shadow_ai_horizon_price(
                 client,
                 config,
                 instrument,
                 target_time,
-                window_minutes=10,
             )
             if horizon_snapshot is None:
+                if now >= target_time + timedelta(days=3):
+                    outcomes[key] = {
+                        "status": "unavailable",
+                        "reason": "не найдена рыночная цена в течение трёх дней после горизонта",
+                    }
+                    changed = True
+                else:
+                    logging.info(
+                        "symbol=%s signal_ai_shadow_outcome_wait horizon=%s target_time=%s",
+                        symbol,
+                        key,
+                        target_time.astimezone(MOSCOW_TZ).isoformat(),
+                    )
                 continue
-            current_price, evaluated_at = horizon_snapshot
+            current_price, evaluated_at, price_source = horizon_snapshot
             move_pct = (
                 (current_price - observed_price) / observed_price * 100.0
                 if signal == "LONG"
@@ -1110,6 +1169,7 @@ def update_signal_ai_shadow_outcomes(
                 "current_price": round(current_price, 6),
                 "move_pct": round(move_pct, 4),
                 "favorable": move_pct > 0.0,
+                "price_source": price_source,
             }
             changed = True
         if changed:

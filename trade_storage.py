@@ -609,6 +609,7 @@ def load_signal_observations(
     limit: int | None = None,
     target_day: date | None = None,
     unevaluated_only: bool = False,
+    newest_first: bool = False,
 ) -> list[dict[str, Any]]:
     ensure_trade_db(db_path)
     query = "SELECT * FROM signal_observations"
@@ -621,7 +622,7 @@ def load_signal_observations(
         clauses.append("(evaluated_at IS NULL OR evaluated_at = '')")
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY observed_at ASC"
+    query += " ORDER BY observed_at DESC" if newest_first else " ORDER BY observed_at ASC"
     if limit is not None:
         query += " LIMIT ?"
         params.append(limit)

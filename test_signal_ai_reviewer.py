@@ -80,6 +80,33 @@ class SignalAiReviewerTests(unittest.TestCase):
             self.assertEqual(set(outcomes), {"1h", "2h", "4h", "8h"})
             self.assertTrue(outcomes["4h"]["favorable"])
 
+    def test_shadow_outcomes_save_hourly_fallback_source(self) -> None:
+        observed_at = "2026-08-01T10:00:00+03:00"
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "trade.sqlite3"
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": observed_at,
+                    "observation_key": "2026-08-01 10:00",
+                    "symbol": "BRU6",
+                    "signal": "LONG",
+                    "strategy": "reversal_1h",
+                    "decision": "selected",
+                    "observed_price": 100.0,
+                    "context": {"shadow_ai": {"action": "ВХОД"}},
+                },
+            )
+            instrument = bot.InstrumentConfig(symbol="BRU6", figi="FIGI", display_name="Brent")
+            evaluated_at = bot.datetime.fromisoformat("2026-08-01T15:00:00+03:00")
+            with patch.object(bot, "TRADE_DB_PATH", db_path), patch.object(
+                bot, "get_shadow_ai_horizon_price", return_value=(101.0, evaluated_at, "hour")
+            ):
+                bot.update_signal_ai_shadow_outcomes(None, SimpleNamespace(), [instrument])
+
+            outcomes = load_signal_observations(db_path)[0]["context"]["shadow_ai_outcomes"]
+            self.assertEqual(outcomes["4h"]["price_source"], "hour")
+
 
 if __name__ == "__main__":
     unittest.main()

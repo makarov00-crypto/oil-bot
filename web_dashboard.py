@@ -1359,15 +1359,19 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         "correct_4h": 0,
         "executed": 0,
     }
-    for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800):
+    shadow_outcomes_by_key: dict[str, dict[str, Any]] = {}
+    for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800, newest_first=True):
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
         if not shadow_ai:
             continue
+        candle_time = str(context.get("candle_time") or row.get("observation_key") or "")
+        shadow_key = ":".join([str(row.get("symbol") or "").upper(), str(row.get("signal") or "").upper(), candle_time])
+        outcomes = context.get("shadow_ai_outcomes") if isinstance(context.get("shadow_ai_outcomes"), dict) else {}
+        shadow_outcomes_by_key[shadow_key] = outcomes
         execution_status = str(context.get("execution_status") or "").lower()
         if execution_status in {"confirmed_open", "recovered_open", "submitted_open"}:
             performance["executed"] += 1
-        outcomes = context.get("shadow_ai_outcomes") if isinstance(context.get("shadow_ai_outcomes"), dict) else {}
         for hours in (1, 2, 4, 8):
             outcome = outcomes.get(f"{hours}h") if isinstance(outcomes, dict) else None
             if not isinstance(outcome, dict) or "favorable" not in outcome:
@@ -1396,6 +1400,16 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         if key:
             latest[key] = row
     reviews = sorted(latest.values(), key=lambda item: str(item.get("time") or ""), reverse=True)[:limit]
+    for item in reviews:
+        item["shadow_ai_outcomes"] = shadow_outcomes_by_key.get(str(item.get("key") or ""), {})
+        item["shadow_ai_4h_due"] = False
+        try:
+            observed_at = datetime.fromisoformat(str(item.get("time") or ""))
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=timezone.utc)
+            item["shadow_ai_4h_due"] = datetime.now(timezone.utc) >= observed_at.astimezone(timezone.utc) + timedelta(hours=4)
+        except ValueError:
+            pass
     supporting = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"})
     abstaining = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"})
     return {
@@ -4742,7 +4756,7 @@ def build_dashboard_html() -> str:
         <div><div class="muted">Проверено через 4ч</div><div class="metric" id="shadowAiEvaluated4h">0</div></div>
         <div><div class="muted">Точность через 4ч</div><div class="metric" id="shadowAiAccuracy4h">-</div></div>
       </div>
-      <div id="shadowAiRows" class="review-list" style="margin-top:12px;"></div>
+      <div id="shadowAiRows" class="review-list" style="margin-top:12px; max-height:420px; overflow-y:auto; padding-right:6px;"></div>
     </section>
 
     <div class="grid">
@@ -6275,7 +6289,15 @@ def build_dashboard_html() -> str:
             const signal = item.signal || '-';
             const confidence = Number(ai.confidence || 0).toFixed(2);
             const title = `${instrumentText(item.symbol || '-')} · ${signal} → ${action}`;
-            const detail = [ai.reason || 'без пояснения', ai.risk_note || '', `уверенность ${confidence}`].filter(Boolean).join(' · ');
+            const outcome4h = item.shadow_ai_outcomes?.['4h'];
+            let outcomeText = item.shadow_ai_4h_due ? '4ч: ждём первую доступную цену рынка' : '4ч: горизонт ещё не наступил';
+            if (outcome4h?.status === 'unavailable') outcomeText = '4ч: цена рынка недоступна';
+            else if (typeof outcome4h?.favorable === 'boolean') {
+              const move = Number(outcome4h.move_pct || 0);
+              const source = outcome4h.price_source === 'hour' ? 'первая часовая свеча' : 'минутная свеча';
+              outcomeText = `4ч: ${outcome4h.favorable ? 'подтверждён' : 'не подтвердился'} (${move >= 0 ? '+' : ''}${move.toFixed(2)}%, ${source})`;
+            }
+            const detail = [ai.reason || 'без пояснения', ai.risk_note || '', `уверенность ${confidence}`, outcomeText].filter(Boolean).join(' · ');
             return buildReviewRowRich(item.candle_time || item.time || '-', title, detail, '');
           }).join('')
         : '<div class="muted">Ждём следующий подтверждённый кандидат на вход. ИИ пока не участвует в торговле.</div>';
