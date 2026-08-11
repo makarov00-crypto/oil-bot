@@ -43,6 +43,18 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("news-overview", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_trade_quality_tabs_use_structured_cards(self) -> None:
+        html = dashboard.build_dashboard_html()
+        quality_render = html.split("qualityTradesBody.innerHTML =", 1)[1].split("const aiReview", 1)[0]
+
+        self.assertIn('class="quality-card"', quality_render)
+        self.assertIn('class="quality-horizon-grid"', quality_render)
+        self.assertIn('id="qualityTradesCount"', html)
+        self.assertIn('id="qualityExitsCount"', html)
+        self.assertIn('id="qualityMissedCount"', html)
+        self.assertNotIn("buildReviewRowRich(", quality_render)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:
         rows = []
         base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)

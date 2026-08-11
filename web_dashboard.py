@@ -4345,8 +4345,125 @@ def build_dashboard_html() -> str:
       background: rgba(39, 147, 220, 0.20);
       border-color: rgba(81, 191, 255, 0.50);
     }
+    .quality-tab-count {
+      display: inline-flex;
+      min-width: 20px;
+      height: 20px;
+      align-items: center;
+      justify-content: center;
+      margin-left: 5px;
+      padding: 0 5px;
+      border-radius: 7px;
+      background: rgba(127, 149, 179, 0.14);
+      color: #bfd0e6;
+      font: 700 11px/1 "JetBrains Mono", monospace;
+    }
+    .quality-tab.active .quality-tab-count {
+      background: rgba(67, 197, 255, 0.18);
+      color: #ffffff;
+    }
     .quality-panel { display: none; margin-top: 14px; }
     .quality-panel.active { display: block; }
+    .quality-card-list {
+      display: grid;
+      gap: 10px;
+    }
+    .quality-card {
+      min-width: 0;
+      padding: 14px;
+      border: 1px solid rgba(102, 174, 255, 0.14);
+      border-radius: 8px;
+      background: rgba(7, 14, 27, 0.58);
+    }
+    .quality-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .quality-card-title {
+      color: #f1f7ff;
+      font: 750 15px/1.3 "Sora", "Manrope", sans-serif;
+    }
+    .quality-card-meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .quality-card-result {
+      flex: 0 0 auto;
+      text-align: right;
+      font: 750 16px/1.25 "JetBrains Mono", monospace;
+    }
+    .quality-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .quality-metric {
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid rgba(102, 174, 255, 0.10);
+      border-radius: 7px;
+      background: rgba(10, 18, 34, 0.56);
+    }
+    .quality-metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+    }
+    .quality-metric-value {
+      margin-top: 4px;
+      color: #eaf3ff;
+      font: 700 13px/1.3 "JetBrains Mono", monospace;
+      overflow-wrap: anywhere;
+    }
+    .quality-horizon-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .quality-horizon {
+      min-width: 0;
+      padding: 8px 10px;
+      border-left: 2px solid rgba(67, 197, 255, 0.34);
+      background: rgba(10, 18, 34, 0.42);
+    }
+    .quality-horizon-time {
+      color: #8ca4c2;
+      font: 700 11px/1.2 "JetBrains Mono", monospace;
+    }
+    .quality-horizon-value {
+      margin-top: 4px;
+      color: #e7f1ff;
+      font: 650 12px/1.3 "JetBrains Mono", monospace;
+    }
+    .quality-horizon-delta {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+    }
+    .quality-card-note {
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid rgba(102, 174, 255, 0.10);
+      color: #b8c9dd;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .quality-card-note strong {
+      color: #e9f3ff;
+      font-weight: 700;
+    }
+    .quality-card-note + .quality-card-note {
+      margin-top: 6px;
+      padding-top: 0;
+      border-top: 0;
+    }
     .strategy-diagnostics-grid {
       display: grid;
       gap: 12px;
@@ -4678,6 +4795,20 @@ def build_dashboard_html() -> str:
       }
       .news-diagnostics {
         grid-template-columns: 1fr;
+      }
+      .quality-card-head {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .quality-card-result {
+        text-align: left;
+      }
+      .quality-metric-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+      .quality-horizon-grid {
+        grid-template-columns: 1fr 1fr;
       }
       .mobile-card-grid {
         grid-template-columns: 1fr 1fr;
@@ -5025,9 +5156,9 @@ def build_dashboard_html() -> str:
         <div class="trade-review-summary" id="tradeQualityOverview"></div>
         <div class="quality-tabs" role="tablist" aria-label="Диагностика качества">
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
-          <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория</button>
-          <button class="quality-tab" type="button" data-quality-tab="exits">Выходы</button>
-          <button class="quality-tab" type="button" data-quality-tab="missed">Пропуски</button>
+          <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория <span class="quality-tab-count" id="qualityTradesCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="exits">Выходы <span class="quality-tab-count" id="qualityExitsCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="missed">Пропуски <span class="quality-tab-count" id="qualityMissedCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
           <div class="table-scroll desktop-table">
@@ -5047,15 +5178,15 @@ def build_dashboard_html() -> str:
         </div>
         <div id="qualityPanelTrades" class="quality-panel">
           <div class="muted" style="margin-bottom:10px;">Фактический итог и результат альтернативного удержания позиции по часовым свечам.</div>
-          <div id="qualityTradesBody" class="review-list"></div>
+          <div id="qualityTradesBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelExits" class="quality-panel">
           <div class="muted" style="margin-bottom:10px;">Показываются только закрытия, после которых цена прошла в прежнюю сторону больше обычного шума.</div>
-          <div id="qualityExitsBody" class="review-list"></div>
+          <div id="qualityExitsBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelMissed" class="quality-panel">
           <div class="muted" style="margin-bottom:10px;">Только движения, которые после пропуска превысили порог волатильности инструмента.</div>
-          <div id="missedEntriesBody" class="review-list"></div>
+          <div id="missedEntriesBody" class="quality-card-list"></div>
         </div>
       </div>
     </section>
@@ -6589,6 +6720,10 @@ def build_dashboard_html() -> str:
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const missedEntries = Array.isArray(tradeQuality.missed_entries) ? tradeQuality.missed_entries : [];
+      const materialQualityExits = qualityExits.filter((item) => item.is_material_early_exit);
+      document.getElementById('qualityTradesCount').textContent = String(Math.min(qualityTrades.length, 20));
+      document.getElementById('qualityExitsCount').textContent = String(Math.min(materialQualityExits.length, 12));
+      document.getElementById('qualityMissedCount').textContent = String(Math.min(missedEntries.length, 12));
       tradeQualityMeta.textContent = tradeQuality.available
         ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Расчёт обновляется раз в час и использует часовые свечи, минуты - только на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
@@ -6638,50 +6773,90 @@ def build_dashboard_html() -> str:
       qualityEdgeBody.innerHTML = dimensionRows(qualityEdges, formatEdgeLabel);
       qualityTradesBody.innerHTML = qualityTrades.length
         ? qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || ''))).slice(0, 20).map((item) => {
-            const holdParts = [1, 2, 4, 8].map((hours) => {
+            const pnl = Number(item.pnl_rub || 0);
+            const pnlClass = pnl >= 0 ? 'good' : 'bad';
+            const holdTiles = [1, 2, 4, 8].map((hours) => {
               const value = item[`hold_${hours}h_net_rub`];
               const delta = item[`hold_${hours}h_delta_rub`];
-              if (value == null) return `${hours}ч: ждём данные`;
-              return `${hours}ч: ${formatSignedRub(value)} (${formatSignedRub(delta || 0)} к факту)`;
-            });
+              const deltaClass = Number(delta || 0) >= 0 ? 'good' : 'bad';
+              return `<div class="quality-horizon">
+                <div class="quality-horizon-time">Ещё ${hours}ч</div>
+                <div class="quality-horizon-value">${value == null ? 'ждём данные' : escapeHtml(formatSignedRub(value))}</div>
+                ${value == null ? '' : `<div class="quality-horizon-delta ${deltaClass}">${escapeHtml(formatSignedRub(delta || 0))} к факту</div>`}
+              </div>`;
+            }).join('');
             const aiAction = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[item.shadow_ai_action] || item.shadow_ai_action || 'нет оценки';
             const aiConfidence = item.shadow_ai_confidence ? ` · уверенность ${(Number(item.shadow_ai_confidence) * 100).toFixed(0)}%` : '';
-            const potential = item.max_possible_net_rub == null
-              ? 'максимум в рублях ещё не рассчитан'
-              : `максимум по ходу ${formatSignedRub(item.max_possible_net_rub)} · недобрано ${formatRub(item.missed_profit_rub || 0)}`;
-            return buildReviewRowRich(
-              `${formatMoscowTime(item.exit_time || '')} · ${instrumentText(item.symbol || '-')} · ${item.side === 'SHORT' ? 'Шорт' : 'Лонг'}`,
-              `Факт ${formatSignedRub(item.pnl_rub || 0)} · ${potential}`,
-              `${holdParts.join(' · ')} · ИИ: ${aiAction}${aiConfidence}${item.shadow_ai_reason ? ` — ${shortDiagnosticText(item.shadow_ai_reason, 120)}` : ''} · Выход: ${shortDiagnosticText(item.exit_reason || 'причина не сохранена', 120)}`,
-            );
+            const excursion = item.mfe_pct == null
+              ? 'ещё не рассчитано'
+              : `+${Number(item.mfe_pct || 0).toFixed(2)}% / -${Number(item.mae_pct || 0).toFixed(2)}%`;
+            return `<article class="quality-card">
+              <div class="quality-card-head">
+                <div>
+                  <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
+                  <div class="quality-card-meta">${escapeHtml(formatMoscowTime(item.exit_time || ''))} · ${item.side === 'SHORT' ? 'шорт' : 'лонг'}</div>
+                </div>
+                <div class="quality-card-result ${pnlClass}">${escapeHtml(formatSignedRub(pnl))}</div>
+              </div>
+              <div class="quality-metric-grid">
+                <div class="quality-metric"><div class="quality-metric-label">Максимум по ходу</div><div class="quality-metric-value">${item.max_possible_net_rub == null ? 'ещё не рассчитан' : escapeHtml(formatSignedRub(item.max_possible_net_rub))}</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Недобрано</div><div class="quality-metric-value ${Number(item.missed_profit_rub || 0) > 0 ? 'bad' : ''}">${escapeHtml(formatRub(item.missed_profit_rub || 0))}</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Движение / просадка</div><div class="quality-metric-value">${escapeHtml(excursion)}</div></div>
+              </div>
+              <div class="quality-horizon-grid">${holdTiles}</div>
+              <div class="quality-card-note"><strong>Выход:</strong> ${escapeHtml(shortDiagnosticText(item.exit_reason || 'причина не сохранена', 180))}</div>
+              <div class="quality-card-note"><strong>Теневой ИИ:</strong> ${escapeHtml(`${aiAction}${aiConfidence}${item.shadow_ai_reason ? ` · ${shortDiagnosticText(item.shadow_ai_reason, 140)}` : ''}`)}</div>
+            </article>`;
           }).join('')
         : '<div class="muted">Нет закрытых сделок для лаборатории за период.</div>';
-      qualityExitsBody.innerHTML = qualityExits.filter((item) => item.is_material_early_exit).length
-        ? qualityExits.filter((item) => item.is_material_early_exit).slice(0, 12).map((item) => buildReviewRowRich(
-            `${formatMoscowTime(item.exit_time || '')} · ${instrumentText(item.symbol || '-')}`,
-            `${item.side === 'SHORT' ? 'Шорт' : 'Лонг'} закрыт ${formatSignedRub(item.net_pnl_rub || 0)} · затем +${Number(item.post_exit_4h_pct || 0).toFixed(2)}%`,
-            `${shortDiagnosticText(item.exit_reason || 'Причина закрытия не сохранена', 130)} · порог +${Number(item.threshold_pct || 0).toFixed(2)}%`,
-          )).join('')
+      qualityExitsBody.innerHTML = materialQualityExits.length
+        ? materialQualityExits.slice(0, 12).map((item) => {
+            const pnl = Number(item.net_pnl_rub || 0);
+            const pnlClass = pnl >= 0 ? 'good' : 'bad';
+            return `<article class="quality-card">
+              <div class="quality-card-head">
+                <div>
+                  <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
+                  <div class="quality-card-meta">${escapeHtml(formatMoscowTime(item.exit_time || ''))} · ${item.side === 'SHORT' ? 'шорт' : 'лонг'}</div>
+                </div>
+                <div class="quality-card-result ${pnlClass}">${escapeHtml(formatSignedRub(pnl))}</div>
+              </div>
+              <div class="quality-metric-grid">
+                <div class="quality-metric"><div class="quality-metric-label">После выхода за 4ч</div><div class="quality-metric-value bad">+${escapeHtml(Number(item.post_exit_4h_pct || 0).toFixed(2))}%</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Порог значимости</div><div class="quality-metric-value">+${escapeHtml(Number(item.threshold_pct || 0).toFixed(2))}%</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Что это значит</div><div class="quality-metric-value">движение продолжилось</div></div>
+              </div>
+              <div class="quality-card-note"><strong>Почему закрыли:</strong> ${escapeHtml(shortDiagnosticText(item.exit_reason || 'Причина закрытия не сохранена', 190))}</div>
+            </article>`;
+          }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
       missedEntriesBody.innerHTML = missedEntries.length
         ? missedEntries.slice(0, 12).map((item) => {
             const move = Number(item.move_4h_pct || 0);
-            const formatMove = (hours) => {
+            const moveClass = move >= 0 ? 'good' : 'bad';
+            const horizonTiles = [1, 2, 4, 8].map((hours) => {
               const value = item[`move_${hours}h_pct`];
-              if (value == null) return `${hours}ч -`;
-              const number = Number(value);
-              return `${hours}ч ${number >= 0 ? '+' : ''}${number.toFixed(2)}%`;
-            };
-            const moveText = `${formatMove(1)} · ${formatMove(2)} · ${formatMove(4)} · ${formatMove(8)}`;
-            const moneyText = [1, 2, 4, 8].map((hours) => {
-              const value = item[`move_${hours}h_rub`];
-              return value == null ? null : `${hours}ч ${formatSignedRub(value)}`;
-            }).filter(Boolean).join(' · ');
-            return buildReviewRowRich(
-              formatMoscowTime(item.observed_at || ''),
-              `${instrumentText(item.symbol || '-')} · ${displaySignal(item.signal || '-')} · ${item.source_label || 'Вход не исполнен'}`,
-              `${moveText} · ${moneyText || 'денежная оценка ещё не готова'} · ${item.quantity_basis || ''} · ${shortDiagnosticText(item.reason || 'Причина не сохранена', 150)}`,
-            );
+              const money = item[`move_${hours}h_rub`];
+              const number = value == null ? null : Number(value);
+              const tone = number == null ? '' : number >= 0 ? 'good' : 'bad';
+              return `<div class="quality-horizon">
+                <div class="quality-horizon-time">Через ${hours}ч</div>
+                <div class="quality-horizon-value ${tone}">${number == null ? 'ждём данные' : `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`}</div>
+                <div class="quality-horizon-delta">${money == null ? 'без денежной оценки' : escapeHtml(formatSignedRub(money))}</div>
+              </div>`;
+            }).join('');
+            return `<article class="quality-card">
+              <div class="quality-card-head">
+                <div>
+                  <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
+                  <div class="quality-card-meta">${escapeHtml(formatMoscowTime(item.observed_at || ''))} · ${escapeHtml(item.source_label || 'вход не исполнен')}</div>
+                </div>
+                <div class="quality-card-result ${moveClass}">${escapeHtml(`${move >= 0 ? '+' : ''}${move.toFixed(2)}% за 4ч`)}</div>
+              </div>
+              <div class="quality-card-meta" style="margin-top:8px;">${signalBadge(item.signal || '-')} ${escapeHtml(item.quantity_basis || '')}</div>
+              <div class="quality-horizon-grid">${horizonTiles}</div>
+              <div class="quality-card-note"><strong>Почему пропустили:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 210))}</div>
+            </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых пропущенных входов: новые HOLD-наблюдения накопятся после часовых свечей.</div>';
 
