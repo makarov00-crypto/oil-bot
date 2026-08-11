@@ -62,6 +62,7 @@ from trade_storage import (
     update_signal_observation_outcome,
 )
 from trade_quality import (
+    add_trade_counterfactuals,
     build_trade_key,
     build_trade_quality_overview,
     calculate_post_exit_move,
@@ -128,7 +129,7 @@ UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 TRADE_QUALITY_REFRESH_SECONDS = 3600
-TRADE_QUALITY_ANALYTICS_VERSION = 4
+TRADE_QUALITY_ANALYTICS_VERSION = 5
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
@@ -667,6 +668,12 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "entry_allocator_summary": str(state.last_entry_allocator_summary or ""),
         "signal_summary": signal_summary,
         "execution_status": str(state.execution_status or ""),
+        "shadow_ai": {
+            "action": str(state.last_shadow_ai_action or ""),
+            "direction": str(state.last_shadow_ai_direction or ""),
+            "confidence": round(float(state.last_shadow_ai_confidence or 0.0), 3),
+            "reason": str(state.last_shadow_ai_reason or ""),
+        } if state.last_shadow_ai_action else {},
     }
     return {key: value for key, value in context.items() if value not in ("", [], None)}
 
@@ -861,6 +868,9 @@ def append_signal_observation_decision(
         "allocator_quantity": int(candidate.get("allocator_quantity") or 0),
         "allocatable_margin_rub": float(candidate.get("allocatable_margin_rub") or 0.0),
         "requested_margin_rub": float(candidate.get("requested_margin_rub") or 0.0),
+        "correlation_size_multiplier": float(candidate.get("correlation_size_multiplier") or 1.0),
+        "correlation_quantity_cap": int(candidate.get("correlation_quantity_cap") or 0),
+        "correlation_note": str(candidate.get("correlation_note") or ""),
         "candle_time": str(candidate.get("candle_time") or ""),
         "execution_status": str(candidate.get("execution_status") or ""),
         "execution_note": str(candidate.get("execution_note") or ""),
@@ -1352,44 +1362,41 @@ def build_trade_quality_analytics(
             continue
         quality_key = build_trade_key(trade)
         cached_trade = cached_trades.get(quality_key)
-        if cached_trade and cached_trade.get("mfe_pct") is not None and cached_trade.get("post_exit_4h_pct") is not None:
-            enriched_cached = {**cached_trade, **trade, "quality_key": quality_key}
-            enriched_cached["early_exit_threshold_pct"] = early_exit_threshold_pct(enriched_cached)
-            enriched_cached["is_material_early_exit"] = is_material_early_exit(enriched_cached)
-            completed.append(enriched_cached)
-            continue
         entry_time = entry_time.astimezone(MOSCOW_TZ)
         exit_time = exit_time.astimezone(MOSCOW_TZ)
-        entry_hour = entry_time.replace(minute=0, second=0, microsecond=0)
-        exit_hour = exit_time.replace(minute=0, second=0, microsecond=0)
-        hourly_rows = get_candle_rows_in_range(
-            client,
-            instrument,
-            entry_hour,
-            min(now.astimezone(MOSCOW_TZ), exit_hour + timedelta(hours=1)),
-            CandleInterval.CANDLE_INTERVAL_HOUR,
-        )
-        first_boundary_end = min(exit_time, entry_hour + timedelta(hours=1))
-        boundary_rows = get_candle_rows_in_range(
-            client,
-            instrument,
-            entry_time,
-            first_boundary_end,
-            CandleInterval.CANDLE_INTERVAL_1_MIN,
-        )
-        if exit_hour != entry_hour:
-            boundary_rows.extend(
-                get_candle_rows_in_range(
-                    client,
-                    instrument,
-                    exit_hour,
-                    exit_time,
-                    CandleInterval.CANDLE_INTERVAL_1_MIN,
-                )
+        enriched = {**(cached_trade or {}), **trade, "quality_key": quality_key}
+        if enriched.get("mfe_pct") is None:
+            entry_hour = entry_time.replace(minute=0, second=0, microsecond=0)
+            exit_hour = exit_time.replace(minute=0, second=0, microsecond=0)
+            hourly_rows = get_candle_rows_in_range(
+                client,
+                instrument,
+                entry_hour,
+                min(now.astimezone(MOSCOW_TZ), exit_hour + timedelta(hours=1)),
+                CandleInterval.CANDLE_INTERVAL_HOUR,
             )
-        quality = calculate_trade_excursion(trade, hourly_rows, boundary_rows)
-        enriched = {**trade, **quality, "quality_key": quality_key}
-        for hours in (1, 2, 4):
+            first_boundary_end = min(exit_time, entry_hour + timedelta(hours=1))
+            boundary_rows = get_candle_rows_in_range(
+                client,
+                instrument,
+                entry_time,
+                first_boundary_end,
+                CandleInterval.CANDLE_INTERVAL_1_MIN,
+            )
+            if exit_hour != entry_hour:
+                boundary_rows.extend(
+                    get_candle_rows_in_range(
+                        client,
+                        instrument,
+                        exit_hour,
+                        exit_time,
+                        CandleInterval.CANDLE_INTERVAL_1_MIN,
+                    )
+                )
+            enriched.update(calculate_trade_excursion(trade, hourly_rows, boundary_rows))
+        for hours in (1, 2, 4, 8):
+            if enriched.get(f"post_exit_{hours}h_pct") is not None:
+                continue
             snapshot = get_hourly_horizon_price(client, config, instrument, exit_time + timedelta(hours=hours))
             if snapshot is None:
                 continue
@@ -1399,7 +1406,7 @@ def build_trade_quality_analytics(
             enriched[f"post_exit_{hours}h_source"] = source
         enriched["early_exit_threshold_pct"] = early_exit_threshold_pct(enriched)
         enriched["is_material_early_exit"] = is_material_early_exit(enriched)
-        completed.append(enriched)
+        completed.append(add_trade_counterfactuals(enriched))
 
     missed_entry_evaluations: list[dict[str, Any]] = []
     potential_rows: list[tuple[dict[str, Any], str, float, str]] = []
@@ -1450,10 +1457,8 @@ def build_trade_quality_analytics(
             continue
         source_kind, source_label, reason = source_data.split("|", 2)
         cached = cached_missed.get(observation_uid)
-        if cached and cached.get("move_4h_pct") is not None:
-            missed_entry_evaluations.append(cached)
-            continue
         evaluation = {
+            **(cached or {}),
             "observation_uid": observation_uid,
             "symbol": symbol,
             "signal": direction,
@@ -1465,14 +1470,32 @@ def build_trade_quality_analytics(
             "reason": compact_reason(reason),
             "diagnostic_score": round(diagnostic_score, 3),
             "threshold_pct": round(max(0.35, float(context.get("atr_pct") or 0.0) * 100.0), 3),
+            "evaluation_quantity": max(1, int(context.get("allocator_quantity") or 0)),
+            "quantity_basis": (
+                "размер аллокатора"
+                if int(context.get("allocator_quantity") or 0) > 0
+                else "1 лот для диагностики"
+            ),
         }
-        for hours in (1, 2, 4):
+        for hours in (1, 2, 4, 8):
+            if evaluation.get(f"move_{hours}h_pct") is not None:
+                continue
             snapshot = get_hourly_horizon_price(client, config, instrument, observed_at + timedelta(hours=hours))
             if snapshot is None:
                 continue
             future_price, evaluated_at, source = snapshot
             move_pct = (future_price - observed_price) / observed_price * 100.0 if direction == "LONG" else (observed_price - future_price) / observed_price * 100.0
             evaluation[f"move_{hours}h_pct"] = round(move_pct, 4)
+            evaluation[f"move_{hours}h_rub"] = round(
+                calculate_futures_pnl_rub(
+                    instrument,
+                    observed_price,
+                    future_price,
+                    int(evaluation["evaluation_quantity"]),
+                    direction,
+                ),
+                2,
+            )
             evaluation[f"evaluated_{hours}h_at"] = evaluated_at.isoformat()
             evaluation[f"price_source_{hours}h"] = source
         if evaluation.get("move_4h_pct") is not None:
@@ -7532,7 +7555,6 @@ def rank_cycle_entry_candidates(
     used_budget_rub = 0.0
     class_counts: dict[str, int] = defaultdict(int)
     correlation_counts: dict[str, int] = defaultdict(int)
-    correlation_best_scores: dict[str, float] = defaultdict(float)
     for item in ranked:
         score = float(item.get("priority_score") or 0.0)
         edge_score = float(item.get("entry_edge_score") or 0.0)
@@ -7552,19 +7574,31 @@ def rank_cycle_entry_candidates(
             continue
 
         correlation_bucket = get_candidate_correlation_bucket(item)
-        bucket_best_score = float(correlation_best_scores.get(correlation_bucket) or 0.0)
-        if (
+        correlated = (
             correlation_bucket
             and correlation_counts[correlation_bucket] >= 1
-            and score < 0.88
-            and not (edge_score >= 0.70 and score >= bucket_best_score - 0.03)
-        ):
+        )
+        if correlated and score < 0.60 and edge_score < 0.60:
             item["defer_reason"] = (
                 f"похожая рыночная идея уже выбрана в этом цикле; "
                 f"группа {correlation_bucket}, приоритет {score:.2f}."
             )
             deferred.append(item)
             continue
+        if correlated:
+            original_quantity = max(1, int(item.get("allocator_quantity") or 1))
+            quantity_cap = max(1, math.ceil(original_quantity * 0.40))
+            size_ratio = quantity_cap / original_quantity
+            item["correlation_size_multiplier"] = 0.40
+            item["correlation_quantity_cap"] = quantity_cap
+            item["requested_margin_rub"] = round(
+                float(item.get("requested_margin_rub") or 0.0) * size_ratio,
+                2,
+            )
+            item["correlation_note"] = (
+                f"похожая идея в группе {correlation_bucket}: размер снижен "
+                f"с {original_quantity} до {quantity_cap} лот(а)"
+            )
 
         instrument_class = str(item.get("instrument_class") or "базовый")
         class_limit = class_limits.get(instrument_class, 2)
@@ -7626,7 +7660,6 @@ def rank_cycle_entry_candidates(
         class_counts[instrument_class] += 1
         if correlation_bucket:
             correlation_counts[correlation_bucket] += 1
-            correlation_best_scores[correlation_bucket] = max(correlation_best_scores[correlation_bucket], score)
     return selected, deferred
 
 
@@ -8281,6 +8314,8 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
         else ""
     )
     broker_leverage_reason_hint = f", {broker_leverage_reason}" if broker_leverage_reason and quantity > 0 else ""
+    correlation_note = str(sizing.get("correlation_note") or "").strip()
+    correlation_hint = f", {correlation_note}" if correlation_note else ""
     risk_budget = float(sizing.get("risk_budget_rub") or 0.0)
     qty_by_risk = int(sizing.get("qty_by_risk") or 0)
     max_open_risk_budget = float(sizing.get("max_open_risk_budget_rub") or 0.0)
@@ -8305,7 +8340,7 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}, "
+        f"форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}{correlation_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){risk_hint}{broker_hint} -> {quantity} лот(а)."
@@ -8547,20 +8582,81 @@ def macd_crossed_up_with_ema_reclaim(df: pd.DataFrame) -> bool:
 
 
 def unified_reversal_pressure_intact(df: pd.DataFrame, side: str) -> bool:
-    if len(df) < 2:
-        return False
-    last = df.iloc[-1]
+    score, _ = assess_unified_trend_alive(df, side)
+    return score >= 0.65
+
+
+def assess_unified_trend_alive(df: pd.DataFrame, side: str) -> tuple[float, str]:
+    """Score whether the existing hourly trend still justifies holding the position."""
+    direction = str(side or "").upper()
+    if len(df) < 2 or direction not in {"LONG", "SHORT"}:
+        return 0.0, "недостаточно часовых свечей"
+    last, prev = df.iloc[-1], df.iloc[-2]
+    sign = 1.0 if direction == "LONG" else -1.0
     close = float(last["close"])
+    prev_close = float(prev["close"])
     ema20 = float(last["ema20"])
-    macd = float(last["macd"])
-    macd_signal = float(last["macd_signal"])
-    macd_hist = macd - macd_signal
+    prev_ema20 = float(prev["ema20"])
+    macd_hist = float(last["macd"]) - float(last["macd_signal"])
+    prev_hist = float(prev["macd"]) - float(prev["macd_signal"])
     ao = float(last.get("ao", macd_hist))
-    if side == "LONG":
-        return close > ema20 and macd > macd_signal and ao > 0
-    if side == "SHORT":
-        return close < ema20 and macd < macd_signal and ao < 0
-    return False
+    prev_ao = float(prev.get("ao", prev_hist))
+    rsi = float(last.get("rsi", 50.0))
+    prev_rsi = float(prev.get("rsi", rsi))
+    chaikin = float(last.get("chaikin", 0.0))
+    prev_chaikin = float(prev.get("chaikin", chaikin))
+    volume = float(last.get("volume", 0.0))
+    volume_avg = float(last.get("volume_avg", 0.0))
+    volume_ratio = volume / volume_avg if volume_avg > 0 else 0.0
+
+    checks = [
+        (0.20, sign * (close - ema20) > 0),
+        (0.10, sign * (ema20 - prev_ema20) >= 0),
+        (0.18, sign * macd_hist > 0),
+        (0.12, sign * (macd_hist - prev_hist) >= -abs(prev_hist) * 0.20),
+        (0.14, sign * ao > 0),
+        (0.08, sign * (ao - prev_ao) >= -abs(prev_ao) * 0.20),
+        (0.07, sign * (rsi - 50.0) >= -5.0 and sign * (rsi - prev_rsi) >= -2.0),
+        (0.06, volume_ratio >= 0.65 or sign * (chaikin - prev_chaikin) > 0),
+        (0.05, sign * (close - prev_close) >= 0),
+    ]
+    score = round(sum(weight for weight, passed in checks if passed), 3)
+    label = "тренд жив" if score >= 0.65 else "разворот подтверждается" if score < 0.40 else "тренд слабеет"
+    return score, f"{label}: оценка {score:.2f}"
+
+
+def reversal_turnover_gate(
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    current_price: float,
+    opposite_signal: str,
+) -> tuple[bool, str]:
+    """Require a new directional advantage to cover close, re-entry and slippage."""
+    expected_side = "SHORT" if state.position_side == "LONG" else "LONG"
+    if opposite_signal != expected_side:
+        return True, "нет немедленного переворота"
+    quantity = max(1, int(state.position_qty or 1))
+    one_side_commission = max(5.0, float(state.entry_commission_rub or 0.0))
+    slippage_per_order = max(0.0, float(instrument.min_price_increment_amount or 0.0)) * quantity
+    turnover_cost_rub = one_side_commission * 3.0 + slippage_per_order * 3.0
+    atr_pct = max(0.0005, float(state.last_atr_pct or 0.0))
+    target_price = current_price * (1.0 + atr_pct if expected_side == "LONG" else 1.0 - atr_pct)
+    expected_move_rub = abs(
+        calculate_futures_pnl_rub(
+            instrument,
+            current_price,
+            target_price,
+            quantity,
+            expected_side,
+        )
+    ) * max(0.50, float(state.last_entry_edge_score or 0.0))
+    required_rub = turnover_cost_rub * 1.50
+    allowed = float(state.last_entry_edge_score or 0.0) >= 0.62 and expected_move_rub >= required_rub
+    reason = (
+        f"оборот {'окупается' if allowed else 'не окупается'}: ожидаемо {expected_move_rub:.0f} RUB, "
+        f"нужно не меньше {required_rub:.0f} RUB с комиссиями и проскальзыванием"
+    )
+    return allowed, reason
 
 
 def unified_trailing_reversal_confirmed(df: pd.DataFrame, side: str) -> bool:
@@ -9402,6 +9498,7 @@ def open_position(
     strategy_name: str = "",
     entry_reason: str = "",
     cash_fund: CashFundConfig | None = None,
+    quantity_cap: int | None = None,
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
@@ -9463,6 +9560,15 @@ def open_position(
         strategy_name,
     )
     quantity = int(allocator_sizing.get("quantity") or 0)
+    if quantity > 0 and quantity_cap is not None and quantity_cap > 0:
+        original_quantity = quantity
+        quantity = min(quantity, int(quantity_cap))
+        if quantity < original_quantity:
+            allocator_sizing["quantity"] = quantity
+            allocator_sizing["correlation_quantity_cap"] = int(quantity_cap)
+            allocator_sizing["correlation_note"] = (
+                f"корреляционный риск снизил размер с {original_quantity} до {quantity} лот(а)"
+            )
     if quantity <= 0:
         release_reason = ""
         if sizing_requires_margin_release(allocator_sizing):
@@ -9488,6 +9594,8 @@ def open_position(
         return
     sizing_lines = build_position_sizing_lines(client, config, instrument, state, price, signal, quantity, strategy_name)
     try:
+        state.last_allocator_quantity = quantity
+        state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
         state.last_entry_allocator_quantity = quantity
         state.last_entry_allocator_summary = build_allocator_summary_text(allocator_sizing)
         state.last_entry_allocator_time = datetime.now(UTC).isoformat()
@@ -9745,6 +9853,12 @@ def check_exit(
             adaptive_exit_reason,
         )
     is_unified_reversal = is_unified_reversal_strategy(state.entry_strategy)
+    trend_alive_score, trend_alive_reason = (
+        assess_unified_trend_alive(exit_df, state.position_side)
+        if is_unified_reversal
+        else (0.0, "")
+    )
+    trend_alive = is_unified_reversal and trend_alive_score >= 0.65
     prev = exit_df.iloc[-2]
     prev2 = exit_df.iloc[-3]
     macd = float(last["macd"])
@@ -9776,6 +9890,7 @@ def check_exit(
                 and close < ema20
             )
         opposite_signal_confirmed = fresh_signal == "SHORT" and close < ema20 and close <= prev_close
+        turnover_allowed, turnover_reason = reversal_turnover_gate(instrument, state, price, fresh_signal)
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if price <= stop_price:
@@ -9786,7 +9901,7 @@ def check_exit(
             price <= trailing_price
             and (
                 not is_unified_reversal
-                or (min_hold_passed and unified_trailing_reversal_confirmed(exit_df, "LONG"))
+                or (min_hold_passed and not trend_alive and unified_trailing_reversal_confirmed(exit_df, "LONG"))
             )
         ):
             suffix = " с подтверждением разворота" if is_unified_reversal else ""
@@ -9798,10 +9913,12 @@ def check_exit(
             and not (is_unified_reversal and unified_reversal_pressure_intact(exit_df, "LONG"))
         ):
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
-        elif min_hold_passed and macd_down:
+        elif min_hold_passed and macd_down and not trend_alive and turnover_allowed:
             close_position(client, config, instrument, state, "MACD подтверждённо развернулся вниз и цена потеряла EMA20")
-        elif min_hold_passed and opposite_signal_confirmed:
+        elif min_hold_passed and opposite_signal_confirmed and not trend_alive and turnover_allowed:
             close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал SHORT")
+        elif min_hold_passed and opposite_signal_confirmed and (trend_alive or not turnover_allowed):
+            logging.info("symbol=%s status=hold_reversal side=LONG trend=%s turnover=%s", instrument.symbol, trend_alive_reason, turnover_reason)
     else:
         profit_pct = (state.entry_price - price) / state.entry_price
         if profit_pct >= exit_profile.breakeven_profit_pct:
@@ -9820,6 +9937,7 @@ def check_exit(
                 and close > ema20
             )
         opposite_signal_confirmed = fresh_signal == "LONG" and close > ema20 and close >= prev_close
+        turnover_allowed, turnover_reason = reversal_turnover_gate(instrument, state, price, fresh_signal)
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
         if price >= stop_price:
@@ -9830,7 +9948,7 @@ def check_exit(
             price >= trailing_price
             and (
                 not is_unified_reversal
-                or (min_hold_passed and unified_trailing_reversal_confirmed(exit_df, "SHORT"))
+                or (min_hold_passed and not trend_alive and unified_trailing_reversal_confirmed(exit_df, "SHORT"))
             )
         ):
             suffix = " с подтверждением разворота" if is_unified_reversal else ""
@@ -9848,10 +9966,12 @@ def check_exit(
             )
         ):
             close_position(client, config, instrument, state, f"RSI вышел в зону перепроданности: {rsi:.2f} <= {profile.rsi_exit_short:.2f}")
-        elif min_hold_passed and macd_up:
+        elif min_hold_passed and macd_up and not trend_alive and turnover_allowed:
             close_position(client, config, instrument, state, "MACD подтверждённо развернулся вверх и цена вернулась выше EMA20")
-        elif min_hold_passed and opposite_signal_confirmed:
+        elif min_hold_passed and opposite_signal_confirmed and not trend_alive and turnover_allowed:
             close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал LONG")
+        elif min_hold_passed and opposite_signal_confirmed and (trend_alive or not turnover_allowed):
+            logging.info("symbol=%s status=hold_reversal side=SHORT trend=%s turnover=%s", instrument.symbol, trend_alive_reason, turnover_reason)
 
 
 def process_instrument(
@@ -9861,6 +9981,7 @@ def process_instrument(
     *,
     collect_entry_candidate_only: bool = False,
     cash_fund: CashFundConfig | None = None,
+    entry_quantity_cap: int | None = None,
 ) -> dict[str, Any] | None:
     state = load_state(instrument.symbol)
     reconcile_state_accounting(instrument.symbol, state)
@@ -10317,6 +10438,7 @@ def process_instrument(
                                                 primary_strategy_name,
                                                 reason,
                                                 cash_fund,
+                                                entry_quantity_cap,
                                             )
                         else:
                             logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
@@ -10410,7 +10532,15 @@ def run_bot() -> int:
                             instrument = watchlist_by_symbol.get(symbol)
                             if instrument is None:
                                 continue
-                            process_instrument(client, config, instrument, cash_fund=cash_fund)
+                            process_instrument(
+                                client,
+                                config,
+                                instrument,
+                                cash_fund=cash_fund,
+                                entry_quantity_cap=(
+                                    int(item.get("correlation_quantity_cap") or 0) or None
+                                ),
+                            )
                             state = load_state(symbol)
                             execution_status, execution_note = selected_signal_execution_status(state)
                             observation_uid = append_signal_observation_decision(

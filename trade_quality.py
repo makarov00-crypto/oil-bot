@@ -63,6 +63,7 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             commission_rub = 0.0
         entry_context = entry.get("context") if isinstance(entry.get("context"), dict) else {}
+        shadow_ai = entry_context.get("shadow_ai") if isinstance(entry_context.get("shadow_ai"), dict) else {}
         pairs.append(
             {
                 "symbol": symbol,
@@ -80,6 +81,10 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "entry_edge_label": str(entry_context.get("entry_edge_label") or ""),
                 "setup_quality_label": str(entry_context.get("setup_quality_label") or ""),
                 "entry_atr_pct": _as_float(entry_context.get("atr_pct")),
+                "shadow_ai_action": str(shadow_ai.get("action") or ""),
+                "shadow_ai_direction": str(shadow_ai.get("direction") or ""),
+                "shadow_ai_confidence": _as_float(shadow_ai.get("confidence")),
+                "shadow_ai_reason": str(shadow_ai.get("reason") or ""),
             }
         )
     return pairs
@@ -163,6 +168,42 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return default
+
+
+def add_trade_counterfactuals(trade: dict[str, Any]) -> dict[str, Any]:
+    """Estimate alternative hold results in RUB using the trade's observed sensitivity."""
+    result = dict(trade)
+    realized_pct = _as_float(trade.get("realized_price_pct"))
+    net_rub = _as_float(trade.get("pnl_rub"))
+    commission_rub = abs(_as_float(trade.get("commission_rub")))
+    gross_rub = net_rub + commission_rub
+    if abs(realized_pct) < 1e-9 or gross_rub * realized_pct <= 0.0:
+        return result
+
+    rub_per_pct = abs(gross_rub / realized_pct)
+    side = str(trade.get("side") or "").upper()
+    result["estimated_rub_per_pct"] = round(rub_per_pct, 4)
+    for hours in (1, 2, 4, 8):
+        key = f"post_exit_{hours}h_pct"
+        if trade.get(key) is None:
+            continue
+        post_exit_pct = _as_float(trade.get(key))
+        realized_fraction = realized_pct / 100.0
+        continuation_fraction = post_exit_pct / 100.0
+        if side == "SHORT":
+            hold_pct = (realized_fraction + continuation_fraction - realized_fraction * continuation_fraction) * 100.0
+        else:
+            hold_pct = ((1.0 + realized_fraction) * (1.0 + continuation_fraction) - 1.0) * 100.0
+        hold_net_rub = hold_pct * rub_per_pct - commission_rub
+        result[f"hold_{hours}h_price_pct"] = round(hold_pct, 4)
+        result[f"hold_{hours}h_net_rub"] = round(hold_net_rub, 2)
+        result[f"hold_{hours}h_delta_rub"] = round(hold_net_rub - net_rub, 2)
+
+    if trade.get("mfe_pct") is not None:
+        max_possible_net_rub = _as_float(trade.get("mfe_pct")) * rub_per_pct - commission_rub
+        result["max_possible_net_rub"] = round(max_possible_net_rub, 2)
+        result["missed_profit_rub"] = round(max(0.0, max_possible_net_rub - net_rub), 2)
+    return result
 
 
 def early_exit_threshold_pct(trade: dict[str, Any]) -> float:

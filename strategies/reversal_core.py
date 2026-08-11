@@ -193,6 +193,16 @@ def evaluate_signal_core(
     bb_width_pct = (float(last["bb_upper"]) - float(last["bb_lower"])) / close if close else 0.0
     volume_ratio = (volume / volume_avg) if volume_avg > 0 else 0.0
     body_ratio = (body / body_avg) if body_avg > 0 else 0.0
+    pre_volume_ratios = [
+        float(row["volume"]) / float(row["volume_avg"])
+        for _, row in pre_recent.iterrows()
+        if float(row.get("volume_avg", 0.0)) > 0.0
+    ]
+    compression_volume_ratio = (
+        sum(pre_volume_ratios) / len(pre_volume_ratios)
+        if pre_volume_ratios
+        else volume_ratio
+    )
     distance_to_ema20_pct = abs(close - ema20) / close if close else 0.0
     late_evening = _is_late_evening_candle(last.get("time"))
     recent_high = float(pre_recent["high"].max())
@@ -224,7 +234,7 @@ def evaluate_signal_core(
     structure_down = close < ema20 and close < ema50 and ema20 <= prev_ema20 and close <= prev_close
     expansion_up = structure_up and macd_hist > 0 and macd_hist > prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
     expansion_down = structure_down and macd_hist < 0 and macd_hist < prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
-    compression = atr_pct <= profile.compression_atr_pct and recent_range_pct <= profile.compression_range_pct and bb_width_pct <= profile.compression_bb_width_pct and volume_ratio < 1.05
+    compression = atr_pct <= profile.compression_atr_pct and recent_range_pct <= profile.compression_range_pct and bb_width_pct <= profile.compression_bb_width_pct and compression_volume_ratio < 1.05
     soft_volume_floor = max(0.55, profile.min_volume_ratio - 0.30)
     soft_impulse_floor = max(0.45, profile.min_body_ratio - 0.35)
     soft_volatility_floor = profile.min_atr_pct * 0.60
@@ -255,6 +265,9 @@ def evaluate_signal_core(
     else:
         regime = "mixed"
     trend_like_regime = regime in {"trend", "expansion"}
+
+    ao_long_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "LONG") or (ao >= prev_ao and macd_hist > prev_hist)
+    ao_short_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "SHORT") or (ao <= prev_ao and macd_hist < prev_hist)
 
     breakout_up = close > recent_high and close > ema20
     breakout_down = close < recent_low and close < ema20
@@ -297,8 +310,6 @@ def evaluate_signal_core(
     )
     rsi_long_extreme_bad = rsi < max(profile.rsi_long_min - 10.0, 35.0) and rsi < prev_rsi
     rsi_short_extreme_bad = rsi > min(profile.rsi_short_max + 10.0, 65.0) and rsi > prev_rsi
-    ao_long_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "LONG") or (ao >= prev_ao and macd_hist > prev_hist)
-    ao_short_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "SHORT") or (ao <= prev_ao and macd_hist < prev_hist)
     ao_long_supported = ao_long_ok or (trend_like_regime and _ao_trend_tolerates(ao, prev_ao, "LONG"))
     ao_short_supported = ao_short_ok or (trend_like_regime and _ao_trend_tolerates(ao, prev_ao, "SHORT"))
     chaikin_long_ok = chaikin >= prev_chaikin and (chaikin > 0 or chaikin_delta > 0)
@@ -498,9 +509,14 @@ def evaluate_signal_core(
     if regime == "chop":
         long_blockers.append("режим chop: переворот запрещён")
         short_blockers.append("режим chop: переворот запрещён")
-    if regime in {"compression", "mixed"}:
-        long_blockers.append(f"режим {regime}: новые позиции запрещены")
-        short_blockers.append(f"режим {regime}: новые позиции запрещены")
+    if regime == "compression":
+        if not compression_long_ok:
+            long_blockers.append("режим compression: нужен пробой вверх на объёме")
+        if not compression_short_ok:
+            short_blockers.append("режим compression: нужен пробой вниз на объёме")
+    if regime == "mixed":
+        long_blockers.append("режим mixed: новые позиции запрещены")
+        short_blockers.append("режим mixed: новые позиции запрещены")
     if not recent_long_cross and not trend_long_continuation_ok:
         long_blockers.append("нет свежего MACD cross вверх")
     if not recent_short_cross and not trend_short_continuation_ok:
@@ -540,8 +556,8 @@ def evaluate_signal_core(
     elif late_short:
         short_warnings.append("late entry мягкий: требуется свежий подтверждённый cross")
 
-    regime_allows_long = regime in {"trend", "expansion"}
-    regime_allows_short = regime in {"trend", "expansion"}
+    regime_allows_long = regime in {"trend", "expansion"} or compression_long_ok
+    regime_allows_short = regime in {"trend", "expansion"} or compression_short_ok
     long_ok = (
         regime_allows_long
         and (trend_up or expansion_up or early_long_ok)

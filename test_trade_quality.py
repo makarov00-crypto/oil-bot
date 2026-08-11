@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from trade_quality import (
+    add_trade_counterfactuals,
     build_trade_quality_overview,
     calculate_post_exit_move,
     calculate_trade_excursion,
@@ -38,6 +39,36 @@ class TradeQualityTests(unittest.TestCase):
         self.assertEqual(pairs[0]["pnl_rub"], 250.0)
         self.assertEqual(pairs[0]["commission_rub"], 14.0)
         self.assertEqual(pairs[0]["qty_lots"], 2)
+
+    def test_pair_preserves_entry_ai_decision(self) -> None:
+        rows = [
+            {"_dt": self.entry, "symbol": "BRU6", "side": "LONG", "event": "OPEN", "qty_lots": 1, "price": 100.0, "context": {"shadow_ai": {"action": "ENTER", "confidence": 0.81, "reason": "тренд подтверждён"}}},
+            {"_dt": self.exit, "symbol": "BRU6", "side": "LONG", "event": "CLOSE", "qty_lots": 1, "price": 102.0, "pnl_rub": 190.0, "commission_rub": 10.0},
+        ]
+
+        trade = pair_closed_trades(rows)[0]
+
+        self.assertEqual(trade["shadow_ai_action"], "ENTER")
+        self.assertEqual(trade["shadow_ai_confidence"], 0.81)
+
+    def test_counterfactuals_convert_hold_result_to_money(self) -> None:
+        trade = {
+            "side": "LONG",
+            "pnl_rub": 190.0,
+            "commission_rub": 10.0,
+            "realized_price_pct": 2.0,
+            "mfe_pct": 4.0,
+            "post_exit_1h_pct": 1.0,
+            "post_exit_2h_pct": -1.0,
+        }
+
+        result = add_trade_counterfactuals(trade)
+
+        self.assertAlmostEqual(result["hold_1h_net_rub"], 292.0)
+        self.assertAlmostEqual(result["hold_1h_delta_rub"], 102.0)
+        self.assertAlmostEqual(result["hold_2h_net_rub"], 88.0)
+        self.assertAlmostEqual(result["max_possible_net_rub"], 390.0)
+        self.assertAlmostEqual(result["missed_profit_rub"], 200.0)
 
     def test_calculates_hourly_excursion_and_boundary_prices(self) -> None:
         trade = {

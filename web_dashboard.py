@@ -5025,6 +5025,7 @@ def build_dashboard_html() -> str:
         <div class="trade-review-summary" id="tradeQualityOverview"></div>
         <div class="quality-tabs" role="tablist" aria-label="Диагностика качества">
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
+          <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория</button>
           <button class="quality-tab" type="button" data-quality-tab="exits">Выходы</button>
           <button class="quality-tab" type="button" data-quality-tab="missed">Пропуски</button>
         </div>
@@ -5043,6 +5044,10 @@ def build_dashboard_html() -> str:
             <div class="review-block"><h3>По режиму рынка</h3><table class="review-summary-table"><tbody id="qualityRegimeBody"></tbody></table></div>
             <div class="review-block"><h3>По качеству входа</h3><table class="review-summary-table"><tbody id="qualityEdgeBody"></tbody></table></div>
           </div>
+        </div>
+        <div id="qualityPanelTrades" class="quality-panel">
+          <div class="muted" style="margin-bottom:10px;">Фактический итог и результат альтернативного удержания позиции по часовым свечам.</div>
+          <div id="qualityTradesBody" class="review-list"></div>
         </div>
         <div id="qualityPanelExits" class="quality-panel">
           <div class="muted" style="margin-bottom:10px;">Показываются только закрытия, после которых цена прошла в прежнюю сторону больше обычного шума.</div>
@@ -6565,11 +6570,13 @@ def build_dashboard_html() -> str:
       const missedEntriesBody = document.getElementById('missedEntriesBody');
       const tradeQualityOverview = document.getElementById('tradeQualityOverview');
       const qualityExitsBody = document.getElementById('qualityExitsBody');
+      const qualityTradesBody = document.getElementById('qualityTradesBody');
       const qualityRegimeBody = document.getElementById('qualityRegimeBody');
       const qualityEdgeBody = document.getElementById('qualityEdgeBody');
       const qualityRows = Array.isArray(tradeQuality.by_symbol) ? tradeQuality.by_symbol : [];
       const qualityOverview = tradeQuality.overview || {};
       const qualityExits = Array.isArray(tradeQuality.exit_diagnostics) ? tradeQuality.exit_diagnostics : [];
+      const qualityTrades = Array.isArray(tradeQuality.trades) ? tradeQuality.trades : [];
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const missedEntries = Array.isArray(tradeQuality.missed_entries) ? tradeQuality.missed_entries : [];
@@ -6620,6 +6627,26 @@ def build_dashboard_html() -> str:
         : buildReviewRow('Нет данных', 'История ещё копится');
       qualityRegimeBody.innerHTML = dimensionRows(qualityRegimes, formatRegimeLabel);
       qualityEdgeBody.innerHTML = dimensionRows(qualityEdges, formatEdgeLabel);
+      qualityTradesBody.innerHTML = qualityTrades.length
+        ? qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || ''))).slice(0, 20).map((item) => {
+            const holdParts = [1, 2, 4, 8].map((hours) => {
+              const value = item[`hold_${hours}h_net_rub`];
+              const delta = item[`hold_${hours}h_delta_rub`];
+              if (value == null) return `${hours}ч: ждём данные`;
+              return `${hours}ч: ${formatSignedRub(value)} (${formatSignedRub(delta || 0)} к факту)`;
+            });
+            const aiAction = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[item.shadow_ai_action] || item.shadow_ai_action || 'нет оценки';
+            const aiConfidence = item.shadow_ai_confidence ? ` · уверенность ${(Number(item.shadow_ai_confidence) * 100).toFixed(0)}%` : '';
+            const potential = item.max_possible_net_rub == null
+              ? 'максимум в рублях ещё не рассчитан'
+              : `максимум по ходу ${formatSignedRub(item.max_possible_net_rub)} · недобрано ${formatRub(item.missed_profit_rub || 0)}`;
+            return buildReviewRowRich(
+              `${formatMoscowTime(item.exit_time || '')} · ${instrumentText(item.symbol || '-')} · ${item.side === 'SHORT' ? 'Шорт' : 'Лонг'}`,
+              `Факт ${formatSignedRub(item.pnl_rub || 0)} · ${potential}`,
+              `${holdParts.join(' · ')} · ИИ: ${aiAction}${aiConfidence}${item.shadow_ai_reason ? ` — ${shortDiagnosticText(item.shadow_ai_reason, 120)}` : ''} · Выход: ${shortDiagnosticText(item.exit_reason || 'причина не сохранена', 120)}`,
+            );
+          }).join('')
+        : '<div class="muted">Нет закрытых сделок для лаборатории за период.</div>';
       qualityExitsBody.innerHTML = qualityExits.filter((item) => item.is_material_early_exit).length
         ? qualityExits.filter((item) => item.is_material_early_exit).slice(0, 12).map((item) => buildReviewRowRich(
             `${formatMoscowTime(item.exit_time || '')} · ${instrumentText(item.symbol || '-')}`,
@@ -6636,11 +6663,15 @@ def build_dashboard_html() -> str:
               const number = Number(value);
               return `${hours}ч ${number >= 0 ? '+' : ''}${number.toFixed(2)}%`;
             };
-            const moveText = `${formatMove(1)} · ${formatMove(2)} · ${formatMove(4)}`;
+            const moveText = `${formatMove(1)} · ${formatMove(2)} · ${formatMove(4)} · ${formatMove(8)}`;
+            const moneyText = [1, 2, 4, 8].map((hours) => {
+              const value = item[`move_${hours}h_rub`];
+              return value == null ? null : `${hours}ч ${formatSignedRub(value)}`;
+            }).filter(Boolean).join(' · ');
             return buildReviewRowRich(
               formatMoscowTime(item.observed_at || ''),
               `${instrumentText(item.symbol || '-')} · ${displaySignal(item.signal || '-')} · ${item.source_label || 'Вход не исполнен'}`,
-              `${moveText} · ${shortDiagnosticText(item.reason || 'Причина не сохранена', 150)}`,
+              `${moveText} · ${moneyText || 'денежная оценка ещё не готова'} · ${item.quantity_basis || ''} · ${shortDiagnosticText(item.reason || 'Причина не сохранена', 150)}`,
             );
           }).join('')
         : '<div class="muted">Нет подтверждённых пропущенных входов: новые HOLD-наблюдения накопятся после часовых свечей.</div>';

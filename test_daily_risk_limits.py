@@ -819,7 +819,7 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual([item["symbol"] for item in deferred], ["BRK6", "VBM6"])
         self.assertIn("не хватает свободного бюджета ГО", deferred[0]["defer_reason"])
 
-    def test_rank_cycle_entry_candidates_defers_similar_market_idea(self) -> None:
+    def test_rank_cycle_entry_candidates_reduces_similar_market_idea(self) -> None:
         candidates = [
             {
                 "symbol": "BRK6",
@@ -830,7 +830,7 @@ class DailyRiskLimitTests(unittest.TestCase):
                 "allocator_quantity": 1,
                 "instrument_class": "базовый",
                 "requested_margin_rub": 1800.0,
-                "allocatable_margin_rub": 7000.0,
+                "allocatable_margin_rub": 12000.0,
             },
             {
                 "symbol": "NGJ6",
@@ -838,10 +838,10 @@ class DailyRiskLimitTests(unittest.TestCase):
                 "priority_score": 0.78,
                 "entry_edge_score": 0.80,
                 "regime_confidence": 0.76,
-                "allocator_quantity": 1,
+                "allocator_quantity": 10,
                 "instrument_class": "тяжёлый",
                 "requested_margin_rub": 5600.0,
-                "allocatable_margin_rub": 7000.0,
+                "allocatable_margin_rub": 12000.0,
             },
             {
                 "symbol": "GNM6",
@@ -852,13 +852,27 @@ class DailyRiskLimitTests(unittest.TestCase):
                 "allocator_quantity": 1,
                 "instrument_class": "средний",
                 "requested_margin_rub": 3200.0,
-                "allocatable_margin_rub": 7000.0,
+                "allocatable_margin_rub": 12000.0,
             },
         ]
 
         selected, deferred = mod.rank_cycle_entry_candidates(candidates, max_entries=3, min_priority_score=0.45)
 
-        self.assertEqual([item["symbol"] for item in selected], ["BRK6", "GNM6"])
+        self.assertEqual([item["symbol"] for item in selected], ["BRK6", "NGJ6", "GNM6"])
+        self.assertEqual(deferred, [])
+        self.assertEqual(selected[1]["correlation_quantity_cap"], 4)
+        self.assertEqual(selected[1]["correlation_size_multiplier"], 0.4)
+        self.assertAlmostEqual(selected[1]["requested_margin_rub"], 2240.0)
+
+    def test_rank_cycle_entry_candidates_still_defers_weak_correlated_idea(self) -> None:
+        candidates = [
+            {"symbol": "BRK6", "signal": "LONG", "priority_score": 0.84, "entry_edge_score": 0.82, "allocator_quantity": 5, "instrument_class": "базовый", "requested_margin_rub": 2000.0, "allocatable_margin_rub": 10000.0},
+            {"symbol": "NGJ6", "signal": "LONG", "priority_score": 0.56, "entry_edge_score": 0.52, "allocator_quantity": 5, "instrument_class": "базовый", "requested_margin_rub": 2000.0, "allocatable_margin_rub": 10000.0},
+        ]
+
+        selected, deferred = mod.rank_cycle_entry_candidates(candidates, max_entries=2, min_priority_score=0.45)
+
+        self.assertEqual([item["symbol"] for item in selected], ["BRK6"])
         self.assertEqual([item["symbol"] for item in deferred], ["NGJ6"])
         self.assertIn("похожая рыночная идея", deferred[0]["defer_reason"])
 

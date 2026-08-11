@@ -445,6 +445,76 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertTrue(mod.unified_reversal_pressure_intact(df, "SHORT"))
 
+    def test_unified_reversal_compression_breakout_does_not_crash(self) -> None:
+        rows = [
+            {"open": 99.96, "high": 100.05, "low": 99.90, "close": 100.00, "ema20": 100.00, "ema50": 100.00, "macd": -0.03, "macd_signal": -0.01, "ao": -0.02},
+            {"open": 99.98, "high": 100.06, "low": 99.92, "close": 100.01, "ema20": 100.00, "ema50": 100.00, "macd": -0.02, "macd_signal": -0.01, "ao": -0.01},
+            {"open": 100.00, "high": 100.07, "low": 99.94, "close": 100.02, "ema20": 100.00, "ema50": 100.00, "macd": -0.01, "macd_signal": -0.01, "ao": -0.005},
+            {"open": 100.01, "high": 100.08, "low": 99.95, "close": 100.03, "ema20": 100.00, "ema50": 100.00, "macd": -0.005, "macd_signal": 0.0, "ao": -0.002},
+            {"open": 100.02, "high": 100.09, "low": 99.96, "close": 100.04, "ema20": 100.01, "ema50": 100.00, "macd": 0.002, "macd_signal": 0.0, "ao": 0.002},
+            {"open": 100.03, "high": 100.10, "low": 99.97, "close": 100.05, "ema20": 100.02, "ema50": 100.00, "rsi": 50.0, "macd": 0.006, "macd_signal": 0.001, "ao": 0.005},
+            {"open": 100.04, "high": 100.11, "low": 99.98, "close": 100.06, "ema20": 100.03, "ema50": 100.01, "rsi": 52.0, "macd": 0.010, "macd_signal": 0.003, "ao": 0.008},
+            {"open": 100.05, "high": 100.35, "low": 100.02, "close": 100.30, "ema20": 100.05, "ema50": 100.01, "rsi": 54.0, "macd": 0.018, "macd_signal": 0.006, "ao": 0.015, "atr": 0.10, "bb_upper": 100.55, "bb_lower": 99.55, "volume": 130.0, "volume_avg": 100.0, "body": 0.25, "body_avg": 0.20},
+        ]
+        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
+
+        signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("reversal_1h", reason)
+
+    def test_unified_trend_score_distinguishes_live_trend_from_reversal(self) -> None:
+        alive = candle_rows(
+            [
+                {"close": 100.5, "ema20": 100.0, "rsi": 53.0, "macd": 0.20, "macd_signal": 0.12, "ao": 0.10, "chaikin": 1.0, "volume": 90.0},
+                {"close": 101.0, "ema20": 100.2, "rsi": 56.0, "macd": 0.25, "macd_signal": 0.14, "ao": 0.14, "chaikin": 2.0, "volume": 105.0},
+                {"close": 101.6, "ema20": 100.5, "rsi": 59.0, "macd": 0.31, "macd_signal": 0.17, "ao": 0.19, "chaikin": 3.0, "volume": 120.0},
+            ]
+        )
+        reversed_df = candle_rows(
+            [
+                {"close": 101.0, "ema20": 100.4, "rsi": 58.0, "macd": 0.25, "macd_signal": 0.14, "ao": 0.15, "chaikin": 2.0},
+                {"close": 100.2, "ema20": 100.5, "rsi": 49.0, "macd": 0.10, "macd_signal": 0.13, "ao": 0.04, "chaikin": 0.5},
+                {"close": 99.6, "ema20": 100.3, "rsi": 42.0, "macd": -0.04, "macd_signal": 0.08, "ao": -0.06, "chaikin": -1.0},
+            ]
+        )
+
+        alive_score, _ = mod.assess_unified_trend_alive(alive, "LONG")
+        reversed_score, _ = mod.assess_unified_trend_alive(reversed_df, "LONG")
+
+        self.assertGreaterEqual(alive_score, 0.65)
+        self.assertLess(reversed_score, 0.65)
+
+    def test_reversal_turnover_gate_requires_edge_to_cover_costs(self) -> None:
+        instrument = InstrumentConfig(
+            symbol="USDRUBF",
+            figi="FIGI",
+            display_name="USD/RUB",
+            min_price_increment=0.0025,
+            min_price_increment_amount=2.5,
+        )
+        weak = mod.InstrumentState(
+            position_side="LONG",
+            position_qty=2,
+            entry_commission_rub=12.0,
+            last_entry_edge_score=0.54,
+            last_atr_pct=0.001,
+        )
+        strong = mod.InstrumentState(
+            position_side="LONG",
+            position_qty=2,
+            entry_commission_rub=12.0,
+            last_entry_edge_score=0.82,
+            last_atr_pct=0.02,
+        )
+
+        weak_allowed, weak_reason = mod.reversal_turnover_gate(instrument, weak, 80.0, "SHORT")
+        strong_allowed, _ = mod.reversal_turnover_gate(instrument, strong, 80.0, "SHORT")
+
+        self.assertFalse(weak_allowed)
+        self.assertIn("оборот", weak_reason)
+        self.assertTrue(strong_allowed)
+
     def test_unified_trailing_exit_requires_completed_candle_reversal(self) -> None:
         intact = candle_rows(
             [
