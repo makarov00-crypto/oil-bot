@@ -124,6 +124,7 @@ UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 TRADE_QUALITY_REFRESH_SECONDS = 600
+TRADE_QUALITY_ANALYTICS_VERSION = 2
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
@@ -1245,6 +1246,8 @@ def load_trade_quality_payload() -> dict[str, Any]:
 
 
 def trade_quality_is_fresh(payload: dict[str, Any]) -> bool:
+    if int(payload.get("version") or 0) != TRADE_QUALITY_ANALYTICS_VERSION:
+        return False
     generated_at = parse_state_datetime(str(payload.get("generated_at") or ""))
     return bool(generated_at and datetime.now(UTC) - generated_at < timedelta(seconds=TRADE_QUALITY_REFRESH_SECONDS))
 
@@ -1316,7 +1319,7 @@ def build_trade_quality_analytics(
         completed.append(enriched)
 
     missed_entries: list[dict[str, Any]] = []
-    for row in load_signal_observations(TRADE_DB_PATH, limit=800, newest_first=True):
+    for row in load_signal_observations(TRADE_DB_PATH, limit=None, newest_first=True):
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         execution = str(context.get("execution_status") or "").lower()
         decision = str(row.get("decision") or "").lower()
@@ -1348,6 +1351,7 @@ def build_trade_quality_analytics(
         )
 
     return {
+        "version": TRADE_QUALITY_ANALYTICS_VERSION,
         "generated_at": now.astimezone(MOSCOW_TZ).isoformat(),
         "period_days": 30,
         "trades": completed,
