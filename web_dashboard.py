@@ -2825,20 +2825,52 @@ def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) ->
 
 def load_trade_quality_analytics() -> dict[str, Any]:
     if not TRADE_QUALITY_ANALYTICS_PATH.exists():
-        return {"available": False, "trades": [], "by_symbol": [], "missed_entries": []}
+        return {
+            "available": False,
+            "trades": [],
+            "by_symbol": [],
+            "missed_entries": [],
+            "overview": {},
+            "by_regime": [],
+            "by_entry_quality": [],
+            "exit_diagnostics": [],
+        }
     try:
         payload = json.loads(TRADE_QUALITY_ANALYTICS_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"available": False, "trades": [], "by_symbol": [], "missed_entries": []}
+        return {
+            "available": False,
+            "trades": [],
+            "by_symbol": [],
+            "missed_entries": [],
+            "overview": {},
+            "by_regime": [],
+            "by_entry_quality": [],
+            "exit_diagnostics": [],
+        }
     if not isinstance(payload, dict):
-        return {"available": False, "trades": [], "by_symbol": [], "missed_entries": []}
+        return {
+            "available": False,
+            "trades": [],
+            "by_symbol": [],
+            "missed_entries": [],
+            "overview": {},
+            "by_regime": [],
+            "by_entry_quality": [],
+            "exit_diagnostics": [],
+        }
     return {
         "available": True,
+        "version": int(payload.get("version") or 0),
         "generated_at": str(payload.get("generated_at") or ""),
         "period_days": int(payload.get("period_days") or 30),
         "trades": payload.get("trades") if isinstance(payload.get("trades"), list) else [],
         "by_symbol": payload.get("by_symbol") if isinstance(payload.get("by_symbol"), list) else [],
         "missed_entries": payload.get("missed_entries") if isinstance(payload.get("missed_entries"), list) else [],
+        "overview": payload.get("overview") if isinstance(payload.get("overview"), dict) else {},
+        "by_regime": payload.get("by_regime") if isinstance(payload.get("by_regime"), list) else [],
+        "by_entry_quality": payload.get("by_entry_quality") if isinstance(payload.get("by_entry_quality"), list) else [],
+        "exit_diagnostics": payload.get("exit_diagnostics") if isinstance(payload.get("exit_diagnostics"), list) else [],
     }
 
 
