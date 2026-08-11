@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -68,8 +69,8 @@ class SignalAiReviewerTests(unittest.TestCase):
             evaluated_at = bot.datetime.fromisoformat("2026-08-01T18:05:00+03:00")
             with patch.object(bot, "TRADE_DB_PATH", db_path), patch.object(
                 bot,
-                "get_price_near_observation_horizon",
-                return_value=(101.0, evaluated_at),
+                "get_hourly_horizon_price",
+                return_value=(101.0, evaluated_at, "hourly_close"),
             ):
                 updated = bot.update_signal_ai_shadow_outcomes(None, SimpleNamespace(), [instrument])
 
@@ -100,12 +101,30 @@ class SignalAiReviewerTests(unittest.TestCase):
             instrument = bot.InstrumentConfig(symbol="BRU6", figi="FIGI", display_name="Brent")
             evaluated_at = bot.datetime.fromisoformat("2026-08-01T15:00:00+03:00")
             with patch.object(bot, "TRADE_DB_PATH", db_path), patch.object(
-                bot, "get_shadow_ai_horizon_price", return_value=(101.0, evaluated_at, "hour")
+                bot, "get_hourly_horizon_price", return_value=(101.0, evaluated_at, "hourly_close")
             ):
                 bot.update_signal_ai_shadow_outcomes(None, SimpleNamespace(), [instrument])
 
             outcomes = load_signal_observations(db_path)[0]["context"]["shadow_ai_outcomes"]
-            self.assertEqual(outcomes["4h"]["price_source"], "hour")
+            self.assertEqual(outcomes["4h"]["price_source"], "hourly_close")
+
+    def test_hourly_horizon_uses_candle_that_ends_at_target(self) -> None:
+        target = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        candle = SimpleNamespace(
+            time=datetime(2026, 8, 1, 11, 0, tzinfo=timezone.utc),
+            close=SimpleNamespace(units=101, nano=0),
+            is_complete=True,
+        )
+        client = SimpleNamespace(market_data=SimpleNamespace(get_candles=lambda **kwargs: SimpleNamespace(candles=[candle])))
+        instrument = bot.InstrumentConfig(symbol="BRU6", figi="FIGI", display_name="Brent")
+
+        result = bot.get_hourly_horizon_price(client, SimpleNamespace(), instrument, target)
+
+        self.assertIsNotNone(result)
+        price, evaluated_at, source = result
+        self.assertEqual(price, 101.0)
+        self.assertEqual(evaluated_at.astimezone(timezone.utc), target)
+        self.assertEqual(source, "hourly_close")
 
 
 if __name__ == "__main__":

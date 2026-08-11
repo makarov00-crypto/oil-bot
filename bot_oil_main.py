@@ -60,6 +60,13 @@ from trade_storage import (
     update_signal_observation_context,
     update_signal_observation_outcome,
 )
+from trade_quality import (
+    build_trade_key,
+    calculate_post_exit_move,
+    calculate_trade_excursion,
+    pair_closed_trades,
+    summarize_trade_quality,
+)
 from tinkoff.invest import (
     CandleInterval,
     GetMaxLotsRequest,
@@ -109,10 +116,12 @@ SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
+TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
+TRADE_QUALITY_REFRESH_SECONDS = 600
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
@@ -1001,23 +1010,13 @@ def get_price_near_observation_horizon(
     return closest[0], closest[1].astimezone(MOSCOW_TZ)
 
 
-def get_shadow_ai_horizon_price(
+def get_hourly_horizon_price(
     client: Client,
     config: BotConfig,
     instrument: InstrumentConfig,
     target_time: datetime,
 ) -> tuple[float, datetime, str] | None:
-    """Prefer a precise minute close, then the first available hourly close."""
-    exact_snapshot = get_price_near_observation_horizon(
-        client,
-        config,
-        instrument,
-        target_time,
-        window_minutes=10,
-    )
-    if exact_snapshot is not None:
-        return exact_snapshot[0], exact_snapshot[1], "minute"
-
+    """Return the close of the hourly candle ending at, or after, a target time."""
     now = datetime.now(UTC)
     target_utc = target_time.astimezone(UTC)
     if now <= target_utc:
@@ -1025,7 +1024,7 @@ def get_shadow_ai_horizon_price(
     try:
         candles = client.market_data.get_candles(
             figi=instrument.figi,
-            from_=target_utc,
+            from_=target_utc - timedelta(hours=1, minutes=5),
             to=min(now, target_utc + timedelta(days=3)),
             interval=CandleInterval.CANDLE_INTERVAL_HOUR,
         )
@@ -1033,19 +1032,66 @@ def get_shadow_ai_horizon_price(
         logging.info("symbol=%s signal_ai_shadow_hourly_price_unavailable error=%s", instrument.symbol, error)
         return None
 
+    candidates: list[tuple[datetime, float]] = []
     for candle in getattr(candles, "candles", []) or []:
+        if not bool(getattr(candle, "is_complete", True)):
+            continue
         candle_time = getattr(candle, "time", None)
         if candle_time is None:
             continue
         if candle_time.tzinfo is None:
             candle_time = candle_time.replace(tzinfo=UTC)
         candle_time = candle_time.astimezone(UTC)
-        if candle_time < target_utc:
+        candle_close_time = candle_time + timedelta(hours=1)
+        if candle_close_time < target_utc:
             continue
         close_price = quotation_to_float(getattr(candle, "close", None))
         if close_price > 0.0:
-            return close_price, candle_time.astimezone(MOSCOW_TZ), "hour"
+            candidates.append((candle_close_time, close_price))
+    if candidates:
+        evaluated_at, close_price = min(candidates, key=lambda item: item[0])
+        source = "hourly_close" if evaluated_at - target_utc <= timedelta(minutes=10) else "hourly_next_session"
+        return close_price, evaluated_at.astimezone(MOSCOW_TZ), source
     return None
+
+
+def get_candle_rows_in_range(
+    client: Client,
+    instrument: InstrumentConfig,
+    start: datetime,
+    end: datetime,
+    interval: CandleInterval,
+) -> list[dict[str, Any]]:
+    if end <= start:
+        return []
+    try:
+        response = client.market_data.get_candles(
+            figi=instrument.figi,
+            from_=start.astimezone(UTC),
+            to=end.astimezone(UTC),
+            interval=interval,
+        )
+    except Exception as error:
+        logging.info("symbol=%s trade_quality_candles_unavailable error=%s", instrument.symbol, error)
+        return []
+    rows: list[dict[str, Any]] = []
+    for candle in getattr(response, "candles", []) or []:
+        candle_time = getattr(candle, "time", None)
+        if candle_time is None:
+            continue
+        if candle_time.tzinfo is None:
+            candle_time = candle_time.replace(tzinfo=UTC)
+        try:
+            rows.append(
+                {
+                    "time": candle_time.astimezone(MOSCOW_TZ),
+                    "high": quotation_to_float(getattr(candle, "high", None)),
+                    "low": quotation_to_float(getattr(candle, "low", None)),
+                }
+            )
+        except Exception:
+            continue
+    return rows
 
 
 def update_signal_observation_outcomes(
@@ -1132,12 +1178,13 @@ def update_signal_ai_shadow_outcomes(
         changed = False
         for hours in (1, 2, 4, 8):
             key = f"{hours}h"
-            if key in outcomes:
+            existing_outcome = outcomes.get(key) if isinstance(outcomes.get(key), dict) else {}
+            if existing_outcome.get("evaluation_version") == "hourly_close_v2":
                 continue
             target_time = observed_at + timedelta(hours=hours)
             if now < target_time:
                 continue
-            horizon_snapshot = get_shadow_ai_horizon_price(
+            horizon_snapshot = get_hourly_horizon_price(
                 client,
                 config,
                 instrument,
@@ -1170,6 +1217,7 @@ def update_signal_ai_shadow_outcomes(
                 "move_pct": round(move_pct, 4),
                 "favorable": move_pct > 0.0,
                 "price_source": price_source,
+                "evaluation_version": "hourly_close_v2",
             }
             changed = True
         if changed:
@@ -1182,6 +1230,147 @@ def update_signal_ai_shadow_outcomes(
     if updated:
         logging.info("signal_ai_shadow_outcomes_updated count=%s", updated)
     return updated
+
+
+def load_trade_quality_payload() -> dict[str, Any]:
+    if not TRADE_QUALITY_ANALYTICS_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(TRADE_QUALITY_ANALYTICS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def trade_quality_is_fresh(payload: dict[str, Any]) -> bool:
+    generated_at = parse_state_datetime(str(payload.get("generated_at") or ""))
+    return bool(generated_at and datetime.now(UTC) - generated_at < timedelta(seconds=TRADE_QUALITY_REFRESH_SECONDS))
+
+
+def build_trade_quality_analytics(
+    client: Client,
+    config: BotConfig,
+    watchlist: Sequence[InstrumentConfig],
+) -> dict[str, Any]:
+    """Build a cached hourly quality review; broker PnL remains the source of money results."""
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=30)
+    by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
+    raw_rows: list[dict[str, Any]] = []
+    for row in load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH):
+        item = dict(row)
+        event_time = parse_state_datetime(str(item.get("time") or ""))
+        if event_time is None or event_time < cutoff:
+            continue
+        item["_dt"] = event_time.astimezone(MOSCOW_TZ)
+        raw_rows.append(item)
+
+    completed: list[dict[str, Any]] = []
+    for trade in pair_closed_trades(raw_rows):
+        entry_time = parse_state_datetime(str(trade.get("entry_time") or ""))
+        exit_time = parse_state_datetime(str(trade.get("exit_time") or ""))
+        instrument = by_symbol.get(str(trade.get("symbol") or "").upper())
+        if entry_time is None or exit_time is None or instrument is None:
+            continue
+        entry_time = entry_time.astimezone(MOSCOW_TZ)
+        exit_time = exit_time.astimezone(MOSCOW_TZ)
+        entry_hour = entry_time.replace(minute=0, second=0, microsecond=0)
+        exit_hour = exit_time.replace(minute=0, second=0, microsecond=0)
+        hourly_rows = get_candle_rows_in_range(
+            client,
+            instrument,
+            entry_hour,
+            min(now.astimezone(MOSCOW_TZ), exit_hour + timedelta(hours=1)),
+            CandleInterval.CANDLE_INTERVAL_HOUR,
+        )
+        first_boundary_end = min(exit_time, entry_hour + timedelta(hours=1))
+        boundary_rows = get_candle_rows_in_range(
+            client,
+            instrument,
+            entry_time,
+            first_boundary_end,
+            CandleInterval.CANDLE_INTERVAL_1_MIN,
+        )
+        if exit_hour != entry_hour:
+            boundary_rows.extend(
+                get_candle_rows_in_range(
+                    client,
+                    instrument,
+                    exit_hour,
+                    exit_time,
+                    CandleInterval.CANDLE_INTERVAL_1_MIN,
+                )
+            )
+        quality = calculate_trade_excursion(trade, hourly_rows, boundary_rows)
+        enriched = {**trade, **quality, "quality_key": build_trade_key(trade)}
+        for hours in (1, 2, 4):
+            snapshot = get_hourly_horizon_price(client, config, instrument, exit_time + timedelta(hours=hours))
+            if snapshot is None:
+                continue
+            future_price, evaluated_at, source = snapshot
+            enriched[f"post_exit_{hours}h_pct"] = calculate_post_exit_move(trade, future_price)
+            enriched[f"post_exit_{hours}h_at"] = evaluated_at.isoformat()
+            enriched[f"post_exit_{hours}h_source"] = source
+        completed.append(enriched)
+
+    missed_entries: list[dict[str, Any]] = []
+    for row in load_signal_observations(TRADE_DB_PATH, limit=800, newest_first=True):
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        execution = str(context.get("execution_status") or "").lower()
+        decision = str(row.get("decision") or "").lower()
+        if decision not in {"selected", "deferred"} or execution in {"confirmed_open", "recovered_open", "submitted_open"}:
+            continue
+        observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
+        symbol = str(row.get("symbol") or "").upper()
+        instrument = by_symbol.get(symbol)
+        observed_price = float(row.get("observed_price") or 0.0)
+        signal = str(row.get("signal") or "").upper()
+        if observed_at is None or observed_at < cutoff or observed_price <= 0.0 or signal not in {"LONG", "SHORT"} or instrument is None:
+            continue
+        snapshot = get_hourly_horizon_price(client, config, instrument, observed_at + timedelta(hours=4))
+        if snapshot is None:
+            continue
+        future_price, evaluated_at, source = snapshot
+        move_pct = ((future_price - observed_price) / observed_price * 100.0) if signal == "LONG" else ((observed_price - future_price) / observed_price * 100.0)
+        missed_entries.append(
+            {
+                "symbol": symbol,
+                "signal": signal,
+                "observed_at": observed_at.isoformat(),
+                "decision": decision,
+                "execution_status": execution or "не исполнен",
+                "move_4h_pct": round(move_pct, 4),
+                "evaluated_at": evaluated_at.isoformat(),
+                "price_source": source,
+            }
+        )
+
+    return {
+        "generated_at": now.astimezone(MOSCOW_TZ).isoformat(),
+        "period_days": 30,
+        "trades": completed,
+        "by_symbol": summarize_trade_quality(completed),
+        "missed_entries": sorted(missed_entries, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
+    }
+
+
+def maybe_refresh_trade_quality_analytics(
+    client: Client,
+    config: BotConfig,
+    watchlist: Sequence[InstrumentConfig],
+) -> None:
+    if trade_quality_is_fresh(load_trade_quality_payload()):
+        return
+    payload = build_trade_quality_analytics(client, config, watchlist)
+    TRADE_QUALITY_ANALYTICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = TRADE_QUALITY_ANALYTICS_PATH.with_suffix(".tmp")
+    temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary_path.replace(TRADE_QUALITY_ANALYTICS_PATH)
+    logging.info(
+        "trade_quality_analytics_updated trades=%s missed_entries=%s",
+        len(payload.get("trades") or []),
+        len(payload.get("missed_entries") or []),
+    )
 
 
 def get_news_event_horizon_minutes(news_bias: NewsBias) -> int:
@@ -10095,6 +10284,7 @@ def run_bot() -> int:
                         update_signal_observation_outcomes(client, config, watchlist)
                         update_signal_ai_shadow_outcomes(client, config, watchlist)
                         update_news_event_outcomes(client, config, watchlist)
+                        maybe_refresh_trade_quality_analytics(client, config, watchlist)
                         maybe_park_free_cash_in_fund(client, config, watchlist, cash_fund, cycle_candidates)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist, cash_fund=cash_fund)
                         maybe_send_hourly_summary(client, config, watchlist)

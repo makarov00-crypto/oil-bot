@@ -54,6 +54,7 @@ TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
+TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
@@ -2822,6 +2823,25 @@ def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) ->
     return review
 
 
+def load_trade_quality_analytics() -> dict[str, Any]:
+    if not TRADE_QUALITY_ANALYTICS_PATH.exists():
+        return {"available": False, "trades": [], "by_symbol": [], "missed_entries": []}
+    try:
+        payload = json.loads(TRADE_QUALITY_ANALYTICS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"available": False, "trades": [], "by_symbol": [], "missed_entries": []}
+    if not isinstance(payload, dict):
+        return {"available": False, "trades": [], "by_symbol": [], "missed_entries": []}
+    return {
+        "available": True,
+        "generated_at": str(payload.get("generated_at") or ""),
+        "period_days": int(payload.get("period_days") or 30),
+        "trades": payload.get("trades") if isinstance(payload.get("trades"), list) else [],
+        "by_symbol": payload.get("by_symbol") if isinstance(payload.get("by_symbol"), list) else [],
+        "missed_entries": payload.get("missed_entries") if isinstance(payload.get("missed_entries"), list) else [],
+    }
+
+
 def load_trade_review_for_day(
     target_day: date,
     limit: int = 200,
@@ -4903,6 +4923,7 @@ def build_dashboard_html() -> str:
         <button class="review-tab active" type="button" data-review-tab="trades">Сделки</button>
         <button class="review-tab" type="button" data-review-tab="strategy">Стратегия</button>
         <button class="review-tab" type="button" data-review-tab="allocator">Аллокатор</button>
+        <button class="review-tab" type="button" data-review-tab="quality">Качество</button>
       </div>
       <div id="reviewTabTrades" class="review-tab-panel active">
         <div id="reviewTradeSummary" class="trade-review-summary"></div>
@@ -4943,6 +4964,23 @@ def build_dashboard_html() -> str:
               <tbody id="allocatorDecisionsBody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+      <div id="reviewTabQuality" class="review-tab-panel">
+        <div class="muted" id="tradeQualityMeta">Качество сделок ещё рассчитывается.</div>
+        <div class="table-scroll desktop-table">
+          <table style="margin-top:12px;">
+            <thead>
+              <tr>
+                <th>Инструмент</th><th>Сделок</th><th class="right">Чистый итог</th><th class="right">Комиссии</th><th>Среднее удержание</th><th>Макс. прибыль</th><th>Макс. просадка</th><th>Ранний выход</th>
+              </tr>
+            </thead>
+            <tbody id="tradeQualityBody"></tbody>
+          </table>
+        </div>
+        <div class="review-block" style="margin-top:16px;">
+          <h3>Пропущенные входы</h3>
+          <div id="missedEntriesBody" class="review-list"></div>
         </div>
       </div>
     </section>
@@ -5519,6 +5557,15 @@ def build_dashboard_html() -> str:
       if (!Number.isFinite(num)) return '-';
       const sign = num > 0 ? '+' : '';
       return `${sign}${num.toFixed(2)} RUB`;
+    }
+
+    function formatMoscowTime(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return new Intl.DateTimeFormat('ru-RU', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow'
+      }).format(date);
     }
 
     function reviewValueHtml(main, sub = '') {
@@ -6294,7 +6341,9 @@ def build_dashboard_html() -> str:
             if (outcome4h?.status === 'unavailable') outcomeText = '4ч: цена рынка недоступна';
             else if (typeof outcome4h?.favorable === 'boolean') {
               const move = Number(outcome4h.move_pct || 0);
-              const source = outcome4h.price_source === 'hour' ? 'первая часовая свеча' : 'минутная свеча';
+              const source = outcome4h.price_source === 'hourly_next_session'
+                ? 'первая часовая свеча после паузы рынка'
+                : 'часовое закрытие';
               outcomeText = `4ч: ${outcome4h.favorable ? 'подтверждён' : 'не подтвердился'} (${move >= 0 ? '+' : ''}${move.toFixed(2)}%, ${source})`;
             }
             const detail = [ai.reason || 'без пояснения', ai.risk_note || '', `уверенность ${confidence}`, outcomeText].filter(Boolean).join(' · ');
@@ -6439,6 +6488,50 @@ def build_dashboard_html() -> str:
           </article>`);
         }
       }
+
+      const tradeQuality = data.trade_quality || {};
+      const tradeQualityMeta = document.getElementById('tradeQualityMeta');
+      const tradeQualityBody = document.getElementById('tradeQualityBody');
+      const missedEntriesBody = document.getElementById('missedEntriesBody');
+      const qualityRows = Array.isArray(tradeQuality.by_symbol) ? tradeQuality.by_symbol : [];
+      const missedEntries = Array.isArray(tradeQuality.missed_entries) ? tradeQuality.missed_entries : [];
+      tradeQualityMeta.textContent = tradeQuality.available
+        ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Макс. прибыль и просадка считаются по часовым свечам; минуты используются только на границах сделки.`
+        : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
+      tradeQualityBody.innerHTML = qualityRows.length
+        ? qualityRows.map((row) => {
+            const pnl = Number(row.net_pnl_rub || 0);
+            const pnlClass = pnl >= 0 ? 'good' : 'bad';
+            const mfe = row.average_mfe_pct == null ? '-' : `+${Number(row.average_mfe_pct).toFixed(2)}%`;
+            const mae = row.average_mae_pct == null ? '-' : `-${Number(row.average_mae_pct).toFixed(2)}%`;
+            const postExit = row.average_post_exit_4h_pct == null
+              ? 'нет оценки'
+              : `${row.early_exit_count || 0} · ${Number(row.average_post_exit_4h_pct) >= 0 ? '+' : ''}${Number(row.average_post_exit_4h_pct).toFixed(2)}%`;
+            return `<tr>
+              <td>${renderInstrumentLabel(row.symbol || '-', '')}</td>
+              <td>${escapeHtml(String(row.trades || 0))}</td>
+              <td class="right ${pnlClass}">${escapeHtml(formatSignedRub(pnl))}</td>
+              <td class="right">${escapeHtml(formatRub(row.commission_rub || 0))}</td>
+              <td>${escapeHtml(String(row.average_hold_minutes || 0))} мин</td>
+              <td class="good">${escapeHtml(mfe)}</td>
+              <td class="bad">${escapeHtml(mae)}</td>
+              <td>${escapeHtml(postExit)}</td>
+            </tr>`;
+          }).join('')
+        : '<tr><td colspan="8" class="muted">Нет закрытых сделок для оценки за период.</td></tr>';
+      missedEntriesBody.innerHTML = missedEntries.length
+        ? missedEntries.slice(0, 12).map((item) => {
+            const move = Number(item.move_4h_pct || 0);
+            const moveText = `${move >= 0 ? '+' : ''}${move.toFixed(2)}% через 4ч`;
+            const source = item.price_source === 'hourly_next_session' ? 'первая свеча после паузы рынка' : 'часовое закрытие';
+            return buildReviewRowRich(
+              formatMoscowTime(item.observed_at || ''),
+              `${instrumentText(item.symbol || '-')} · ${displaySignal(item.signal || '-')}`,
+              `${item.decision === 'deferred' ? 'отложен аллокатором' : 'не исполнен'} · ${moveText} · ${source}`,
+              ''
+            );
+          }).join('')
+        : '<div class="muted">Нет подтверждённых пропущенных входов за период.</div>';
 
 const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available
@@ -6709,6 +6802,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "news": load_news_snapshot(),
         "signal_ai_shadow": load_signal_ai_shadow_summary(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
+        "trade_quality": load_trade_quality_analytics(),
         "allocator_decisions": load_allocator_decisions_for_day(target_day, 20),
         "signal_observations": load_signal_observation_summary_for_day(target_day, 20),
         "summary": summarize_states(display_states, portfolio_view),
