@@ -124,7 +124,8 @@ UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 TRADE_QUALITY_REFRESH_SECONDS = 600
-TRADE_QUALITY_ANALYTICS_VERSION = 2
+TRADE_QUALITY_ANALYTICS_VERSION = 3
+HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
@@ -1021,7 +1022,9 @@ def get_hourly_horizon_price(
 ) -> tuple[float, datetime, str] | None:
     """Return the close of the hourly candle ending at, or after, a target time."""
     now = datetime.now(UTC)
-    target_utc = target_time.astimezone(UTC)
+    # Signals are generated from completed hourly candles. Recording can lag the
+    # boundary by seconds, so evaluate against that hour's close, not the next one.
+    target_utc = target_time.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
     if now <= target_utc:
         return None
     try:
@@ -1182,7 +1185,7 @@ def update_signal_ai_shadow_outcomes(
         for hours in (1, 2, 4, 8):
             key = f"{hours}h"
             existing_outcome = outcomes.get(key) if isinstance(outcomes.get(key), dict) else {}
-            if existing_outcome.get("evaluation_version") == "hourly_close_v2":
+            if existing_outcome.get("evaluation_version") == HOURLY_OUTCOME_EVALUATION_VERSION:
                 continue
             target_time = observed_at + timedelta(hours=hours)
             if now < target_time:
@@ -1220,7 +1223,7 @@ def update_signal_ai_shadow_outcomes(
                 "move_pct": round(move_pct, 4),
                 "favorable": move_pct > 0.0,
                 "price_source": price_source,
-                "evaluation_version": "hourly_close_v2",
+                "evaluation_version": HOURLY_OUTCOME_EVALUATION_VERSION,
             }
             changed = True
         if changed:

@@ -109,7 +109,7 @@ class SignalAiReviewerTests(unittest.TestCase):
             self.assertEqual(outcomes["4h"]["price_source"], "hourly_close")
 
     def test_hourly_horizon_uses_candle_that_ends_at_target(self) -> None:
-        target = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        target = datetime(2026, 8, 1, 12, 0, 18, tzinfo=timezone.utc)
         candle = SimpleNamespace(
             time=datetime(2026, 8, 1, 11, 0, tzinfo=timezone.utc),
             close=SimpleNamespace(units=101, nano=0),
@@ -123,7 +123,7 @@ class SignalAiReviewerTests(unittest.TestCase):
         self.assertIsNotNone(result)
         price, evaluated_at, source = result
         self.assertEqual(price, 101.0)
-        self.assertEqual(evaluated_at.astimezone(timezone.utc), target)
+        self.assertEqual(evaluated_at.astimezone(timezone.utc), target.replace(second=0))
         self.assertEqual(source, "hourly_close")
 
 
