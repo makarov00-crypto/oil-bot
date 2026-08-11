@@ -63,9 +63,13 @@ from trade_storage import (
 )
 from trade_quality import (
     build_trade_key,
+    build_trade_quality_overview,
     calculate_post_exit_move,
     calculate_trade_excursion,
+    early_exit_threshold_pct,
+    is_material_early_exit,
     pair_closed_trades,
+    summarize_trade_dimension,
     summarize_trade_quality,
 )
 from tinkoff.invest import (
@@ -123,8 +127,8 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
-TRADE_QUALITY_REFRESH_SECONDS = 600
-TRADE_QUALITY_ANALYTICS_VERSION = 3
+TRADE_QUALITY_REFRESH_SECONDS = 3600
+TRADE_QUALITY_ANALYTICS_VERSION = 4
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
@@ -910,6 +914,11 @@ def append_hold_signal_observation(
     regime_confidence: float,
     setup_quality_label: str,
     entry_edge_score: float,
+    diagnostic_direction: str = "",
+    diagnostic_score: float = 0.0,
+    atr_pct: float = 0.0,
+    volume_ratio: float = 0.0,
+    body_ratio: float = 0.0,
 ) -> str:
     observed_at = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
     summary = [str(item).strip() for item in signal_summary[:3] if str(item).strip()]
@@ -936,9 +945,59 @@ def append_hold_signal_observation(
             "hold_blockers": summary,
             "execution_status": "not_candidate",
             "execution_note": "стратегия не подтвердила вход",
+            "diagnostic_direction": diagnostic_direction,
+            "diagnostic_score": round(float(diagnostic_score or 0.0), 3),
+            "atr_pct": round(float(atr_pct or 0.0), 6),
+            "volume_ratio": round(float(volume_ratio or 0.0), 3),
+            "body_ratio": round(float(body_ratio or 0.0), 3),
         },
     }
     return append_signal_observation(TRADE_DB_PATH, row)
+
+
+def infer_hold_diagnostic_direction(df: pd.DataFrame) -> tuple[str, float]:
+    """Record a clear unfinished hourly pressure without turning it into a live signal."""
+    if len(df) < 2:
+        return "", 0.0
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    try:
+        close = float(last["close"])
+        prev_close = float(prev["close"])
+        ema20 = float(last["ema20"])
+        macd = float(last["macd"])
+        signal = float(last["macd_signal"])
+        previous_gap = float(prev["macd"]) - float(prev["macd_signal"])
+        gap = macd - signal
+        rsi = float(last["rsi"])
+        prev_rsi = float(prev["rsi"])
+        ao = float(last.get("ao", 0.0))
+        prev_ao = float(prev.get("ao", 0.0))
+    except (KeyError, TypeError, ValueError):
+        return "", 0.0
+    long_votes = [
+        close >= ema20,
+        macd >= signal,
+        gap >= previous_gap,
+        rsi >= prev_rsi,
+        ao >= prev_ao,
+        close >= prev_close,
+    ]
+    short_votes = [
+        close <= ema20,
+        macd <= signal,
+        gap <= previous_gap,
+        rsi <= prev_rsi,
+        ao <= prev_ao,
+        close <= prev_close,
+    ]
+    long_score = sum(long_votes) / len(long_votes)
+    short_score = sum(short_votes) / len(short_votes)
+    if long_score >= 4 / 6 and long_score >= short_score + 2 / 6:
+        return "LONG", round(long_score, 3)
+    if short_score >= 4 / 6 and short_score >= long_score + 2 / 6:
+        return "SHORT", round(short_score, 3)
+    return "", 0.0
 
 
 def selected_signal_execution_status(state: InstrumentState) -> tuple[str, str]:
@@ -1263,6 +1322,17 @@ def build_trade_quality_analytics(
     """Build a cached hourly quality review; broker PnL remains the source of money results."""
     now = datetime.now(UTC)
     cutoff = now - timedelta(days=30)
+    previous_payload = load_trade_quality_payload()
+    cached_trades = {
+        str(item.get("quality_key") or ""): item
+        for item in previous_payload.get("trades") or []
+        if isinstance(item, dict)
+    }
+    cached_missed = {
+        str(item.get("observation_uid") or ""): item
+        for item in previous_payload.get("missed_entry_evaluations") or []
+        if isinstance(item, dict)
+    }
     by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
     raw_rows: list[dict[str, Any]] = []
     for row in load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH):
@@ -1279,6 +1349,14 @@ def build_trade_quality_analytics(
         exit_time = parse_state_datetime(str(trade.get("exit_time") or ""))
         instrument = by_symbol.get(str(trade.get("symbol") or "").upper())
         if entry_time is None or exit_time is None or instrument is None:
+            continue
+        quality_key = build_trade_key(trade)
+        cached_trade = cached_trades.get(quality_key)
+        if cached_trade and cached_trade.get("mfe_pct") is not None and cached_trade.get("post_exit_4h_pct") is not None:
+            enriched_cached = {**cached_trade, **trade, "quality_key": quality_key}
+            enriched_cached["early_exit_threshold_pct"] = early_exit_threshold_pct(enriched_cached)
+            enriched_cached["is_material_early_exit"] = is_material_early_exit(enriched_cached)
+            completed.append(enriched_cached)
             continue
         entry_time = entry_time.astimezone(MOSCOW_TZ)
         exit_time = exit_time.astimezone(MOSCOW_TZ)
@@ -1310,7 +1388,7 @@ def build_trade_quality_analytics(
                 )
             )
         quality = calculate_trade_excursion(trade, hourly_rows, boundary_rows)
-        enriched = {**trade, **quality, "quality_key": build_trade_key(trade)}
+        enriched = {**trade, **quality, "quality_key": quality_key}
         for hours in (1, 2, 4):
             snapshot = get_hourly_horizon_price(client, config, instrument, exit_time + timedelta(hours=hours))
             if snapshot is None:
@@ -1319,39 +1397,91 @@ def build_trade_quality_analytics(
             enriched[f"post_exit_{hours}h_pct"] = calculate_post_exit_move(trade, future_price)
             enriched[f"post_exit_{hours}h_at"] = evaluated_at.isoformat()
             enriched[f"post_exit_{hours}h_source"] = source
+        enriched["early_exit_threshold_pct"] = early_exit_threshold_pct(enriched)
+        enriched["is_material_early_exit"] = is_material_early_exit(enriched)
         completed.append(enriched)
 
-    missed_entries: list[dict[str, Any]] = []
+    missed_entry_evaluations: list[dict[str, Any]] = []
+    potential_rows: list[tuple[dict[str, Any], str, float, str]] = []
     for row in load_signal_observations(TRADE_DB_PATH, limit=None, newest_first=True):
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         execution = str(context.get("execution_status") or "").lower()
         decision = str(row.get("decision") or "").lower()
-        if decision not in {"selected", "deferred"} or execution in {"confirmed_open", "recovered_open", "submitted_open"}:
+        signal = str(row.get("signal") or "").upper()
+        diagnostic_direction = str(context.get("diagnostic_direction") or "").upper()
+        diagnostic_score = float(context.get("diagnostic_score") or 0.0)
+        is_strategy_hold = decision == "hold" and signal == "HOLD" and diagnostic_direction in {"LONG", "SHORT"} and diagnostic_score >= 0.83
+        is_unexecuted_candidate = decision in {"selected", "deferred"} and execution not in {"confirmed_open", "recovered_open", "submitted_open"}
+        if not is_unexecuted_candidate and not is_strategy_hold:
             continue
         observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
         symbol = str(row.get("symbol") or "").upper()
         instrument = by_symbol.get(symbol)
         observed_price = float(row.get("observed_price") or 0.0)
-        signal = str(row.get("signal") or "").upper()
-        if observed_at is None or observed_at < cutoff or observed_price <= 0.0 or signal not in {"LONG", "SHORT"} or instrument is None:
+        direction = diagnostic_direction if is_strategy_hold else signal
+        if observed_at is None or observed_at < cutoff or observed_at > now - timedelta(hours=4) or observed_price <= 0.0 or direction not in {"LONG", "SHORT"} or instrument is None:
             continue
-        snapshot = get_hourly_horizon_price(client, config, instrument, observed_at + timedelta(hours=4))
-        if snapshot is None:
+        reason = str(row.get("decision_reason") or "")
+        if is_strategy_hold:
+            reason = "; ".join(str(item) for item in context.get("hold_blockers") or [] if str(item).strip()) or reason
+            source_kind = "strategy_hold"
+            source_label = "Стратегия отсеяла"
+        elif decision == "deferred":
+            source_kind = "allocator_deferred"
+            source_label = "Аллокатор отложил"
+        elif execution == "rejected":
+            source_kind = "broker_rejected"
+            source_label = "Брокер не исполнил"
+        else:
+            source_kind = "selected_unexecuted"
+            source_label = "Вход не подтвердился"
+        potential_rows.append((row, direction, diagnostic_score, f"{source_kind}|{source_label}|{reason}"))
+
+    # The report is diagnostic, not part of the trading cycle. Bound new work so it
+    # cannot exhaust the broker data limit; completed observations are reused below.
+    for row, direction, diagnostic_score, source_data in potential_rows[:48]:
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
+        symbol = str(row.get("symbol") or "").upper()
+        instrument = by_symbol.get(symbol)
+        observed_price = float(row.get("observed_price") or 0.0)
+        observation_uid = str(row.get("observation_uid") or "")
+        if observed_at is None or instrument is None or observed_price <= 0.0:
             continue
-        future_price, evaluated_at, source = snapshot
-        move_pct = ((future_price - observed_price) / observed_price * 100.0) if signal == "LONG" else ((observed_price - future_price) / observed_price * 100.0)
-        missed_entries.append(
-            {
-                "symbol": symbol,
-                "signal": signal,
-                "observed_at": observed_at.isoformat(),
-                "decision": decision,
-                "execution_status": execution or "не исполнен",
-                "move_4h_pct": round(move_pct, 4),
-                "evaluated_at": evaluated_at.isoformat(),
-                "price_source": source,
-            }
-        )
+        source_kind, source_label, reason = source_data.split("|", 2)
+        cached = cached_missed.get(observation_uid)
+        if cached and cached.get("move_4h_pct") is not None:
+            missed_entry_evaluations.append(cached)
+            continue
+        evaluation = {
+            "observation_uid": observation_uid,
+            "symbol": symbol,
+            "signal": direction,
+            "observed_at": observed_at.isoformat(),
+            "decision": str(row.get("decision") or ""),
+            "execution_status": str(context.get("execution_status") or "не исполнен"),
+            "source_kind": source_kind,
+            "source_label": source_label,
+            "reason": compact_reason(reason),
+            "diagnostic_score": round(diagnostic_score, 3),
+            "threshold_pct": round(max(0.35, float(context.get("atr_pct") or 0.0) * 100.0), 3),
+        }
+        for hours in (1, 2, 4):
+            snapshot = get_hourly_horizon_price(client, config, instrument, observed_at + timedelta(hours=hours))
+            if snapshot is None:
+                continue
+            future_price, evaluated_at, source = snapshot
+            move_pct = (future_price - observed_price) / observed_price * 100.0 if direction == "LONG" else (observed_price - future_price) / observed_price * 100.0
+            evaluation[f"move_{hours}h_pct"] = round(move_pct, 4)
+            evaluation[f"evaluated_{hours}h_at"] = evaluated_at.isoformat()
+            evaluation[f"price_source_{hours}h"] = source
+        if evaluation.get("move_4h_pct") is not None:
+            missed_entry_evaluations.append(evaluation)
+
+    missed_entries = [
+        item for item in missed_entry_evaluations
+        if float(item.get("move_4h_pct") or 0.0) >= float(item.get("threshold_pct") or 0.35)
+    ]
 
     return {
         "version": TRADE_QUALITY_ANALYTICS_VERSION,
@@ -1359,6 +1489,23 @@ def build_trade_quality_analytics(
         "period_days": 30,
         "trades": completed,
         "by_symbol": summarize_trade_quality(completed),
+        "by_regime": summarize_trade_dimension(completed, "market_regime"),
+        "by_entry_quality": summarize_trade_dimension(completed, "entry_edge_label"),
+        "overview": build_trade_quality_overview(completed, missed_entries),
+        "exit_diagnostics": sorted(
+            [
+                {
+                    "symbol": item.get("symbol"), "side": item.get("side"), "exit_time": item.get("exit_time"),
+                    "exit_reason": item.get("exit_reason"), "net_pnl_rub": item.get("pnl_rub"),
+                    "post_exit_4h_pct": item.get("post_exit_4h_pct"),
+                    "threshold_pct": item.get("early_exit_threshold_pct"),
+                    "is_material_early_exit": item.get("is_material_early_exit", False),
+                }
+                for item in completed if item.get("post_exit_4h_pct") is not None
+            ],
+            key=lambda item: float(item.get("post_exit_4h_pct") or 0.0), reverse=True,
+        )[:50],
+        "missed_entry_evaluations": missed_entry_evaluations,
         "missed_entries": sorted(missed_entries, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
     }
 
@@ -9885,6 +10032,7 @@ def process_instrument(
         and state.position_side == "FLAT"
         and not has_pending_order(state)
     ):
+        diagnostic_direction, diagnostic_score = infer_hold_diagnostic_direction(lower_df)
         append_hold_signal_observation(
             symbol=instrument.symbol,
             strategy_name=primary_strategy_name,
@@ -9896,6 +10044,11 @@ def process_instrument(
             regime_confidence=float(state.last_market_regime_confidence or 0.0),
             setup_quality_label=setup_quality_label,
             entry_edge_score=float(state.last_entry_edge_score or 0.0),
+            diagnostic_direction=diagnostic_direction,
+            diagnostic_score=diagnostic_score,
+            atr_pct=float(regime_metrics.get("atr_pct") or 0.0),
+            volume_ratio=float(regime_metrics.get("volume_ratio") or 0.0),
+            body_ratio=float(regime_metrics.get("body_ratio") or 0.0),
         )
     state.last_allocator_quantity = 0
     if signal not in {"LONG", "SHORT"}:

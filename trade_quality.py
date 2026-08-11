@@ -62,6 +62,7 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             commission_rub = abs(float(row.get("commission_rub") or 0.0))
         except (TypeError, ValueError):
             commission_rub = 0.0
+        entry_context = entry.get("context") if isinstance(entry.get("context"), dict) else {}
         pairs.append(
             {
                 "symbol": symbol,
@@ -75,6 +76,10 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "pnl_rub": pnl_rub,
                 "commission_rub": commission_rub,
                 "exit_reason": str(row.get("reason") or ""),
+                "market_regime": str(entry_context.get("market_regime") or ""),
+                "entry_edge_label": str(entry_context.get("entry_edge_label") or ""),
+                "setup_quality_label": str(entry_context.get("setup_quality_label") or ""),
+                "entry_atr_pct": _as_float(entry_context.get("atr_pct")),
             }
         )
     return pairs
@@ -153,6 +158,24 @@ def calculate_post_exit_move(
     return round((exit_price - horizon_price) / exit_price * 100.0, 4)
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return default
+
+
+def early_exit_threshold_pct(trade: dict[str, Any]) -> float:
+    """Ignore harmless post-exit noise; use entry ATR when it is available."""
+    atr_pct = _as_float(trade.get("entry_atr_pct")) * 100.0
+    return round(max(0.35, atr_pct), 3)
+
+
+def is_material_early_exit(trade: dict[str, Any]) -> bool:
+    move = _as_float(trade.get("post_exit_4h_pct"))
+    return move >= early_exit_threshold_pct(trade)
+
+
 def summarize_trade_quality(trades: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for trade in trades:
@@ -167,6 +190,7 @@ def summarize_trade_quality(trades: Iterable[dict[str, Any]]) -> list[dict[str, 
         mfes = []
         maes = []
         early_moves = []
+        wins = 0
         for row in rows:
             try:
                 held = datetime.fromisoformat(str(row["exit_time"])) - datetime.fromisoformat(str(row["entry_time"]))
@@ -179,17 +203,86 @@ def summarize_trade_quality(trades: Iterable[dict[str, Any]]) -> list[dict[str, 
                 maes.append(float(row["mae_pct"]))
             if row.get("post_exit_4h_pct") is not None:
                 early_moves.append(float(row["post_exit_4h_pct"]))
+            if _as_float(row.get("pnl_rub")) > 0:
+                wins += 1
+        gross = pnl + commission
+        positive_mfe = sum(max(0.0, _as_float(row.get("mfe_pct"))) for row in rows)
+        captured = sum(max(0.0, _as_float(row.get("realized_price_pct"))) for row in rows)
+        material_early_moves = [
+            _as_float(row.get("post_exit_4h_pct"))
+            for row in rows
+            if is_material_early_exit(row)
+        ]
         result.append(
             {
                 "symbol": symbol,
                 "trades": len(rows),
                 "net_pnl_rub": round(pnl, 2),
+                "gross_pnl_rub": round(gross, 2),
                 "commission_rub": round(commission, 2),
+                "win_rate_pct": round(wins / len(rows) * 100.0, 1) if rows else 0.0,
+                "profit_capture_pct": round(captured / positive_mfe * 100.0, 1) if positive_mfe else None,
                 "average_hold_minutes": round(sum(holds) / len(holds)) if holds else 0,
                 "average_mfe_pct": round(sum(mfes) / len(mfes), 3) if mfes else None,
                 "average_mae_pct": round(sum(maes) / len(maes), 3) if maes else None,
-                "early_exit_count": sum(1 for item in early_moves if item > 0.0),
+                "early_exit_count": len(material_early_moves),
+                "early_exit_raw_count": sum(1 for item in early_moves if item > 0.0),
                 "average_post_exit_4h_pct": round(sum(early_moves) / len(early_moves), 3) if early_moves else None,
+                "average_early_exit_4h_pct": round(sum(material_early_moves) / len(material_early_moves), 3) if material_early_moves else None,
             }
         )
     return sorted(result, key=lambda item: (item["net_pnl_rub"], item["symbol"]))
+
+
+def summarize_trade_dimension(trades: Iterable[dict[str, Any]], field: str) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for trade in trades:
+        label = str(trade.get(field) or "Не указано").strip() or "Не указано"
+        grouped.setdefault(label, []).append(trade)
+    result: list[dict[str, Any]] = []
+    for label, rows in grouped.items():
+        net = sum(_as_float(row.get("pnl_rub")) for row in rows)
+        commission = sum(_as_float(row.get("commission_rub")) for row in rows)
+        wins = sum(1 for row in rows if _as_float(row.get("pnl_rub")) > 0.0)
+        result.append(
+            {
+                "label": label,
+                "trades": len(rows),
+                "net_pnl_rub": round(net, 2),
+                "commission_rub": round(commission, 2),
+                "win_rate_pct": round(wins / len(rows) * 100.0, 1) if rows else 0.0,
+            }
+        )
+    return sorted(result, key=lambda item: (item["net_pnl_rub"], item["label"]))
+
+
+def build_trade_quality_overview(trades: Iterable[dict[str, Any]], missed_entries: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    rows = list(trades)
+    missed = list(missed_entries)
+    net = sum(_as_float(row.get("pnl_rub")) for row in rows)
+    commission = sum(_as_float(row.get("commission_rub")) for row in rows)
+    gross = net + commission
+    wins = sum(1 for row in rows if _as_float(row.get("pnl_rub")) > 0.0)
+    losses = sum(1 for row in rows if _as_float(row.get("pnl_rub")) < 0.0)
+    positive_mfe = sum(max(0.0, _as_float(row.get("mfe_pct"))) for row in rows)
+    captured = sum(max(0.0, _as_float(row.get("realized_price_pct"))) for row in rows)
+    early = [row for row in rows if is_material_early_exit(row)]
+    return {
+        "closed_trades": len(rows),
+        "wins": wins,
+        "losses": losses,
+        "net_pnl_rub": round(net, 2),
+        "gross_pnl_rub": round(gross, 2),
+        "commission_rub": round(commission, 2),
+        "commission_share_pct": round(commission / gross * 100.0, 1) if gross > 0.0 else None,
+        "win_rate_pct": round(wins / len(rows) * 100.0, 1) if rows else 0.0,
+        "profit_capture_pct": round(captured / positive_mfe * 100.0, 1) if positive_mfe else None,
+        "material_early_exit_count": len(early),
+        "average_early_exit_4h_pct": round(
+            sum(_as_float(row.get("post_exit_4h_pct")) for row in early) / len(early), 3
+        ) if early else None,
+        "missed_entries_count": len(missed),
+        "missed_entries_move_4h_pct": round(
+            sum(_as_float(row.get("move_4h_pct")) for row in missed) / len(missed), 3
+        ) if missed else None,
+    }

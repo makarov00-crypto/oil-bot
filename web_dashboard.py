@@ -4293,6 +4293,28 @@ def build_dashboard_html() -> str:
     .review-tab-panel.active {
       display: block;
     }
+    .quality-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .quality-tab {
+      border: 1px solid rgba(102, 174, 255, 0.16);
+      background: transparent;
+      color: var(--muted);
+      border-radius: 7px;
+      padding: 7px 10px;
+      font: 600 13px/1.2 "Manrope", sans-serif;
+      cursor: pointer;
+    }
+    .quality-tab.active {
+      color: #ffffff;
+      background: rgba(39, 147, 220, 0.20);
+      border-color: rgba(81, 191, 255, 0.50);
+    }
+    .quality-panel { display: none; margin-top: 14px; }
+    .quality-panel.active { display: block; }
     .strategy-diagnostics-grid {
       display: grid;
       gap: 12px;
@@ -4968,18 +4990,34 @@ def build_dashboard_html() -> str:
       </div>
       <div id="reviewTabQuality" class="review-tab-panel">
         <div class="muted" id="tradeQualityMeta">Качество сделок ещё рассчитывается.</div>
-        <div class="table-scroll desktop-table">
-          <table style="margin-top:12px;">
+        <div class="trade-review-summary" id="tradeQualityOverview"></div>
+        <div class="quality-tabs" role="tablist" aria-label="Диагностика качества">
+          <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
+          <button class="quality-tab" type="button" data-quality-tab="exits">Выходы</button>
+          <button class="quality-tab" type="button" data-quality-tab="missed">Пропуски</button>
+        </div>
+        <div id="qualityPanelSummary" class="quality-panel active">
+          <div class="table-scroll desktop-table">
+            <table>
             <thead>
               <tr>
-                <th>Инструмент</th><th>Сделок</th><th class="right">Чистый итог</th><th class="right">Комиссии</th><th>Среднее удержание</th><th>Макс. прибыль</th><th>Макс. просадка</th><th>Ранний выход</th>
+                <th>Инструмент</th><th>Сделок</th><th class="right">Итог после комиссии</th><th>Доля плюсовых</th><th>Удержали прибыли</th><th>Макс. прибыль</th><th>Макс. просадка</th><th>Ранние выходы</th>
               </tr>
             </thead>
             <tbody id="tradeQualityBody"></tbody>
           </table>
+          </div>
+          <div class="review-layout" style="margin-top:16px;">
+            <div class="review-block"><h3>По режиму рынка</h3><table class="review-summary-table"><tbody id="qualityRegimeBody"></tbody></table></div>
+            <div class="review-block"><h3>По качеству входа</h3><table class="review-summary-table"><tbody id="qualityEdgeBody"></tbody></table></div>
+          </div>
         </div>
-        <div class="review-block" style="margin-top:16px;">
-          <h3>Пропущенные входы</h3>
+        <div id="qualityPanelExits" class="quality-panel">
+          <div class="muted" style="margin-bottom:10px;">Показываются только закрытия, после которых цена прошла в прежнюю сторону больше обычного шума.</div>
+          <div id="qualityExitsBody" class="review-list"></div>
+        </div>
+        <div id="qualityPanelMissed" class="quality-panel">
+          <div class="muted" style="margin-bottom:10px;">Только движения, которые после пропуска превысили порог волатильности инструмента.</div>
           <div id="missedEntriesBody" class="review-list"></div>
         </div>
       </div>
@@ -6493,45 +6531,87 @@ def build_dashboard_html() -> str:
       const tradeQualityMeta = document.getElementById('tradeQualityMeta');
       const tradeQualityBody = document.getElementById('tradeQualityBody');
       const missedEntriesBody = document.getElementById('missedEntriesBody');
+      const tradeQualityOverview = document.getElementById('tradeQualityOverview');
+      const qualityExitsBody = document.getElementById('qualityExitsBody');
+      const qualityRegimeBody = document.getElementById('qualityRegimeBody');
+      const qualityEdgeBody = document.getElementById('qualityEdgeBody');
       const qualityRows = Array.isArray(tradeQuality.by_symbol) ? tradeQuality.by_symbol : [];
+      const qualityOverview = tradeQuality.overview || {};
+      const qualityExits = Array.isArray(tradeQuality.exit_diagnostics) ? tradeQuality.exit_diagnostics : [];
+      const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
+      const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const missedEntries = Array.isArray(tradeQuality.missed_entries) ? tradeQuality.missed_entries : [];
       tradeQualityMeta.textContent = tradeQuality.available
-        ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Макс. прибыль и просадка считаются по часовым свечам; минуты используются только на границах сделки.`
+        ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Расчёт обновляется раз в час и использует часовые свечи, минуты - только на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
+      const capture = qualityOverview.profit_capture_pct == null ? '-' : `${Number(qualityOverview.profit_capture_pct).toFixed(1)}%`;
+      const commissionShare = qualityOverview.commission_share_pct == null ? 'нет базы' : `${Number(qualityOverview.commission_share_pct).toFixed(1)}% валового результата`;
+      const earlyExitSub = Number(qualityOverview.material_early_exit_count || 0)
+        ? `среднее продолжение +${Number(qualityOverview.average_early_exit_4h_pct || 0).toFixed(2)}% за 4ч`
+        : 'пока нет подтверждённых';
+      tradeQualityOverview.innerHTML = tradeQuality.available ? [
+        buildTradeSummaryCard('Итог после комиссии', formatSignedRub(qualityOverview.net_pnl_rub || 0), `${Number(qualityOverview.closed_trades || 0)} закрытых сделок`, Number(qualityOverview.net_pnl_rub || 0) >= 0 ? 'good' : 'bad'),
+        buildTradeSummaryCard('Доля прибыльных', `${Number(qualityOverview.win_rate_pct || 0).toFixed(1)}%`, `${Number(qualityOverview.wins || 0)} в плюс · ${Number(qualityOverview.losses || 0)} в минус`),
+        buildTradeSummaryCard('Удержали прибыли', capture, 'доля полученной цены от максимального движения'),
+        buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
+        buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
+        buildTradeSummaryCard('Подтверждённые пропуски', String(qualityOverview.missed_entries_count || 0), qualityOverview.missed_entries_move_4h_pct == null ? 'история ещё копится' : `среднее движение +${Number(qualityOverview.missed_entries_move_4h_pct).toFixed(2)}% за 4ч`),
+      ].join('') : '';
       tradeQualityBody.innerHTML = qualityRows.length
         ? qualityRows.map((row) => {
             const pnl = Number(row.net_pnl_rub || 0);
             const pnlClass = pnl >= 0 ? 'good' : 'bad';
             const mfe = row.average_mfe_pct == null ? '-' : `+${Number(row.average_mfe_pct).toFixed(2)}%`;
             const mae = row.average_mae_pct == null ? '-' : `-${Number(row.average_mae_pct).toFixed(2)}%`;
-            const postExit = row.average_post_exit_4h_pct == null
+            const captureValue = row.profit_capture_pct == null ? '-' : `${Number(row.profit_capture_pct).toFixed(0)}%`;
+            const postExit = row.average_early_exit_4h_pct == null
               ? 'нет оценки'
-              : `${row.early_exit_count || 0} · ${Number(row.average_post_exit_4h_pct) >= 0 ? '+' : ''}${Number(row.average_post_exit_4h_pct).toFixed(2)}%`;
+              : `${row.early_exit_count || 0} · +${Number(row.average_early_exit_4h_pct).toFixed(2)}%`;
             return `<tr>
               <td>${renderInstrumentLabel(row.symbol || '-', '')}</td>
               <td>${escapeHtml(String(row.trades || 0))}</td>
               <td class="right ${pnlClass}">${escapeHtml(formatSignedRub(pnl))}</td>
-              <td class="right">${escapeHtml(formatRub(row.commission_rub || 0))}</td>
-              <td>${escapeHtml(String(row.average_hold_minutes || 0))} мин</td>
+              <td>${escapeHtml(`${Number(row.win_rate_pct || 0).toFixed(0)}%`)}</td>
+              <td>${escapeHtml(captureValue)}</td>
               <td class="good">${escapeHtml(mfe)}</td>
               <td class="bad">${escapeHtml(mae)}</td>
               <td>${escapeHtml(postExit)}</td>
             </tr>`;
           }).join('')
         : '<tr><td colspan="8" class="muted">Нет закрытых сделок для оценки за период.</td></tr>';
+      const dimensionRows = (rows, formatter) => rows.length
+        ? rows.map((row) => buildReviewRow(
+            formatter(row.label),
+            formatSignedRub(row.net_pnl_rub || 0),
+            `${row.trades || 0} сделок · ${Number(row.win_rate_pct || 0).toFixed(0)}% в плюс · комиссии ${formatRub(row.commission_rub || 0)}`,
+          )).join('')
+        : buildReviewRow('Нет данных', 'История ещё копится');
+      qualityRegimeBody.innerHTML = dimensionRows(qualityRegimes, formatRegimeLabel);
+      qualityEdgeBody.innerHTML = dimensionRows(qualityEdges, formatEdgeLabel);
+      qualityExitsBody.innerHTML = qualityExits.filter((item) => item.is_material_early_exit).length
+        ? qualityExits.filter((item) => item.is_material_early_exit).slice(0, 12).map((item) => buildReviewRowRich(
+            `${formatMoscowTime(item.exit_time || '')} · ${instrumentText(item.symbol || '-')}`,
+            `${item.side === 'SHORT' ? 'Шорт' : 'Лонг'} закрыт ${formatSignedRub(item.net_pnl_rub || 0)} · затем +${Number(item.post_exit_4h_pct || 0).toFixed(2)}%`,
+            `${shortDiagnosticText(item.exit_reason || 'Причина закрытия не сохранена', 130)} · порог +${Number(item.threshold_pct || 0).toFixed(2)}%`,
+          )).join('')
+        : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
       missedEntriesBody.innerHTML = missedEntries.length
         ? missedEntries.slice(0, 12).map((item) => {
             const move = Number(item.move_4h_pct || 0);
-            const moveText = `${move >= 0 ? '+' : ''}${move.toFixed(2)}% через 4ч`;
-            const source = item.price_source === 'hourly_next_session' ? 'первая свеча после паузы рынка' : 'часовое закрытие';
+            const formatMove = (hours) => {
+              const value = item[`move_${hours}h_pct`];
+              if (value == null) return `${hours}ч -`;
+              const number = Number(value);
+              return `${hours}ч ${number >= 0 ? '+' : ''}${number.toFixed(2)}%`;
+            };
+            const moveText = `${formatMove(1)} · ${formatMove(2)} · ${formatMove(4)}`;
             return buildReviewRowRich(
               formatMoscowTime(item.observed_at || ''),
-              `${instrumentText(item.symbol || '-')} · ${displaySignal(item.signal || '-')}`,
-              `${item.decision === 'deferred' ? 'отложен аллокатором' : 'не исполнен'} · ${moveText} · ${source}`,
-              ''
+              `${instrumentText(item.symbol || '-')} · ${displaySignal(item.signal || '-')} · ${item.source_label || 'Вход не исполнен'}`,
+              `${moveText} · ${shortDiagnosticText(item.reason || 'Причина не сохранена', 150)}`,
             );
           }).join('')
-        : '<div class="muted">Нет подтверждённых пропущенных входов за период.</div>';
+        : '<div class="muted">Нет подтверждённых пропущенных входов: новые HOLD-наблюдения накопятся после часовых свечей.</div>';
 
 const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available
@@ -6717,6 +6797,15 @@ const aiReview = data.ai_review || {};
           document.querySelectorAll('.review-tab').forEach((item) => item.classList.toggle('active', item === button));
           document.querySelectorAll('.review-tab-panel').forEach((panel) => {
             panel.classList.toggle('active', panel.id === `reviewTab${target.charAt(0).toUpperCase()}${target.slice(1)}`);
+          });
+        });
+      });
+      document.querySelectorAll('.quality-tab').forEach((button) => {
+        button.addEventListener('click', () => {
+          const target = button.dataset.qualityTab;
+          document.querySelectorAll('.quality-tab').forEach((item) => item.classList.toggle('active', item === button));
+          document.querySelectorAll('.quality-panel').forEach((panel) => {
+            panel.classList.toggle('active', panel.id === `qualityPanel${target.charAt(0).toUpperCase()}${target.slice(1)}`);
           });
         });
       });

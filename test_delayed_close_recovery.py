@@ -1138,9 +1138,10 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             display_name="MOEX",
             min_price_increment=1.0,
         )
+        last_exit_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         state = mod.InstrumentState(
-            trading_day=datetime.now(timezone.utc).astimezone(mod.MOSCOW_TZ).date().isoformat(),
-            last_exit_time=(datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+            trading_day=last_exit_at.astimezone(mod.MOSCOW_TZ).date().isoformat(),
+            last_exit_time=last_exit_at.isoformat(),
             last_exit_side="LONG",
             last_exit_pnl_rub=-120.0,
             last_exit_price=2640.0,
@@ -1168,9 +1169,10 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             display_name="MOEX",
             min_price_increment=1.0,
         )
+        last_exit_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         state = mod.InstrumentState(
-            trading_day=datetime.now(timezone.utc).astimezone(mod.MOSCOW_TZ).date().isoformat(),
-            last_exit_time=(datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+            trading_day=last_exit_at.astimezone(mod.MOSCOW_TZ).date().isoformat(),
+            last_exit_time=last_exit_at.isoformat(),
             last_exit_side="LONG",
             last_exit_pnl_rub=250.0,
             last_exit_price=2640.0,

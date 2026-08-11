@@ -308,6 +308,32 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "HOLD")
         self.assertIn("long не подтверждён", reason)
 
+    def test_hold_diagnostic_marks_clear_unfinished_long_pressure(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.0, "ema20": 99.8, "rsi": 52.0, "macd": 0.10, "macd_signal": 0.06, "ao": 0.12},
+                {"close": 100.8, "ema20": 100.0, "rsi": 56.0, "macd": 0.16, "macd_signal": 0.08, "ao": 0.20},
+            ]
+        )
+
+        direction, score = mod.infer_hold_diagnostic_direction(df)
+
+        self.assertEqual(direction, "LONG")
+        self.assertGreaterEqual(score, 0.83)
+
+    def test_hold_diagnostic_keeps_mixed_picture_neutral(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.0, "ema20": 100.0, "rsi": 50.0, "macd": 0.01, "macd_signal": 0.01, "ao": 0.0},
+                {"close": 99.9, "ema20": 100.0, "rsi": 51.0, "macd": 0.02, "macd_signal": 0.01, "ao": -0.01},
+            ]
+        )
+
+        direction, score = mod.infer_hold_diagnostic_direction(df)
+
+        self.assertEqual(direction, "")
+        self.assertEqual(score, 0.0)
+
     def test_unified_reversal_allows_strong_trend_continuation_without_recent_cross(self) -> None:
         df = candle_rows(
             [
