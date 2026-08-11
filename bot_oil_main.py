@@ -34,7 +34,7 @@ from instrument_groups import (
     uses_unified_reversal,
     uses_unified_reversal_1h,
 )
-from news_bias import NewsBias, detect_news_bias, select_active_biases
+from news_bias import NewsBias, calibrate_news_biases, detect_news_bias, select_active_biases
 from news_ai_analyzer import NewsAiSignal, request_news_ai_signals
 from signal_ai_reviewer import SignalAiReview, request_signal_ai_reviews
 from news_ingest import (
@@ -55,6 +55,7 @@ from trade_storage import (
     load_signal_observations,
     load_trade_rows as load_trade_rows_from_storage,
     mark_news_event_outcome_unavailable,
+    summarize_news_analytics,
     summarize_news_source_stats,
     update_news_event_outcome,
     sync_journal_to_db,
@@ -3499,7 +3500,11 @@ def apply_ai_signal_to_news_bias(item: NewsBias, ai_signal: NewsAiSignal) -> New
     if direction == item.bias and direction in {"LONG", "SHORT", "BLOCK"}:
         score = round(score + max(0.0, score) * 0.25 * confidence, 2)
         strength = stronger_strength(strength, ai_signal.strength)
-        if confidence >= 0.75 and actionability == "WATCH":
+        if (
+            confidence >= 0.75
+            and actionability == "WATCH"
+            and (item.calibration_factor >= 0.90 or item.source_count > 1)
+        ):
             actionability = "ACTION"
         reason = f"{reason} AI подтвердил новость: {ai_signal.reason}"
     elif direction in {"LONG", "SHORT", "BLOCK"} and direction != item.bias and confidence >= 0.75:
@@ -3524,6 +3529,9 @@ def apply_ai_signal_to_news_bias(item: NewsBias, ai_signal: NewsAiSignal) -> New
 def news_bias_trade_gate(news_bias: NewsBias | None) -> tuple[bool, str]:
     if news_bias is None or news_bias.bias == "NEUTRAL":
         return False, "новостей по инструменту нет"
+    if news_bias.bias != "BLOCK" and news_bias.calibration_factor <= 0.85 and news_bias.source_count <= 1:
+        details = news_bias.calibration_reason or "слабая накопленная статистика"
+        return False, f"историческая точность новости недостаточна: {details}"
     if not get_news_ai_enabled():
         if news_bias.actionability == "BACKGROUND" or news_bias.horizon == "BACKGROUND":
             return False, "новость только фоновая"
@@ -3919,6 +3927,12 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
     if seen_changed:
         save_news_seen_links(seen_links)
 
+    try:
+        source_stats = summarize_news_source_stats(TRADE_DB_PATH, days=10, limit=50)
+        direction_stats = summarize_news_analytics(TRADE_DB_PATH, days=10, limit=10).get("directions", [])
+        all_biases = calibrate_news_biases(all_biases, source_stats, direction_stats)
+    except Exception as error:
+        logging.warning("Не удалось откалибровать новости по истории: %s", error)
     active = enrich_news_biases_with_ai(select_active_biases(all_biases, now=now))
     NEWS_CACHE["fetched_at"] = now
     NEWS_CACHE["biases"] = active
@@ -3937,6 +3951,9 @@ def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
             "source_reliability": item.source_reliability,
             "source_count": item.source_count,
             "confirming_sources": list(item.confirming_sources),
+            "calibration_factor": item.calibration_factor,
+            "calibration_sample": item.calibration_sample,
+            "calibration_reason": item.calibration_reason,
             "trade_eligible": eligible,
             "trade_gate_reason": gate_reason,
             "ai_direction": item.ai_direction,

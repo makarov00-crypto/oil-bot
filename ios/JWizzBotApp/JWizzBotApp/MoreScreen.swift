@@ -46,6 +46,19 @@ struct MoreScreen: View {
                             )
                         }
                         .buttonStyle(.plain)
+
+                        Divider().overlay(Color.white.opacity(0.08))
+
+                        NavigationLink {
+                            TradeQualityScreen(store: store)
+                        } label: {
+                            menuRow(
+                                title: "Качество торговли",
+                                subtitle: "Удержание прибыли, пропущенные входы и проверка решений ИИ",
+                                systemImage: "chart.xyaxis.line"
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }

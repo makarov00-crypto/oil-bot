@@ -22,6 +22,7 @@
 		A10000000000000000000074 /* MoreScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000075 /* MoreScreen.swift */; };
 		A10000000000000000000076 /* AIReviewScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000077 /* AIReviewScreen.swift */; };
 		A10000000000000000000078 /* AllocatorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000079 /* AllocatorScreen.swift */; };
+		A10000000000000000000080 /* TradeQualityScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000081 /* TradeQualityScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 		A10000000000000000000075 /* MoreScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoreScreen.swift; sourceTree = "<group>"; };
 		A10000000000000000000077 /* AIReviewScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIReviewScreen.swift; sourceTree = "<group>"; };
 		A10000000000000000000079 /* AllocatorScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllocatorScreen.swift; sourceTree = "<group>"; };
+		A10000000000000000000081 /* TradeQualityScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeQualityScreen.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -74,6 +76,7 @@
 				A10000000000000000000073 /* GlassUI.swift */,
 				A10000000000000000000077 /* AIReviewScreen.swift */,
 				A10000000000000000000079 /* AllocatorScreen.swift */,
+				A10000000000000000000081 /* TradeQualityScreen.swift */,
 				A10000000000000000000075 /* MoreScreen.swift */,
 				A1000000000000000000000D /* NewsScreen.swift */,
 				A1000000000000000000000A /* OverviewScreen.swift */,
@@ -171,6 +174,7 @@
 				A10000000000000000000072 /* GlassUI.swift in Sources */,
 				A10000000000000000000076 /* AIReviewScreen.swift in Sources */,
 				A10000000000000000000078 /* AllocatorScreen.swift in Sources */,
+				A10000000000000000000080 /* TradeQualityScreen.swift in Sources */,
 				A10000000000000000000074 /* MoreScreen.swift in Sources */,
 				A1000000000000000000001B /* NewsScreen.swift in Sources */,
 				A10000000000000000000018 /* OverviewScreen.swift in Sources */,

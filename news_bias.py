@@ -47,6 +47,9 @@ class NewsBias:
     ai_event_type: str = ""
     ai_reason: str = ""
     ai_risk: str = ""
+    calibration_factor: float = 1.0
+    calibration_sample: int = 0
+    calibration_reason: str = ""
 
 
 IMMEDIATE_TERMS = (
@@ -116,6 +119,66 @@ def collect_hits(text: str, phrases: tuple[str, ...]) -> list[str]:
 
 def source_quality_multiplier(speed_score: float, reliability_score: float) -> float:
     return 0.55 * speed_score + 0.45 * reliability_score
+
+
+def outcome_quality_factor(total_count: int, favorable_count: int, *, min_sample: int = 12) -> float:
+    if total_count < min_sample:
+        return 1.0
+    posterior_rate = (max(0, favorable_count) + 10.0) / (max(0, total_count) + 20.0)
+    return max(0.80, min(1.15, posterior_rate / 0.50))
+
+
+def calibrate_news_bias(
+    item: NewsBias,
+    source_stats: dict[str, dict],
+    direction_stats: dict[str, dict],
+) -> NewsBias:
+    if item.bias not in {"LONG", "SHORT"}:
+        return item
+
+    source_row = source_stats.get(item.source, {})
+    direction_row = direction_stats.get(item.bias, {})
+    source_total = int(source_row.get("total_count") or 0)
+    direction_total = int(direction_row.get("total_count") or 0)
+    source_factor = outcome_quality_factor(source_total, int(source_row.get("favorable_count") or 0))
+    direction_factor = outcome_quality_factor(direction_total, int(direction_row.get("favorable_count") or 0))
+    combined_factor = max(0.80, min(1.20, source_factor * direction_factor))
+    sample = min(value for value in (source_total, direction_total) if value > 0) if source_total or direction_total else 0
+    reason_parts: list[str] = []
+    if source_total >= 12:
+        reason_parts.append(f"источник {float(source_row.get('win_rate_pct') or 0.0):.1f}% из {source_total}")
+    if direction_total >= 12:
+        direction_label = "лонг" if item.bias == "LONG" else "шорт"
+        reason_parts.append(f"{direction_label} {float(direction_row.get('win_rate_pct') or 0.0):.1f}% из {direction_total}")
+    if not reason_parts:
+        return item
+
+    strength = item.strength
+    actionability = item.actionability
+    if combined_factor <= 0.85:
+        strength = {"HIGH": "MEDIUM", "MEDIUM": "LOW"}.get(strength, strength)
+        if actionability == "ACTION":
+            actionability = "WATCH"
+
+    return replace(
+        item,
+        strength=strength,
+        actionability=actionability,
+        score=round(item.score * combined_factor, 2),
+        calibration_factor=round(combined_factor, 3),
+        calibration_sample=sample,
+        calibration_reason="; ".join(reason_parts),
+    )
+
+
+def calibrate_news_biases(
+    biases: list[NewsBias],
+    source_rows: list[dict],
+    direction_rows: list[dict],
+) -> list[NewsBias]:
+    source_stats = {str(row.get("source") or ""): row for row in source_rows if row.get("source")}
+    direction_stats = {str(row.get("label") or "").upper(): row for row in direction_rows if row.get("label")}
+    return [calibrate_news_bias(item, source_stats, direction_stats) for item in biases]
 
 
 def classify_strength(score: int, source_weight: int, speed_score: float, reliability_score: float) -> str:

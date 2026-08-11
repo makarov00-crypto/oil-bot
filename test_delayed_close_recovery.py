@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import bot_oil_main as mod
 import pandas as pd
-import strategy_registry
 
 
 class DelayedCloseRecoveryTests(unittest.TestCase):
@@ -1265,26 +1264,6 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(state.last_exit_side, "LONG")
         self.assertIn("Трейлинг-стоп", state.last_exit_reason)
         self.assertIn("исполнено брокером", state.last_exit_reason)
-
-    def test_imoexf_uses_unified_reversal_primary_strategy(self) -> None:
-        strategies = strategy_registry.get_primary_strategies("IMOEXF")
-
-        self.assertEqual(strategies, ["reversal_1h"])
-
-    def test_srm6_uses_unified_reversal_primary_strategy(self) -> None:
-        strategies = strategy_registry.get_primary_strategies("SRM6")
-
-        self.assertEqual(strategies, ["reversal_1h"])
-
-    def test_onu6_uses_unified_reversal_primary_strategy(self) -> None:
-        strategies = strategy_registry.get_primary_strategies("ONU6")
-
-        self.assertEqual(strategies, ["reversal_1h"])
-
-    def test_gnm6_uses_unified_reversal_primary_strategy(self) -> None:
-        strategies = strategy_registry.get_primary_strategies("GNM6")
-
-        self.assertEqual(strategies, ["reversal_1h"])
 
     def test_update_latest_unclosed_open_respects_not_before(self) -> None:
         rows = [

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import bot_oil_main as bot
-from news_bias import NewsBias, NewsMessage, detect_news_bias, select_active_biases
+from news_bias import NewsBias, NewsMessage, calibrate_news_biases, detect_news_bias, select_active_biases
 from news_ingest import fetch_web_news_items
 
 
@@ -229,6 +229,45 @@ class NewsBiasTests(unittest.TestCase):
         biases = detect_news_bias(message)
 
         self.assertFalse(any(item.category == "газ" for item in biases))
+
+    def test_outcome_calibration_downgrades_weak_single_source_short(self) -> None:
+        message = NewsMessage(
+            channel="finamalert",
+            text="USD/RUB резко ниже, падение доллара и давление на валюту усилились.",
+            created_at=datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
+        )
+        item = next(value for value in detect_news_bias(message) if value.symbol == "USDRUBF")
+
+        calibrated = calibrate_news_biases(
+            [item],
+            [{"source": "finamalert", "total_count": 26, "favorable_count": 11, "win_rate_pct": 42.3}],
+            [{"label": "SHORT", "total_count": 38, "favorable_count": 15, "win_rate_pct": 39.5}],
+        )[0]
+
+        self.assertLessEqual(calibrated.calibration_factor, 0.85)
+        self.assertEqual(calibrated.actionability, "WATCH")
+        self.assertIn("источник 42.3%", calibrated.calibration_reason)
+        eligible, reason = bot.news_bias_trade_gate(calibrated)
+        self.assertFalse(eligible)
+        self.assertIn("точность", reason)
+
+    def test_outcome_calibration_waits_for_sufficient_sample(self) -> None:
+        message = NewsMessage(
+            channel="finam_invest",
+            text="Нефть Brent выше, рост нефти и сильный спрос поддерживают рынок.",
+            created_at=datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
+        )
+        item = next(value for value in detect_news_bias(message) if value.category == "нефть")
+
+        calibrated = calibrate_news_biases(
+            [item],
+            [{"source": "finam_invest", "total_count": 10, "favorable_count": 6, "win_rate_pct": 60.0}],
+            [{"label": "LONG", "total_count": 8, "favorable_count": 5, "win_rate_pct": 62.5}],
+        )[0]
+
+        self.assertEqual(calibrated.calibration_factor, 1.0)
+        self.assertEqual(calibrated.calibration_reason, "")
+        self.assertEqual(calibrated.actionability, item.actionability)
 
 
 if __name__ == "__main__":

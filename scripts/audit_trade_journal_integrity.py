@@ -22,6 +22,9 @@ from bot_oil_main import (
 )
 
 
+LIVE_STRATEGY_NAMES = {"reversal_1h"}
+
+
 @dataclass
 class AuditResult:
     bogus_rebuild_opens: list[dict[str, Any]]
@@ -411,7 +414,7 @@ def make_row_key(row: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def is_live_strategy_name(strategy_name: str) -> bool:
-    return str(strategy_name or "").strip().lower() == "reversal_15m"
+    return str(strategy_name or "").strip().lower() in LIVE_STRATEGY_NAMES
 
 
 def merge_recovery_close_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:

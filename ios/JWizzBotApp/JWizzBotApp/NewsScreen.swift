@@ -126,6 +126,16 @@ struct NewsScreen: View {
                                     if let aiReason = item.aiReason, !aiReason.isEmpty {
                                         InfoRow(title: "AI-разбор", value: aiSummary(for: item))
                                     }
+                                    if let calibration = calibrationSummary(for: item) {
+                                        InfoRow(title: "Накопленная точность", value: calibration)
+                                    }
+                                    if let gateReason = item.tradeGateReason, !gateReason.isEmpty {
+                                        InfoRow(
+                                            title: item.tradeEligible == true ? "Влияние на вход" : "Только наблюдение",
+                                            value: gateReason,
+                                            accent: item.tradeEligible == true ? .green : .orange
+                                        )
+                                    }
                                     if let category = item.category, !category.isEmpty {
                                         InfoRow(title: "Тема", value: category)
                                     }
@@ -294,5 +304,12 @@ struct NewsScreen: View {
             ? " · подтверждения: \((item.confirmingSources ?? []).joined(separator: ", "))"
             : ""
         return "\(label) · \(type) · скорость \(speed) · надёжность \(reliability)\(confirmations)"
+    }
+
+    private func calibrationSummary(for item: NewsBiasItem) -> String? {
+        guard let factor = item.calibrationFactor, factor != 1 else { return nil }
+        let percent = Int((factor * 100).rounded())
+        let reason = item.calibrationReason?.isEmpty == false ? " · \(item.calibrationReason!)" : ""
+        return "вес \(percent)%\(reason)"
     }
 }

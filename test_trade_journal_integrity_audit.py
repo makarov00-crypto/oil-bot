@@ -186,6 +186,53 @@ class TradeJournalIntegrityAuditTests(unittest.TestCase):
         self.assertEqual(len(audit.stale_legacy_unmatched_opens), 1)
         self.assertEqual(audit.stale_legacy_unmatched_opens[0]["symbol"], "SRM6")
 
+    def test_cleanup_preserves_unmatched_hourly_reversal_open(self) -> None:
+        row = {
+            "time": "2026-08-11T07:00:00+03:00",
+            "symbol": "BRU6",
+            "event": "OPEN",
+            "side": "LONG",
+            "price": 84.04,
+            "qty_lots": 1,
+            "strategy": "reversal_1h",
+            "source": "portfolio_confirmation",
+            "reason": "hourly signal",
+        }
+        enriched = [{**row, "_dt": audit_mod.parse_state_datetime(row["time"])}]
+
+        with patch.object(audit_mod, "load_live_position_map", return_value={}):
+            audit = audit_mod.classify_journal(enriched)
+
+        cleaned_rows, removed = audit_mod.cleanup_safe_rows(enriched, audit)
+
+        self.assertEqual(audit.stale_unmatched_open_counts, {"BRU6": 1})
+        self.assertEqual(audit.stale_legacy_unmatched_opens, [])
+        self.assertEqual(removed, 0)
+        self.assertEqual(cleaned_rows, [row])
+
+    def test_cleanup_removes_unmatched_retired_15m_reversal_open(self) -> None:
+        row = {
+            "time": "2026-05-08T10:00:00+03:00",
+            "symbol": "CNYRUBF",
+            "event": "OPEN",
+            "side": "SHORT",
+            "price": 10.95,
+            "qty_lots": 1,
+            "strategy": "reversal_15m",
+            "source": "portfolio_confirmation",
+            "reason": "retired strategy",
+        }
+        enriched = [{**row, "_dt": audit_mod.parse_state_datetime(row["time"])}]
+
+        with patch.object(audit_mod, "load_live_position_map", return_value={}):
+            audit = audit_mod.classify_journal(enriched)
+
+        cleaned_rows, removed = audit_mod.cleanup_safe_rows(enriched, audit)
+
+        self.assertEqual(audit.stale_legacy_unmatched_opens, [enriched[0]])
+        self.assertEqual(removed, 1)
+        self.assertEqual(cleaned_rows, [])
+
     def test_cleanup_safe_rows_removes_stale_legacy_open_and_merges_recovery_close(self) -> None:
         rows = [
             {

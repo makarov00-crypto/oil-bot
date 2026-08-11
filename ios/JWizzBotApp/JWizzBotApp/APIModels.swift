@@ -35,6 +35,8 @@ struct DashboardPayload: Decodable {
     let instrumentCatalog: [String: String]?
     let allocatorDecisions: [AllocatorDecision]?
     let signalObservations: SignalObservationSummary?
+    let tradeQuality: TradeQualityPayload?
+    let signalAIShadow: SignalAIShadowPayload?
 
     enum CodingKeys: String, CodingKey {
         case generatedAtMoscow = "generated_at_moscow"
@@ -53,6 +55,226 @@ struct DashboardPayload: Decodable {
         case instrumentCatalog = "instrument_catalog"
         case allocatorDecisions = "allocator_decisions"
         case signalObservations = "signal_observations"
+        case tradeQuality = "trade_quality"
+        case signalAIShadow = "signal_ai_shadow"
+    }
+}
+
+struct TradeQualityPayload: Decodable {
+    let available: Bool
+    let generatedAt: String?
+    let periodDays: Int?
+    let overview: TradeQualityOverview?
+    let bySymbol: [TradeQualitySymbol]
+    let trades: [TradeQualityTrade]
+    let missedEntries: [MissedEntryQuality]
+
+    enum CodingKeys: String, CodingKey {
+        case available
+        case generatedAt = "generated_at"
+        case periodDays = "period_days"
+        case overview
+        case bySymbol = "by_symbol"
+        case trades
+        case missedEntries = "missed_entries"
+    }
+}
+
+struct TradeQualityOverview: Decodable {
+    let closedTrades: Int?
+    let wins: Int?
+    let losses: Int?
+    let netPnlRub: Double?
+    let commissionRub: Double?
+    let commissionSharePct: Double?
+    let winRatePct: Double?
+    let profitCapturePct: Double?
+    let materialEarlyExitCount: Int?
+    let averageEarlyExit4hPct: Double?
+    let missedEntriesCount: Int?
+    let missedEntriesMove4hPct: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case closedTrades = "closed_trades"
+        case wins
+        case losses
+        case netPnlRub = "net_pnl_rub"
+        case commissionRub = "commission_rub"
+        case commissionSharePct = "commission_share_pct"
+        case winRatePct = "win_rate_pct"
+        case profitCapturePct = "profit_capture_pct"
+        case materialEarlyExitCount = "material_early_exit_count"
+        case averageEarlyExit4hPct = "average_early_exit_4h_pct"
+        case missedEntriesCount = "missed_entries_count"
+        case missedEntriesMove4hPct = "missed_entries_move_4h_pct"
+    }
+}
+
+struct TradeQualitySymbol: Decodable, Identifiable {
+    let symbol: String
+    let trades: Int?
+    let netPnlRub: Double?
+    let commissionRub: Double?
+    let winRatePct: Double?
+    let profitCapturePct: Double?
+    let averageHoldMinutes: Int?
+    let averageMfePct: Double?
+    let averageMaePct: Double?
+    let earlyExitCount: Int?
+    let averageEarlyExit4hPct: Double?
+
+    var id: String { symbol }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case trades
+        case netPnlRub = "net_pnl_rub"
+        case commissionRub = "commission_rub"
+        case winRatePct = "win_rate_pct"
+        case profitCapturePct = "profit_capture_pct"
+        case averageHoldMinutes = "average_hold_minutes"
+        case averageMfePct = "average_mfe_pct"
+        case averageMaePct = "average_mae_pct"
+        case earlyExitCount = "early_exit_count"
+        case averageEarlyExit4hPct = "average_early_exit_4h_pct"
+    }
+}
+
+struct TradeQualityTrade: Decodable, Identifiable {
+    let qualityKey: String?
+    let symbol: String
+    let side: String?
+    let entryTime: String?
+    let exitTime: String?
+    let pnlRub: Double?
+    let commissionRub: Double?
+    let exitReason: String?
+    let maxPossibleNetRub: Double?
+    let missedProfitRub: Double?
+    let hold1hNetRub: Double?
+    let hold1hDeltaRub: Double?
+    let hold2hNetRub: Double?
+    let hold2hDeltaRub: Double?
+    let hold4hNetRub: Double?
+    let hold4hDeltaRub: Double?
+    let hold8hNetRub: Double?
+    let hold8hDeltaRub: Double?
+    let shadowAIAction: String?
+    let shadowAIConfidence: Double?
+    let shadowAIReason: String?
+
+    var id: String { qualityKey ?? "\(symbol)|\(entryTime ?? "")|\(exitTime ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case qualityKey = "quality_key"
+        case symbol
+        case side
+        case entryTime = "entry_time"
+        case exitTime = "exit_time"
+        case pnlRub = "pnl_rub"
+        case commissionRub = "commission_rub"
+        case exitReason = "exit_reason"
+        case maxPossibleNetRub = "max_possible_net_rub"
+        case missedProfitRub = "missed_profit_rub"
+        case hold1hNetRub = "hold_1h_net_rub"
+        case hold1hDeltaRub = "hold_1h_delta_rub"
+        case hold2hNetRub = "hold_2h_net_rub"
+        case hold2hDeltaRub = "hold_2h_delta_rub"
+        case hold4hNetRub = "hold_4h_net_rub"
+        case hold4hDeltaRub = "hold_4h_delta_rub"
+        case hold8hNetRub = "hold_8h_net_rub"
+        case hold8hDeltaRub = "hold_8h_delta_rub"
+        case shadowAIAction = "shadow_ai_action"
+        case shadowAIConfidence = "shadow_ai_confidence"
+        case shadowAIReason = "shadow_ai_reason"
+    }
+}
+
+struct MissedEntryQuality: Decodable, Identifiable {
+    let observationUID: String?
+    let symbol: String
+    let signal: String?
+    let observedAt: String?
+    let sourceLabel: String?
+    let reason: String?
+    let move1hPct: Double?
+    let move2hPct: Double?
+    let move4hPct: Double?
+    let move8hPct: Double?
+    let move8hRub: Double?
+
+    var id: String { observationUID ?? "\(symbol)|\(observedAt ?? "")|\(signal ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case observationUID = "observation_uid"
+        case symbol
+        case signal
+        case observedAt = "observed_at"
+        case sourceLabel = "source_label"
+        case reason
+        case move1hPct = "move_1h_pct"
+        case move2hPct = "move_2h_pct"
+        case move4hPct = "move_4h_pct"
+        case move8hPct = "move_8h_pct"
+        case move8hRub = "move_8h_rub"
+    }
+}
+
+struct SignalAIShadowPayload: Decodable {
+    let enabled: Bool?
+    let count: Int?
+    let supporting: Int?
+    let abstaining: Int?
+    let reviews: [SignalAIShadowReview]
+}
+
+struct SignalAIShadowReview: Decodable, Identifiable {
+    let key: String
+    let time: String?
+    let symbol: String?
+    let signal: String?
+    let candleTime: String?
+    let review: SignalAIShadowDecision?
+    let outcomes: [String: SignalAIShadowOutcome]
+
+    var id: String { key }
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case time
+        case symbol
+        case signal
+        case candleTime = "candle_time"
+        case review
+        case outcomes = "shadow_ai_outcomes"
+    }
+}
+
+struct SignalAIShadowDecision: Decodable {
+    let action: String?
+    let direction: String?
+    let confidence: Double?
+    let reason: String?
+    let riskNote: String?
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case direction
+        case confidence
+        case reason
+        case riskNote = "risk_note"
+    }
+}
+
+struct SignalAIShadowOutcome: Decodable {
+    let favorable: Bool?
+    let movePct: Double?
+    let evaluatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case favorable
+        case movePct = "move_pct"
+        case evaluatedAt = "evaluated_at"
     }
 }
 
@@ -618,6 +840,11 @@ struct NewsBiasItem: Decodable, Identifiable {
     let messageText: String?
     let messageURL: String?
     let expiresAtMoscow: String?
+    let calibrationFactor: Double?
+    let calibrationSample: Int?
+    let calibrationReason: String?
+    let tradeEligible: Bool?
+    let tradeGateReason: String?
 
     var id: String { "\(symbol)-\(source)-\(bias)" }
 
@@ -648,6 +875,11 @@ struct NewsBiasItem: Decodable, Identifiable {
         case messageText = "message_text"
         case messageURL = "message_url"
         case expiresAtMoscow = "expires_at_moscow"
+        case calibrationFactor = "calibration_factor"
+        case calibrationSample = "calibration_sample"
+        case calibrationReason = "calibration_reason"
+        case tradeEligible = "trade_eligible"
+        case tradeGateReason = "trade_gate_reason"
     }
 }
 

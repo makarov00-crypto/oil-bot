@@ -5337,6 +5337,13 @@ def build_dashboard_html() -> str:
       return reason ? `только наблюдение · ${reason}` : 'только наблюдение';
     }
 
+    function formatNewsCalibration(item) {
+      const factor = Number(item.calibration_factor);
+      if (!Number.isFinite(factor) || factor === 1) return '';
+      const reason = String(item.calibration_reason || '').trim();
+      return `исторический вес ${Math.round(factor * 100)}%${reason ? ` · ${reason}` : ''}`;
+    }
+
     function shortNewsText(value, maxLength = 120) {
       const text = String(value || '').replace(/\\s+/g, ' ').trim();
       if (!text) return '-';
@@ -6180,6 +6187,7 @@ def build_dashboard_html() -> str:
         const whatMatters = formatNewsWhatMatters(item);
         const tradeGate = formatNewsTradeGate(item);
         const tradeGateShort = formatNewsDecisionReason(item);
+        const calibration = formatNewsCalibration(item);
         const aiSummary = item.ai_reason
           ? shortNewsText(item.ai_reason, 150)
           : shortNewsText(reasonText, 150);
@@ -6187,6 +6195,7 @@ def build_dashboard_html() -> str:
         const nowText = `${formatNewsHorizon(item.horizon || '')} · ${formatStrength(item.strength || '-')}`;
         const detailLines = [
           `${formatNewsCategory(item.category || '')} · ${nowText}`,
+          calibration,
           item.topics && item.topics.length ? `темы: ${item.topics.slice(0, 3).join(', ')}` : '',
           `до ${item.expires_at_moscow || '-'}`,
         ].filter(Boolean);
