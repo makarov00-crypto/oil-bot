@@ -308,7 +308,47 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "HOLD")
         self.assertIn("long не подтверждён", reason)
 
-    def test_unified_reversal_rejects_unconfirmed_trend_continuation_without_fresh_cross(self) -> None:
+    def test_unified_reversal_allows_strong_trend_continuation_without_recent_cross(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.0, "ema20": 99.6, "ema50": 99.1, "rsi": 51.0, "macd": 0.08, "macd_signal": 0.02, "ao": 0.16},
+                {"close": 100.3, "ema20": 99.8, "ema50": 99.2, "rsi": 53.0, "macd": 0.10, "macd_signal": 0.03, "ao": 0.18},
+                {"close": 100.7, "ema20": 100.0, "ema50": 99.35, "rsi": 55.0, "macd": 0.13, "macd_signal": 0.05, "ao": 0.20},
+                {"close": 101.1, "ema20": 100.25, "ema50": 99.55, "rsi": 57.0, "macd": 0.16, "macd_signal": 0.07, "ao": 0.23},
+                {"close": 101.5, "ema20": 100.55, "ema50": 99.80, "rsi": 59.0, "macd": 0.20, "macd_signal": 0.10, "ao": 0.26},
+                {"close": 101.9, "ema20": 100.90, "ema50": 100.10, "rsi": 61.0, "macd": 0.24, "macd_signal": 0.13, "ao": 0.30},
+                {"close": 102.2, "ema20": 101.35, "ema50": 100.40, "rsi": 63.0, "macd": 0.28, "macd_signal": 0.17, "ao": 0.34},
+                {
+                    "open": 102.0,
+                    "close": 102.8,
+                    "high": 102.9,
+                    "low": 101.9,
+                    "ema20": 102.32,
+                    "ema50": 100.75,
+                    "rsi": 65.0,
+                    "macd": 0.32,
+                    "macd_signal": 0.21,
+                    "ao": 0.40,
+                    "volume": 135.0,
+                    "volume_avg": 100.0,
+                    "body": 0.80,
+                    "body_avg": 0.60,
+                    "atr": 0.30,
+                    "bb_upper": 103.2,
+                    "bb_lower": 99.7,
+                    "stoch_k": 84.0,
+                    "stoch_d": 78.0,
+                },
+            ]
+        )
+        instrument = InstrumentConfig(symbol="ONU6", figi="FIGI", display_name="Ozon")
+
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("MACD cross вверх: нет", reason)
+
+    def test_unified_reversal_rejects_low_volume_trend_continuation_without_fresh_cross(self) -> None:
         df = candle_rows(
             [
                 {"close": 100.0, "ema20": 100.4, "ema50": 100.9, "rsi": 49.0, "macd": -0.08, "macd_signal": -0.02, "ao": -0.16},
@@ -329,7 +369,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
                     "macd": -0.31,
                     "macd_signal": -0.20,
                     "ao": -0.38,
-                    "volume": 125.0,
+                    "volume": 105.0,
                     "volume_avg": 100.0,
                     "body": 0.60,
                     "body_avg": 0.60,
@@ -346,7 +386,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
         self.assertEqual(signal, "HOLD")
-        self.assertIn("RSI ещё не развернулся достаточно уверенно", reason)
+        self.assertIn("нет свежего MACD cross вниз", reason)
 
     def test_unified_reversal_entry_edge_is_not_crushed_by_early_compression(self) -> None:
         state = mod.InstrumentState(

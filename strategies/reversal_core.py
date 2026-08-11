@@ -546,7 +546,9 @@ def evaluate_signal_core(
         regime_allows_long
         and (trend_up or expansion_up or early_long_ok)
         and (recent_long_cross or trend_long_continuation_ok)
-        and macd_long_ok
+        # A qualified trend continuation deliberately has no recent MACD cross.
+        # Requiring macd_long_ok here made that branch unreachable.
+        and (macd_long_ok or trend_long_continuation_ok)
         and ao_long_ok
         and rsi_long_ok
         and entry_volume_ok
@@ -560,7 +562,7 @@ def evaluate_signal_core(
         regime_allows_short
         and (trend_down or expansion_down or early_short_ok)
         and (recent_short_cross or trend_short_continuation_ok)
-        and macd_short_ok
+        and (macd_short_ok or trend_short_continuation_ok)
         and ao_short_ok
         and rsi_short_ok
         and entry_volume_ok
