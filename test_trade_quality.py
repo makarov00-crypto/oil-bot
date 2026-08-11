@@ -112,6 +112,31 @@ class TradeQualityTests(unittest.TestCase):
         self.assertEqual(summary[0]["early_exit_count"], 1)
         self.assertEqual(summary[0]["average_post_exit_4h_pct"], 2.0)
 
+    def test_quality_summary_combines_contracts_after_rollover(self) -> None:
+        trades = [
+            {
+                "symbol": "BMQ6",
+                "entry_time": self.entry.isoformat(),
+                "exit_time": self.exit.isoformat(),
+                "pnl_rub": 100.0,
+                "commission_rub": 10.0,
+            },
+            {
+                "symbol": "BRU6",
+                "entry_time": self.entry.isoformat(),
+                "exit_time": self.exit.isoformat(),
+                "pnl_rub": 200.0,
+                "commission_rub": 12.0,
+            },
+        ]
+
+        summary = summarize_trade_quality(trades)
+
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary[0]["symbol"], "BRU6")
+        self.assertEqual(summary[0]["trades"], 2)
+        self.assertEqual(summary[0]["net_pnl_rub"], 300.0)
+
     def test_overview_uses_journal_pnl_as_net_result_without_second_commission_deduction(self) -> None:
         trades = [
             {"pnl_rub": 100.0, "commission_rub": 10.0, "mfe_pct": 2.0, "realized_price_pct": 1.0},

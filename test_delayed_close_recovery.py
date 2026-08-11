@@ -999,6 +999,54 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         ]
         self.assertEqual(mod.get_active_journal_lots("USDRUBF", "SHORT", rows), 1)
 
+    def test_active_journal_lots_uses_open_from_previous_day(self) -> None:
+        rows = [
+            {
+                "time": "2026-04-09T23:40:00+03:00",
+                "symbol": "USDRUBF",
+                "side": "SHORT",
+                "event": "OPEN",
+                "qty_lots": 3,
+            }
+        ]
+
+        with patch.object(mod, "load_trade_journal", return_value=rows), patch.object(
+            mod, "get_today_trade_journal_rows", return_value=[]
+        ):
+            self.assertEqual(mod.get_active_journal_lots("USDRUBF", "SHORT"), 3)
+
+    def test_recovered_close_updates_strategy_exit_memory(self) -> None:
+        state = mod.InstrumentState(
+            position_side="FLAT",
+            last_exit_time="2026-04-10T10:05:02+03:00",
+            last_exit_side="SHORT",
+            last_exit_pnl_rub=0.0,
+            last_exit_reason="Внешнее закрытие у брокера",
+        )
+        saved: dict[str, object] = {}
+        row = {
+            "time": "2026-04-10T10:05:00+03:00",
+            "symbol": "USDRUBF",
+            "side": "SHORT",
+            "event": "CLOSE",
+            "price": 78.25,
+            "net_pnl_rub": -143.75,
+            "reason": "Стоп-лосс (восстановлено по операциям брокера)",
+        }
+
+        with patch.object(mod, "load_state", return_value=state), patch.object(
+            mod,
+            "save_state",
+            side_effect=lambda symbol, updated_state: saved.update(symbol=symbol, state=updated_state),
+        ):
+            updated = mod.apply_recovered_close_to_state(row)
+
+        self.assertTrue(updated)
+        self.assertEqual(saved["symbol"], "USDRUBF")
+        self.assertEqual(state.last_exit_pnl_rub, -143.75)
+        self.assertEqual(state.last_exit_price, 78.25)
+        self.assertEqual(state.execution_status, "recovered_close")
+
     def test_old_reentry_exit_from_previous_trading_day_does_not_block_brk6(self) -> None:
         instrument = mod.InstrumentConfig(
             symbol="BMM6",

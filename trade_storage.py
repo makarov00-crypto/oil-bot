@@ -702,6 +702,32 @@ def update_signal_observation_outcome(
         )
 
 
+def mark_signal_observation_outcome_unavailable(
+    db_path: Path,
+    observation_uid: str,
+    *,
+    checked_at: str,
+    note: str,
+) -> None:
+    update_signal_observation_context(
+        db_path,
+        observation_uid,
+        {
+            "outcome_status": "unavailable",
+            "outcome_note": str(note or "историческая цена недоступна"),
+        },
+    )
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE signal_observations
+            SET evaluated_at = ?, current_price = NULL, move_pct = NULL, favorable = NULL
+            WHERE observation_uid = ?
+            """,
+            (checked_at, observation_uid),
+        )
+
+
 def update_signal_observation_context(
     db_path: Path,
     observation_uid: str,

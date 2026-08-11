@@ -71,13 +71,30 @@ def list_active_contracts() -> list[dict[str, Any]]:
 
 def get_active_contract_symbol(template_symbol: str) -> str | None:
     normalized_template = _normalize_symbol(template_symbol)
-    for item in list_active_contracts():
-        if item["template_symbol"] != normalized_template:
-            continue
+    contracts = list_active_contracts()
+    current_symbol = normalized_template
+    visited: set[str] = set()
+    while current_symbol and current_symbol not in visited:
+        visited.add(current_symbol)
+        item = next(
+            (row for row in contracts if row["template_symbol"] == current_symbol),
+            None,
+        )
+        if item is None:
+            return current_symbol
         if item["disabled"]:
             return None
-        return item["active_symbol"] or normalized_template
-    return normalized_template
+        next_symbol = item["active_symbol"] or current_symbol
+        if next_symbol == current_symbol:
+            return current_symbol
+        current_symbol = next_symbol
+    return current_symbol or normalized_template
+
+
+def get_instrument_history_symbol(symbol: str) -> str:
+    """Return the current contract identity used for cross-roll analytics."""
+    normalized_symbol = _normalize_symbol(symbol)
+    return get_active_contract_symbol(normalized_symbol) or normalized_symbol
 
 
 def get_active_contract_template(symbol: str) -> str | None:
@@ -117,9 +134,33 @@ def upsert_active_contract(template_symbol: str, active_symbol: str | None, *, d
     for item in contracts:
         if _normalize_symbol(item.get("template_symbol")) != normalized_template:
             continue
+        previous_active = _normalize_symbol(item.get("active_symbol"))
         item["active_symbol"] = normalized_active
         item["disabled"] = bool(disabled)
         item["updated_at"] = now_iso
+
+        if previous_active and normalized_active and previous_active != normalized_active:
+            for related_item in contracts:
+                if related_item is item:
+                    continue
+                if _normalize_symbol(related_item.get("active_symbol")) != previous_active:
+                    continue
+                related_item["active_symbol"] = normalized_active
+                related_item["updated_at"] = now_iso
+
+            has_previous_alias = any(
+                _normalize_symbol(related_item.get("template_symbol")) == previous_active
+                for related_item in contracts
+            )
+            if previous_active != normalized_template and not has_previous_alias:
+                contracts.append(
+                    {
+                        "template_symbol": previous_active,
+                        "active_symbol": normalized_active,
+                        "disabled": False,
+                        "updated_at": now_iso,
+                    }
+                )
         _write_payload(payload)
         return {
             "status": "updated",

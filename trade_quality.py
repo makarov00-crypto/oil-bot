@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
+from active_contracts import get_instrument_history_symbol
+
 
 def build_trade_key(trade: dict[str, Any]) -> str:
     return "|".join(
@@ -220,7 +222,8 @@ def is_material_early_exit(trade: dict[str, Any]) -> bool:
 def summarize_trade_quality(trades: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for trade in trades:
-        grouped.setdefault(str(trade.get("symbol") or ""), []).append(trade)
+        symbol = get_instrument_history_symbol(str(trade.get("symbol") or ""))
+        grouped.setdefault(symbol, []).append(trade)
     result: list[dict[str, Any]] = []
     for symbol, rows in grouped.items():
         if not symbol:

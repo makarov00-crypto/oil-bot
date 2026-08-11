@@ -19,7 +19,7 @@ import pandas as pd
 import requests
 import ta
 from dotenv import load_dotenv
-from active_contracts import replace_with_active_symbols
+from active_contracts import get_instrument_history_symbol, replace_with_active_symbols
 from custom_instruments import merge_with_custom_symbols
 from instrument_groups import (
     DEFAULT_SYMBOLS,
@@ -55,6 +55,7 @@ from trade_storage import (
     load_signal_observations,
     load_trade_rows as load_trade_rows_from_storage,
     mark_news_event_outcome_unavailable,
+    mark_signal_observation_outcome_unavailable,
     summarize_news_analytics,
     summarize_news_source_stats,
     update_news_event_outcome,
@@ -134,6 +135,7 @@ TRADE_QUALITY_ANALYTICS_VERSION = 5
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
+SIGNAL_OUTCOME_MAX_WAIT = timedelta(days=3)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
 MOEX_DERIVATIVES_BLOG_URL = "https://teletype.in/@moex_derivatives"
 MOEX_ISS_FUTURES_HISTORY_URL = "https://iss.moex.com/iss/history/engines/futures/markets/forts/securities"
@@ -1184,9 +1186,6 @@ def update_signal_observation_outcomes(
     updated = 0
     for row in rows:
         symbol = str(row.get("symbol") or "").upper()
-        instrument = instruments_by_symbol.get(symbol)
-        if instrument is None:
-            continue
         observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
         if observed_at is None:
             continue
@@ -1194,11 +1193,39 @@ def update_signal_observation_outcomes(
         target_time = observed_at + timedelta(minutes=max(1, row_horizon))
         if now < target_time:
             continue
+        instrument = instruments_by_symbol.get(symbol)
+        if instrument is None:
+            if now >= target_time + SIGNAL_OUTCOME_MAX_WAIT:
+                mark_signal_observation_outcome_unavailable(
+                    TRADE_DB_PATH,
+                    str(row.get("observation_uid") or ""),
+                    checked_at=now.astimezone(MOSCOW_TZ).isoformat(),
+                    note="контракт больше не входит в активный список, историческая цена недоступна",
+                )
+                updated += 1
+            continue
         observed_price = float(row.get("observed_price") or 0.0)
         if observed_price <= 0.0:
+            if now >= target_time + SIGNAL_OUTCOME_MAX_WAIT:
+                mark_signal_observation_outcome_unavailable(
+                    TRADE_DB_PATH,
+                    str(row.get("observation_uid") or ""),
+                    checked_at=now.astimezone(MOSCOW_TZ).isoformat(),
+                    note="не удалось зафиксировать цену в момент сигнала",
+                )
+                updated += 1
             continue
         horizon_snapshot = get_price_near_observation_horizon(client, config, instrument, target_time)
         if horizon_snapshot is None:
+            if now >= target_time + SIGNAL_OUTCOME_MAX_WAIT:
+                mark_signal_observation_outcome_unavailable(
+                    TRADE_DB_PATH,
+                    str(row.get("observation_uid") or ""),
+                    checked_at=now.astimezone(MOSCOW_TZ).isoformat(),
+                    note="не найдена рыночная цена в течение трёх дней после горизонта",
+                )
+                updated += 1
+                continue
             logging.info(
                 "symbol=%s signal_observation_outcome_wait horizon_price_unavailable target_time=%s",
                 symbol,
@@ -1359,14 +1386,14 @@ def build_trade_quality_analytics(
         entry_time = parse_state_datetime(str(trade.get("entry_time") or ""))
         exit_time = parse_state_datetime(str(trade.get("exit_time") or ""))
         instrument = by_symbol.get(str(trade.get("symbol") or "").upper())
-        if entry_time is None or exit_time is None or instrument is None:
+        if entry_time is None or exit_time is None:
             continue
         quality_key = build_trade_key(trade)
         cached_trade = cached_trades.get(quality_key)
         entry_time = entry_time.astimezone(MOSCOW_TZ)
         exit_time = exit_time.astimezone(MOSCOW_TZ)
         enriched = {**(cached_trade or {}), **trade, "quality_key": quality_key}
-        if enriched.get("mfe_pct") is None:
+        if enriched.get("mfe_pct") is None and instrument is not None:
             entry_hour = entry_time.replace(minute=0, second=0, microsecond=0)
             exit_hour = exit_time.replace(minute=0, second=0, microsecond=0)
             hourly_rows = get_candle_rows_in_range(
@@ -1397,6 +1424,8 @@ def build_trade_quality_analytics(
             enriched.update(calculate_trade_excursion(trade, hourly_rows, boundary_rows))
         for hours in (1, 2, 4, 8):
             if enriched.get(f"post_exit_{hours}h_pct") is not None:
+                continue
+            if instrument is None:
                 continue
             snapshot = get_hourly_horizon_price(client, config, instrument, exit_time + timedelta(hours=hours))
             if snapshot is None:
@@ -2050,7 +2079,7 @@ def get_active_journal_lots(symbol: str, side: str, rows: list[dict[str, Any]] |
     target_symbol = symbol.upper()
     target_side = side.upper()
     active_lots = 0
-    source_rows = rows if rows is not None else get_today_trade_journal_rows()
+    source_rows = rows if rows is not None else load_trade_journal()
     for row in source_rows:
         if str(row.get("symbol", "")).upper() != target_symbol:
             continue
@@ -2063,6 +2092,25 @@ def get_active_journal_lots(symbol: str, side: str, rows: list[dict[str, Any]] |
         elif event == "CLOSE":
             active_lots = max(0, active_lots - qty)
     return max(0, active_lots)
+
+
+def apply_recovered_close_to_state(row: dict[str, Any]) -> bool:
+    symbol = str(row.get("symbol") or "").strip().upper()
+    side = str(row.get("side") or "").strip().upper()
+    close_dt = parse_state_datetime(str(row.get("time") or ""))
+    if not symbol or side not in {"LONG", "SHORT"} or close_dt is None:
+        return False
+
+    state = load_state(symbol)
+    state.last_exit_time = close_dt.isoformat()
+    state.last_exit_side = side
+    state.last_exit_reason = str(row.get("reason") or "")
+    state.last_exit_pnl_rub = float(row.get("net_pnl_rub") or row.get("pnl_rub") or 0.0)
+    state.last_exit_price = float(row.get("price") or 0.0)
+    if state.position_side == "FLAT":
+        state.execution_status = "recovered_close"
+    save_state(symbol, state)
+    return True
 
 
 def has_journal_event_since(
@@ -3099,6 +3147,17 @@ def reconcile_missing_trade_closes_from_broker(
     rows.extend(aggregated_matches)
     rows.sort(key=lambda row: parse_state_datetime(str(row.get("time") or "")) or datetime.min.replace(tzinfo=UTC))
     save_trade_journal(rows)
+    recovered_symbols = {str(row.get("symbol") or "").upper() for row in aggregated_matches}
+    latest_close_by_symbol: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        row_symbol = str(row.get("symbol") or "").upper()
+        if row_symbol not in recovered_symbols or str(row.get("event") or "").upper() != "CLOSE":
+            continue
+        latest_close_by_symbol[row_symbol] = row
+    recovered_row_ids = {id(row) for row in aggregated_matches}
+    for row in latest_close_by_symbol.values():
+        if id(row) in recovered_row_ids:
+            apply_recovered_close_to_state(row)
     logging.warning(
         "journal_auto_recovery recovered_closes=%s symbols=%s skipped_legacy_unmatched=%s",
         len(aggregated_matches),
@@ -4013,6 +4072,7 @@ def apply_news_bias_to_signal(signal: str, reason: str, news_bias: NewsBias | No
 
 def get_strategy_profile(config: BotConfig, instrument: InstrumentConfig) -> StrategyProfile:
     symbol = instrument.symbol
+    template_symbol = get_symbol_template(symbol)
     group = get_instrument_group(symbol).name
 
     if group == "equity_index":
@@ -4063,7 +4123,7 @@ def get_strategy_profile(config: BotConfig, instrument: InstrumentConfig) -> Str
             allow_short=True,
         )
 
-    if symbol == "GNM6":
+    if template_symbol == "GNM6":
         return StrategyProfile(
             ema_slope_threshold=0.0,
             near_ema20_pct=0.0065,
@@ -6552,11 +6612,12 @@ def calculate_recent_strategy_performance(
             )
         ]
     target_symbol = str(symbol or "").upper()
+    target_history_symbol = get_instrument_history_symbol(target_symbol)
     target_strategy = str(strategy_name or "")
     closed_trades = [
         trade
         for trade in aggregate_closed_strategy_trades(source_rows)
-        if str(trade.get("symbol", "")).upper() == target_symbol
+        if get_instrument_history_symbol(str(trade.get("symbol", ""))) == target_history_symbol
         and str(trade.get("strategy", "") or "") == target_strategy
     ]
     total_net = 0.0
@@ -6608,12 +6669,13 @@ def calculate_recent_strategy_regime_performance(
             )
         ]
     target_symbol = str(symbol or "").upper()
+    target_history_symbol = get_instrument_history_symbol(target_symbol)
     target_strategy = str(strategy_name or "")
     target_regime = str(market_regime or "").strip().lower()
     closed_trades = [
         trade
         for trade in aggregate_closed_strategy_trades(source_rows)
-        if str(trade.get("symbol", "")).upper() == target_symbol
+        if get_instrument_history_symbol(str(trade.get("symbol", ""))) == target_history_symbol
         and str(trade.get("strategy", "") or "") == target_strategy
         and str(trade.get("market_regime") or "").strip().lower() == target_regime
     ]
@@ -7187,11 +7249,12 @@ def get_margin_headroom_rub(client: Client, config: BotConfig, snapshot: Account
 
 
 def get_instrument_allocation_weight(symbol: str) -> tuple[str, float]:
+    template_symbol = get_symbol_template(symbol)
     if is_brent_symbol(symbol) or is_natural_gas_symbol(symbol) or symbol == "USDRUBF":
         return "тяжёлый", 0.85
-    if symbol in {"GNM6", "SRM6"}:
+    if template_symbol in {"GNM6", "SRM6"}:
         return "средний", 1.0
-    if symbol in {"IMOEXF", "CNYRUBF"}:
+    if template_symbol in {"IMOEXF", "CNYRUBF"}:
         return "лёгкий", 1.35
     return "базовый", 1.0
 
@@ -7427,7 +7490,7 @@ def calculate_signal_learning_priority_adjustment(
     symbol: str,
     strategy_name: str,
     *,
-    lookback_days: int = 15,
+    lookback_days: int = 30,
     min_evaluated: int = 5,
 ) -> tuple[float, str]:
     signal = str(state.last_signal or "").strip().upper()
@@ -7449,28 +7512,55 @@ def calculate_signal_learning_priority_adjustment(
             logging.info("signal_learning_history_unavailable symbol=%s error=%s", symbol, error)
             return 0.0, ""
 
-    matched: list[dict[str, Any]] = []
+    target_symbol = get_instrument_history_symbol(symbol)
+    family_rows: list[dict[str, Any]] = []
     for row in rows:
         if not row.get("evaluated_at"):
             continue
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
-        row_edge = str((context or {}).get("entry_edge_label") or "").strip().lower()
+        if str(context.get("outcome_status") or "").lower() == "unavailable":
+            continue
         row_horizon_minutes = int(row.get("horizon_minutes") or 0)
         if (
-            str(row.get("symbol") or "").upper() == symbol.upper()
+            get_instrument_history_symbol(str(row.get("symbol") or "")) == target_symbol
             and str(row.get("signal") or "").upper() == signal
             and str(row.get("strategy") or "") == str(strategy_name or "")
-            and str(row.get("market_regime") or "").strip() == market_regime
-            and str(row.get("setup_quality") or "").strip() == setup_quality
-            and row_edge == edge_label
             and row_horizon_minutes == expected_horizon_minutes
         ):
-            matched.append(row)
+            family_rows.append(row)
+
+    exact_rows: list[dict[str, Any]] = []
+    regime_rows: list[dict[str, Any]] = []
+    for row in family_rows:
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        row_edge = str((context or {}).get("entry_edge_label") or "").strip().lower()
+        row_regime = str(row.get("market_regime") or "").strip()
+        if row_regime == market_regime:
+            regime_rows.append(row)
+        if (
+            row_regime == market_regime
+            and str(row.get("setup_quality") or "").strip() == setup_quality
+            and row_edge == edge_label
+        ):
+            exact_rows.append(row)
+
+    matched = exact_rows
+    learning_scope = "связки"
+    required_sample = min_evaluated
+    if len(matched) < required_sample and len(regime_rows) >= max(6, min_evaluated):
+        matched = regime_rows
+        learning_scope = "режима"
+        required_sample = max(6, min_evaluated)
+    if len(matched) < required_sample and len(family_rows) >= max(10, min_evaluated * 2):
+        matched = family_rows
+        learning_scope = "направления"
+        required_sample = max(10, min_evaluated * 2)
 
     evaluated = len(matched)
-    if evaluated < min_evaluated:
-        if evaluated > 0:
-            return 0.0, f"обучение связки: {evaluated} наблюд., мало данных"
+    if evaluated < required_sample:
+        available = max(len(exact_rows), len(regime_rows), len(family_rows))
+        if available > 0:
+            return 0.0, f"обучение инструмента: {available} наблюд., мало данных"
         return 0.0, ""
 
     favorable = sum(1 for row in matched if row.get("favorable") is True)
@@ -7488,7 +7578,7 @@ def calculate_signal_learning_priority_adjustment(
     if confirmation_rate >= 0.70 and avg_move_pct > 0.0:
         if edge_score < 0.45:
             return 0.0, (
-                f"обучение связки: {confirmation_rate * 100:.0f}% подтверждений, "
+                f"обучение {learning_scope}: {confirmation_rate * 100:.0f}% подтверждений, "
                 "но текущее качество входа слабое, бонус не применён"
             )
         adjustment = 0.03 + min(0.04, (confirmation_rate - 0.70) / 0.30 * 0.04) + min(0.02, avg_move_pct / 2.0)
@@ -7503,13 +7593,13 @@ def calculate_signal_learning_priority_adjustment(
 
     if abs(adjustment) < 0.005:
         return 0.0, (
-            f"обучение связки нейтрально: {confirmation_rate * 100:.0f}% подтверждений, "
+            f"обучение {learning_scope} нейтрально: {confirmation_rate * 100:.0f}% подтверждений, "
             f"{evaluated} наблюд., среднее движение {avg_move_pct:.2f}%"
         )
 
     direction = "бонус" if adjustment > 0 else "штраф"
     return adjustment, (
-        f"обучение связки: {direction} {adjustment:+.2f}, "
+        f"обучение {learning_scope}: {direction} {adjustment:+.2f}, "
         f"{confirmation_rate * 100:.0f}% подтверждений, {evaluated} наблюд., "
         f"среднее движение {avg_move_pct:.2f}%"
     )
@@ -8100,7 +8190,7 @@ def calculate_position_sizing_context(
         ):
             raw_qty = 1
         elif (
-            instrument.symbol == "SRM6"
+            get_symbol_template(instrument.symbol) == "SRM6"
             and signal == "SHORT"
             and near_min_lot_by_working
             and conviction_weight >= 1.15
@@ -8779,6 +8869,7 @@ def position_reentry_allowed(
     signal_df: pd.DataFrame | None = None,
 ) -> tuple[bool, str]:
     is_unified_reversal = uses_unified_reversal(instrument.symbol)
+    template_symbol = get_symbol_template(instrument.symbol)
 
     def exit_reason_has_macd_ema_reversal() -> bool:
         reason = str(state.last_exit_reason or "").lower()
@@ -8977,7 +9068,7 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 60)
         if is_natural_gas_symbol(instrument.symbol) and "Трейлинг-стоп" in state.last_exit_reason:
             cooldown_minutes = max(cooldown_minutes, 90)
-    elif instrument.symbol == "GNM6":
+    elif template_symbol == "GNM6":
         if state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
             cooldown_minutes = max(cooldown_minutes, 35)
         if state.last_exit_pnl_rub < 0:
@@ -8999,7 +9090,7 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 45)
         if state.last_exit_side and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             cooldown_minutes = max(cooldown_minutes, 75)
-    elif instrument.symbol == "SRM6":
+    elif template_symbol == "SRM6":
         if "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             cooldown_minutes = max(cooldown_minutes, 25)
         if state.last_exit_pnl_rub < 0:
@@ -9024,7 +9115,7 @@ def position_reentry_allowed(
             cooldown_minutes = max(cooldown_minutes, 90)
         if "Трейлинг-стоп" in state.last_exit_reason:
             cooldown_minutes = max(cooldown_minutes, 90)
-    elif instrument.symbol == "IMOEXF":
+    elif template_symbol == "IMOEXF":
         if state.last_exit_pnl_rub < 0:
             cooldown_minutes = 35
         if state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
@@ -9037,7 +9128,7 @@ def position_reentry_allowed(
             min_steps = 2 if not is_natural_gas_symbol(instrument.symbol) else 3
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=min_steps):
                 return False, f"для {instrument.symbol} повторный вход после фиксации прибыли разрешён только после нового экстремума."
-        if not is_unified_reversal and instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+        if not is_unified_reversal and template_symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
         if brk6_fresh_impulse_override():
@@ -9051,10 +9142,10 @@ def position_reentry_allowed(
         if is_natural_gas_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после нового экстремума."
-        if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
+        if template_symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, "для GNM6 повторный LONG после прибыльного выхода разрешён только после нового экстремума."
-        if not is_unified_reversal and instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if not is_unified_reversal and template_symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."
         return True, ""
@@ -9068,7 +9159,7 @@ def position_reentry_allowed(
             min_steps = 2 if not is_natural_gas_symbol(instrument.symbol) else 3
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=min_steps):
                 return False, f"для {instrument.symbol} повторный вход после фиксации прибыли разрешён только после нового экстремума."
-        if not is_unified_reversal and instrument.symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
+        if not is_unified_reversal and template_symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
         if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
@@ -9080,10 +9171,10 @@ def position_reentry_allowed(
         if is_natural_gas_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=4):
                 return False, f"для {instrument.symbol} повторный вход после убыточного выхода разрешён только после нового экстремума."
-        if instrument.symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
+        if template_symbol == "GNM6" and state.last_exit_side == signal == "LONG" and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=3):
                 return False, "для GNM6 повторный LONG после прибыльного выхода разрешён только после нового экстремума."
-        if not is_unified_reversal and instrument.symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
+        if not is_unified_reversal and template_symbol == "IMOEXF" and state.last_exit_side == signal and state.last_exit_pnl_rub < 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, "для IMOEXF повторный вход после убыточного выхода разрешён только после нового экстремума."
         return True, ""
@@ -9829,6 +9920,7 @@ def check_exit(
         return
 
     price = get_last_price(client, instrument)
+    template_symbol = get_symbol_template(instrument.symbol)
     if not state.entry_time:
         state.entry_time = datetime.now(UTC).isoformat()
     state.max_price = max(state.max_price or price, price)
@@ -9849,13 +9941,13 @@ def check_exit(
             breakeven_profit_pct=max(exit_profile.breakeven_profit_pct, 0.0060),
             trailing_stop_pct=max(exit_profile.trailing_stop_pct, 0.0080),
         )
-    if instrument.symbol == "GNM6":
+    if template_symbol == "GNM6":
         exit_profile = ExitProfile(
             min_hold_minutes=max(exit_profile.min_hold_minutes, 30),
             breakeven_profit_pct=max(exit_profile.breakeven_profit_pct, 0.0060),
             trailing_stop_pct=max(exit_profile.trailing_stop_pct, 0.0070),
         )
-    if instrument.symbol == "VBM6":
+    if template_symbol == "VBM6":
         exit_profile = ExitProfile(
             min_hold_minutes=max(exit_profile.min_hold_minutes, 25),
             breakeven_profit_pct=max(exit_profile.breakeven_profit_pct, 0.0050),
@@ -9897,7 +9989,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = max(stop_price, state.entry_price)
         trailing_price = (state.max_price or price) * (1 - exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (template_symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_down = macd_crossed_down_with_ema_loss(exit_df)
         else:
             macd_down = (
@@ -9944,7 +10036,7 @@ def check_exit(
         if state.breakeven_armed:
             stop_price = min(stop_price, state.entry_price)
         trailing_price = (state.min_price or price) * (1 + exit_profile.trailing_stop_pct)
-        if (instrument.symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
+        if (template_symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"} or is_natural_gas_symbol(instrument.symbol) or get_instrument_group(instrument.symbol).name == "fx") and higher_tf_df is not None:
             macd_up = macd_crossed_up_with_ema_reclaim(exit_df)
         else:
             macd_up = (
@@ -10079,7 +10171,7 @@ def process_instrument(
     if (
         not uses_unified_reversal(instrument.symbol)
         and (
-            instrument.symbol in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
+            get_symbol_template(instrument.symbol) in {"GNM6", "RNM6", "SRM6", "VBM6", "IMOEXF"}
             or is_natural_gas_symbol(instrument.symbol)
             or get_instrument_group(instrument.symbol).name == "fx"
         )

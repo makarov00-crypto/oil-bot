@@ -16,6 +16,7 @@ from trade_storage import (
     load_signal_observations,
     load_trade_rows,
     mark_news_event_outcome_unavailable,
+    mark_signal_observation_outcome_unavailable,
     summarize_news_analytics,
     summarize_news_allocator_impact,
     summarize_news_source_stats,
@@ -569,6 +570,36 @@ class TradeStorageTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["decision_reason"], "повторный проход цикла")
         self.assertEqual(rows[0]["observed_price"], 80.2)
+
+    def test_signal_observation_unavailable_is_finalized_without_fake_result(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "trade_analytics.sqlite3"
+            uid = append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-04-24T10:00:00+03:00",
+                    "symbol": "BRK6",
+                    "signal": "LONG",
+                    "strategy": "reversal_1h",
+                    "decision": "deferred",
+                    "observed_price": 80.0,
+                    "horizon_minutes": 60,
+                },
+            )
+
+            mark_signal_observation_outcome_unavailable(
+                db_path,
+                uid,
+                checked_at="2026-04-28T10:00:00+03:00",
+                note="цена недоступна",
+            )
+
+            self.assertEqual(load_signal_observations(db_path, unevaluated_only=True), [])
+            row = load_signal_observations(db_path)[0]
+            self.assertEqual(row["context"]["outcome_status"], "unavailable")
+            self.assertEqual(row["context"]["outcome_note"], "цена недоступна")
+            self.assertIsNone(row["favorable"])
+            self.assertIsNone(row["move_pct"])
 
     def test_update_signal_observation_context_merges_execution_status(self) -> None:
         with TemporaryDirectory() as temp_dir:

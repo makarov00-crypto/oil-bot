@@ -5,6 +5,8 @@ import unittest
 from active_contracts import (
     get_active_contract_symbol,
     get_active_contract_template,
+    get_instrument_history_symbol,
+    list_active_contracts,
     replace_with_active_symbols,
     upsert_active_contract,
 )
@@ -59,6 +61,29 @@ class ActiveContractsTest(unittest.TestCase):
         symbols = replace_with_active_symbols(["ONU6", "GNM6"])
 
         self.assertEqual(symbols, ["GNM6"])
+
+    def test_rollover_preserves_old_contract_as_history_alias(self) -> None:
+        upsert_active_contract("BMM6", "BMQ6")
+        upsert_active_contract("BMM6", "BRU6")
+
+        self.assertEqual(get_active_contract_symbol("BMM6"), "BRU6")
+        self.assertEqual(get_active_contract_symbol("BMQ6"), "BRU6")
+        self.assertEqual(get_instrument_history_symbol("BMQ6"), "BRU6")
+        self.assertEqual(get_instrument_history_symbol("BRU6"), "BRU6")
+
+    def test_rollover_moves_all_existing_aliases_to_new_contract(self) -> None:
+        upsert_active_contract("BRK6", "BMQ6")
+        upsert_active_contract("BMM6", "BMQ6")
+
+        upsert_active_contract("BMM6", "BRU6")
+
+        contracts = {
+            item["template_symbol"]: item["active_symbol"]
+            for item in list_active_contracts()
+        }
+        self.assertEqual(contracts["BRK6"], "BRU6")
+        self.assertEqual(contracts["BMM6"], "BRU6")
+        self.assertEqual(contracts["BMQ6"], "BRU6")
 
 
 if __name__ == "__main__":

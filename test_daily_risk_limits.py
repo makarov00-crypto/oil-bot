@@ -222,6 +222,33 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertEqual(reason, "")
 
+    def test_active_contracts_keep_template_allocation_classes(self) -> None:
+        self.assertEqual(mod.get_instrument_allocation_weight("GLU6"), ("средний", 1.0))
+        self.assertEqual(mod.get_instrument_allocation_weight("SRU6"), ("средний", 1.0))
+        self.assertEqual(mod.get_instrument_allocation_weight("BRU6"), ("тяжёлый", 0.85))
+
+    def test_recent_strategy_performance_keeps_history_across_contract_rollover(self) -> None:
+        today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
+        rows = [
+            {
+                "time": f"{today}T12:00:00+03:00",
+                "event": "CLOSE",
+                "symbol": "BMQ6",
+                "strategy": "reversal_1h",
+                "net_pnl_rub": 240.0,
+            }
+        ]
+
+        with patch.object(
+            mod,
+            "get_instrument_history_symbol",
+            side_effect=lambda symbol: "BRENT" if str(symbol).upper() in {"BMQ6", "BRU6"} else str(symbol).upper(),
+        ):
+            stats = mod.calculate_recent_strategy_performance("BRU6", "reversal_1h", rows=rows)
+
+        self.assertEqual(stats["closed_count"], 1)
+        self.assertEqual(stats["net_pnl_rub"], 240.0)
+
     def test_recent_strategy_performance_ignores_previous_days(self) -> None:
         rows = [
             {"time": "2026-04-17T10:10:00+03:00", "event": "CLOSE", "symbol": "NGJ6", "strategy": "momentum_breakout", "net_pnl_rub": -220.0},
@@ -767,6 +794,50 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertGreater(score, 0.72)
         self.assertIn("мало данных", reason)
 
+    def test_signal_learning_falls_back_to_instrument_direction(self) -> None:
+        state = mod.InstrumentState(
+            last_signal="LONG",
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_entry_edge_score=0.82,
+            last_entry_edge_label="high",
+        )
+        today = mod.datetime.now(mod.MOSCOW_TZ).date()
+        rows = []
+        for index in range(10):
+            rows.append(
+                {
+                    "evaluated_at": f"{today.isoformat()}T12:{index:02d}:00+03:00",
+                    "symbol": "BMQ6",
+                    "signal": "LONG",
+                    "strategy": "reversal_1h",
+                    "market_regime": "trend_expansion" if index % 2 == 0 else "mixed",
+                    "setup_quality": "strong" if index % 3 == 0 else "moderate",
+                    "horizon_minutes": 60,
+                    "move_pct": 0.8,
+                    "favorable": True,
+                    "context": {"entry_edge_label": "high" if index % 4 == 0 else "confirmed"},
+                }
+            )
+
+        with patch.object(
+            mod,
+            "load_signal_observations",
+            side_effect=lambda _path, *, target_day, limit: rows if target_day == today else [],
+        ), patch.object(
+            mod,
+            "get_instrument_history_symbol",
+            side_effect=lambda symbol: "BRENT" if str(symbol).upper() in {"BMQ6", "BRU6"} else str(symbol).upper(),
+        ):
+            adjustment, reason = mod.calculate_signal_learning_priority_adjustment(
+                state,
+                "BRU6",
+                "reversal_1h",
+            )
+
+        self.assertGreater(adjustment, 0.0)
+        self.assertIn("обучение направления: бонус", reason)
+
     def test_rank_cycle_entry_candidates_keeps_only_top_priority_set(self) -> None:
         candidates = [
             {"symbol": "BRK6", "priority_score": 0.86, "entry_edge_score": 0.82, "regime_confidence": 0.81, "allocator_quantity": 1},
@@ -1101,6 +1172,54 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(updated, 0)
         self.assertEqual(rows[0]["evaluated_at"], "")
         self.assertIsNone(rows[0]["current_price"])
+
+    def test_update_signal_observation_outcomes_finalizes_stale_missing_price(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="UCM6", figi="FIGI", display_name="USD/CNY")
+        old_time = (mod.datetime.now(mod.UTC) - mod.timedelta(days=4)).astimezone(mod.MOSCOW_TZ).isoformat()
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trade.sqlite3"):
+            mod.append_signal_observation_decision(
+                {
+                    "symbol": "UCM6",
+                    "signal": "SHORT",
+                    "strategy_name": "reversal_1h",
+                    "observed_at": old_time,
+                    "observed_price": 7.20,
+                },
+                decision="deferred",
+                decision_reason="не хватило ГО",
+                horizon_minutes=60,
+            )
+            with patch.object(mod, "get_price_near_observation_horizon", return_value=None):
+                updated = mod.update_signal_observation_outcomes(None, self.config, [instrument])
+            rows = mod.load_signal_observations(mod.TRADE_DB_PATH)
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(rows[0]["context"]["outcome_status"], "unavailable")
+        self.assertIsNone(rows[0]["favorable"])
+
+    def test_update_signal_observation_outcomes_finalizes_expired_contract(self) -> None:
+        old_time = (mod.datetime.now(mod.UTC) - mod.timedelta(days=4)).astimezone(mod.MOSCOW_TZ).isoformat()
+
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trade.sqlite3"):
+            mod.append_signal_observation_decision(
+                {
+                    "symbol": "OLD6",
+                    "signal": "LONG",
+                    "strategy_name": "reversal_1h",
+                    "observed_at": old_time,
+                    "observed_price": 100.0,
+                },
+                decision="deferred",
+                decision_reason="старый контракт",
+                horizon_minutes=60,
+            )
+            updated = mod.update_signal_observation_outcomes(None, self.config, [])
+            row = mod.load_signal_observations(mod.TRADE_DB_PATH)[0]
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(row["context"]["outcome_status"], "unavailable")
+        self.assertIn("контракт больше не входит", row["context"]["outcome_note"])
 
     def test_append_signal_observation_decision_uses_hourly_horizon_for_reversal_1h(self) -> None:
         with TemporaryDirectory() as temp_dir, patch.object(mod, "TRADE_DB_PATH", mod.Path(temp_dir) / "trade.sqlite3"):
