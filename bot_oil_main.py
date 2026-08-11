@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import re
+import subprocess
 import sys
 import time
 from html import unescape as html_unescape
@@ -117,6 +118,7 @@ TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
+TRADE_QUALITY_LOCK_PATH = STATE_DIR / "_trade_quality_analytics.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
@@ -1354,23 +1356,32 @@ def build_trade_quality_analytics(
     }
 
 
-def maybe_refresh_trade_quality_analytics(
-    client: Client,
-    config: BotConfig,
-    watchlist: Sequence[InstrumentConfig],
-) -> None:
+def maybe_start_trade_quality_refresh() -> None:
+    """Run expensive historical quality analysis outside the live trading cycle."""
     if trade_quality_is_fresh(load_trade_quality_payload()):
         return
-    payload = build_trade_quality_analytics(client, config, watchlist)
-    TRADE_QUALITY_ANALYTICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = TRADE_QUALITY_ANALYTICS_PATH.with_suffix(".tmp")
-    temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary_path.replace(TRADE_QUALITY_ANALYTICS_PATH)
-    logging.info(
-        "trade_quality_analytics_updated trades=%s missed_entries=%s",
-        len(payload.get("trades") or []),
-        len(payload.get("missed_entries") or []),
-    )
+    if TRADE_QUALITY_LOCK_PATH.exists():
+        try:
+            if datetime.now(UTC).timestamp() - TRADE_QUALITY_LOCK_PATH.stat().st_mtime < 30 * 60:
+                return
+        except OSError:
+            return
+        TRADE_QUALITY_LOCK_PATH.unlink(missing_ok=True)
+    TRADE_QUALITY_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TRADE_QUALITY_LOCK_PATH.write_text(datetime.now(UTC).isoformat(), encoding="utf-8")
+    script_path = Path(__file__).with_name("scripts") / "refresh_trade_quality_analytics.py"
+    try:
+        subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=str(Path(__file__).resolve().parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logging.info("trade_quality_analytics_refresh_started")
+    except OSError as error:
+        TRADE_QUALITY_LOCK_PATH.unlink(missing_ok=True)
+        logging.warning("trade_quality_analytics_refresh_start_failed error=%s", error)
 
 
 def get_news_event_horizon_minutes(news_bias: NewsBias) -> int:
@@ -10284,7 +10295,7 @@ def run_bot() -> int:
                         update_signal_observation_outcomes(client, config, watchlist)
                         update_signal_ai_shadow_outcomes(client, config, watchlist)
                         update_news_event_outcomes(client, config, watchlist)
-                        maybe_refresh_trade_quality_analytics(client, config, watchlist)
+                        maybe_start_trade_quality_refresh()
                         maybe_park_free_cash_in_fund(client, config, watchlist, cash_fund, cycle_candidates)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist, cash_fund=cash_fund)
                         maybe_send_hourly_summary(client, config, watchlist)
