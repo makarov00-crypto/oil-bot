@@ -5332,6 +5332,16 @@ def clamp_float(value: float, lower: float, upper: float) -> float:
     return max(lower, min(value, upper))
 
 
+def normalize_decision_score(value: float) -> float:
+    """Stabilize aggregate scores before later threshold comparisons."""
+    return round(float(value or 0.0), 3)
+
+
+def normalize_entry_edge_score(value: float) -> float:
+    """Use the same precision for entry quality that the allocator displays."""
+    return round(float(value or 0.0), 2)
+
+
 def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, dict[str, float | str]]:
     last = df.iloc[-1]
     recent = df.iloc[-5:] if len(df) >= 5 else df
@@ -6545,7 +6555,7 @@ def get_daily_loss_recovery_entry_reason(
         return ""
     if signal not in {"LONG", "SHORT"}:
         return "мягкий дневной стоп: разрешены только направленные сигналы на вход."
-    if float(state.last_entry_edge_score or 0.0) < 0.78:
+    if normalize_entry_edge_score(state.last_entry_edge_score) < 0.78:
         return (
             "мягкий дневной стоп: после достижения дневного лимита разрешены только "
             "входы высокого качества."
@@ -6906,7 +6916,7 @@ def get_entry_edge_profile(
         edge -= 0.10
         reasons.append("режим восстановления")
 
-    edge = clamp_float(edge, 0.05, 0.95)
+    edge = normalize_entry_edge_score(clamp_float(edge, 0.05, 0.95))
     if edge >= 0.78:
         label = "high"
     elif edge >= 0.62:
@@ -7377,7 +7387,7 @@ def get_adaptive_entry_size_multiplier(
         multiplier *= 0.65
         reasons.append("режим восстановления")
 
-    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
     edge_label = str(state.last_entry_edge_label or "").strip().lower()
     if edge_score >= 0.78:
         multiplier *= 1.08
@@ -7414,7 +7424,7 @@ def calculate_entry_priority_details(
     reasons: list[str] = []
     components: dict[str, float] = {}
 
-    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
     edge_component = edge_score * 0.55
     score += edge_component
     components["качество входа"] = edge_component
@@ -7494,7 +7504,7 @@ def calculate_entry_priority_details(
     if news_reason:
         reasons.append(news_reason)
 
-    score = clamp_float(score, 0.0, 1.0)
+    score = normalize_decision_score(clamp_float(score, 0.0, 1.0))
     return {
         "score": score,
         "reason": ", ".join(reason for reason in reasons if reason) or "нейтральный приоритет",
@@ -7528,7 +7538,7 @@ def calculate_signal_learning_priority_adjustment(
         return 0.0, ""
 
     edge_label = str(state.last_entry_edge_label or "").strip().lower()
-    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
     market_regime = str(state.last_market_regime or "").strip()
     setup_quality = str(state.last_setup_quality_label or "").strip()
     expected_horizon_minutes = get_signal_observation_horizon_minutes(strategy_name)
@@ -7834,7 +7844,7 @@ def calculate_open_position_hold_score(
         score -= 0.18
         reasons.append("текущий сигнал уже не в сторону позиции")
 
-    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
     score += edge_score * 0.25
     if edge_score >= 0.78:
         reasons.append("вход был высокого качества")
@@ -7871,12 +7881,12 @@ def calculate_open_position_hold_score(
         score += 0.08
         reasons.append("позиция ещё слишком свежая")
 
-    score = clamp_float(score, 0.0, 1.0)
+    score = normalize_decision_score(clamp_float(score, 0.0, 1.0))
     return score, ", ".join(reasons) if reasons else "нейтральное удержание"
 
 
 def get_entry_edge_cap_multiplier(state: InstrumentState) -> tuple[float, str]:
-    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
     edge_label = str(state.last_entry_edge_label or "").strip().lower()
     if edge_score <= 0.0 and not edge_label:
         return 1.0, "качество входа ещё не оценено"
@@ -8139,7 +8149,7 @@ def calculate_position_sizing_context(
         strategy_name,
         state.last_market_regime,
     )
-    entry_edge_score = float(state.last_entry_edge_score or 0.0)
+    entry_edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
     entry_edge_label = str(state.last_entry_edge_label or "")
     entry_edge_reason = str(state.last_entry_edge_reason or "")
     entry_edge_cap_multiplier, entry_edge_cap_reason = get_entry_edge_cap_multiplier(state)
@@ -8610,7 +8620,7 @@ def get_adaptive_exit_profile(
     regime = str(state.last_market_regime or "").strip().lower()
     regime_confidence = float(state.last_market_regime_confidence or 0.0)
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
-    edge_score = float(state.last_entry_edge_score or 0.0)
+    edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
     edge_label = str(state.last_entry_edge_label or "").strip().lower()
     recovery_active = False
     if state.entry_strategy:
@@ -8821,9 +8831,9 @@ def reversal_turnover_gate(
             quantity,
             expected_side,
         )
-    ) * max(0.50, float(state.last_entry_edge_score or 0.0))
+    ) * max(0.50, normalize_entry_edge_score(state.last_entry_edge_score))
     required_rub = turnover_cost_rub * 1.50
-    allowed = float(state.last_entry_edge_score or 0.0) >= 0.62 and expected_move_rub >= required_rub
+    allowed = normalize_entry_edge_score(state.last_entry_edge_score) >= 0.62 and expected_move_rub >= required_rub
     reason = (
         f"оборот {'окупается' if allowed else 'не окупается'}: ожидаемо {expected_move_rub:.0f} RUB, "
         f"нужно не меньше {required_rub:.0f} RUB с комиссиями и проскальзыванием"
@@ -8982,7 +8992,7 @@ def position_reentry_allowed(
         setup_label = str(state.last_setup_quality_label or "").strip().lower()
         regime = str(state.last_market_regime or "").strip().lower()
         regime_confidence = float(state.last_market_regime_confidence or 0.0)
-        edge_score = float(state.last_entry_edge_score or 0.0)
+        edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
         volume_ratio = float(state.last_volume_ratio or 0.0)
         strategy_name = str(state.last_strategy_name or "").strip().lower()
         if not is_unified_reversal_strategy(strategy_name):

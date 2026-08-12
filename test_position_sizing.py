@@ -366,6 +366,76 @@ class PositionSizingTests(unittest.TestCase):
         self.assertGreater(sizing["adaptive_size_multiplier"], 1.15)
         self.assertEqual(sizing["entry_edge_label"], "high")
 
+    def test_floating_point_edge_at_strong_boundary_gets_strong_risk_budget(self) -> None:
+        self.config.risk_per_trade_pct = 0.01
+        self.config.max_open_risk_pct = 0.10
+        self.config.symbols = ["CNYRUBF"]
+        self.instrument.min_price_increment = 0.01
+        self.instrument.min_price_increment_amount = 1.0
+        self.state.last_entry_edge_score = 0.7999999999999999
+        self.state.last_entry_edge_label = "high"
+        snapshot = mod.AccountSnapshot(total_portfolio=100000.0, free_rub=80000.0, blocked_guarantee_rub=0.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=100000.0
+        ), patch.object(
+            mod, "get_broker_max_lots", return_value=100
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.25
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 10.0, "LONG", self.live_strategy
+            )
+
+        self.assertEqual(sizing["entry_edge_score"], 0.8)
+        self.assertEqual(sizing["risk_tier"], "сильный")
+        self.assertEqual(sizing["risk_multiplier"], 1.8)
+        self.assertEqual(sizing["risk_budget_rub"], 1800.0)
+
+    def test_real_edge_below_strong_boundary_keeps_good_risk_budget(self) -> None:
+        self.config.risk_per_trade_pct = 0.01
+        self.config.max_open_risk_pct = 0.10
+        self.config.symbols = ["CNYRUBF"]
+        self.instrument.min_price_increment = 0.01
+        self.instrument.min_price_increment_amount = 1.0
+        self.state.last_entry_edge_score = 0.794
+        self.state.last_entry_edge_label = "high"
+        snapshot = mod.AccountSnapshot(total_portfolio=100000.0, free_rub=80000.0, blocked_guarantee_rub=0.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=100000.0
+        ), patch.object(
+            mod, "get_broker_max_lots", return_value=100
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.25
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 10.0, "LONG", self.live_strategy
+            )
+
+        self.assertEqual(sizing["entry_edge_score"], 0.79)
+        self.assertEqual(sizing["risk_tier"], "хороший")
+        self.assertEqual(sizing["risk_multiplier"], 1.4)
+        self.assertEqual(sizing["risk_budget_rub"], 1400.0)
+
     def test_fragile_edge_reduces_entry_multiplier(self) -> None:
         self.state.last_setup_quality_label = "medium"
         self.state.last_market_regime = "mixed"
