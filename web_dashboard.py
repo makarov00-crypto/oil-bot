@@ -11,7 +11,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from dotenv import load_dotenv
 from active_contracts import list_active_contracts, replace_with_active_symbols
 from custom_instruments import (
@@ -122,7 +122,6 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
-        ("/allocator", "Аллокатор", "allocator"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
@@ -2857,18 +2856,23 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "by_entry_quality": [],
             "exit_diagnostics": [],
         }
+    def newest_first(key: str, time_field: str) -> list[dict[str, Any]]:
+        rows = payload.get(key) if isinstance(payload.get(key), list) else []
+        rows = [item for item in rows if isinstance(item, dict)]
+        return sorted(rows, key=lambda item: str(item.get(time_field) or ""), reverse=True)
+
     return {
         "available": True,
         "version": int(payload.get("version") or 0),
         "generated_at": str(payload.get("generated_at") or ""),
         "period_days": int(payload.get("period_days") or 30),
-        "trades": payload.get("trades") if isinstance(payload.get("trades"), list) else [],
+        "trades": newest_first("trades", "exit_time"),
         "by_symbol": payload.get("by_symbol") if isinstance(payload.get("by_symbol"), list) else [],
-        "missed_entries": payload.get("missed_entries") if isinstance(payload.get("missed_entries"), list) else [],
+        "missed_entries": newest_first("missed_entries", "observed_at"),
         "overview": payload.get("overview") if isinstance(payload.get("overview"), dict) else {},
         "by_regime": payload.get("by_regime") if isinstance(payload.get("by_regime"), list) else [],
         "by_entry_quality": payload.get("by_entry_quality") if isinstance(payload.get("by_entry_quality"), list) else [],
-        "exit_diagnostics": payload.get("exit_diagnostics") if isinstance(payload.get("exit_diagnostics"), list) else [],
+        "exit_diagnostics": newest_first("exit_diagnostics", "exit_time"),
     }
 
 
@@ -4462,6 +4466,222 @@ def build_dashboard_html() -> str:
       padding-top: 0;
       border-top: 0;
     }
+    .quality-ai {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(102, 174, 255, 0.10);
+    }
+    .quality-ai-head,
+    .shadow-ai-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .quality-ai-title,
+    .shadow-ai-title {
+      color: #eef6ff;
+      font-weight: 750;
+    }
+    .quality-ai-meta,
+    .shadow-ai-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .quality-ai-reason {
+      margin-top: 7px;
+      color: #bdcde0;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .shadow-ai-list,
+    .allocator-candidate-list,
+    .allocator-history {
+      display: grid;
+      gap: 10px;
+    }
+    .shadow-ai-list {
+      margin-top: 12px;
+      max-height: 480px;
+      overflow-y: auto;
+      padding-right: 6px;
+    }
+    .shadow-ai-card {
+      min-width: 0;
+      padding: 13px 14px;
+      border: 1px solid rgba(102, 174, 255, 0.14);
+      border-radius: 8px;
+      background: rgba(7, 14, 27, 0.58);
+    }
+    .shadow-ai-decision {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+    .shadow-ai-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr);
+      gap: 10px;
+      margin-top: 11px;
+    }
+    .shadow-ai-field {
+      min-width: 0;
+      padding-left: 10px;
+      border-left: 2px solid rgba(67, 197, 255, 0.28);
+    }
+    .shadow-ai-field-label {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+    .shadow-ai-field-value {
+      margin-top: 4px;
+      color: #dce9f8;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .allocator-kpis {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .allocator-kpi {
+      min-width: 0;
+      padding: 10px 11px;
+      border: 1px solid rgba(102, 174, 255, 0.12);
+      border-radius: 8px;
+      background: rgba(7, 14, 27, 0.50);
+    }
+    .allocator-kpi-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .allocator-kpi-value {
+      margin-top: 5px;
+      color: #eef6ff;
+      font: 700 18px/1.2 "Sora", "Manrope", sans-serif;
+      overflow-wrap: anywhere;
+    }
+    .allocator-section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 18px 0 10px;
+    }
+    .allocator-section-head h3 {
+      margin: 0;
+      font: 700 15px/1.3 "Sora", "Manrope", sans-serif;
+    }
+    .allocator-candidate {
+      display: grid;
+      grid-template-columns: minmax(150px, .8fr) minmax(145px, .7fr) minmax(260px, 1.6fr) minmax(190px, 1fr);
+      gap: 12px;
+      padding: 13px 14px;
+      border: 1px solid rgba(102, 174, 255, 0.13);
+      border-radius: 8px;
+      background: rgba(7, 14, 27, 0.52);
+    }
+    .allocator-candidate-title {
+      color: #eef6ff;
+      font-weight: 750;
+      line-height: 1.35;
+    }
+    .allocator-candidate-sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .allocator-decision {
+      display: inline-flex;
+      width: max-content;
+      max-width: 100%;
+      padding: 4px 7px;
+      border: 1px solid rgba(255, 202, 98, 0.25);
+      border-radius: 7px;
+      color: var(--warn);
+      font-size: 11px;
+      font-weight: 750;
+    }
+    .allocator-decision.selected {
+      color: var(--good);
+      border-color: rgba(55, 230, 164, 0.28);
+      background: rgba(55, 230, 164, 0.07);
+    }
+    .allocator-decision.blocked {
+      color: var(--bad);
+      border-color: rgba(255, 107, 135, 0.28);
+      background: rgba(255, 107, 135, 0.07);
+    }
+    .allocator-details {
+      margin-top: 8px;
+    }
+    .allocator-details summary {
+      color: #9fdcff;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .allocator-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .allocator-detail-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .allocator-detail-value {
+      margin-top: 3px;
+      color: #dce9f8;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .allocator-compare-controls {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .allocator-compare-controls select {
+      width: 100%;
+      padding: 9px 10px;
+      color: var(--ink);
+      background: #07101e;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .allocator-comparison {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .allocator-comparison-item,
+    .allocator-history-item {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid rgba(102, 174, 255, 0.11);
+      border-radius: 8px;
+      background: rgba(7, 14, 27, 0.44);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .allocator-comparison-item strong {
+      display: block;
+      margin: 4px 0 2px;
+      color: #e8f2ff;
+      font-family: "JetBrains Mono", monospace;
+    }
+    .allocator-history {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
     .strategy-diagnostics-grid {
       display: grid;
       gap: 12px;
@@ -4765,6 +4985,20 @@ def build_dashboard_html() -> str:
       .toolbar-inline select {
         width: 100%;
       }
+      .shadow-ai-grid,
+      .allocator-kpis,
+      .allocator-candidate,
+      .allocator-compare-controls,
+      .allocator-comparison,
+      .allocator-history,
+      .allocator-detail-grid {
+        grid-template-columns: 1fr;
+      }
+      .shadow-ai-head,
+      .quality-ai-head,
+      .allocator-section-head {
+        flex-direction: column;
+      }
       table {
         font-size: 13px;
       }
@@ -4959,7 +5193,7 @@ def build_dashboard_html() -> str:
         <div><div class="muted">Проверено через 4ч</div><div class="metric" id="shadowAiEvaluated4h">0</div></div>
         <div><div class="muted">Точность через 4ч</div><div class="metric" id="shadowAiAccuracy4h">-</div></div>
       </div>
-      <div id="shadowAiRows" class="review-list" style="margin-top:12px; max-height:420px; overflow-y:auto; padding-right:6px;"></div>
+      <div id="shadowAiRows" class="shadow-ai-list"></div>
     </section>
 
     <div class="grid">
@@ -5067,7 +5301,7 @@ def build_dashboard_html() -> str:
       </div>
     </section>
 
-    <section class="panel" style="margin-top:16px;">
+    <section class="panel" id="trade-review" style="margin-top:16px;">
       <div class="section-title">
         <div>
           <h2>Обзор сделок</h2>
@@ -5140,14 +5374,26 @@ def build_dashboard_html() -> str:
         <div class="strategy-diagnostics-grid" id="strategyDiagnosticsCards" style="margin-top:16px;"></div>
       </div>
       <div id="reviewTabAllocator" class="review-tab-panel">
-        <div class="review-block">
-          <h3>Последние решения аллокатора</h3>
-          <div class="review-scroll tall">
-            <table class="review-summary-table compact">
-              <tbody id="allocatorDecisionsBody"></tbody>
-            </table>
-          </div>
+        <div class="allocator-kpis" id="allocatorKpis"></div>
+        <div class="allocator-section-head">
+          <h3>Почему принято решение</h3>
+          <div class="muted" id="allocatorUpdatedAt">Последнее решение по каждому инструменту</div>
         </div>
+        <div id="allocatorCandidateList" class="allocator-candidate-list"></div>
+        <div class="allocator-section-head">
+          <h3>Сравнение сигналов</h3>
+          <div class="muted">Разница между двумя текущими кандидатами</div>
+        </div>
+        <div class="allocator-compare-controls">
+          <select id="allocatorCompareLeft" aria-label="Первый сигнал для сравнения"></select>
+          <select id="allocatorCompareRight" aria-label="Второй сигнал для сравнения"></select>
+        </div>
+        <div id="allocatorComparison" class="allocator-comparison"></div>
+        <div class="allocator-section-head">
+          <h3>Последние решения</h3>
+          <div class="muted">Действия аллокатора с капиталом за выбранный день</div>
+        </div>
+        <div id="allocatorHistory" class="allocator-history"></div>
       </div>
       <div id="reviewTabQuality" class="review-tab-panel">
         <div class="muted" id="tradeQualityMeta">Качество сделок ещё рассчитывается.</div>
@@ -5793,6 +6039,121 @@ def build_dashboard_html() -> str:
       const safeMain = escapeHtml(main || '-');
       const safeSub = escapeHtml(sub || '');
       return `<tr><td class="review-summary-label">${escapeHtml(label)}</td><td class="review-summary-value"><div class="review-summary-main">${safeMain}</div>${safeSub ? `<div class="review-summary-sub">${safeSub}</div>` : ''}${html || ''}</td></tr>`;
+    }
+
+    function allocatorDecisionClass(item) {
+      if (item.decision === 'selected') return 'selected';
+      if (item.decision === 'blocked') return 'blocked';
+      return '';
+    }
+
+    function renderAllocatorCandidate(item) {
+      const margin = Number(item.requested_margin_rub || 0);
+      const available = Number(item.allocatable_margin_rub || 0);
+      const quantity = Number(item.quantity || 0);
+      const components = renderPriorityComponents(item.priority_components)
+        || '<div class="allocator-candidate-sub">Состав приоритета не сохранён.</div>';
+      return `<article class="allocator-candidate">
+        <div>
+          <div class="allocator-candidate-title">${escapeHtml(item.symbol || '-')} · ${escapeHtml(displaySignal(item.signal))}</div>
+          <div class="allocator-candidate-sub">${escapeHtml(item.display_name || instrumentNames[item.symbol] || '')}<br>${escapeHtml(item.time_display || '-')}</div>
+        </div>
+        <div>
+          <span class="allocator-decision ${allocatorDecisionClass(item)}">${escapeHtml(item.decision_display || '-')}</span>
+          <div class="allocator-candidate-sub">приоритет <strong class="mono">${Number(item.priority_score || 0).toFixed(2)}</strong><br>качество входа <strong class="mono">${Number(item.entry_edge_score || 0).toFixed(2)}</strong></div>
+        </div>
+        <div>
+          <div class="allocator-candidate-title">Что повлияло</div>
+          ${components}
+          <details class="allocator-details">
+            <summary>Причина и исполнение</summary>
+            <div class="allocator-detail-grid">
+              <div><div class="allocator-detail-label">Главная причина</div><div class="allocator-detail-value">${escapeHtml(humanizeAllocatorText(item.reason || 'Причина не сохранена'))}</div></div>
+              <div><div class="allocator-detail-label">Исполнение</div><div class="allocator-detail-value">${escapeHtml(humanizeAllocatorText(item.execution_note || item.execution_status || 'не применимо'))}</div></div>
+            </div>
+          </details>
+        </div>
+        <div>
+          <div class="allocator-candidate-title">Капитал и результат</div>
+          <div class="allocator-candidate-sub">цель ГО: ${margin ? escapeHtml(formatRub(margin)) : 'не рассчитана'}<br>доступно: ${available ? escapeHtml(formatRub(available)) : 'нет расчёта'}<br>размер: ${quantity || 'не определён'} лот(а)<br>проверка: ${escapeHtml(item.outcome || 'ожидает')}</div>
+        </div>
+      </article>`;
+    }
+
+    function renderAllocatorComparison(items) {
+      const target = document.getElementById('allocatorComparison');
+      const leftSelect = document.getElementById('allocatorCompareLeft');
+      const rightSelect = document.getElementById('allocatorCompareRight');
+      if (!target || !leftSelect || !rightSelect) return;
+      const left = items.find((item) => item.symbol === leftSelect.value);
+      const right = items.find((item) => item.symbol === rightSelect.value);
+      if (!left || !right || left.symbol === right.symbol) {
+        target.innerHTML = '<div class="muted">Для сравнения нужны два разных текущих сигнала.</div>';
+        return;
+      }
+      const componentValue = (item, name) => {
+        const components = item.priority_components || {};
+        const aliases = {
+          news: ['news', 'новости'],
+          learning: ['learning', 'обучение'],
+        };
+        return (aliases[name] || [name]).reduce((sum, key) => sum + Number(components[key] || 0), 0);
+      };
+      const fields = [
+        ['Приоритет', Number(left.priority_score || 0), Number(right.priority_score || 0)],
+        ['Качество входа', Number(left.entry_edge_score || 0), Number(right.entry_edge_score || 0)],
+        ['Новости', componentValue(left, 'news'), componentValue(right, 'news')],
+        ['Обучение', componentValue(left, 'learning'), componentValue(right, 'learning')],
+      ];
+      target.innerHTML = fields.map(([label, leftValue, rightValue]) => {
+        const delta = leftValue - rightValue;
+        const winner = delta >= 0 ? left.symbol : right.symbol;
+        return `<div class="allocator-comparison-item">${escapeHtml(label)}<strong>${escapeHtml(left.symbol)} ${leftValue.toFixed(2)} · ${escapeHtml(right.symbol)} ${rightValue.toFixed(2)}</strong><span class="${delta > 0 ? 'good' : delta < 0 ? 'bad' : 'muted'}">разница ${delta > 0 ? '+' : ''}${delta.toFixed(2)} в пользу ${escapeHtml(winner)}</span></div>`;
+      }).join('');
+    }
+
+    function renderAllocatorWorkspace(workspace) {
+      const summary = workspace.summary || {};
+      const kpis = [
+        ['Кандидатов', summary.candidates ?? 0],
+        ['Выбрано', summary.selected ?? 0],
+        ['Отложено', summary.deferred ?? 0],
+        ['Не дошли до рейтинга', summary.blocked ?? 0],
+        ['Не хватает ГО', summary.capital_blocked ?? 0],
+        ['Свободно', formatRub(summary.free_cash_rub || 0)],
+      ];
+      document.getElementById('allocatorKpis').innerHTML = kpis.map(([label, value]) => `<div class="allocator-kpi"><div class="allocator-kpi-label">${escapeHtml(label)}</div><div class="allocator-kpi-value">${escapeHtml(String(value))}</div></div>`).join('');
+      document.getElementById('allocatorUpdatedAt').textContent = workspace.generated_at_moscow ? `Обновлено ${workspace.generated_at_moscow}` : 'Последнее решение по каждому инструменту';
+
+      const items = Array.isArray(workspace.candidates) ? workspace.candidates : [];
+      document.getElementById('allocatorCandidateList').innerHTML = items.length
+        ? items.map(renderAllocatorCandidate).join('')
+        : '<div class="muted">За выбранный день кандидатов на вход пока не было.</div>';
+
+      const leftSelect = document.getElementById('allocatorCompareLeft');
+      const rightSelect = document.getElementById('allocatorCompareRight');
+      const previousLeft = leftSelect.value;
+      const previousRight = rightSelect.value;
+      const options = items.map((item) => `<option value="${escapeHtml(item.symbol)}">${escapeHtml(item.symbol)} · ${escapeHtml(displaySignal(item.signal))} · ${escapeHtml(item.decision_display || '-')}</option>`).join('');
+      leftSelect.innerHTML = options || '<option value="">Нет кандидатов</option>';
+      rightSelect.innerHTML = options || '<option value="">Нет кандидатов</option>';
+      if (items.some((item) => item.symbol === previousLeft)) leftSelect.value = previousLeft;
+      if (items.some((item) => item.symbol === previousRight)) rightSelect.value = previousRight;
+      if (items.length > 1 && leftSelect.value === rightSelect.value) rightSelect.selectedIndex = 1;
+      leftSelect.onchange = () => renderAllocatorComparison(items);
+      rightSelect.onchange = () => renderAllocatorComparison(items);
+      renderAllocatorComparison(items);
+
+      const decisions = Array.isArray(workspace.recent_decisions) ? workspace.recent_decisions : [];
+      document.getElementById('allocatorHistory').innerHTML = decisions.length
+        ? decisions.slice(0, 12).map((item) => {
+            const meta = [
+              item.symbol ? `${item.symbol} ${displaySignal(item.signal)}` : '',
+              Number(item.priority_score || 0) ? `приоритет ${Number(item.priority_score).toFixed(2)}` : '',
+            ].filter(Boolean).join(' · ');
+            return `<div class="allocator-history-item"><strong>${escapeHtml(`${item.time_display || '-'} · ${item.decision_display || '-'}`)}</strong><div class="allocator-candidate-sub">${escapeHtml(meta)}<br>${escapeHtml(humanizeAllocatorText(item.reason || ''))}</div></div>`;
+          }).join('')
+        : '<div class="muted">Переключений и отложенных решений за выбранный день нет.</div>';
     }
 
     function cleanDiagnosticText(value) {
@@ -6541,26 +6902,40 @@ def build_dashboard_html() -> str:
       document.getElementById('shadowAiEvaluated4h').textContent = shadowAiEvaluated4h;
       document.getElementById('shadowAiAccuracy4h').textContent = shadowAiEvaluated4h ? `${(shadowAiCorrect4h / shadowAiEvaluated4h * 100).toFixed(1)}%` : '-';
       const shadowAiRows = document.getElementById('shadowAiRows');
-      const shadowAiReviews = Array.isArray(shadowAi.reviews) ? shadowAi.reviews : [];
+      const shadowAiReviews = Array.isArray(shadowAi.reviews)
+        ? shadowAi.reviews.slice().sort((a, b) => String(b.candle_time || b.time || '').localeCompare(String(a.candle_time || a.time || '')))
+        : [];
       shadowAiRows.innerHTML = shadowAiReviews.length
         ? shadowAiReviews.map((item) => {
             const ai = item.review || {};
-            const action = ({ENTER: 'ВХОД', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВОРОТ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[ai.action] || ai.action || 'ВОЗДЕРЖАТЬСЯ';
-            const signal = item.signal || '-';
-            const confidence = Number(ai.confidence || 0).toFixed(2);
-            const title = `${instrumentText(item.symbol || '-')} · ${signal} → ${action}`;
+            const rawAction = String(ai.action || 'ABSTAIN').toUpperCase();
+            const action = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[rawAction] || rawAction;
+            const actionTone = rawAction === 'ENTER' || rawAction === 'HOLD' ? 'long' : rawAction === 'EXIT' || rawAction === 'REVERSE' ? 'short' : 'hold';
+            const confidence = `${(Number(ai.confidence || 0) * 100).toFixed(0)}%`;
             const outcome4h = item.shadow_ai_outcomes?.['4h'];
-            let outcomeText = item.shadow_ai_4h_due ? '4ч: ждём первую доступную цену рынка' : '4ч: горизонт ещё не наступил';
-            if (outcome4h?.status === 'unavailable') outcomeText = '4ч: цена рынка недоступна';
+            let outcomeText = item.shadow_ai_4h_due ? 'Ждём первую доступную цену рынка.' : 'Горизонт ещё не наступил.';
+            if (outcome4h?.status === 'unavailable') outcomeText = 'Цена рынка недоступна.';
             else if (typeof outcome4h?.favorable === 'boolean') {
               const move = Number(outcome4h.move_pct || 0);
               const source = outcome4h.price_source === 'hourly_next_session'
                 ? 'первая часовая свеча после паузы рынка'
                 : 'часовое закрытие';
-              outcomeText = `4ч: ${outcome4h.favorable ? 'подтверждён' : 'не подтвердился'} (${move >= 0 ? '+' : ''}${move.toFixed(2)}%, ${source})`;
+              outcomeText = `${outcome4h.favorable ? 'Решение подтвердилось' : 'Решение не подтвердилось'}: ${move >= 0 ? '+' : ''}${move.toFixed(2)}%, ${source}.`;
             }
-            const detail = [ai.reason || 'без пояснения', ai.risk_note || '', `уверенность ${confidence}`, outcomeText].filter(Boolean).join(' · ');
-            return buildReviewRowRich(item.candle_time || item.time || '-', title, detail, '');
+            return `<article class="shadow-ai-card">
+              <div class="shadow-ai-head">
+                <div>
+                  <div class="shadow-ai-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
+                  <div class="shadow-ai-meta">${escapeHtml(formatMoscowTime(item.candle_time || item.time || ''))}</div>
+                </div>
+                <div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge ${actionTone}">${escapeHtml(action)}</span><span class="muted">уверенность ${escapeHtml(confidence)}</span></div>
+              </div>
+              <div class="shadow-ai-grid">
+                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Почему</div><div class="shadow-ai-field-value">${escapeHtml(ai.reason || 'Пояснение не сохранено.')}</div></div>
+                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Риск</div><div class="shadow-ai-field-value">${escapeHtml(ai.risk_note || 'Отдельный риск не указан.')}</div></div>
+                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Проверка через 4 часа</div><div class="shadow-ai-field-value">${escapeHtml(outcomeText)}</div></div>
+              </div>
+            </article>`;
           }).join('')
         : '<div class="muted">Ждём следующий подтверждённый кандидат на вход. ИИ пока не участвует в торговле.</div>';
 
@@ -6576,29 +6951,7 @@ def build_dashboard_html() -> str:
       document.getElementById('strategyDiagnosticsActionBody').innerHTML = diagnostics.actionRows.join('');
       document.getElementById('strategyDiagnosticsCards').innerHTML = diagnostics.cards || '<div class="muted">Нет актуальных состояний стратегии.</div>';
 
-      const allocatorDecisionsBody = document.getElementById('allocatorDecisionsBody');
-      const allocatorDecisions = Array.isArray(data.allocator_decisions) ? data.allocator_decisions : [];
-      allocatorDecisionsBody.innerHTML = allocatorDecisions.length
-        ? allocatorDecisions.slice(0, 8).map((item) => {
-            const symbol = item.symbol ? instrumentText(item.symbol) : '-';
-            const signal = item.signal ? ` ${displaySignal(item.signal)}` : '';
-            const replaced = item.replaced_symbol ? ` вместо ${instrumentText(item.replaced_symbol)}` : '';
-            const score = Number(item.priority_score || 0);
-            const scoreText = score > 0 ? `приоритет ${score.toFixed(2)}` : '';
-            const newsAdjustment = Number(item.news_priority_adjustment || 0);
-            const newsText = newsAdjustment ? `новости ${newsAdjustment > 0 ? '+' : ''}${newsAdjustment.toFixed(2)}` : '';
-            const margin = Number(item.requested_margin_rub || 0);
-            const marginText = margin > 0 ? `ГО ${formatRub(margin)}` : '';
-            const meta = [scoreText, newsText, marginText].filter(Boolean).join(' · ');
-            const componentHtml = renderPriorityComponents(item.priority_components);
-            return buildReviewRowRich(
-              `${item.time_display || '-'} · ${item.decision_display || '-'}`,
-              `${symbol}${signal}${replaced}`,
-              [meta, item.news_priority_reason || '', humanizeAllocatorText(item.reason || '')].filter(Boolean).join(' · '),
-              componentHtml
-            );
-          }).join('')
-        : buildReviewRow('Сегодня', 'решений пока нет', 'аллокатор ещё не откладывал и не перераспределял сигналы');
+      renderAllocatorWorkspace(data.allocator_workspace || {});
 
       const reviewBody = document.querySelector('#reviewTable tbody');
       const reviewCards = document.getElementById('reviewCards');
@@ -6718,10 +7071,14 @@ def build_dashboard_html() -> str:
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const missedEntries = Array.isArray(tradeQuality.missed_entries) ? tradeQuality.missed_entries : [];
-      const materialQualityExits = qualityExits.filter((item) => item.is_material_early_exit);
-      document.getElementById('qualityTradesCount').textContent = String(Math.min(qualityTrades.length, 20));
+      const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
+      const materialQualityExits = qualityExits
+        .filter((item) => item.is_material_early_exit)
+        .sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
+      const sortedMissedEntries = missedEntries.slice().sort((a, b) => String(b.observed_at || '').localeCompare(String(a.observed_at || '')));
+      document.getElementById('qualityTradesCount').textContent = String(Math.min(sortedQualityTrades.length, 20));
       document.getElementById('qualityExitsCount').textContent = String(Math.min(materialQualityExits.length, 12));
-      document.getElementById('qualityMissedCount').textContent = String(Math.min(missedEntries.length, 12));
+      document.getElementById('qualityMissedCount').textContent = String(Math.min(sortedMissedEntries.length, 12));
       tradeQualityMeta.textContent = tradeQuality.available
         ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Расчёт обновляется раз в час и использует часовые свечи, минуты - только на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
@@ -6769,8 +7126,8 @@ def build_dashboard_html() -> str:
         : buildReviewRow('Нет данных', 'История ещё копится');
       qualityRegimeBody.innerHTML = dimensionRows(qualityRegimes, formatRegimeLabel);
       qualityEdgeBody.innerHTML = dimensionRows(qualityEdges, formatEdgeLabel);
-      qualityTradesBody.innerHTML = qualityTrades.length
-        ? qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || ''))).slice(0, 20).map((item) => {
+      qualityTradesBody.innerHTML = sortedQualityTrades.length
+        ? sortedQualityTrades.slice(0, 20).map((item) => {
             const pnl = Number(item.pnl_rub || 0);
             const pnlClass = pnl >= 0 ? 'good' : 'bad';
             const holdTiles = [1, 2, 4, 8].map((hours) => {
@@ -6784,7 +7141,7 @@ def build_dashboard_html() -> str:
               </div>`;
             }).join('');
             const aiAction = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[item.shadow_ai_action] || item.shadow_ai_action || 'нет оценки';
-            const aiConfidence = item.shadow_ai_confidence ? ` · уверенность ${(Number(item.shadow_ai_confidence) * 100).toFixed(0)}%` : '';
+            const aiConfidence = item.shadow_ai_confidence ? `${(Number(item.shadow_ai_confidence) * 100).toFixed(0)}%` : 'нет оценки';
             const excursion = item.mfe_pct == null
               ? 'ещё не рассчитано'
               : `+${Number(item.mfe_pct || 0).toFixed(2)}% / -${Number(item.mae_pct || 0).toFixed(2)}%`;
@@ -6803,7 +7160,10 @@ def build_dashboard_html() -> str:
               </div>
               <div class="quality-horizon-grid">${holdTiles}</div>
               <div class="quality-card-note"><strong>Выход:</strong> ${escapeHtml(shortDiagnosticText(item.exit_reason || 'причина не сохранена', 180))}</div>
-              <div class="quality-card-note"><strong>Теневой ИИ:</strong> ${escapeHtml(`${aiAction}${aiConfidence}${item.shadow_ai_reason ? ` · ${shortDiagnosticText(item.shadow_ai_reason, 140)}` : ''}`)}</div>
+              <div class="quality-ai">
+                <div class="quality-ai-head"><div class="quality-ai-title">Теневой ИИ</div><div class="quality-ai-meta">${escapeHtml(aiAction)} · уверенность ${escapeHtml(aiConfidence)}</div></div>
+                <div class="quality-ai-reason"><strong>Почему:</strong> ${escapeHtml(item.shadow_ai_reason ? shortDiagnosticText(item.shadow_ai_reason, 220) : 'Пояснение не сохранено.')}</div>
+              </div>
             </article>`;
           }).join('')
         : '<div class="muted">Нет закрытых сделок для лаборатории за период.</div>';
@@ -6828,8 +7188,8 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
-      missedEntriesBody.innerHTML = missedEntries.length
-        ? missedEntries.slice(0, 12).map((item) => {
+      missedEntriesBody.innerHTML = sortedMissedEntries.length
+        ? sortedMissedEntries.slice(0, 12).map((item) => {
             const move = Number(item.move_4h_pct || 0);
             const moveClass = move >= 0 ? 'good' : 'bad';
             const horizonTiles = [1, 2, 4, 8].map((hours) => {
@@ -7045,6 +7405,13 @@ const aiReview = data.ai_review || {};
           });
         });
       });
+      if (window.location.hash === '#trade-review-allocator') {
+        const allocatorTab = document.querySelector('[data-review-tab="allocator"]');
+        if (allocatorTab) {
+          allocatorTab.click();
+          document.getElementById('trade-review')?.scrollIntoView({block: 'start'});
+        }
+      }
       document.querySelectorAll('.quality-tab').forEach((button) => {
         button.addEventListener('click', () => {
           const target = button.dataset.qualityTab;
@@ -7085,9 +7452,9 @@ def docs() -> str:
     return build_docs_html()
 
 
-@app.get("/allocator", response_class=HTMLResponse)
-def allocator() -> str:
-    return build_allocator_html()
+@app.get("/allocator", response_class=RedirectResponse)
+def allocator() -> RedirectResponse:
+    return RedirectResponse(url="/#trade-review-allocator", status_code=307)
 
 
 @app.get("/contracts", response_class=HTMLResponse)
@@ -7137,6 +7504,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "signal_ai_shadow": load_signal_ai_shadow_summary(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),
+        "allocator_workspace": load_allocator_workspace(target_day, display_states, portfolio_view),
         "allocator_decisions": load_allocator_decisions_for_day(target_day, 20),
         "signal_observations": load_signal_observation_summary_for_day(target_day, 20),
         "summary": summarize_states(display_states, portfolio_view),

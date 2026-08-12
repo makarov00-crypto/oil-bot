@@ -52,7 +52,45 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('id="qualityTradesCount"', html)
         self.assertIn('id="qualityExitsCount"', html)
         self.assertIn('id="qualityMissedCount"', html)
+        self.assertIn('class="quality-ai"', quality_render)
         self.assertNotIn("buildReviewRowRich(", quality_render)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_allocator_is_embedded_in_trade_review_and_removed_from_site_nav(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertNotIn('href="/allocator"', html)
+        self.assertIn('id="allocatorCandidateList"', html)
+        self.assertIn('id="allocatorComparison"', html)
+        self.assertIn('id="allocatorHistory"', html)
+        self.assertEqual(dashboard.allocator().headers["location"], "/#trade-review-allocator")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_trade_quality_events_are_loaded_newest_first(self) -> None:
+        payload = {
+            "version": 1,
+            "trades": [{"exit_time": "2026-08-11T10:00:00+03:00"}, {"exit_time": "2026-08-12T10:00:00+03:00"}],
+            "exit_diagnostics": [{"exit_time": "2026-08-10T10:00:00+03:00"}, {"exit_time": "2026-08-12T11:00:00+03:00"}],
+            "missed_entries": [{"observed_at": "2026-08-09T10:00:00+03:00"}, {"observed_at": "2026-08-12T12:00:00+03:00"}],
+        }
+        with TemporaryDirectory() as temp_dir:
+            analytics_path = dashboard.Path(temp_dir) / "quality.json"
+            analytics_path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch.object(dashboard, "TRADE_QUALITY_ANALYTICS_PATH", analytics_path):
+                result = dashboard.load_trade_quality_analytics()
+
+        self.assertEqual(result["trades"][0]["exit_time"], "2026-08-12T10:00:00+03:00")
+        self.assertEqual(result["exit_diagnostics"][0]["exit_time"], "2026-08-12T11:00:00+03:00")
+        self.assertEqual(result["missed_entries"][0]["observed_at"], "2026-08-12T12:00:00+03:00")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_shadow_ai_review_uses_structured_fields(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertIn('class="shadow-ai-card"', html)
+        self.assertIn('class="shadow-ai-field-label">Почему', html)
+        self.assertIn('class="shadow-ai-field-label">Риск', html)
+        self.assertIn('class="shadow-ai-field-label">Проверка через 4 часа', html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:
