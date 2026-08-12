@@ -91,6 +91,8 @@ from strategies.base import StrategyProfile
 
 
 APP_NAME = "oil-bot-main"
+LOCAL_LIVE_CONFIRMATION_ENV = "OIL_LOCAL_LIVE_CONFIRM"
+LOCAL_LIVE_CONFIRMATION_VALUE = "I_UNDERSTAND_LIVE_TRADING"
 T_INVEST_REST_PORTFOLIO_URL = (
     "https://invest-public-api.tinkoff.ru/rest/"
     "tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio"
@@ -384,6 +386,19 @@ def parse_bool_env(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def assert_local_live_trading_confirmation(config: BotConfig) -> None:
+    """Require an explicit opt-in before a Mac process can send real orders."""
+    if sys.platform != "darwin" or config.dry_run:
+        return
+    confirmation = os.getenv(LOCAL_LIVE_CONFIRMATION_ENV, "").strip()
+    if confirmation == LOCAL_LIVE_CONFIRMATION_VALUE:
+        return
+    raise RuntimeError(
+        "Локальный LIVE-режим заблокирован. Используй ./run_bot_live.sh только при осознанном запуске "
+        "или передай OIL_LOCAL_LIVE_CONFIRM=I_UNDERSTAND_LIVE_TRADING."
+    )
 
 
 def parse_symbols_env() -> list[str]:
@@ -10727,6 +10742,7 @@ def run_bot() -> int:
     config = load_config()
     if not config.dry_run and not config.allow_orders:
         raise RuntimeError("LIVE-режим заблокирован: сначала включи OIL_ALLOW_ORDERS=true осознанно.")
+    assert_local_live_trading_confirmation(config)
 
     mode = "DRY_RUN" if config.dry_run else "LIVE"
     started_at = datetime.now(timezone.utc)
