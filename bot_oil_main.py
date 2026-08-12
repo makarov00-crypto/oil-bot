@@ -132,7 +132,7 @@ UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 TRADE_QUALITY_REFRESH_SECONDS = 3600
-TRADE_QUALITY_ANALYTICS_VERSION = 6
+TRADE_QUALITY_ANALYTICS_VERSION = 7
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
@@ -1376,6 +1376,24 @@ def trade_quality_is_fresh(payload: dict[str, Any]) -> bool:
     return bool(generated_at and datetime.now(UTC) - generated_at < timedelta(seconds=TRADE_QUALITY_REFRESH_SECONDS))
 
 
+def classify_trade_quality_observation(row: dict[str, Any]) -> tuple[str, str, str, float] | None:
+    """Classify observations without treating strategy hypotheses as missed trades."""
+    context = row.get("context") if isinstance(row.get("context"), dict) else {}
+    execution = str(context.get("execution_status") or "").lower()
+    decision = str(row.get("decision") or "").lower()
+    signal = str(row.get("signal") or "").upper()
+    diagnostic_direction = str(context.get("diagnostic_direction") or "").upper()
+    diagnostic_score = float(context.get("diagnostic_score") or 0.0)
+    entry_edge_score = float(row.get("entry_edge_score") or 0.0)
+    if decision == "deferred" and signal in {"LONG", "SHORT"} and entry_edge_score >= 0.70:
+        return "allocator_deferred", "Упущенный подтверждённый вход", signal, diagnostic_score
+    if decision == "hold" and signal == "HOLD" and diagnostic_direction in {"LONG", "SHORT"} and diagnostic_score >= 0.83:
+        return "strategy_hold", "Стратегия не вошла", diagnostic_direction, diagnostic_score
+    if decision == "selected" and signal in {"LONG", "SHORT"} and execution not in {"confirmed_open", "recovered_open"}:
+        return "broker_rejected" if execution == "rejected" else "selected_unexecuted", "Неисполненная заявка", signal, diagnostic_score
+    return None
+
+
 def build_trade_quality_analytics(
     client: Client,
     config: BotConfig,
@@ -1477,36 +1495,19 @@ def build_trade_quality_analytics(
     potential_rows: list[tuple[dict[str, Any], str, float, str]] = []
     for row in signal_observations:
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
-        execution = str(context.get("execution_status") or "").lower()
-        decision = str(row.get("decision") or "").lower()
-        signal = str(row.get("signal") or "").upper()
-        diagnostic_direction = str(context.get("diagnostic_direction") or "").upper()
-        diagnostic_score = float(context.get("diagnostic_score") or 0.0)
-        is_strategy_hold = decision == "hold" and signal == "HOLD" and diagnostic_direction in {"LONG", "SHORT"} and diagnostic_score >= 0.83
-        is_unexecuted_candidate = decision in {"selected", "deferred"} and execution not in {"confirmed_open", "recovered_open", "submitted_open"}
-        if not is_unexecuted_candidate and not is_strategy_hold:
+        classification = classify_trade_quality_observation(row)
+        if classification is None:
             continue
+        source_kind, source_label, direction, diagnostic_score = classification
         observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
         symbol = str(row.get("symbol") or "").upper()
         instrument = by_symbol.get(symbol)
         observed_price = float(row.get("observed_price") or 0.0)
-        direction = diagnostic_direction if is_strategy_hold else signal
         if observed_at is None or observed_at < cutoff or observed_at > now - timedelta(hours=4) or observed_price <= 0.0 or direction not in {"LONG", "SHORT"} or instrument is None:
             continue
         reason = str(row.get("decision_reason") or "")
-        if is_strategy_hold:
+        if source_kind == "strategy_hold":
             reason = "; ".join(str(item) for item in context.get("hold_blockers") or [] if str(item).strip()) or reason
-            source_kind = "strategy_hold"
-            source_label = "Стратегия отсеяла"
-        elif decision == "deferred":
-            source_kind = "allocator_deferred"
-            source_label = "Аллокатор отложил"
-        elif execution == "rejected":
-            source_kind = "broker_rejected"
-            source_label = "Брокер не исполнил"
-        else:
-            source_kind = "selected_unexecuted"
-            source_label = "Вход не подтвердился"
         potential_rows.append((row, direction, diagnostic_score, f"{source_kind}|{source_label}|{reason}"))
 
     # The report is diagnostic, not part of the trading cycle. Bound new work so it
@@ -1566,10 +1567,29 @@ def build_trade_quality_analytics(
         if evaluation.get("move_4h_pct") is not None:
             missed_entry_evaluations.append(evaluation)
 
-    missed_entries = [
+    material_evaluations = [
         item for item in missed_entry_evaluations
         if float(item.get("move_4h_pct") or 0.0) >= float(item.get("threshold_pct") or 0.35)
     ]
+    missed_entries = [item for item in material_evaluations if item.get("source_kind") == "allocator_deferred"]
+    strategy_hypotheses = [item for item in material_evaluations if item.get("source_kind") == "strategy_hold"]
+    unexecuted_entries = [
+        item for item in material_evaluations
+        if item.get("source_kind") in {"broker_rejected", "selected_unexecuted"}
+    ]
+    overview = build_trade_quality_overview(completed, missed_entries)
+    overview.update(
+        {
+            "strategy_hypotheses_count": len(strategy_hypotheses),
+            "strategy_hypotheses_move_4h_pct": round(
+                sum(float(item.get("move_4h_pct") or 0.0) for item in strategy_hypotheses) / len(strategy_hypotheses), 3
+            ) if strategy_hypotheses else None,
+            "unexecuted_entries_count": len(unexecuted_entries),
+            "unexecuted_entries_move_4h_pct": round(
+                sum(float(item.get("move_4h_pct") or 0.0) for item in unexecuted_entries) / len(unexecuted_entries), 3
+            ) if unexecuted_entries else None,
+        }
+    )
 
     return {
         "version": TRADE_QUALITY_ANALYTICS_VERSION,
@@ -1579,7 +1599,7 @@ def build_trade_quality_analytics(
         "by_symbol": summarize_trade_quality(completed),
         "by_regime": summarize_trade_dimension(completed, "market_regime"),
         "by_entry_quality": summarize_trade_dimension(completed, "entry_edge_label"),
-        "overview": build_trade_quality_overview(completed, missed_entries),
+        "overview": overview,
         "exit_diagnostics": sorted(
             [
                 {
@@ -1595,6 +1615,8 @@ def build_trade_quality_analytics(
         )[:50],
         "missed_entry_evaluations": missed_entry_evaluations,
         "missed_entries": sorted(missed_entries, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
+        "strategy_hypotheses": sorted(strategy_hypotheses, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
+        "unexecuted_entries": sorted(unexecuted_entries, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
     }
 
 

@@ -72,6 +72,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
             "trades": [{"exit_time": "2026-08-11T10:00:00+03:00"}, {"exit_time": "2026-08-12T10:00:00+03:00"}],
             "exit_diagnostics": [{"exit_time": "2026-08-10T10:00:00+03:00"}, {"exit_time": "2026-08-12T11:00:00+03:00"}],
             "missed_entries": [{"observed_at": "2026-08-09T10:00:00+03:00"}, {"observed_at": "2026-08-12T12:00:00+03:00"}],
+            "strategy_hypotheses": [{"observed_at": "2026-08-11T12:00:00+03:00"}],
+            "unexecuted_entries": [{"observed_at": "2026-08-11T13:00:00+03:00"}],
         }
         with TemporaryDirectory() as temp_dir:
             analytics_path = dashboard.Path(temp_dir) / "quality.json"
@@ -82,6 +84,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(result["trades"][0]["exit_time"], "2026-08-12T10:00:00+03:00")
         self.assertEqual(result["exit_diagnostics"][0]["exit_time"], "2026-08-12T11:00:00+03:00")
         self.assertEqual(result["missed_entries"][0]["observed_at"], "2026-08-12T12:00:00+03:00")
+        self.assertEqual(result["strategy_hypotheses"][0]["observed_at"], "2026-08-11T12:00:00+03:00")
+        self.assertEqual(result["unexecuted_entries"][0]["observed_at"], "2026-08-11T13:00:00+03:00")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_shadow_ai_review_uses_structured_fields(self) -> None:

@@ -2843,6 +2843,8 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "trades": [],
             "by_symbol": [],
             "missed_entries": [],
+            "strategy_hypotheses": [],
+            "unexecuted_entries": [],
             "overview": {},
             "by_regime": [],
             "by_entry_quality": [],
@@ -2856,6 +2858,8 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "trades": [],
             "by_symbol": [],
             "missed_entries": [],
+            "strategy_hypotheses": [],
+            "unexecuted_entries": [],
             "overview": {},
             "by_regime": [],
             "by_entry_quality": [],
@@ -2867,6 +2871,8 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "trades": [],
             "by_symbol": [],
             "missed_entries": [],
+            "strategy_hypotheses": [],
+            "unexecuted_entries": [],
             "overview": {},
             "by_regime": [],
             "by_entry_quality": [],
@@ -2885,6 +2891,8 @@ def load_trade_quality_analytics() -> dict[str, Any]:
         "trades": newest_first("trades", "exit_time"),
         "by_symbol": payload.get("by_symbol") if isinstance(payload.get("by_symbol"), list) else [],
         "missed_entries": newest_first("missed_entries", "observed_at"),
+        "strategy_hypotheses": newest_first("strategy_hypotheses", "observed_at"),
+        "unexecuted_entries": newest_first("unexecuted_entries", "observed_at"),
         "overview": payload.get("overview") if isinstance(payload.get("overview"), dict) else {},
         "by_regime": payload.get("by_regime") if isinstance(payload.get("by_regime"), list) else [],
         "by_entry_quality": payload.get("by_entry_quality") if isinstance(payload.get("by_entry_quality"), list) else [],
@@ -5418,7 +5426,9 @@ def build_dashboard_html() -> str:
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
           <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория <span class="quality-tab-count" id="qualityTradesCount">0</span></button>
           <button class="quality-tab" type="button" data-quality-tab="exits">Выходы <span class="quality-tab-count" id="qualityExitsCount">0</span></button>
-          <button class="quality-tab" type="button" data-quality-tab="missed">Пропуски <span class="quality-tab-count" id="qualityMissedCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="missed">Реальные пропуски <span class="quality-tab-count" id="qualityMissedCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="hypotheses">Гипотезы <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="execution">Исполнение <span class="quality-tab-count" id="qualityExecutionCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
           <div class="table-scroll desktop-table">
@@ -5445,8 +5455,16 @@ def build_dashboard_html() -> str:
           <div id="qualityExitsBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelMissed" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">Только движения, которые после пропуска превысили порог волатильности инструмента.</div>
+          <div class="muted" style="margin-bottom:10px;">Только подтверждённые LONG/SHORT-кандидаты с качеством от 0.70, которые остановили аллокатор, риск или брокер. Движение после сигнала превысило порог волатильности инструмента.</div>
           <div id="missedEntriesBody" class="quality-card-list"></div>
+        </div>
+        <div id="qualityPanelHypotheses" class="quality-panel">
+          <div class="muted" style="margin-bottom:10px;">HOLD без входа, где диагностика увидела вероятное направление. Это материал для настройки стратегии, а не ошибка торговли.</div>
+          <div id="strategyHypothesesBody" class="quality-card-list"></div>
+        </div>
+        <div id="qualityPanelExecution" class="quality-panel">
+          <div class="muted" style="margin-bottom:10px;">Кандидат был выбран, но вход не был подтверждён брокером или контуром исполнения.</div>
+          <div id="unexecutedEntriesBody" class="quality-card-list"></div>
         </div>
       </div>
     </section>
@@ -7095,6 +7113,8 @@ def build_dashboard_html() -> str:
       const tradeQualityMeta = document.getElementById('tradeQualityMeta');
       const tradeQualityBody = document.getElementById('tradeQualityBody');
       const missedEntriesBody = document.getElementById('missedEntriesBody');
+      const strategyHypothesesBody = document.getElementById('strategyHypothesesBody');
+      const unexecutedEntriesBody = document.getElementById('unexecutedEntriesBody');
       const tradeQualityOverview = document.getElementById('tradeQualityOverview');
       const qualityExitsBody = document.getElementById('qualityExitsBody');
       const qualityTradesBody = document.getElementById('qualityTradesBody');
@@ -7107,14 +7127,20 @@ def build_dashboard_html() -> str:
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const missedEntries = Array.isArray(tradeQuality.missed_entries) ? tradeQuality.missed_entries : [];
+      const strategyHypotheses = Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : [];
+      const unexecutedEntries = Array.isArray(tradeQuality.unexecuted_entries) ? tradeQuality.unexecuted_entries : [];
       const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const materialQualityExits = qualityExits
         .filter((item) => item.is_material_early_exit)
         .sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const sortedMissedEntries = missedEntries.slice().sort((a, b) => String(b.observed_at || '').localeCompare(String(a.observed_at || '')));
+      const sortedStrategyHypotheses = strategyHypotheses.slice().sort((a, b) => String(b.observed_at || '').localeCompare(String(a.observed_at || '')));
+      const sortedUnexecutedEntries = unexecutedEntries.slice().sort((a, b) => String(b.observed_at || '').localeCompare(String(a.observed_at || '')));
       document.getElementById('qualityTradesCount').textContent = String(Math.min(sortedQualityTrades.length, 20));
       document.getElementById('qualityExitsCount').textContent = String(Math.min(materialQualityExits.length, 12));
       document.getElementById('qualityMissedCount').textContent = String(Math.min(sortedMissedEntries.length, 12));
+      document.getElementById('qualityHypothesesCount').textContent = String(Math.min(sortedStrategyHypotheses.length, 12));
+      document.getElementById('qualityExecutionCount').textContent = String(Math.min(sortedUnexecutedEntries.length, 12));
       tradeQualityMeta.textContent = tradeQuality.available
         ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Расчёт обновляется раз в час и использует часовые свечи, минуты - только на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
@@ -7130,6 +7156,8 @@ def build_dashboard_html() -> str:
         buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
         buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
         buildTradeSummaryCard('Подтверждённые пропуски', String(qualityOverview.missed_entries_count || 0), qualityOverview.missed_entries_move_4h_pct == null ? 'история ещё копится' : `среднее движение +${Number(qualityOverview.missed_entries_move_4h_pct).toFixed(2)}% за 4ч`),
+        buildTradeSummaryCard('Гипотезы HOLD', String(qualityOverview.strategy_hypotheses_count || 0), qualityOverview.strategy_hypotheses_move_4h_pct == null ? 'не являются ошибками' : `среднее движение +${Number(qualityOverview.strategy_hypotheses_move_4h_pct).toFixed(2)}% за 4ч`),
+        buildTradeSummaryCard('Неисполненные заявки', String(qualityOverview.unexecuted_entries_count || 0), qualityOverview.unexecuted_entries_move_4h_pct == null ? 'история ещё копится' : `среднее движение +${Number(qualityOverview.unexecuted_entries_move_4h_pct).toFixed(2)}% за 4ч`),
       ].join('') : '';
       tradeQualityBody.innerHTML = qualityRows.length
         ? qualityRows.map((row) => {
@@ -7226,8 +7254,8 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
-      missedEntriesBody.innerHTML = sortedMissedEntries.length
-        ? sortedMissedEntries.slice(0, 12).map((item) => {
+      const renderSignalDiagnostics = (items, emptyMessage, reasonLabel) => items.length
+        ? items.slice(0, 12).map((item) => {
             const move = Number(item.move_4h_pct || 0);
             const moveClass = move >= 0 ? 'good' : 'bad';
             const horizonTiles = [1, 2, 4, 8].map((hours) => {
@@ -7251,10 +7279,25 @@ def build_dashboard_html() -> str:
               </div>
               <div class="quality-card-meta" style="margin-top:8px;">${signalBadge(item.signal || '-')} ${escapeHtml(item.quantity_basis || '')}</div>
               <div class="quality-horizon-grid">${horizonTiles}</div>
-              <div class="quality-card-note"><strong>Почему пропустили:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 210))}</div>
+              <div class="quality-card-note"><strong>${escapeHtml(reasonLabel)}:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 210))}</div>
             </article>`;
           }).join('')
-        : '<div class="muted">Нет подтверждённых пропущенных входов: новые HOLD-наблюдения накопятся после часовых свечей.</div>';
+        : `<div class="muted">${escapeHtml(emptyMessage)}</div>`;
+      missedEntriesBody.innerHTML = renderSignalDiagnostics(
+        sortedMissedEntries,
+        'Нет реальных пропусков: подтверждённые кандидаты с качеством от 0.70 появятся здесь только после проверки движения.',
+        'Почему не вошли',
+      );
+      strategyHypothesesBody.innerHTML = renderSignalDiagnostics(
+        sortedStrategyHypotheses,
+        'Нет диагностических HOLD-гипотез с подтверждённым движением.',
+        'Что увидела диагностика',
+      );
+      unexecutedEntriesBody.innerHTML = renderSignalDiagnostics(
+        sortedUnexecutedEntries,
+        'Нет выбранных, но неисполненных заявок с подтверждённым движением.',
+        'Почему заявка не исполнилась',
+      );
 
 const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available

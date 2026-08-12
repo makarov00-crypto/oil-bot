@@ -15,6 +15,32 @@ class DailyRiskLimitTests(unittest.TestCase):
             dry_run=False,
         )
 
+    def test_trade_quality_classifies_only_strong_deferred_candidate_as_real_miss(self) -> None:
+        real_miss = mod.classify_trade_quality_observation(
+            {"decision": "deferred", "signal": "LONG", "entry_edge_score": 0.70, "context": {}}
+        )
+        weak_candidate = mod.classify_trade_quality_observation(
+            {"decision": "deferred", "signal": "LONG", "entry_edge_score": 0.69, "context": {}}
+        )
+        hold_hypothesis = mod.classify_trade_quality_observation(
+            {
+                "decision": "hold",
+                "signal": "HOLD",
+                "context": {"diagnostic_direction": "SHORT", "diagnostic_score": 0.83},
+            }
+        )
+
+        self.assertEqual(real_miss[:2], ("allocator_deferred", "Упущенный подтверждённый вход"))
+        self.assertIsNone(weak_candidate)
+        self.assertEqual(hold_hypothesis[:2], ("strategy_hold", "Стратегия не вошла"))
+
+    def test_trade_quality_classifies_selected_unexecuted_as_execution_problem(self) -> None:
+        result = mod.classify_trade_quality_observation(
+            {"decision": "selected", "signal": "SHORT", "context": {"execution_status": "rejected"}}
+        )
+
+        self.assertEqual(result[:2], ("broker_rejected", "Неисполненная заявка"))
+
     def test_daily_loss_limit_uses_global_closed_net_pnl(self) -> None:
         rows = [
             {"event": "CLOSE", "symbol": "BRK6", "net_pnl_rub": -1800.0},
