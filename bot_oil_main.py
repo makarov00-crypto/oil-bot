@@ -333,6 +333,10 @@ class InstrumentState:
     last_shadow_ai_reason: str = ""
     last_allocator_summary: str = ""
     last_allocator_quantity: int = 0
+    last_allocator_open_risk_budget_rub: float = 0.0
+    last_allocator_reserved_open_risk_rub: float = 0.0
+    last_allocator_available_open_risk_rub: float = 0.0
+    last_allocator_risk_per_contract_rub: float = 0.0
     last_entry_allocator_summary: str = ""
     last_entry_allocator_quantity: int = 0
     last_entry_allocator_time: str = ""
@@ -815,6 +819,8 @@ def append_allocator_decision(
     news_priority_adjustment: float = 0.0,
     news_priority_reason: str = "",
     priority_components: dict[str, Any] | None = None,
+    defer_kind: str = "",
+    defer_winners: list[dict[str, Any]] | None = None,
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     row = {
@@ -834,6 +840,7 @@ def append_allocator_decision(
         "learning_reason": learning_reason,
         "news_priority_adjustment": round(float(news_priority_adjustment or 0.0), 3),
         "news_priority_reason": news_priority_reason,
+        "defer_kind": defer_kind,
     }
     if priority_components:
         row["priority_components"] = {
@@ -841,6 +848,16 @@ def append_allocator_decision(
             for key, value in priority_components.items()
             if abs(float(value or 0.0)) >= 0.001
         }
+    if defer_winners:
+        row["defer_winners"] = [
+            {
+                "symbol": str(winner.get("symbol") or "").upper(),
+                "priority_score": round(float(winner.get("priority_score") or 0.0), 3),
+                "entry_edge_score": round(float(winner.get("entry_edge_score") or 0.0), 3),
+            }
+            for winner in defer_winners
+            if str(winner.get("symbol") or "").strip()
+        ]
     with ALLOCATOR_DECISIONS_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps({key: value for key, value in row.items() if value not in ("", None)}, ensure_ascii=False) + "\n")
 
@@ -878,6 +895,12 @@ def append_signal_observation_decision(
         "candle_time": str(candidate.get("candle_time") or ""),
         "execution_status": str(candidate.get("execution_status") or ""),
         "execution_note": str(candidate.get("execution_note") or ""),
+        "defer_kind": str(candidate.get("defer_kind") or ""),
+        "defer_winners": candidate.get("defer_winners") if isinstance(candidate.get("defer_winners"), list) else [],
+        "open_risk_budget_rub": float(candidate.get("open_risk_budget_rub") or 0.0),
+        "open_risk_reserved_rub": float(candidate.get("open_risk_reserved_rub") or 0.0),
+        "open_risk_available_rub": float(candidate.get("open_risk_available_rub") or 0.0),
+        "risk_per_contract_rub": float(candidate.get("risk_per_contract_rub") or 0.0),
     }
     shadow_ai = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
     if shadow_ai:
@@ -7702,16 +7725,29 @@ def rank_cycle_entry_candidates(
     used_budget_rub = 0.0
     class_counts: dict[str, int] = defaultdict(int)
     correlation_counts: dict[str, int] = defaultdict(int)
+
+    def selected_snapshot() -> list[dict[str, Any]]:
+        return [
+            {
+                "symbol": str(candidate.get("symbol") or "").upper(),
+                "priority_score": float(candidate.get("priority_score") or 0.0),
+                "entry_edge_score": float(candidate.get("entry_edge_score") or 0.0),
+            }
+            for candidate in selected
+        ]
+
     for item in ranked:
         score = float(item.get("priority_score") or 0.0)
         edge_score = float(item.get("entry_edge_score") or 0.0)
         if int(item.get("allocator_quantity") or 0) <= 0:
+            item["defer_kind"] = "sizing"
             item["defer_reason"] = str(item.get("allocator_summary") or "").strip() or (
                 "расчёт капитала и риска не разрешил ни одного лота"
             )
             deferred.append(item)
             continue
         if score < min_priority_score:
+            item["defer_kind"] = "priority_threshold"
             item["defer_reason"] = (
                 f"приоритет цикла {score:.2f} ниже порога, "
                 f"{item.get('priority_reason') or 'сигнал недостаточно силён'}."
@@ -7719,9 +7755,11 @@ def rank_cycle_entry_candidates(
             deferred.append(item)
             continue
         if len(selected) >= max_entries:
+            item["defer_kind"] = "cycle_competition"
+            item["defer_winners"] = selected_snapshot()
             item["defer_reason"] = (
-                f"в этом цикле уже выбрано достаточно идей; приоритет {score:.2f}, "
-                f"{item.get('priority_reason') or 'конкуренция сигналов'}."
+                f"проиграл конкуренцию {', '.join(winner['symbol'] for winner in item['defer_winners']) or 'в этом цикле'}: "
+                f"приоритет {score:.2f}; {item.get('priority_reason') or 'сигнал слабее по набору факторов'}."
             )
             deferred.append(item)
             continue
@@ -7732,6 +7770,8 @@ def rank_cycle_entry_candidates(
             and correlation_counts[correlation_bucket] >= 1
         )
         if correlated and score < 0.60 and edge_score < 0.60:
+            item["defer_kind"] = "correlation"
+            item["defer_winners"] = selected_snapshot()
             item["defer_reason"] = (
                 f"похожая рыночная идея уже выбрана в этом цикле; "
                 f"группа {correlation_bucket}, приоритет {score:.2f}."
@@ -7756,6 +7796,8 @@ def rank_cycle_entry_candidates(
         instrument_class = str(item.get("instrument_class") or "базовый")
         class_limit = class_limits.get(instrument_class, 2)
         if class_counts[instrument_class] >= class_limit and score < 0.86:
+            item["defer_kind"] = "class_limit"
+            item["defer_winners"] = selected_snapshot()
             item["defer_reason"] = (
                 f"по классу {instrument_class} уже набрано достаточно идей; "
                 f"приоритет {score:.2f}."
@@ -7798,8 +7840,16 @@ def rank_cycle_entry_candidates(
                     f"в цикле заменён более эффективной по ГО идеей {item.get('symbol') or '-'}; "
                     f"эффективность {candidate_efficiency:.4f} против {weakest_efficiency:.4f}."
                 )
+                weakest_selected["defer_kind"] = "capital_efficiency"
+                weakest_selected["defer_winners"] = [{
+                    "symbol": str(item.get("symbol") or "").upper(),
+                    "priority_score": score,
+                    "entry_edge_score": edge_score,
+                }]
                 deferred.append(weakest_selected)
             else:
+                item["defer_kind"] = "cycle_margin"
+                item["defer_winners"] = selected_snapshot()
                 item["defer_reason"] = (
                     f"в цикле не хватает свободного бюджета ГО: нужно {requested_margin_rub:.0f} RUB, "
                     f"после уже выбранных идей осталось {max(0.0, cycle_budget_rub - used_budget_rub):.0f} RUB."
@@ -8079,6 +8129,8 @@ def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> Non
         news_priority_adjustment=float(candidate.get("news_priority_adjustment") or 0.0),
         news_priority_reason=str(candidate.get("news_priority_reason") or ""),
         priority_components=candidate.get("priority_components") if isinstance(candidate.get("priority_components"), dict) else None,
+        defer_kind=str(candidate.get("defer_kind") or ""),
+        defer_winners=candidate.get("defer_winners") if isinstance(candidate.get("defer_winners"), list) else None,
     )
     state = load_state(symbol)
     state.last_allocator_quantity = 0
@@ -10444,6 +10496,10 @@ def process_instrument(
                                     )
                                     state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
                                     state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
+                                    state.last_allocator_open_risk_budget_rub = float(allocator_sizing.get("max_open_risk_budget_rub") or 0.0)
+                                    state.last_allocator_reserved_open_risk_rub = float(allocator_sizing.get("reserved_open_risk_rub") or 0.0)
+                                    state.last_allocator_available_open_risk_rub = float(allocator_sizing.get("available_open_risk_rub") or 0.0)
+                                    state.last_allocator_risk_per_contract_rub = float(allocator_sizing.get("money_risk_per_contract_rub") or 0.0)
         except Exception as error:
             state.last_allocator_summary = f"Аллокатор временно недоступен: {error}"
             logging.info("symbol=%s allocator_summary_error=%s", instrument.symbol, error)
@@ -10589,6 +10645,10 @@ def process_instrument(
                                                     ((allocator_sizing or {}).get("margin_per_lot_rub") or 0.0)
                                                     * max(1, int((allocator_sizing or {}).get("quantity") or 0))
                                                 ),
+                                                "open_risk_budget_rub": float((allocator_sizing or {}).get("max_open_risk_budget_rub") or 0.0),
+                                                "open_risk_reserved_rub": float((allocator_sizing or {}).get("reserved_open_risk_rub") or 0.0),
+                                                "open_risk_available_rub": float((allocator_sizing or {}).get("available_open_risk_rub") or 0.0),
+                                                "risk_per_contract_rub": float((allocator_sizing or {}).get("money_risk_per_contract_rub") or 0.0),
                                                 "shadow_ai_context": {
                                                     "close": round(float(lower_df.iloc[-1].get("close") or 0.0), 6),
                                                     "macd": round(float(lower_df.iloc[-1].get("macd") or 0.0), 6),
@@ -10626,6 +10686,11 @@ def process_instrument(
                                             )
                         else:
                             logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
+                            state.last_error = reentry_reason
+                            state.last_allocator_quantity = 0
+                            state.last_allocator_summary = (
+                                f"{state.last_allocator_summary}\nСтратегия: {reentry_reason}"
+                            ).strip()
                             state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
     else:
         check_exit(client, config, instrument, state, lower_df, signal, higher_tf_df=higher_tf_df)
@@ -10746,17 +10811,7 @@ def run_bot() -> int:
                                 continue
                             if rotation_target_symbol and symbol == rotation_target_symbol:
                                 continue
-                            priority_score = float(item.get("priority_score") or 0.0)
-                            if priority_score < 0.45:
-                                defer_reason = (
-                                    f"кандидат {symbol} отложен: приоритет цикла {priority_score:.2f} "
-                                    f"ниже порога, {item.get('priority_reason') or 'сигнал недостаточно силён'}."
-                                )
-                            else:
-                                defer_reason = (
-                                    f"кандидат {symbol} отложен: в этом цикле есть более сильные входы, "
-                                    f"приоритет {priority_score:.2f}, {item.get('priority_reason') or 'конкуренция сигналов'}."
-                                )
+                            defer_reason = str(item.get("defer_reason") or "кандидат отложен аллокатором")
                             mark_cycle_deferred_candidate(item, defer_reason)
                             logging.info("symbol=%s status=entry_deferred_cycle_rank reason=%s", symbol, defer_reason)
                         recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)

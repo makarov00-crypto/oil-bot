@@ -972,6 +972,10 @@ class DashboardTradeReviewTests(unittest.TestCase):
                             "last_signal": "SHORT",
                             "position_side": "FLAT",
                             "last_error": "недостаточно ГО для входа",
+                            "last_allocator_summary": "Аллокатор: вход не проходит.",
+                            "last_allocator_available_open_risk_rub": 43.0,
+                            "last_allocator_risk_per_contract_rub": 47.0,
+                            "last_signal_summary": ["MACD cross вниз: нет"],
                         }
                     },
                     {"free_cash_rub": 12000.0},
@@ -983,6 +987,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(payload["candidates"][0]["decision_display"], "заявка отправлена")
         self.assertEqual(payload["candidates"][1]["decision_display"], "не дошёл до рейтинга")
         self.assertIn("новости", payload["candidates"][0]["priority_components"])
+        self.assertEqual(payload["candidates"][1]["open_risk_available_rub"], 43.0)
+        self.assertEqual(payload["candidates"][1]["risk_per_contract_rub"], 47.0)
+        self.assertEqual(payload["candidates"][1]["signal_summary"], ["MACD cross вниз: нет"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_allocator_candidate_does_not_treat_broker_target_as_final_quantity(self) -> None:

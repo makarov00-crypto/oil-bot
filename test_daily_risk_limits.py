@@ -849,6 +849,22 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertEqual([item["symbol"] for item in selected], ["BRK6", "NGJ6"])
         self.assertEqual([item["symbol"] for item in deferred], ["IMOEXF"])
+        self.assertEqual(deferred[0]["defer_kind"], "priority_threshold")
+
+    def test_rank_cycle_entry_candidates_records_cycle_winners_for_deferred_candidate(self) -> None:
+        candidates = [
+            {"symbol": "BRK6", "priority_score": 0.86, "entry_edge_score": 0.82, "regime_confidence": 0.81, "allocator_quantity": 1},
+            {"symbol": "NGJ6", "priority_score": 0.78, "entry_edge_score": 0.76, "regime_confidence": 0.75, "allocator_quantity": 1},
+            {"symbol": "LKU6", "priority_score": 0.63, "entry_edge_score": 0.75, "regime_confidence": 0.83, "allocator_quantity": 1},
+        ]
+
+        selected, deferred = mod.rank_cycle_entry_candidates(candidates, max_entries=2, min_priority_score=0.45)
+
+        self.assertEqual([item["symbol"] for item in selected], ["BRK6", "NGJ6"])
+        self.assertEqual([item["symbol"] for item in deferred], ["LKU6"])
+        self.assertEqual(deferred[0]["defer_kind"], "cycle_competition")
+        self.assertEqual([winner["symbol"] for winner in deferred[0]["defer_winners"]], ["BRK6", "NGJ6"])
+        self.assertIn("проиграл конкуренцию BRK6, NGJ6", deferred[0]["defer_reason"])
 
     def test_rank_cycle_entry_candidates_defers_zero_sized_candidate(self) -> None:
         candidate = {
@@ -1126,6 +1142,26 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["learning_adjustment"], -0.08)
         self.assertIn("штраф -0.08", rows[0]["learning_reason"])
+
+    def test_mark_cycle_deferred_candidate_persists_competition_winners(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch.object(mod, "ALLOCATOR_DECISIONS_PATH", mod.Path(temp_dir) / "allocator_decisions.jsonl"), patch.object(
+            mod, "load_state", return_value=mod.InstrumentState()
+        ), patch.object(mod, "save_state"):
+            mod.mark_cycle_deferred_candidate(
+                {
+                    "symbol": "LKU6",
+                    "signal": "SHORT",
+                    "priority_score": 0.63,
+                    "entry_edge_score": 0.75,
+                    "defer_kind": "cycle_competition",
+                    "defer_winners": [{"symbol": "BRK6", "priority_score": 0.78, "entry_edge_score": 0.81}],
+                },
+                "проиграл конкуренцию BRK6",
+            )
+            rows = [mod.json.loads(line) for line in mod.ALLOCATOR_DECISIONS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        self.assertEqual(rows[0]["defer_kind"], "cycle_competition")
+        self.assertEqual(rows[0]["defer_winners"][0]["symbol"], "BRK6")
 
     def test_update_signal_observation_outcomes_marks_favorable_short(self) -> None:
         instrument = mod.InstrumentConfig(symbol="UCM6", figi="FIGI", display_name="USD/CNY")

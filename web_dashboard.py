@@ -1501,6 +1501,12 @@ def _allocator_candidate_from_observation(row: dict[str, Any]) -> dict[str, Any]
         "learning_adjustment": _signal_observation_context_float(row, "learning_adjustment"),
         "requested_margin_rub": _signal_observation_context_float(row, "requested_margin_rub"),
         "allocatable_margin_rub": _signal_observation_context_float(row, "allocatable_margin_rub"),
+        "defer_kind": str(context.get("defer_kind") or ""),
+        "defer_winners": context.get("defer_winners") if isinstance(context.get("defer_winners"), list) else [],
+        "open_risk_budget_rub": _signal_observation_context_float(row, "open_risk_budget_rub"),
+        "open_risk_reserved_rub": _signal_observation_context_float(row, "open_risk_reserved_rub"),
+        "open_risk_available_rub": _signal_observation_context_float(row, "open_risk_available_rub"),
+        "risk_per_contract_rub": _signal_observation_context_float(row, "risk_per_contract_rub"),
         "quantity": quantity,
         "execution_status": execution_status,
         "execution_note": str(context.get("execution_note") or ""),
@@ -1536,7 +1542,9 @@ def load_allocator_workspace(target_day: date, states: dict[str, dict], portfoli
             continue
         if str(state.get("position_side") or "FLAT").upper() != "FLAT":
             continue
-        reason = str(state.get("last_error") or state.get("last_allocator_summary") or "").strip()
+        strategy_blocker = str(state.get("last_error") or "").strip()
+        allocator_summary = str(state.get("last_allocator_summary") or "").strip()
+        reason = strategy_blocker or allocator_summary
         if not reason:
             continue
         blocked.append(
@@ -1556,11 +1564,19 @@ def load_allocator_workspace(target_day: date, states: dict[str, dict], portfoli
                 "learning_adjustment": 0.0,
                 "requested_margin_rub": 0.0,
                 "allocatable_margin_rub": 0.0,
+                "defer_kind": "strategy_block",
+                "defer_winners": [],
+                "open_risk_budget_rub": float(state.get("last_allocator_open_risk_budget_rub") or 0.0),
+                "open_risk_reserved_rub": float(state.get("last_allocator_reserved_open_risk_rub") or 0.0),
+                "open_risk_available_rub": float(state.get("last_allocator_available_open_risk_rub") or 0.0),
+                "risk_per_contract_rub": float(state.get("last_allocator_risk_per_contract_rub") or 0.0),
                 "quantity": 0,
                 "execution_status": "",
                 "execution_note": "",
                 "reason": reason,
-                "allocator_summary": str(state.get("last_allocator_summary") or ""),
+                "allocator_summary": allocator_summary,
+                "strategy_blocker": strategy_blocker,
+                "signal_summary": [str(line) for line in state.get("last_signal_summary") or [] if str(line).strip()],
                 "outcome": "не оценивался",
                 "favorable": None,
             }
@@ -6051,6 +6067,22 @@ def build_dashboard_html() -> str:
       const margin = Number(item.requested_margin_rub || 0);
       const available = Number(item.allocatable_margin_rub || 0);
       const quantity = Number(item.quantity || 0);
+      const winners = Array.isArray(item.defer_winners) ? item.defer_winners : [];
+      const competition = winners.length
+        ? `<div class="allocator-candidate-sub">Победители цикла: ${winners.map((winner) => `${escapeHtml(winner.symbol || '-')} <strong class="mono">${Number(winner.priority_score || 0).toFixed(2)}</strong> / вход ${Number(winner.entry_edge_score || 0).toFixed(2)}`).join(' · ')}<br>Ваш приоритет: <strong class="mono">${Number(item.priority_score || 0).toFixed(2)}</strong></div>`
+        : '';
+      const openRiskAvailable = Number(item.open_risk_available_rub || 0);
+      const riskPerContract = Number(item.risk_per_contract_rub || 0);
+      const riskLine = riskPerContract
+        ? `<div class="allocator-candidate-sub">Общий риск: свободно <strong class="mono">${escapeHtml(formatRub(openRiskAvailable))}</strong>; минимум для 1 лота <strong class="mono">${escapeHtml(formatRub(riskPerContract))}</strong></div>`
+        : '';
+      const strategyBlocker = item.strategy_blocker
+        ? `<div class="allocator-candidate-sub">Стратегия: ${escapeHtml(humanizeAllocatorText(item.strategy_blocker))}</div>`
+        : '';
+      const macdNote = (Array.isArray(item.signal_summary) ? item.signal_summary : []).find((line) => /MACD\s*cross/i.test(String(line)));
+      const macdLine = macdNote
+        ? `<div class="allocator-candidate-sub">${escapeHtml(macdNote)}</div>`
+        : '';
       const components = renderPriorityComponents(item.priority_components)
         || '<div class="allocator-candidate-sub">Состав приоритета не сохранён.</div>';
       return `<article class="allocator-candidate">
@@ -6065,6 +6097,10 @@ def build_dashboard_html() -> str:
         <div>
           <div class="allocator-candidate-title">Что повлияло</div>
           ${components}
+          ${competition}
+          ${riskLine}
+          ${strategyBlocker}
+          ${macdLine}
           <details class="allocator-details">
             <summary>Причина и исполнение</summary>
             <div class="allocator-detail-grid">
