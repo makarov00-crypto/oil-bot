@@ -72,6 +72,7 @@ from trade_quality import (
     early_exit_threshold_pct,
     is_material_early_exit,
     pair_closed_trades,
+    restore_shadow_ai_from_signal_observations,
     summarize_trade_dimension,
     summarize_trade_quality,
 )
@@ -131,7 +132,7 @@ UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 TRADE_QUALITY_REFRESH_SECONDS = 3600
-TRADE_QUALITY_ANALYTICS_VERSION = 5
+TRADE_QUALITY_ANALYTICS_VERSION = 6
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
@@ -1381,8 +1382,19 @@ def build_trade_quality_analytics(
         item["_dt"] = event_time.astimezone(MOSCOW_TZ)
         raw_rows.append(item)
 
+    signal_observations = load_signal_observations(TRADE_DB_PATH, limit=None, newest_first=True)
+    observations_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for observation in signal_observations:
+        observation_symbol = str(observation.get("symbol") or "").upper()
+        if observation_symbol:
+            observations_by_symbol.setdefault(observation_symbol, []).append(observation)
+
     completed: list[dict[str, Any]] = []
     for trade in pair_closed_trades(raw_rows):
+        trade = restore_shadow_ai_from_signal_observations(
+            trade,
+            observations_by_symbol.get(str(trade.get("symbol") or "").upper(), []),
+        )
         entry_time = parse_state_datetime(str(trade.get("entry_time") or ""))
         exit_time = parse_state_datetime(str(trade.get("exit_time") or ""))
         instrument = by_symbol.get(str(trade.get("symbol") or "").upper())
@@ -1440,7 +1452,7 @@ def build_trade_quality_analytics(
 
     missed_entry_evaluations: list[dict[str, Any]] = []
     potential_rows: list[tuple[dict[str, Any], str, float, str]] = []
-    for row in load_signal_observations(TRADE_DB_PATH, limit=None, newest_first=True):
+    for row in signal_observations:
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         execution = str(context.get("execution_status") or "").lower()
         decision = str(row.get("decision") or "").lower()

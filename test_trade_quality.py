@@ -8,6 +8,7 @@ from trade_quality import (
     calculate_trade_excursion,
     is_material_early_exit,
     pair_closed_trades,
+    restore_shadow_ai_from_signal_observations,
     summarize_trade_dimension,
     summarize_trade_quality,
 )
@@ -42,7 +43,7 @@ class TradeQualityTests(unittest.TestCase):
 
     def test_pair_preserves_entry_ai_decision(self) -> None:
         rows = [
-            {"_dt": self.entry, "symbol": "BRU6", "side": "LONG", "event": "OPEN", "qty_lots": 1, "price": 100.0, "context": {"shadow_ai": {"action": "ENTER", "confidence": 0.81, "reason": "тренд подтверждён"}}},
+            {"_dt": self.entry, "symbol": "BRU6", "side": "LONG", "event": "OPEN", "qty_lots": 1, "price": 100.0, "context": {"shadow_ai": {"action": "ENTER", "confidence": 0.81, "reason": "тренд подтверждён", "risk_note": "тонкий рынок"}}},
             {"_dt": self.exit, "symbol": "BRU6", "side": "LONG", "event": "CLOSE", "qty_lots": 1, "price": 102.0, "pnl_rub": 190.0, "commission_rub": 10.0},
         ]
 
@@ -50,6 +51,75 @@ class TradeQualityTests(unittest.TestCase):
 
         self.assertEqual(trade["shadow_ai_action"], "ENTER")
         self.assertEqual(trade["shadow_ai_confidence"], 0.81)
+        self.assertEqual(trade["shadow_ai_risk_note"], "тонкий рынок")
+        self.assertEqual(trade["shadow_ai_source"], "trade_entry")
+
+    def test_restores_ai_decision_from_matching_executed_signal(self) -> None:
+        trade = {
+            "symbol": "BRU6",
+            "side": "LONG",
+            "entry_time": self.entry.isoformat(),
+            "shadow_ai_action": "",
+        }
+        observations = [
+            {
+                "symbol": "BRU6",
+                "signal": "LONG",
+                "decision": "selected",
+                "observed_at": "2026-08-10T10:14:42+00:00",
+                "context": {
+                    "execution_status": "confirmed_open",
+                    "shadow_ai": {
+                        "action": "ВХОД",
+                        "direction": "ЛОНГ",
+                        "confidence": 0.84,
+                        "reason": "движение подтверждено",
+                        "risk_note": "объём умеренный",
+                    },
+                },
+            }
+        ]
+
+        restored = restore_shadow_ai_from_signal_observations(trade, observations)
+
+        self.assertEqual(restored["shadow_ai_action"], "ВХОД")
+        self.assertEqual(restored["shadow_ai_confidence"], 0.84)
+        self.assertEqual(restored["shadow_ai_risk_note"], "объём умеренный")
+        self.assertEqual(restored["shadow_ai_source"], "signal_observation")
+
+    def test_does_not_restore_ai_from_unexecuted_or_distant_signal(self) -> None:
+        trade = {
+            "symbol": "BRU6",
+            "side": "LONG",
+            "entry_time": self.entry.isoformat(),
+            "shadow_ai_action": "",
+        }
+        observations = [
+            {
+                "symbol": "BRU6",
+                "signal": "LONG",
+                "decision": "selected",
+                "observed_at": "2026-08-10T10:14:42+00:00",
+                "context": {
+                    "execution_status": "selection_not_executed",
+                    "shadow_ai": {"action": "ВХОД", "confidence": 0.84},
+                },
+            },
+            {
+                "symbol": "BRU6",
+                "signal": "LONG",
+                "decision": "selected",
+                "observed_at": "2026-08-10T09:00:00+00:00",
+                "context": {
+                    "execution_status": "confirmed_open",
+                    "shadow_ai": {"action": "ВХОД", "confidence": 0.9},
+                },
+            },
+        ]
+
+        restored = restore_shadow_ai_from_signal_observations(trade, observations)
+
+        self.assertEqual(restored["shadow_ai_action"], "")
 
     def test_counterfactuals_convert_hold_result_to_money(self) -> None:
         trade = {

@@ -163,6 +163,22 @@ struct TradeQualityScreen: View {
                             if let confidence = trade.shadowAIConfidence {
                                 InfoRow(title: "Уверенность", value: formatPct(confidence * 100.0))
                             }
+                            if let reason = trade.shadowAIReason, !reason.isEmpty {
+                                Text("Почему: \(reason)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let risk = trade.shadowAIRiskNote, !risk.isEmpty {
+                                Text("Риск: \(risk)")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        } else {
+                            Divider().overlay(Color.white.opacity(0.08))
+                            InfoRow(title: "Теневой ИИ", value: "Оценка не сохранялась")
+                            Text("На момент этого входа оценка ИИ ещё не записывалась в историю сделки.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         Text(trade.exitReason ?? "Причина выхода не сохранена")
                             .font(.caption)

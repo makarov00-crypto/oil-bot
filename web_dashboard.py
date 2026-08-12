@@ -7140,8 +7140,9 @@ def build_dashboard_html() -> str:
                 ${value == null ? '' : `<div class="quality-horizon-delta ${deltaClass}">${escapeHtml(formatSignedRub(delta || 0))} к факту</div>`}
               </div>`;
             }).join('');
-            const aiAction = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[item.shadow_ai_action] || item.shadow_ai_action || 'нет оценки';
-            const aiConfidence = item.shadow_ai_confidence ? `${(Number(item.shadow_ai_confidence) * 100).toFixed(0)}%` : 'нет оценки';
+            const hasAIReview = Boolean(item.shadow_ai_action);
+            const aiAction = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[item.shadow_ai_action] || item.shadow_ai_action || 'ОЦЕНКА НЕ СОХРАНЯЛАСЬ';
+            const aiConfidence = hasAIReview && item.shadow_ai_confidence != null ? `${(Number(item.shadow_ai_confidence) * 100).toFixed(0)}%` : '';
             const excursion = item.mfe_pct == null
               ? 'ещё не рассчитано'
               : `+${Number(item.mfe_pct || 0).toFixed(2)}% / -${Number(item.mae_pct || 0).toFixed(2)}%`;
@@ -7161,8 +7162,9 @@ def build_dashboard_html() -> str:
               <div class="quality-horizon-grid">${holdTiles}</div>
               <div class="quality-card-note"><strong>Выход:</strong> ${escapeHtml(shortDiagnosticText(item.exit_reason || 'причина не сохранена', 180))}</div>
               <div class="quality-ai">
-                <div class="quality-ai-head"><div class="quality-ai-title">Теневой ИИ</div><div class="quality-ai-meta">${escapeHtml(aiAction)} · уверенность ${escapeHtml(aiConfidence)}</div></div>
-                <div class="quality-ai-reason"><strong>Почему:</strong> ${escapeHtml(item.shadow_ai_reason ? shortDiagnosticText(item.shadow_ai_reason, 220) : 'Пояснение не сохранено.')}</div>
+                <div class="quality-ai-head"><div class="quality-ai-title">Теневой ИИ</div><div class="quality-ai-meta">${escapeHtml(aiAction)}${aiConfidence ? ` · уверенность ${escapeHtml(aiConfidence)}` : ''}</div></div>
+                <div class="quality-ai-reason"><strong>${hasAIReview ? 'Почему:' : 'Статус:'}</strong> ${escapeHtml(item.shadow_ai_reason ? shortDiagnosticText(item.shadow_ai_reason, 220) : 'На момент этого входа оценка ИИ ещё не записывалась в историю сделки.')}</div>
+                ${item.shadow_ai_risk_note ? `<div class="quality-ai-reason"><strong>Риск:</strong> ${escapeHtml(shortDiagnosticText(item.shadow_ai_risk_note, 180))}</div>` : ''}
               </div>
             </article>`;
           }).join('')

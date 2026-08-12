@@ -87,9 +87,74 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "shadow_ai_direction": str(shadow_ai.get("direction") or ""),
                 "shadow_ai_confidence": _as_float(shadow_ai.get("confidence")),
                 "shadow_ai_reason": str(shadow_ai.get("reason") or ""),
+                "shadow_ai_risk_note": str(shadow_ai.get("risk_note") or ""),
+                "shadow_ai_source": "trade_entry" if shadow_ai.get("action") else "",
             }
         )
     return pairs
+
+
+def restore_shadow_ai_from_signal_observations(
+    trade: dict[str, Any],
+    observations: Iterable[dict[str, Any]],
+    *,
+    max_gap: timedelta = timedelta(minutes=20),
+) -> dict[str, Any]:
+    """Restore an entry AI review from the matching executed signal observation."""
+    if str(trade.get("shadow_ai_action") or "").strip():
+        return dict(trade)
+    try:
+        entry_time = datetime.fromisoformat(str(trade.get("entry_time") or ""))
+    except (TypeError, ValueError):
+        return dict(trade)
+    if entry_time.tzinfo is None:
+        return dict(trade)
+
+    symbol = str(trade.get("symbol") or "").upper()
+    side = str(trade.get("side") or "").upper()
+    best_match: tuple[float, dict[str, Any]] | None = None
+    for observation in observations:
+        if str(observation.get("symbol") or "").upper() != symbol:
+            continue
+        if str(observation.get("signal") or "").upper() != side:
+            continue
+        if str(observation.get("decision") or "").lower() != "selected":
+            continue
+        context = observation.get("context") if isinstance(observation.get("context"), dict) else {}
+        if str(context.get("execution_status") or "").lower() not in {
+            "confirmed_open",
+            "recovered_open",
+            "submitted_open",
+        }:
+            continue
+        shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
+        if not str(shadow_ai.get("action") or "").strip():
+            continue
+        try:
+            observed_at = datetime.fromisoformat(str(observation.get("observed_at") or ""))
+        except (TypeError, ValueError):
+            continue
+        if observed_at.tzinfo is None:
+            continue
+        seconds_after_signal = (entry_time - observed_at).total_seconds()
+        if seconds_after_signal < -120 or seconds_after_signal > max_gap.total_seconds():
+            continue
+        distance = abs(seconds_after_signal)
+        if best_match is None or distance < best_match[0]:
+            best_match = (distance, shadow_ai)
+
+    if best_match is None:
+        return dict(trade)
+    shadow_ai = best_match[1]
+    return {
+        **trade,
+        "shadow_ai_action": str(shadow_ai.get("action") or ""),
+        "shadow_ai_direction": str(shadow_ai.get("direction") or ""),
+        "shadow_ai_confidence": _as_float(shadow_ai.get("confidence")),
+        "shadow_ai_reason": str(shadow_ai.get("reason") or ""),
+        "shadow_ai_risk_note": str(shadow_ai.get("risk_note") or ""),
+        "shadow_ai_source": "signal_observation",
+    }
 
 
 def calculate_trade_excursion(

@@ -162,6 +162,7 @@ struct TradeQualityTrade: Decodable, Identifiable {
     let shadowAIAction: String?
     let shadowAIConfidence: Double?
     let shadowAIReason: String?
+    let shadowAIRiskNote: String?
 
     var id: String { qualityKey ?? "\(symbol)|\(entryTime ?? "")|\(exitTime ?? "")" }
 
@@ -187,6 +188,7 @@ struct TradeQualityTrade: Decodable, Identifiable {
         case shadowAIAction = "shadow_ai_action"
         case shadowAIConfidence = "shadow_ai_confidence"
         case shadowAIReason = "shadow_ai_reason"
+        case shadowAIRiskNote = "shadow_ai_risk_note"
     }
 }
 
