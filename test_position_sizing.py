@@ -672,6 +672,9 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(sizing["qty_by_risk"], 0)
         self.assertTrue(sizing["risk_min_lot_override"])
         self.assertEqual(sizing["quantity"], 1)
+        summary = mod.build_allocator_summary_text(sizing)
+        self.assertIn("1 лот по допуску", summary)
+        self.assertNotIn("риск сделки 564 RUB (0 лот.)", summary)
 
 
 if __name__ == "__main__":

@@ -8470,6 +8470,7 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     correlation_note = str(sizing.get("correlation_note") or "").strip()
     correlation_hint = f", {correlation_note}" if correlation_note else ""
     risk_budget = float(sizing.get("risk_budget_rub") or 0.0)
+    money_risk_per_contract = float(sizing.get("money_risk_per_contract_rub") or 0.0)
     qty_by_risk = int(sizing.get("qty_by_risk") or 0)
     max_open_risk_budget = float(sizing.get("max_open_risk_budget_rub") or 0.0)
     reserved_open_risk = float(sizing.get("reserved_open_risk_rub") or 0.0)
@@ -8477,7 +8478,13 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     qty_by_open_risk = int(sizing.get("qty_by_open_risk") or 0)
     risk_hint = ""
     if risk_budget > 0.0:
-        risk_hint = f", риск сделки {risk_budget:.0f} RUB ({qty_by_risk} лот.)"
+        if risk_min_lot_override:
+            risk_hint = (
+                f", риск сделки {risk_budget:.0f} RUB "
+                f"(1 лот по допуску, риск лота {money_risk_per_contract:.0f} RUB)"
+            )
+        else:
+            risk_hint = f", риск сделки {risk_budget:.0f} RUB ({qty_by_risk} лот.)"
     if max_open_risk_budget > 0.0:
         risk_hint += (
             f", общий риск {reserved_open_risk:.0f}/{max_open_risk_budget:.0f} RUB "
