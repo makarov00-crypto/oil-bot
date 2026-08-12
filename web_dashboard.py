@@ -1484,8 +1484,6 @@ def _allocator_candidate_from_observation(row: dict[str, Any]) -> dict[str, Any]
     quantity = int(context.get("allocator_quantity") or 0)
     if quantity <= 0 and allocator_summary:
         quantity_match = re.search(r"лимит брокера\s+\d+\s*->\s*(\d+)\s+лот", allocator_summary, flags=re.IGNORECASE)
-        if quantity_match is None:
-            quantity_match = re.search(r"брокерский размер\s+(\d+)\s+лот", allocator_summary, flags=re.IGNORECASE)
         if quantity_match is not None:
             quantity = int(quantity_match.group(1))
     return {

@@ -850,6 +850,22 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual([item["symbol"] for item in selected], ["BRK6", "NGJ6"])
         self.assertEqual([item["symbol"] for item in deferred], ["IMOEXF"])
 
+    def test_rank_cycle_entry_candidates_defers_zero_sized_candidate(self) -> None:
+        candidate = {
+            "symbol": "USDRUBF",
+            "priority_score": 0.63,
+            "entry_edge_score": 0.75,
+            "regime_confidence": 0.86,
+            "allocator_quantity": 0,
+            "allocator_summary": "лимит риска сделки не разрешил один лот",
+        }
+
+        selected, deferred = mod.rank_cycle_entry_candidates([candidate])
+
+        self.assertEqual(selected, [])
+        self.assertEqual(deferred, [candidate])
+        self.assertIn("лимит риска", candidate["defer_reason"])
+
     def test_rank_cycle_entry_candidates_respects_cycle_budget_and_class_balance(self) -> None:
         candidates = [
             {

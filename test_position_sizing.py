@@ -637,6 +637,42 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(sizing["available_open_risk_rub"], 500.0)
         self.assertEqual(sizing["quantity"], 0)
 
+    def test_confirmed_hourly_signal_can_use_one_indivisible_lot_with_small_risk_excess(self) -> None:
+        self.config.risk_per_trade_pct = 0.0035
+        self.config.max_open_risk_pct = 0.02
+        self.config.symbols = ["USDRUBF"]
+        self.instrument.symbol = "USDRUBF"
+        self.instrument.initial_margin_on_buy = 12367.64
+        self.instrument.min_price_increment = 0.0025
+        self.instrument.min_price_increment_amount = 2.5
+        self.state.last_entry_edge_score = 0.75
+        self.state.last_entry_edge_label = "confirmed"
+        snapshot = mod.AccountSnapshot(total_portfolio=115085.0, free_rub=82100.0, blocked_guarantee_rub=5924.0)
+        with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+            mod, "get_margin_headroom_rub", return_value=96000.0
+        ), patch.object(
+            mod, "get_broker_max_lots", return_value=20
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.12
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("тяжёлый", 0.85)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, self.instrument, self.state, 83.13, "LONG", self.live_strategy
+            )
+
+        self.assertEqual(sizing["qty_by_risk"], 0)
+        self.assertTrue(sizing["risk_min_lot_override"])
+        self.assertEqual(sizing["quantity"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -947,6 +947,25 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("новости", payload["candidates"][0]["priority_components"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_allocator_candidate_does_not_treat_broker_target_as_final_quantity(self) -> None:
+        candidate = dashboard._allocator_candidate_from_observation(
+            {
+                "symbol": "USDRUBF",
+                "signal": "LONG",
+                "decision": "selected",
+                "context": {
+                    "allocator_summary": (
+                        "Аллокатор: вход не проходит, брокерский размер 10 лот(а), "
+                        "риск сделки 564 RUB (0 лот.)."
+                    ),
+                    "execution_status": "selection_not_executed",
+                },
+            }
+        )
+
+        self.assertEqual(candidate["quantity"], 0)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_signal_observation_summary_for_day_counts_learning_rows(self) -> None:
         with TemporaryDirectory() as temp_dir:
             db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
