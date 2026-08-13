@@ -4720,39 +4720,6 @@ def build_dashboard_html() -> str:
     .allocator-history {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
-    .strategy-diagnostics-grid {
-      display: grid;
-      gap: 12px;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    }
-    .strategy-diagnostic-card {
-      background: rgba(10, 18, 34, 0.62);
-      border: 1px solid rgba(102, 174, 255, 0.12);
-      border-radius: 8px;
-      padding: 12px 14px;
-    }
-    .strategy-diagnostic-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      align-items: flex-start;
-      margin-bottom: 8px;
-    }
-    .strategy-diagnostic-title {
-      font-weight: 800;
-      color: #eef6ff;
-    }
-    .strategy-diagnostic-meta {
-      color: var(--muted);
-      font-size: 12px;
-      margin-top: 2px;
-    }
-    .strategy-diagnostic-line {
-      color: #d8e6f6;
-      font-size: 13px;
-      line-height: 1.4;
-      margin-top: 6px;
-    }
     .trade-review-summary {
       display: grid;
       gap: 10px;
@@ -5376,7 +5343,6 @@ def build_dashboard_html() -> str:
       </div>
       <div class="review-tabs" role="tablist" aria-label="Разделы обзора сделок">
         <button class="review-tab active" type="button" data-review-tab="trades">Сделки</button>
-        <button class="review-tab" type="button" data-review-tab="strategy">Стратегия</button>
         <button class="review-tab" type="button" data-review-tab="allocator">Аллокатор</button>
         <button class="review-tab" type="button" data-review-tab="quality">Качество</button>
       </div>
@@ -5393,23 +5359,6 @@ def build_dashboard_html() -> str:
             <tbody></tbody>
           </table>
         </div>
-      </div>
-      <div id="reviewTabStrategy" class="review-tab-panel">
-        <div class="review-layout">
-          <div class="review-block">
-            <h3>Сводка стратегии</h3>
-            <table class="review-summary-table">
-              <tbody id="strategyDiagnosticsSummaryBody"></tbody>
-            </table>
-          </div>
-          <div class="review-block">
-            <h3>Текущие решения</h3>
-            <table class="review-summary-table">
-              <tbody id="strategyDiagnosticsActionBody"></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="strategy-diagnostics-grid" id="strategyDiagnosticsCards" style="margin-top:16px;"></div>
       </div>
       <div id="reviewTabAllocator" class="review-tab-panel">
         <div class="allocator-kpis" id="allocatorKpis"></div>
@@ -6226,19 +6175,6 @@ def build_dashboard_html() -> str:
       return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
     }
 
-    function extractDiagnosticParts(summary) {
-      const text = Array.isArray(summary) ? summary.join('; ') : String(summary || '');
-      const parts = text.split(';').map((item) => cleanDiagnosticText(item)).filter(Boolean);
-      const findPart = (patterns) => parts.find((part) => patterns.some((pattern) => part.toLowerCase().includes(pattern)));
-      return {
-        macd: findPart(['macd']) || 'MACD: нет данных',
-        rsi: findPart(['rsi=']) || 'RSI: нет данных',
-        ao: findPart(['ao=']) || findPart(['поток чайкина']) || 'AO/поток: нет данных',
-        volume: findPart(['объём', 'объем']) || 'Объём: нет данных',
-        blocker: findPart(['главные блокеры', 'late entry', 'не подтверждён', 'не подтвержден', 'слишком']) || parts[0] || 'нет явного блокера',
-      };
-    }
-
     function positionText(state) {
       const side = String(state.position_side || 'FLAT').toUpperCase();
       const qty = Number(state.position_qty || 0);
@@ -6257,7 +6193,6 @@ def build_dashboard_html() -> str:
         const side = String(state.position_side || 'FLAT').toUpperCase();
         return signal !== 'HOLD' && (side === 'FLAT' || side !== signal);
       });
-      const holds = entries.filter(([, state]) => String(state.last_signal || 'HOLD').toUpperCase() === 'HOLD');
       const allocatorBlocked = entries.filter(([, state]) => {
         const summary = String(state.last_allocator_summary || '').toLowerCase();
         return summary.includes('не хватает') || summary.includes('отложен') || summary.includes('0 лот');
@@ -6269,42 +6204,7 @@ def build_dashboard_html() -> str:
         buildReviewRow('Ограничения', `${allocatorBlocked.length}`, allocatorBlocked.length ? allocatorBlocked.map(([symbol]) => instrumentText(symbol)).slice(0, 4).join(' · ') : 'аллокатор не показывает явных блокировок'),
       ];
 
-      const summaryRows = [
-        buildReviewRow('Инструментов', `${entries.length}`, 'актуальные состояния стратегии'),
-        buildReviewRow('Держим позиции', `${activePositions.length}`, activePositions.length ? activePositions.map(([symbol]) => instrumentText(symbol)).slice(0, 4).join(' · ') : 'нет открытых позиций'),
-        buildReviewRow('Есть вход', `${actionableSignals.length}`, actionableSignals.length ? actionableSignals.map(([symbol, state]) => `${instrumentText(symbol)}: ${displaySignal(state.last_signal)}`).slice(0, 4).join(' · ') : 'нет свободных входов'),
-        buildReviewRow('HOLD', `${holds.length}`, 'инструменты без входа сейчас'),
-      ];
-
-      const actionRows = [
-        buildReviewRow('Главное', actionableSignals.length ? 'проверить свободные сигналы' : activePositions.length ? 'контролировать сопровождение позиции' : 'ждать новый MACD-сигнал', actionableSignals.length ? actionableSignals.map(([symbol]) => instrumentText(symbol)).slice(0, 3).join(' · ') : ''),
-        buildReviewRow('Если нет входа', allocatorBlocked.length ? 'смотреть аллокатор' : 'смотреть блокер стратегии', allocatorBlocked.length ? 'есть ограничения по размеру/ГО/приоритету' : 'причина должна быть в карточке инструмента'),
-        buildReviewRow('Выход', activePositions.length ? 'закрывать только по реальному развороту или стопу' : 'нет позиции для сопровождения', 'RSI сам по себе не должен выбивать новый 15м режим'),
-      ];
-
-      const cards = entries.map(([symbol, state]) => {
-        const signal = String(state.last_signal || 'HOLD').toUpperCase();
-        const parts = extractDiagnosticParts(state.last_signal_summary || []);
-        const strategy = formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-');
-        const allocator = shortDiagnosticText(state.last_allocator_summary || 'аллокатор: нет свежего ограничения', 150);
-        return `<article class="strategy-diagnostic-card">
-          <div class="strategy-diagnostic-head">
-            <div>
-              <div class="strategy-diagnostic-title">${renderInstrumentLabel(symbol, state.display_name || '')}</div>
-              <div class="strategy-diagnostic-meta">${escapeHtml(strategy)} · ${escapeHtml(positionText(state))}</div>
-            </div>
-            ${signalBadge(signal)}
-          </div>
-          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.macd, 130))}</div>
-          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.rsi, 130))}</div>
-          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.ao, 130))}</div>
-          <div class="strategy-diagnostic-line">${escapeHtml(shortDiagnosticText(parts.volume, 130))}</div>
-          <div class="strategy-diagnostic-line"><span class="muted">Блокер:</span> ${escapeHtml(shortDiagnosticText(parts.blocker, 150))}</div>
-          <div class="strategy-diagnostic-line"><span class="muted">Аллокатор:</span> ${escapeHtml(allocator)}</div>
-        </article>`;
-      }).join('');
-
-      return { nowRows, summaryRows, actionRows, cards };
+      return { nowRows };
     }
 
     function buildFocusItem(item, formatter = (value) => value) {
@@ -7013,9 +6913,6 @@ def build_dashboard_html() -> str:
       document.getElementById('reviewWinRate').textContent = `${Number(review.win_rate || 0).toFixed(1)}%`;
       const diagnostics = buildStrategyDiagnostics(data);
       document.getElementById('reviewNowBody').innerHTML = diagnostics.nowRows.join('');
-      document.getElementById('strategyDiagnosticsSummaryBody').innerHTML = diagnostics.summaryRows.join('');
-      document.getElementById('strategyDiagnosticsActionBody').innerHTML = diagnostics.actionRows.join('');
-      document.getElementById('strategyDiagnosticsCards').innerHTML = diagnostics.cards || '<div class="muted">Нет актуальных состояний стратегии.</div>';
 
       renderAllocatorWorkspace(data.allocator_workspace || {});
 
