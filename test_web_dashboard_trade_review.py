@@ -97,6 +97,21 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('class="shadow-ai-field-label">Проверка через 4 часа', html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_shadow_ai_abstention_is_correct_when_original_signal_loses(self) -> None:
+        self.assertTrue(dashboard.evaluate_shadow_ai_verdict("ВОЗДЕРЖАТЬСЯ", False))
+        self.assertFalse(dashboard.evaluate_shadow_ai_verdict("ВОЗДЕРЖАТЬСЯ", True))
+        self.assertTrue(dashboard.evaluate_shadow_ai_verdict("ВХОД", True))
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_quality_lab_uses_unambiguous_labels(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertIn("Лучший результат до выхода", html)
+        self.assertIn("Разница с лучшим моментом", html)
+        self.assertIn("ориентир внутри сделки, не совет удерживать", html)
+        self.assertIn("Закрыть на ${hours}ч позже", html)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:
         rows = []
         base_dt = datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc)

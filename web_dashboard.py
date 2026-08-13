@@ -1380,9 +1380,7 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
             if hours == 4:
                 action = str(shadow_ai.get("action") or "")
                 favorable = bool(outcome.get("favorable"))
-                if (action in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"} and favorable) or (
-                    action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"} and not favorable
-                ):
+                if evaluate_shadow_ai_verdict(action, favorable):
                     performance["correct_4h"] += 1
     if not SIGNAL_AI_SHADOW_PATH.exists():
         return {"enabled": enabled, "count": 0, "supporting": 0, "abstaining": 0, "reviews": [], **performance}
@@ -1420,6 +1418,16 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         "reviews": reviews,
         **performance,
     }
+
+
+def evaluate_shadow_ai_verdict(action: str, favorable: bool) -> bool | None:
+    """Interpret the market result in the context of the AI recommendation."""
+    normalized_action = str(action or "").strip().upper()
+    if normalized_action in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"}:
+        return favorable
+    if normalized_action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN", "ВЫЙТИ", "EXIT", "ПЕРЕВОРОТ", "REVERSE"}:
+        return not favorable
+    return None
 
 
 def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[dict[str, Any]]:
@@ -4446,6 +4454,12 @@ def build_dashboard_html() -> str:
       font: 700 13px/1.3 "JetBrains Mono", monospace;
       overflow-wrap: anywhere;
     }
+    .quality-metric-note {
+      margin-top: 5px;
+      color: #8ca4c2;
+      font-size: 11px;
+      line-height: 1.35;
+    }
     .quality-horizon-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -5447,7 +5461,7 @@ def build_dashboard_html() -> str:
           </div>
         </div>
         <div id="qualityPanelTrades" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">Фактический итог и результат альтернативного удержания позиции по часовым свечам.</div>
+          <div class="muted" style="margin-bottom:10px;">Фактический итог, лучшая и худшая цена до закрытия, а также результат, если закрыть позицию позднее.</div>
           <div id="qualityTradesBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelExits" class="quality-panel">
@@ -6974,7 +6988,15 @@ def build_dashboard_html() -> str:
               const source = outcome4h.price_source === 'hourly_next_session'
                 ? 'первая часовая свеча после паузы рынка'
                 : 'часовое закрытие';
-              outcomeText = `${outcome4h.favorable ? 'Решение подтвердилось' : 'Решение не подтвердилось'}: ${move >= 0 ? '+' : ''}${move.toFixed(2)}%, ${source}.`;
+              const actionSupportsSignal = ['ENTER', 'HOLD', 'ВХОД', 'УДЕРЖИВАТЬ'].includes(rawAction);
+              const actionRejectsSignal = ['ABSTAIN', 'EXIT', 'REVERSE', 'ВОЗДЕРЖАТЬСЯ', 'ВЫЙТИ', 'ПЕРЕВОРОТ'].includes(rawAction);
+              const verdict = actionSupportsSignal ? outcome4h.favorable : actionRejectsSignal ? !outcome4h.favorable : null;
+              const signalText = String(item.signal || '').toUpperCase() === 'SHORT' ? 'шорт' : 'лонг';
+              const movementText = outcome4h.favorable
+                ? `исходный ${signalText} был бы в плюсе ${move >= 0 ? '+' : ''}${move.toFixed(2)}%`
+                : `исходный ${signalText} был бы в минусе ${move.toFixed(2)}%`;
+              const verdictText = verdict == null ? 'Нельзя оценить рекомендацию' : verdict ? 'Совет ИИ подтвердился' : 'Совет ИИ не подтвердился';
+              outcomeText = `${verdictText}: ${movementText}; ${source}.`;
             }
             return `<article class="shadow-ai-card">
               <div class="shadow-ai-head">
@@ -7194,14 +7216,23 @@ def build_dashboard_html() -> str:
         ? sortedQualityTrades.slice(0, 20).map((item) => {
             const pnl = Number(item.pnl_rub || 0);
             const pnlClass = pnl >= 0 ? 'good' : 'bad';
+            const holdDeltas = [1, 2, 4, 8]
+              .map((hours) => Number(item[`hold_${hours}h_delta_rub`]))
+              .filter((value) => Number.isFinite(value));
+            const bestHoldDelta = holdDeltas.length ? Math.max(...holdDeltas) : null;
+            const holdConclusion = bestHoldDelta == null
+              ? 'Для сравнения удержания ещё недостаточно данных.'
+              : bestHoldDelta > 0
+                ? `Более поздний выход мог улучшить результат на ${formatRub(bestHoldDelta)}.`
+                : 'После выхода движение не улучшало результат: закрытие было оправдано.';
             const holdTiles = [1, 2, 4, 8].map((hours) => {
               const value = item[`hold_${hours}h_net_rub`];
               const delta = item[`hold_${hours}h_delta_rub`];
               const deltaClass = Number(delta || 0) >= 0 ? 'good' : 'bad';
               return `<div class="quality-horizon">
-                <div class="quality-horizon-time">Ещё ${hours}ч</div>
+                <div class="quality-horizon-time">Закрыть на ${hours}ч позже</div>
                 <div class="quality-horizon-value">${value == null ? 'ждём данные' : escapeHtml(formatSignedRub(value))}</div>
-                ${value == null ? '' : `<div class="quality-horizon-delta ${deltaClass}">${escapeHtml(formatSignedRub(delta || 0))} к факту</div>`}
+                ${value == null ? '' : `<div class="quality-horizon-delta ${deltaClass}">${escapeHtml(formatSignedRub(delta || 0))} относительно факта</div>`}
               </div>`;
             }).join('');
             const hasAIReview = Boolean(item.shadow_ai_action);
@@ -7210,6 +7241,8 @@ def build_dashboard_html() -> str:
             const excursion = item.mfe_pct == null
               ? 'ещё не рассчитано'
               : `+${Number(item.mfe_pct || 0).toFixed(2)}% / -${Number(item.mae_pct || 0).toFixed(2)}%`;
+            const bestPrice = item.best_price == null ? '—' : formatPrice(item.best_price);
+            const worstPrice = item.worst_price == null ? '—' : formatPrice(item.worst_price);
             return `<article class="quality-card">
               <div class="quality-card-head">
                 <div>
@@ -7219,11 +7252,12 @@ def build_dashboard_html() -> str:
                 <div class="quality-card-result ${pnlClass}">${escapeHtml(formatSignedRub(pnl))}</div>
               </div>
               <div class="quality-metric-grid">
-                <div class="quality-metric"><div class="quality-metric-label">Максимум по ходу</div><div class="quality-metric-value">${item.max_possible_net_rub == null ? 'ещё не рассчитан' : escapeHtml(formatSignedRub(item.max_possible_net_rub))}</div></div>
-                <div class="quality-metric"><div class="quality-metric-label">Недобрано</div><div class="quality-metric-value ${Number(item.missed_profit_rub || 0) > 0 ? 'bad' : ''}">${escapeHtml(formatRub(item.missed_profit_rub || 0))}</div></div>
-                <div class="quality-metric"><div class="quality-metric-label">Движение / просадка</div><div class="quality-metric-value">${escapeHtml(excursion)}</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Лучший результат до выхода</div><div class="quality-metric-value">${item.max_possible_net_rub == null ? 'ещё не рассчитан' : escapeHtml(formatSignedRub(item.max_possible_net_rub))}</div><div class="quality-metric-note">лучшая цена ${escapeHtml(bestPrice)}</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Разница с лучшим моментом</div><div class="quality-metric-value">${item.missed_profit_rub == null ? 'ещё не рассчитана' : escapeHtml(formatRub(item.missed_profit_rub))}</div><div class="quality-metric-note">ориентир внутри сделки, не совет удерживать</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Лучшее / худшее движение</div><div class="quality-metric-value">${escapeHtml(excursion)}</div><div class="quality-metric-note">худшая цена ${escapeHtml(worstPrice)}</div></div>
               </div>
               <div class="quality-horizon-grid">${holdTiles}</div>
+              <div class="quality-card-note"><strong>Проверка выхода:</strong> ${escapeHtml(holdConclusion)}</div>
               <div class="quality-card-note"><strong>Выход:</strong> ${escapeHtml(shortDiagnosticText(item.exit_reason || 'причина не сохранена', 180))}</div>
               <div class="quality-ai">
                 <div class="quality-ai-head"><div class="quality-ai-title">Теневой ИИ</div><div class="quality-ai-meta">${escapeHtml(aiAction)}${aiConfidence ? ` · уверенность ${escapeHtml(aiConfidence)}` : ''}</div></div>
