@@ -1358,6 +1358,10 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         "evaluated_8h": 0,
         "correct_4h": 0,
         "executed": 0,
+        "enter_evaluated_4h": 0,
+        "enter_correct_4h": 0,
+        "abstain_evaluated_4h": 0,
+        "abstain_correct_4h": 0,
     }
     shadow_outcomes_by_key: dict[str, dict[str, Any]] = {}
     for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800, newest_first=True):
@@ -1380,8 +1384,18 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
             if hours == 4:
                 action = str(shadow_ai.get("action") or "")
                 favorable = bool(outcome.get("favorable"))
-                if evaluate_shadow_ai_verdict(action, favorable):
+                verdict = evaluate_shadow_ai_verdict(action, favorable)
+                if verdict:
                     performance["correct_4h"] += 1
+                normalized_action = action.strip().upper()
+                if normalized_action in {"ВХОД", "ENTER"}:
+                    performance["enter_evaluated_4h"] += 1
+                    if verdict:
+                        performance["enter_correct_4h"] += 1
+                elif normalized_action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"}:
+                    performance["abstain_evaluated_4h"] += 1
+                    if verdict:
+                        performance["abstain_correct_4h"] += 1
     if not SIGNAL_AI_SHADOW_PATH.exists():
         return {"enabled": enabled, "count": 0, "supporting": 0, "abstaining": 0, "reviews": [], **performance}
     latest: dict[str, dict[str, Any]] = {}
@@ -1410,12 +1424,23 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
             pass
     supporting = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"})
     abstaining = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"})
+    overall_target = 40
+    enter_target = 20
+    evaluated_4h = int(performance["evaluated_4h"])
+    enter_evaluated_4h = int(performance["enter_evaluated_4h"])
     return {
         "enabled": enabled,
         "count": len(reviews),
         "supporting": supporting,
         "abstaining": abstaining,
         "reviews": reviews,
+        "readiness": {
+            "overall_target": overall_target,
+            "enter_target": enter_target,
+            "overall_remaining": max(0, overall_target - evaluated_4h),
+            "enter_remaining": max(0, enter_target - enter_evaluated_4h),
+            "ready": evaluated_4h >= overall_target and enter_evaluated_4h >= enter_target,
+        },
         **performance,
     }
 
@@ -4545,6 +4570,9 @@ def build_dashboard_html() -> str:
       overflow-y: auto;
       padding-right: 6px;
     }
+    .shadow-ai-performance {
+      margin-top: 14px;
+    }
     .shadow-ai-card {
       min-width: 0;
       padding: 13px 14px;
@@ -5198,6 +5226,7 @@ def build_dashboard_html() -> str:
         <div><div class="muted">Проверено через 4ч</div><div class="metric" id="shadowAiEvaluated4h">0</div></div>
         <div><div class="muted">Точность через 4ч</div><div class="metric" id="shadowAiAccuracy4h">-</div></div>
       </div>
+      <div class="trade-review-summary shadow-ai-performance" id="shadowAiPerformance"></div>
       <div id="shadowAiRows" class="shadow-ai-list"></div>
     </section>
 
@@ -6859,6 +6888,30 @@ def build_dashboard_html() -> str:
       const shadowAiCorrect4h = Number(shadowAi.correct_4h || 0);
       document.getElementById('shadowAiEvaluated4h').textContent = shadowAiEvaluated4h;
       document.getElementById('shadowAiAccuracy4h').textContent = shadowAiEvaluated4h ? `${(shadowAiCorrect4h / shadowAiEvaluated4h * 100).toFixed(1)}%` : '-';
+      const shadowAiEnterEvaluated4h = Number(shadowAi.enter_evaluated_4h || 0);
+      const shadowAiEnterCorrect4h = Number(shadowAi.enter_correct_4h || 0);
+      const shadowAiAbstainEvaluated4h = Number(shadowAi.abstain_evaluated_4h || 0);
+      const shadowAiAbstainCorrect4h = Number(shadowAi.abstain_correct_4h || 0);
+      const shadowAiReadiness = shadowAi.readiness || {};
+      const shadowAiPerformance = document.getElementById('shadowAiPerformance');
+      if (shadowAiPerformance) {
+        const enterAccuracy = shadowAiEnterEvaluated4h
+          ? `${(shadowAiEnterCorrect4h / shadowAiEnterEvaluated4h * 100).toFixed(1)}%`
+          : '-';
+        const abstainAccuracy = shadowAiAbstainEvaluated4h
+          ? `${(shadowAiAbstainCorrect4h / shadowAiAbstainEvaluated4h * 100).toFixed(1)}%`
+          : '-';
+        const overallTarget = Number(shadowAiReadiness.overall_target || 40);
+        const enterTarget = Number(shadowAiReadiness.enter_target || 20);
+        const readinessText = shadowAiReadiness.ready
+          ? 'минимальная выборка набрана: можно обсуждать мягкий фильтр риска'
+          : `до первичной оценки: ещё ${Math.max(0, overallTarget - shadowAiEvaluated4h)} проверок всего и ${Math.max(0, enterTarget - shadowAiEnterEvaluated4h)} рекомендаций «Вход»`;
+        shadowAiPerformance.innerHTML = [
+          buildTradeSummaryCard('ИИ рекомендует вход', enterAccuracy, `${shadowAiEnterCorrect4h} из ${shadowAiEnterEvaluated4h} подтверждено за 4ч`, shadowAiEnterEvaluated4h && shadowAiEnterCorrect4h / shadowAiEnterEvaluated4h >= 0.6 ? 'good' : 'bad'),
+          buildTradeSummaryCard('ИИ советует пропустить', abstainAccuracy, `${shadowAiAbstainCorrect4h} из ${shadowAiAbstainEvaluated4h} подтверждено за 4ч`, shadowAiAbstainEvaluated4h && shadowAiAbstainCorrect4h / shadowAiAbstainEvaluated4h >= 0.6 ? 'good' : 'bad'),
+          buildTradeSummaryCard('Готовность выборки', `${shadowAiEvaluated4h} / ${overallTarget}`, readinessText, shadowAiReadiness.ready ? 'good' : ''),
+        ].join('');
+      }
       const shadowAiRows = document.getElementById('shadowAiRows');
       const shadowAiReviews = Array.isArray(shadowAi.reviews)
         ? shadowAi.reviews.slice().sort((a, b) => String(b.candle_time || b.time || '').localeCompare(String(a.candle_time || a.time || '')))

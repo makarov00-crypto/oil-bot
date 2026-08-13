@@ -103,6 +103,45 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertTrue(dashboard.evaluate_shadow_ai_verdict("ВХОД", True))
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_shadow_ai_summary_separates_enter_and_abstain_results(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
+            shadow_path = dashboard.Path(temp_dir) / "shadow.jsonl"
+            shadow_path.write_text("", encoding="utf-8")
+            rows = [
+                ("BRU6", "ВХОД", True),
+                ("NGQ6", "ВХОД", False),
+                ("RNU6", "ВОЗДЕРЖАТЬСЯ", False),
+            ]
+            for index, (symbol, action, favorable) in enumerate(rows):
+                append_signal_observation(
+                    db_path,
+                    {
+                        "observed_at": f"2026-08-10T1{index}:00:00+03:00",
+                        "symbol": symbol,
+                        "signal": "LONG",
+                        "decision": "selected",
+                        "context": {
+                            "candle_time": f"2026-08-10 1{index}:00",
+                            "shadow_ai": {"action": action, "confidence": 0.8},
+                            "shadow_ai_outcomes": {"4h": {"favorable": favorable}},
+                        },
+                    },
+                )
+            with patch.object(dashboard, "TRADE_DB_PATH", db_path), patch.object(
+                dashboard, "SIGNAL_AI_SHADOW_PATH", shadow_path
+            ):
+                summary = dashboard.load_signal_ai_shadow_summary()
+
+        self.assertEqual(summary["evaluated_4h"], 3)
+        self.assertEqual(summary["correct_4h"], 2)
+        self.assertEqual(summary["enter_evaluated_4h"], 2)
+        self.assertEqual(summary["enter_correct_4h"], 1)
+        self.assertEqual(summary["abstain_evaluated_4h"], 1)
+        self.assertEqual(summary["abstain_correct_4h"], 1)
+        self.assertFalse(summary["readiness"]["ready"])
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_quality_lab_uses_unambiguous_labels(self) -> None:
         html = dashboard.build_dashboard_html()
 
