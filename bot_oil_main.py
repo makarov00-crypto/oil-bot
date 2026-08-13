@@ -69,6 +69,7 @@ from trade_quality import (
     build_trade_quality_overview,
     calculate_post_exit_move,
     calculate_trade_excursion,
+    group_strategy_hypotheses,
     early_exit_threshold_pct,
     is_material_early_exit,
     pair_closed_trades,
@@ -134,7 +135,7 @@ UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 TRADE_QUALITY_REFRESH_SECONDS = 3600
-TRADE_QUALITY_ANALYTICS_VERSION = 7
+TRADE_QUALITY_ANALYTICS_VERSION = 8
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-4.1-mini"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
@@ -1587,7 +1588,8 @@ def build_trade_quality_analytics(
         if float(item.get("move_4h_pct") or 0.0) >= float(item.get("threshold_pct") or 0.35)
     ]
     missed_entries = [item for item in material_evaluations if item.get("source_kind") == "allocator_deferred"]
-    strategy_hypotheses = [item for item in material_evaluations if item.get("source_kind") == "strategy_hold"]
+    raw_strategy_hypotheses = [item for item in material_evaluations if item.get("source_kind") == "strategy_hold"]
+    strategy_hypotheses = group_strategy_hypotheses(raw_strategy_hypotheses)
     unexecuted_entries = [
         item for item in material_evaluations
         if item.get("source_kind") in {"broker_rejected", "selected_unexecuted"}
@@ -1597,8 +1599,9 @@ def build_trade_quality_analytics(
         {
             "strategy_hypotheses_count": len(strategy_hypotheses),
             "strategy_hypotheses_move_4h_pct": round(
-                sum(float(item.get("move_4h_pct") or 0.0) for item in strategy_hypotheses) / len(strategy_hypotheses), 3
+                sum(float(item.get("best_move_4h_pct") or 0.0) for item in strategy_hypotheses) / len(strategy_hypotheses), 3
             ) if strategy_hypotheses else None,
+            "strategy_hypotheses_observations_count": len(raw_strategy_hypotheses),
             "unexecuted_entries_count": len(unexecuted_entries),
             "unexecuted_entries_move_4h_pct": round(
                 sum(float(item.get("move_4h_pct") or 0.0) for item in unexecuted_entries) / len(unexecuted_entries), 3
@@ -1630,7 +1633,7 @@ def build_trade_quality_analytics(
         )[:50],
         "missed_entry_evaluations": missed_entry_evaluations,
         "missed_entries": sorted(missed_entries, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
-        "strategy_hypotheses": sorted(strategy_hypotheses, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
+        "strategy_hypotheses": strategy_hypotheses[:50],
         "unexecuted_entries": sorted(unexecuted_entries, key=lambda item: str(item.get("observed_at") or ""), reverse=True)[:50],
     }
 

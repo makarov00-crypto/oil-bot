@@ -230,6 +230,52 @@ def calculate_post_exit_move(
     return round((exit_price - horizon_price) / exit_price * 100.0, 4)
 
 
+def group_strategy_hypotheses(
+    rows: Iterable[dict[str, Any]],
+    *,
+    max_gap: timedelta = timedelta(hours=2),
+) -> list[dict[str, Any]]:
+    """Combine repeated HOLD diagnostics for one continuing directional move."""
+    groups: list[list[dict[str, Any]]] = []
+    previous_by_key: dict[tuple[str, str], tuple[datetime, list[dict[str, Any]]]] = {}
+    for row in sorted(rows, key=lambda item: str(item.get("observed_at") or "")):
+        symbol = str(row.get("symbol") or "").upper()
+        signal = str(row.get("signal") or "").upper()
+        try:
+            observed_at = datetime.fromisoformat(str(row.get("observed_at") or ""))
+        except (TypeError, ValueError):
+            continue
+        if not symbol or signal not in {"LONG", "SHORT"} or observed_at.tzinfo is None:
+            continue
+        key = (symbol, signal)
+        previous = previous_by_key.get(key)
+        if previous is not None and observed_at - previous[0] <= max_gap:
+            group = previous[1]
+        else:
+            group = []
+            groups.append(group)
+        group.append(row)
+        previous_by_key[key] = (observed_at, group)
+
+    result: list[dict[str, Any]] = []
+    for group in groups:
+        first = dict(group[0])
+        last = group[-1]
+        strongest = max(group, key=lambda item: float(item.get("move_4h_pct") or 0.0))
+        reasons = list(dict.fromkeys(str(item.get("reason") or "").strip() for item in group if str(item.get("reason") or "").strip()))
+        first.update({
+            "first_observed_at": first.get("observed_at"),
+            "last_observed_at": last.get("observed_at"),
+            "observation_count": len(group),
+            "best_move_4h_pct": strongest.get("move_4h_pct"),
+            "best_move_4h_rub": strongest.get("move_4h_rub"),
+            "best_move_observed_at": strongest.get("observed_at"),
+            "reason": " | ".join(reasons[:3]),
+        })
+        result.append(first)
+    return sorted(result, key=lambda item: str(item.get("last_observed_at") or ""), reverse=True)
+
+
 def _as_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value or 0.0)

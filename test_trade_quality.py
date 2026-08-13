@@ -7,6 +7,7 @@ from trade_quality import (
     calculate_post_exit_move,
     calculate_trade_excursion,
     is_material_early_exit,
+    group_strategy_hypotheses,
     pair_closed_trades,
     restore_shadow_ai_from_signal_observations,
     summarize_trade_dimension,
@@ -163,6 +164,19 @@ class TradeQualityTests(unittest.TestCase):
         self.assertEqual(quality["mfe_pct"], 4.0)
         self.assertEqual(quality["mae_pct"], 1.0)
         self.assertEqual(quality["realized_price_pct"], 2.0)
+
+    def test_groups_repeated_hold_hypotheses_into_one_market_move(self) -> None:
+        rows = [
+            {"symbol": "BRU6", "signal": "SHORT", "observed_at": "2026-08-10T10:00:00+03:00", "move_4h_pct": 0.8, "reason": "нет cross"},
+            {"symbol": "BRU6", "signal": "SHORT", "observed_at": "2026-08-10T11:00:00+03:00", "move_4h_pct": 1.2, "reason": "нет cross"},
+            {"symbol": "BRU6", "signal": "SHORT", "observed_at": "2026-08-10T15:00:00+03:00", "move_4h_pct": 0.6, "reason": "слабый объём"},
+        ]
+
+        grouped = group_strategy_hypotheses(rows)
+
+        self.assertEqual(len(grouped), 2)
+        self.assertEqual(grouped[1]["observation_count"], 2)
+        self.assertEqual(grouped[1]["best_move_4h_pct"], 1.2)
 
     def test_summarizes_early_exit_only_when_direction_continued(self) -> None:
         trade = {

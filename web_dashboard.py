@@ -5440,9 +5440,7 @@ def build_dashboard_html() -> str:
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
           <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория <span class="quality-tab-count" id="qualityTradesCount">0</span></button>
           <button class="quality-tab" type="button" data-quality-tab="exits">Выходы <span class="quality-tab-count" id="qualityExitsCount">0</span></button>
-          <button class="quality-tab" type="button" data-quality-tab="missed">Реальные пропуски <span class="quality-tab-count" id="qualityMissedCount">0</span></button>
           <button class="quality-tab" type="button" data-quality-tab="hypotheses">Гипотезы <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
-          <button class="quality-tab" type="button" data-quality-tab="execution">Исполнение <span class="quality-tab-count" id="qualityExecutionCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
           <div class="table-scroll desktop-table">
@@ -5468,17 +5466,9 @@ def build_dashboard_html() -> str:
           <div class="muted" style="margin-bottom:10px;">Показываются только закрытия, после которых цена прошла в прежнюю сторону больше обычного шума.</div>
           <div id="qualityExitsBody" class="quality-card-list"></div>
         </div>
-        <div id="qualityPanelMissed" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">Только подтверждённые LONG/SHORT-кандидаты с качеством от 0.70, которые остановили аллокатор, риск или брокер. Движение после сигнала превысило порог волатильности инструмента.</div>
-          <div id="missedEntriesBody" class="quality-card-list"></div>
-        </div>
         <div id="qualityPanelHypotheses" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">HOLD без входа, где диагностика увидела вероятное направление. Это материал для настройки стратегии, а не ошибка торговли.</div>
+          <div class="muted" style="margin-bottom:10px;">Уникальные движения, где стратегия не вошла, а затем цена прошла в предполагаемую сторону больше обычного шума. Повторные наблюдения одного движения объединены.</div>
           <div id="strategyHypothesesBody" class="quality-card-list"></div>
-        </div>
-        <div id="qualityPanelExecution" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">Кандидат был выбран, но вход не был подтверждён брокером или контуром исполнения.</div>
-          <div id="unexecutedEntriesBody" class="quality-card-list"></div>
         </div>
       </div>
     </section>
@@ -7134,9 +7124,7 @@ def build_dashboard_html() -> str:
       const tradeQuality = data.trade_quality || {};
       const tradeQualityMeta = document.getElementById('tradeQualityMeta');
       const tradeQualityBody = document.getElementById('tradeQualityBody');
-      const missedEntriesBody = document.getElementById('missedEntriesBody');
       const strategyHypothesesBody = document.getElementById('strategyHypothesesBody');
-      const unexecutedEntriesBody = document.getElementById('unexecutedEntriesBody');
       const tradeQualityOverview = document.getElementById('tradeQualityOverview');
       const qualityExitsBody = document.getElementById('qualityExitsBody');
       const qualityTradesBody = document.getElementById('qualityTradesBody');
@@ -7148,21 +7136,15 @@ def build_dashboard_html() -> str:
       const qualityTrades = Array.isArray(tradeQuality.trades) ? tradeQuality.trades : [];
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
-      const missedEntries = Array.isArray(tradeQuality.missed_entries) ? tradeQuality.missed_entries : [];
       const strategyHypotheses = Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : [];
-      const unexecutedEntries = Array.isArray(tradeQuality.unexecuted_entries) ? tradeQuality.unexecuted_entries : [];
       const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const materialQualityExits = qualityExits
         .filter((item) => item.is_material_early_exit)
         .sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
-      const sortedMissedEntries = missedEntries.slice().sort((a, b) => String(b.observed_at || '').localeCompare(String(a.observed_at || '')));
-      const sortedStrategyHypotheses = strategyHypotheses.slice().sort((a, b) => String(b.observed_at || '').localeCompare(String(a.observed_at || '')));
-      const sortedUnexecutedEntries = unexecutedEntries.slice().sort((a, b) => String(b.observed_at || '').localeCompare(String(a.observed_at || '')));
+      const sortedStrategyHypotheses = strategyHypotheses.slice().sort((a, b) => String(b.last_observed_at || b.observed_at || '').localeCompare(String(a.last_observed_at || a.observed_at || '')));
       document.getElementById('qualityTradesCount').textContent = String(Math.min(sortedQualityTrades.length, 20));
       document.getElementById('qualityExitsCount').textContent = String(Math.min(materialQualityExits.length, 12));
-      document.getElementById('qualityMissedCount').textContent = String(Math.min(sortedMissedEntries.length, 12));
       document.getElementById('qualityHypothesesCount').textContent = String(Math.min(sortedStrategyHypotheses.length, 12));
-      document.getElementById('qualityExecutionCount').textContent = String(Math.min(sortedUnexecutedEntries.length, 12));
       tradeQualityMeta.textContent = tradeQuality.available
         ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Расчёт обновляется раз в час и использует часовые свечи, минуты - только на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
@@ -7177,9 +7159,7 @@ def build_dashboard_html() -> str:
         buildTradeSummaryCard('Удержали прибыли', capture, 'доля полученной цены от максимального движения'),
         buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
         buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
-        buildTradeSummaryCard('Подтверждённые пропуски', String(qualityOverview.missed_entries_count || 0), qualityOverview.missed_entries_move_4h_pct == null ? 'история ещё копится' : `среднее движение +${Number(qualityOverview.missed_entries_move_4h_pct).toFixed(2)}% за 4ч`),
-        buildTradeSummaryCard('Гипотезы HOLD', String(qualityOverview.strategy_hypotheses_count || 0), qualityOverview.strategy_hypotheses_move_4h_pct == null ? 'не являются ошибками' : `среднее движение +${Number(qualityOverview.strategy_hypotheses_move_4h_pct).toFixed(2)}% за 4ч`),
-        buildTradeSummaryCard('Неисполненные заявки', String(qualityOverview.unexecuted_entries_count || 0), qualityOverview.unexecuted_entries_move_4h_pct == null ? 'история ещё копится' : `среднее движение +${Number(qualityOverview.unexecuted_entries_move_4h_pct).toFixed(2)}% за 4ч`),
+        buildTradeSummaryCard('Гипотезы HOLD', String(qualityOverview.strategy_hypotheses_count || 0), qualityOverview.strategy_hypotheses_move_4h_pct == null ? 'не являются ошибками' : `${qualityOverview.strategy_hypotheses_observations_count || 0} наблюдений · среднее +${Number(qualityOverview.strategy_hypotheses_move_4h_pct).toFixed(2)}% за 4ч`),
       ].join('') : '';
       tradeQualityBody.innerHTML = qualityRows.length
         ? qualityRows.map((row) => {
@@ -7288,50 +7268,30 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
-      const renderSignalDiagnostics = (items, emptyMessage, reasonLabel) => items.length
-        ? items.slice(0, 12).map((item) => {
-            const move = Number(item.move_4h_pct || 0);
-            const moveClass = move >= 0 ? 'good' : 'bad';
-            const horizonTiles = [1, 2, 4, 8].map((hours) => {
-              const value = item[`move_${hours}h_pct`];
-              const money = item[`move_${hours}h_rub`];
-              const number = value == null ? null : Number(value);
-              const tone = number == null ? '' : number >= 0 ? 'good' : 'bad';
-              return `<div class="quality-horizon">
-                <div class="quality-horizon-time">Через ${hours}ч</div>
-                <div class="quality-horizon-value ${tone}">${number == null ? 'ждём данные' : `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`}</div>
-                <div class="quality-horizon-delta">${money == null ? 'без денежной оценки' : escapeHtml(formatSignedRub(money))}</div>
-              </div>`;
-            }).join('');
+      strategyHypothesesBody.innerHTML = sortedStrategyHypotheses.length
+        ? sortedStrategyHypotheses.slice(0, 12).map((item) => {
+            const bestMove = Number(item.best_move_4h_pct ?? item.move_4h_pct ?? 0);
+            const firstMove = Number(item.move_4h_pct ?? 0);
+            const firstAt = item.first_observed_at || item.observed_at || '';
+            const lastAt = item.last_observed_at || item.observed_at || '';
+            const observations = Number(item.observation_count || 1);
             return `<article class="quality-card">
               <div class="quality-card-head">
                 <div>
-                  <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
-                  <div class="quality-card-meta">${escapeHtml(formatMoscowTime(item.observed_at || ''))} · ${escapeHtml(item.source_label || 'вход не исполнен')}</div>
+                  <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${signalBadge(item.signal || '-')}</div>
+                  <div class="quality-card-meta">${escapeHtml(formatMoscowTime(firstAt))} — ${escapeHtml(formatMoscowTime(lastAt))} · ${observations} ${observations === 1 ? 'наблюдение' : 'наблюдения'}</div>
                 </div>
-                <div class="quality-card-result ${moveClass}">${escapeHtml(`${move >= 0 ? '+' : ''}${move.toFixed(2)}% за 4ч`)}</div>
+                <div class="quality-card-result good">+${escapeHtml(bestMove.toFixed(2))}%</div>
               </div>
-              <div class="quality-card-meta" style="margin-top:8px;">${signalBadge(item.signal || '-')} ${escapeHtml(item.quantity_basis || '')}</div>
-              <div class="quality-horizon-grid">${horizonTiles}</div>
-              <div class="quality-card-note"><strong>${escapeHtml(reasonLabel)}:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 210))}</div>
+              <div class="quality-metric-grid">
+                <div class="quality-metric"><div class="quality-metric-label">Первый сигнал через 4ч</div><div class="quality-metric-value good">+${escapeHtml(firstMove.toFixed(2))}%</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Лучший срез через 4ч</div><div class="quality-metric-value good">+${escapeHtml(bestMove.toFixed(2))}%</div></div>
+                <div class="quality-metric"><div class="quality-metric-label">Порог движения</div><div class="quality-metric-value">+${escapeHtml(Number(item.threshold_pct || 0).toFixed(2))}%</div></div>
+              </div>
+              <div class="quality-card-note"><strong>Почему не вошли:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 260))}</div>
             </article>`;
           }).join('')
-        : `<div class="muted">${escapeHtml(emptyMessage)}</div>`;
-      missedEntriesBody.innerHTML = renderSignalDiagnostics(
-        sortedMissedEntries,
-        'Нет реальных пропусков: подтверждённые кандидаты с качеством от 0.70 появятся здесь только после проверки движения.',
-        'Почему не вошли',
-      );
-      strategyHypothesesBody.innerHTML = renderSignalDiagnostics(
-        sortedStrategyHypotheses,
-        'Нет диагностических HOLD-гипотез с подтверждённым движением.',
-        'Что увидела диагностика',
-      );
-      unexecutedEntriesBody.innerHTML = renderSignalDiagnostics(
-        sortedUnexecutedEntries,
-        'Нет выбранных, но неисполненных заявок с подтверждённым движением.',
-        'Почему заявка не исполнилась',
-      );
+        : '<div class="muted">Нет HOLD-гипотез с подтверждённым движением.</div>';
 
 const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available

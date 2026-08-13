@@ -51,7 +51,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('class="quality-horizon-grid"', quality_render)
         self.assertIn('id="qualityTradesCount"', html)
         self.assertIn('id="qualityExitsCount"', html)
-        self.assertIn('id="qualityMissedCount"', html)
+        self.assertIn('id="qualityHypothesesCount"', html)
         self.assertIn('class="quality-ai"', quality_render)
         self.assertNotIn("buildReviewRowRich(", quality_render)
 
@@ -110,6 +110,15 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("Разница с лучшим моментом", html)
         self.assertIn("ориентир внутри сделки, не совет удерживать", html)
         self.assertIn("Закрыть на ${hours}ч позже", html)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_quality_hides_empty_operational_tabs_and_groups_hypotheses(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertNotIn('data-quality-tab="missed"', html)
+        self.assertNotIn('data-quality-tab="execution"', html)
+        self.assertIn("Повторные наблюдения одного движения объединены", html)
+        self.assertIn("Лучший срез через 4ч", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:
