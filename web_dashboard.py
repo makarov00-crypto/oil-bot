@@ -1367,7 +1367,8 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
     for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800, newest_first=True):
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
-        if not shadow_ai:
+        shadow_status = str(context.get("shadow_ai_status") or "").lower()
+        if not shadow_ai and not shadow_status:
             continue
         candle_time = str(context.get("candle_time") or row.get("observation_key") or "")
         shadow_key = ":".join([str(row.get("symbol") or "").upper(), str(row.get("signal") or "").upper(), candle_time])
@@ -1396,11 +1397,9 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
                     performance["abstain_evaluated_4h"] += 1
                     if verdict:
                         performance["abstain_correct_4h"] += 1
-    if not SIGNAL_AI_SHADOW_PATH.exists():
-        return {"enabled": enabled, "count": 0, "supporting": 0, "abstaining": 0, "reviews": [], **performance}
     latest: dict[str, dict[str, Any]] = {}
     try:
-        lines = SIGNAL_AI_SHADOW_PATH.read_text(encoding="utf-8").splitlines()[-300:]
+        lines = SIGNAL_AI_SHADOW_PATH.read_text(encoding="utf-8").splitlines()[-300:] if SIGNAL_AI_SHADOW_PATH.exists() else []
     except OSError:
         lines = []
     for line in lines:
@@ -1411,6 +1410,29 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         key = str(row.get("key") or "")
         if key:
             latest[key] = row
+    # The database is authoritative for executed candidates. It also retains an
+    # explicit provider failure when the external AI could not answer in time.
+    for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800, newest_first=True):
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
+        shadow_status = str(context.get("shadow_ai_status") or "").lower()
+        if not shadow_ai and not shadow_status:
+            continue
+        candle_time = str(context.get("candle_time") or row.get("observation_key") or "")
+        key = ":".join([str(row.get("symbol") or "").upper(), str(row.get("signal") or "").upper(), candle_time])
+        if not key or key in latest:
+            continue
+        latest[key] = {
+            "time": str(row.get("observed_at") or ""),
+            "key": key,
+            "symbol": str(row.get("symbol") or "").upper(),
+            "signal": str(row.get("signal") or "").upper(),
+            "strategy": str(row.get("strategy") or ""),
+            "candle_time": candle_time,
+            "review": shadow_ai,
+            "status": shadow_status or "ready",
+            "error": str(context.get("shadow_ai_error") or ""),
+        }
     reviews = sorted(latest.values(), key=lambda item: str(item.get("time") or ""), reverse=True)[:limit]
     for item in reviews:
         item["shadow_ai_outcomes"] = shadow_outcomes_by_key.get(str(item.get("key") or ""), {})
@@ -1456,10 +1478,10 @@ def evaluate_shadow_ai_verdict(action: str, favorable: bool) -> bool | None:
 
 
 def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[dict[str, Any]]:
-    if not ALLOCATOR_DECISIONS_PATH.exists():
-        return []
     rows: list[dict[str, Any]] = []
-    for line in ALLOCATOR_DECISIONS_PATH.read_text(encoding="utf-8").splitlines():
+    lines = ALLOCATOR_DECISIONS_PATH.read_text(encoding="utf-8").splitlines() if ALLOCATOR_DECISIONS_PATH.exists() else []
+    known_selected_keys: set[str] = set()
+    for line in lines:
         if not line.strip():
             continue
         try:
@@ -1477,13 +1499,60 @@ def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[
         if local_dt.date() != target_day:
             continue
         item = dict(row)
+        item["_dt"] = local_dt
         item["time_display"] = local_dt.strftime("%H:%M:%S")
-        item["decision_display"] = {
-            "deferred": "отложен",
-            "rotation": "переключение",
-        }.get(str(item.get("decision") or ""), str(item.get("decision") or "-"))
+        item["decision_display"] = _allocator_status_label(
+            str(item.get("decision") or ""), str(item.get("execution_status") or "")
+        )
+        if str(item.get("decision") or "") == "selected":
+            known_selected_keys.add(":".join([
+                str(item.get("symbol") or "").upper(),
+                str(item.get("signal") or "").upper(),
+                str(item.get("candle_time") or ""),
+            ]))
         rows.append(item)
-    rows.sort(key=lambda item: str(item.get("time") or ""), reverse=True)
+    # Older bot versions did not append selected candidates to the allocator log.
+    # Restore those decisions from the immutable signal-observation ledger.
+    for observation in load_signal_observations_from_storage(TRADE_DB_PATH, target_day=target_day, limit=400):
+        if str(observation.get("decision") or "") != "selected":
+            continue
+        context = observation.get("context") if isinstance(observation.get("context"), dict) else {}
+        candle_time = str(context.get("candle_time") or "")
+        key = ":".join([
+            str(observation.get("symbol") or "").upper(),
+            str(observation.get("signal") or "").upper(),
+            candle_time,
+        ])
+        if key in known_selected_keys:
+            continue
+        raw_time = str(observation.get("observed_at") or "")
+        try:
+            observed_dt = datetime.fromisoformat(raw_time)
+            if observed_dt.tzinfo is None:
+                observed_dt = observed_dt.replace(tzinfo=timezone.utc)
+            local_dt = observed_dt.astimezone(MOSCOW_TZ)
+        except Exception:
+            continue
+        execution_status = _signal_observation_execution_status(observation)
+        rows.append({
+            "time": raw_time,
+            "_dt": local_dt,
+            "time_display": local_dt.strftime("%H:%M:%S"),
+            "decision": "selected",
+            "decision_display": _allocator_status_label("selected", execution_status),
+            "symbol": str(observation.get("symbol") or "").upper(),
+            "signal": str(observation.get("signal") or "").upper(),
+            "reason": str(observation.get("decision_reason") or "кандидат выбран аллокатором"),
+            "priority_score": float(observation.get("priority_score") or 0.0),
+            "entry_edge_score": float(observation.get("entry_edge_score") or 0.0),
+            "execution_status": execution_status,
+            "execution_note": str(context.get("execution_note") or ""),
+            "quantity": int(context.get("allocator_quantity") or 0),
+            "candle_time": candle_time,
+        })
+    rows.sort(key=lambda item: item.get("_dt") or datetime.min.replace(tzinfo=MOSCOW_TZ), reverse=True)
+    for item in rows:
+        item.pop("_dt", None)
     return rows[:limit]
 
 
@@ -2438,6 +2507,13 @@ def format_trade_review_row(
     hold_minutes = 0
     if isinstance(entry_dt, datetime) and isinstance(exit_dt, datetime):
         hold_minutes = max(0, round((exit_dt - entry_dt).total_seconds() / 60))
+    is_overnight = bool(
+        isinstance(entry_dt, datetime)
+        and isinstance(exit_dt, datetime)
+        and entry_dt.astimezone(MOSCOW_TZ).date() < exit_dt.astimezone(MOSCOW_TZ).date()
+    )
+    if open_row is None:
+        entry_time = "до начала журнала"
     resolved_context_display = resolve_trade_context_display(close_row, open_row)
     entry_context_display = trade_context_display(open_row or {})
     if entry_context_display == "-":
@@ -2505,6 +2581,7 @@ def format_trade_review_row(
         "verdict": verdict,
         "is_unified_reversal": is_unified,
         "is_signal_flip": is_signal_flip,
+        "is_overnight": is_overnight,
         "loss_hint": loss_hint,
         "_exit_dt": exit_dt,
     }
@@ -2514,6 +2591,7 @@ def build_trade_review(
     rows: list[dict],
     states: dict[str, dict] | None = None,
     live_positions: dict[str, dict] | None = None,
+    close_day: date | None = None,
 ) -> dict:
     open_by_key: dict[tuple[str, str], list[dict]] = {}
     closed_reviews: list[dict] = []
@@ -2610,14 +2688,15 @@ def build_trade_review(
         except Exception:
             pnl_numeric = 0.0
 
-        closed_reviews.append(
-            format_trade_review_row(
-                row,
-                open_row,
-                pnl_numeric,
-                classify_verdict(pnl_numeric, row.get("reason") or ""),
+        if close_day is None or (row.get("_dt") and row["_dt"].astimezone(MOSCOW_TZ).date() == close_day):
+            closed_reviews.append(
+                format_trade_review_row(
+                    row,
+                    open_row,
+                    pnl_numeric,
+                    classify_verdict(pnl_numeric, row.get("reason") or ""),
+                )
             )
-        )
         if open_row is None:
             last_orphan_close_by_key[key] = row
         last_kept_close_by_key[key] = row
@@ -2940,8 +3019,7 @@ def load_trade_review_for_day(
     live_positions: dict[str, dict] | None = None,
 ) -> dict:
     all_rows = load_all_trade_rows()
-    rows = [row for row in all_rows if row.get("_date") == target_day.isoformat()]
-    review = build_trade_review(rows, states, live_positions)
+    review = build_trade_review(all_rows, states, live_positions, close_day=target_day)
     lookback_start = target_day - timedelta(days=2)
     recent_rows = [row for row in all_rows if lookback_start <= row.get("_dt", datetime.min.replace(tzinfo=MOSCOW_TZ)).date() <= target_day]
     recent_review = build_trade_review(recent_rows, states, live_positions)
@@ -6914,17 +6992,20 @@ def build_dashboard_html() -> str:
       }
       const shadowAiRows = document.getElementById('shadowAiRows');
       const shadowAiReviews = Array.isArray(shadowAi.reviews)
-        ? shadowAi.reviews.slice().sort((a, b) => String(b.candle_time || b.time || '').localeCompare(String(a.candle_time || a.time || '')))
+        ? shadowAi.reviews.slice().sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')))
         : [];
       shadowAiRows.innerHTML = shadowAiReviews.length
-        ? shadowAiReviews.map((item) => {
+          ? shadowAiReviews.map((item) => {
             const ai = item.review || {};
+            const unavailable = String(item.status || '').toLowerCase() === 'unavailable';
             const rawAction = String(ai.action || 'ABSTAIN').toUpperCase();
-            const action = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[rawAction] || rawAction;
+            const action = unavailable ? 'ОТВЕТ НЕ ПОЛУЧЕН' : (({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[rawAction] || rawAction);
             const actionTone = rawAction === 'ENTER' || rawAction === 'HOLD' ? 'long' : rawAction === 'EXIT' || rawAction === 'REVERSE' ? 'short' : 'hold';
-            const confidence = `${(Number(ai.confidence || 0) * 100).toFixed(0)}%`;
+            const confidence = unavailable ? '—' : `${(Number(ai.confidence || 0) * 100).toFixed(0)}%`;
+            const decisionTime = formatMoscowTime(item.time || '');
+            const candleTime = item.candle_time ? `${String(item.candle_time).slice(0, 16)}–${String(item.candle_time).slice(11, 13) ? String(Number(String(item.candle_time).slice(11, 13)) + 1).padStart(2, '0') + ':00' : ''} МСК` : '';
             const outcome4h = item.shadow_ai_outcomes?.['4h'];
-            let outcomeText = item.shadow_ai_4h_due ? 'Ждём первую доступную цену рынка.' : 'Горизонт ещё не наступил.';
+            let outcomeText = unavailable ? 'Проверка не применяется: рекомендации ИИ нет.' : (item.shadow_ai_4h_due ? 'Ждём первую доступную цену рынка.' : 'Горизонт ещё не наступил.');
             if (outcome4h?.status === 'unavailable') outcomeText = 'Цена рынка недоступна.';
             else if (typeof outcome4h?.favorable === 'boolean') {
               const move = Number(outcome4h.move_pct || 0);
@@ -6945,12 +7026,12 @@ def build_dashboard_html() -> str:
               <div class="shadow-ai-head">
                 <div>
                   <div class="shadow-ai-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
-                  <div class="shadow-ai-meta">${escapeHtml(formatMoscowTime(item.candle_time || item.time || ''))}</div>
+                  <div class="shadow-ai-meta">Решение: ${escapeHtml(decisionTime)} МСК${candleTime ? `<br>Свеча: ${escapeHtml(candleTime)}` : ''}</div>
                 </div>
                 <div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge ${actionTone}">${escapeHtml(action)}</span><span class="muted">уверенность ${escapeHtml(confidence)}</span></div>
               </div>
               <div class="shadow-ai-grid">
-                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Почему</div><div class="shadow-ai-field-value">${escapeHtml(ai.reason || 'Пояснение не сохранено.')}</div></div>
+                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Почему</div><div class="shadow-ai-field-value">${escapeHtml(unavailable ? (item.error || 'Внешний ИИ не вернул ответ.') : (ai.reason || 'Пояснение не сохранено.'))}</div></div>
                 <div class="shadow-ai-field"><div class="shadow-ai-field-label">Риск</div><div class="shadow-ai-field-value">${escapeHtml(ai.risk_note || 'Отдельный риск не указан.')}</div></div>
                 <div class="shadow-ai-field"><div class="shadow-ai-field-label">Проверка через 4 часа</div><div class="shadow-ai-field-value">${escapeHtml(outcomeText)}</div></div>
               </div>
@@ -6994,6 +7075,7 @@ def build_dashboard_html() -> str:
         const exitSummary = buildTradeExitSummary(row);
         const flipBadge = isSignalFlipTrade(row) ? '<span class="badge hold">ПЕРЕВОРОТ</span>' : '';
         const unifiedBadge = strategyBadge(row);
+        const overnightBadge = row.is_overnight ? '<span class="badge hold">ПЕРЕНОС ЧЕРЕЗ НОЧЬ</span>' : '';
         const regimeBadge = `<span class="trade-regime-badge">${escapeHtml(formatRegimeLabel(row.market_regime || '-'))}</span>`;
         reviewBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(row.symbol || '-', row.display_name || '')}</td>
@@ -7003,7 +7085,7 @@ def build_dashboard_html() -> str:
           <td class="trade-review-text">
             <div class="trade-cell-main">${escapeHtml(entrySummary.main)}</div>
             ${entrySummary.sub ? `<div class="trade-cell-sub">${escapeHtml(entrySummary.sub)}</div>` : ''}
-            <div class="trade-flag-row">${flipBadge}${unifiedBadge}</div>
+            <div class="trade-flag-row">${flipBadge}${unifiedBadge}${overnightBadge}</div>
           </td>
           <td class="trade-review-text">
             <div class="trade-cell-main">${escapeHtml(exitSummary.main)}</div>
@@ -7029,6 +7111,7 @@ def build_dashboard_html() -> str:
             <div class="mobile-card-text"><span class="muted">Вход</span><br>${escapeHtml(entrySummary.main)}${entrySummary.sub ? `<br><span class="muted">${escapeHtml(entrySummary.sub)}</span>` : ''}</div>
             <div class="mobile-card-text"><span class="muted">Выход</span><br>${escapeHtml(exitSummary.main)}${exitSummary.sub ? `<br><span class="muted">${escapeHtml(exitSummary.sub)}</span>` : ''}</div>
             <div class="mobile-card-text"><span class="muted">Подробности</span><br>До комиссии ${escapeHtml(row.gross_pnl_rub ?? '-')} · комиссия ${escapeHtml(row.commission_rub ?? '-')}</div>
+            ${row.is_overnight ? '<div class="mobile-card-text"><span class="badge hold">ПЕРЕНОС ЧЕРЕЗ НОЧЬ</span></div>' : ''}
           </div>
         </article>`);
       }

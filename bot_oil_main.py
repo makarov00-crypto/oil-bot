@@ -334,6 +334,9 @@ class InstrumentState:
     last_shadow_ai_direction: str = ""
     last_shadow_ai_confidence: float = 0.0
     last_shadow_ai_reason: str = ""
+    last_shadow_ai_candle_time: str = ""
+    last_shadow_ai_status: str = ""
+    last_shadow_ai_error: str = ""
     last_allocator_summary: str = ""
     last_allocator_quantity: int = 0
     last_allocator_open_risk_budget_rub: float = 0.0
@@ -698,6 +701,8 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
             "confidence": round(float(state.last_shadow_ai_confidence or 0.0), 3),
             "reason": str(state.last_shadow_ai_reason or ""),
         } if state.last_shadow_ai_action else {},
+        "shadow_ai_status": str(state.last_shadow_ai_status or ""),
+        "shadow_ai_error": str(state.last_shadow_ai_error or ""),
     }
     return {key: value for key, value in context.items() if value not in ("", [], None)}
 
@@ -837,6 +842,10 @@ def append_allocator_decision(
     priority_components: dict[str, Any] | None = None,
     defer_kind: str = "",
     defer_winners: list[dict[str, Any]] | None = None,
+    candle_time: str = "",
+    execution_status: str = "",
+    execution_note: str = "",
+    quantity: int = 0,
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     row = {
@@ -857,6 +866,10 @@ def append_allocator_decision(
         "news_priority_adjustment": round(float(news_priority_adjustment or 0.0), 3),
         "news_priority_reason": news_priority_reason,
         "defer_kind": defer_kind,
+        "candle_time": candle_time,
+        "execution_status": execution_status,
+        "execution_note": execution_note,
+        "quantity": int(quantity or 0),
     }
     if priority_components:
         row["priority_components"] = {
@@ -917,6 +930,8 @@ def append_signal_observation_decision(
         "open_risk_reserved_rub": float(candidate.get("open_risk_reserved_rub") or 0.0),
         "open_risk_available_rub": float(candidate.get("open_risk_available_rub") or 0.0),
         "risk_per_contract_rub": float(candidate.get("risk_per_contract_rub") or 0.0),
+        "shadow_ai_status": str(candidate.get("shadow_ai_status") or ""),
+        "shadow_ai_error": str(candidate.get("shadow_ai_error") or ""),
     }
     shadow_ai = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
     if shadow_ai:
@@ -2274,8 +2289,11 @@ def find_recent_live_open_details(
     qty: int,
     entry_price: float,
     not_before: datetime | None = None,
+    lookback_days: int = 0,
 ) -> tuple[datetime | None, float | None]:
     from_utc, to_utc = get_moscow_day_bounds_utc()
+    if lookback_days > 0:
+        from_utc -= timedelta(days=int(lookback_days))
     cursor = ""
     fee_by_parent: dict[str, float] = {}
     candidates: list[tuple[datetime, str]] = []
@@ -3769,9 +3787,29 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
     for candidate in candidates:
         key = build_shadow_ai_key(candidate)
         candidate["shadow_ai_key"] = key
+        # A prior answer belongs to a different candle and must never leak into a new trade.
+        state = load_state(str(candidate.get("symbol") or "").upper())
+        state.last_shadow_ai_action = ""
+        state.last_shadow_ai_direction = ""
+        state.last_shadow_ai_confidence = 0.0
+        state.last_shadow_ai_reason = ""
+        state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
+        state.last_shadow_ai_status = "pending"
+        state.last_shadow_ai_error = ""
+        save_state(str(candidate.get("symbol") or "").upper(), state)
         existing = previous.get(key)
         if existing:
             candidate["shadow_ai"] = dict(existing.get("review") or {})
+            candidate["shadow_ai_status"] = str(existing.get("status") or "ready")
+            candidate["shadow_ai_error"] = str(existing.get("error") or "")
+            review = candidate["shadow_ai"]
+            if review:
+                state.last_shadow_ai_action = str(review.get("action") or "")
+                state.last_shadow_ai_direction = str(review.get("direction") or "")
+                state.last_shadow_ai_confidence = float(review.get("confidence") or 0.0)
+                state.last_shadow_ai_reason = str(review.get("reason") or "")
+                state.last_shadow_ai_status = "ready"
+                save_state(str(candidate.get("symbol") or "").upper(), state)
         else:
             pending.append(candidate)
     if not pending:
@@ -3780,6 +3818,28 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
         reviews = request_signal_ai_reviews(api_key, pending)
     except Exception as error:
         logging.warning("Теневой ИИ-разбор сигналов не выполнен: %s", error)
+        error_text = f"Теневой ИИ не ответил: {error}"
+        now = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
+        SIGNAL_AI_SHADOW_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with SIGNAL_AI_SHADOW_PATH.open("a", encoding="utf-8") as handle:
+            for candidate in pending:
+                symbol = str(candidate.get("symbol") or "").upper()
+                candidate["shadow_ai_status"] = "unavailable"
+                candidate["shadow_ai_error"] = error_text
+                handle.write(json.dumps({
+                    "time": now,
+                    "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
+                    "symbol": symbol,
+                    "signal": str(candidate.get("signal") or "").upper(),
+                    "strategy": str(candidate.get("strategy_name") or ""),
+                    "candle_time": str(candidate.get("candle_time") or ""),
+                    "status": "unavailable",
+                    "error": error_text,
+                }, ensure_ascii=False) + "\n")
+                state = load_state(symbol)
+                state.last_shadow_ai_status = "unavailable"
+                state.last_shadow_ai_error = error_text
+                save_state(symbol, state)
         return
     SIGNAL_AI_SHADOW_PATH.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
@@ -3791,6 +3851,7 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
                 continue
             review_payload = review.as_dict()
             candidate["shadow_ai"] = review_payload
+            candidate["shadow_ai_status"] = "ready"
             row = {
                 "time": now,
                 "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
@@ -3799,6 +3860,7 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
                 "strategy": str(candidate.get("strategy_name") or ""),
                 "candle_time": str(candidate.get("candle_time") or ""),
                 "review": review_payload,
+                "status": "ready",
             }
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
             state = load_state(symbol)
@@ -3806,6 +3868,9 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
             state.last_shadow_ai_direction = review.direction
             state.last_shadow_ai_confidence = review.confidence
             state.last_shadow_ai_reason = review.reason
+            state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
+            state.last_shadow_ai_status = "ready"
+            state.last_shadow_ai_error = ""
             save_state(symbol, state)
             logging.info(
                 "symbol=%s signal_ai_shadow action=%s direction=%s confidence=%.2f",
@@ -6452,9 +6517,19 @@ def sync_state_with_portfolio(
             state.position_side,
             state.position_qty,
             state.entry_price or last_price,
+            lookback_days=3 if recovery_source == "portfolio_recovery" else 0,
         )
         if operation_time is not None:
             state.entry_time = operation_time.isoformat()
+        recovered_entry_time = operation_time or previous_entry_at
+        if operation_time is None and previous_entry_at is not None:
+            state.entry_time = previous_entry_at.isoformat()
+        if recovery_source == "portfolio_recovery" and recovered_entry_time is None:
+            recovery_reason = (
+                f"{recovery_reason} Время первоначального входа не найдено в доступной истории брокера; "
+                "позиция помечена как восстановленная."
+            )
+            state.entry_reason = recovery_reason
         if entry_fee_rub is not None and entry_fee_rub > 0:
             state.entry_commission_rub = entry_fee_rub
             if not state.entry_commission_accounted:
@@ -6467,7 +6542,7 @@ def sync_state_with_portfolio(
             state.position_side,
             missing_open_lots,
             state.entry_price or last_price,
-            event_time=operation_time,
+            event_time=recovered_entry_time,
             gross_pnl_rub=None,
             commission_rub=entry_fee_rub,
             net_pnl_rub=-entry_fee_rub if entry_fee_rub is not None else None,
@@ -10841,6 +10916,26 @@ def run_bot() -> int:
                                 },
                                 decision="selected",
                                 decision_reason="кандидат выбран аллокатором для входа в этом цикле",
+                            )
+                            append_allocator_decision(
+                                decision="selected",
+                                symbol=symbol,
+                                signal=str(item.get("signal") or ""),
+                                reason="кандидат выбран аллокатором для входа в этом цикле",
+                                priority_score=float(item.get("priority_score") or 0.0),
+                                entry_edge_score=float(item.get("entry_edge_score") or 0.0),
+                                instrument_class=str(item.get("instrument_class") or ""),
+                                requested_margin_rub=float(item.get("requested_margin_rub") or 0.0),
+                                allocatable_margin_rub=float(item.get("allocatable_margin_rub") or 0.0),
+                                learning_adjustment=float(item.get("learning_adjustment") or 0.0),
+                                learning_reason=str(item.get("learning_reason") or ""),
+                                news_priority_adjustment=float(item.get("news_priority_adjustment") or 0.0),
+                                news_priority_reason=str(item.get("news_priority_reason") or ""),
+                                priority_components=item.get("priority_components") if isinstance(item.get("priority_components"), dict) else None,
+                                candle_time=str(item.get("candle_time") or ""),
+                                execution_status=execution_status,
+                                execution_note=execution_note,
+                                quantity=int(item.get("allocator_quantity") or 0),
                             )
                             if execution_status == "submitted_open":
                                 state.pending_observation_uid = observation_uid

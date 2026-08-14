@@ -45,7 +45,23 @@ class SignalAiReviewerTests(unittest.TestCase):
 
         self.assertEqual(candidate["shadow_ai"]["action"], "ВХОД")
         self.assertEqual(state.last_shadow_ai_action, "ВХОД")
-        save.assert_called_once_with("BRU6", state)
+        self.assertEqual(save.call_count, 2)
+        save.assert_called_with("BRU6", state)
+
+    @patch.dict(os.environ, {"OIL_SIGNAL_AI_SHADOW_ENABLED": "1", "OPENAI_API_KEY": "key"}, clear=False)
+    def test_shadow_timeout_is_recorded_and_does_not_keep_previous_verdict(self) -> None:
+        candidate = {"symbol": "GLU6", "signal": "LONG", "strategy_name": "reversal_1h", "candle_time": "2026-08-14 16:00"}
+        state = bot.InstrumentState(last_shadow_ai_action="ВОЗДЕРЖАТЬСЯ", last_shadow_ai_reason="старый ответ")
+        with tempfile.TemporaryDirectory() as directory, patch.object(bot, "SIGNAL_AI_SHADOW_PATH", Path(directory) / "shadow.jsonl"), patch.object(
+            bot, "request_signal_ai_reviews", side_effect=TimeoutError("тайм-аут")
+        ), patch.object(bot, "load_state", return_value=state), patch.object(bot, "save_state"):
+            bot.apply_signal_ai_shadow_reviews([candidate])
+            logged = (Path(directory) / "shadow.jsonl").read_text(encoding="utf-8")
+
+        self.assertEqual(candidate["shadow_ai_status"], "unavailable")
+        self.assertEqual(state.last_shadow_ai_action, "")
+        self.assertEqual(state.last_shadow_ai_status, "unavailable")
+        self.assertIn("тайм-аут", logged)
 
     def test_shadow_outcomes_are_saved_for_each_due_hour(self) -> None:
         observed_at = "2026-08-01T10:00:00+03:00"

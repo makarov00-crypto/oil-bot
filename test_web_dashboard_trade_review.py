@@ -219,6 +219,48 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(bmm6["entry_time"], "24.04 12:00:00")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_trade_review_for_day_pairs_overnight_position_and_marks_it(self) -> None:
+        opened_at = datetime(2026, 8, 13, 20, 30, tzinfo=dashboard.MOSCOW_TZ)
+        closed_at = datetime(2026, 8, 14, 10, 15, tzinfo=dashboard.MOSCOW_TZ)
+        rows = [
+            {
+                "_dt": opened_at, "_date": "2026-08-13", "time": opened_at.isoformat(),
+                "symbol": "GLU6", "side": "LONG", "event": "OPEN", "qty_lots": 1, "price": 100.0,
+                "strategy": "reversal_1h", "reason": "вход",
+            },
+            {
+                "_dt": closed_at, "_date": "2026-08-14", "time": closed_at.isoformat(),
+                "symbol": "GLU6", "side": "LONG", "event": "CLOSE", "qty_lots": 1, "price": 101.0,
+                "pnl_rub": 10.0, "strategy": "reversal_1h", "reason": "выход",
+            },
+        ]
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows):
+            review = dashboard.load_trade_review_for_day(date(2026, 8, 14))
+
+        self.assertEqual(len(review["closed_reviews"]), 1)
+        self.assertEqual(review["closed_reviews"][0]["entry_time"], "13.08 20:30:00")
+        self.assertTrue(review["closed_reviews"][0]["is_overnight"])
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_allocator_history_restores_legacy_selected_candidate_and_sorts_by_timestamp(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = dashboard.Path(temp_dir) / "trade.sqlite3"
+            decisions_path = dashboard.Path(temp_dir) / "allocator.jsonl"
+            decisions_path.write_text(json.dumps({
+                "time": "2026-08-14T11:00:00+03:00", "decision": "deferred", "symbol": "NGU6", "signal": "SHORT"
+            }) + "\n", encoding="utf-8")
+            append_signal_observation(db_path, {
+                "observed_at": "2026-08-14T12:00:00+03:00", "symbol": "GLU6", "signal": "LONG", "decision": "selected",
+                "priority_score": 0.8, "entry_edge_score": 0.75,
+                "context": {"candle_time": "2026-08-14 11:00", "execution_status": "confirmed_open", "allocator_quantity": 8},
+            })
+            with patch.object(dashboard, "TRADE_DB_PATH", db_path), patch.object(dashboard, "ALLOCATOR_DECISIONS_PATH", decisions_path):
+                rows = dashboard.load_allocator_decisions_for_day(date(2026, 8, 14))
+
+        self.assertEqual(rows[0]["symbol"], "GLU6")
+        self.assertEqual(rows[0]["decision_display"], "позиция открыта")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_uses_full_3day_window_for_focus(self) -> None:
         rows = []
         for idx in range(25):
