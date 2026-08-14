@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from dotenv import load_dotenv
+from ao_chaikin_shadow import build_shadow_strategy_payload
 from active_contracts import list_active_contracts, replace_with_active_symbols
 from custom_instruments import (
     list_custom_instruments,
@@ -53,6 +54,7 @@ LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
+AO_CHAIKIN_SHADOW_PATH = LOG_DIR / "ao_chaikin_shadow.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
@@ -3012,6 +3014,20 @@ def load_trade_quality_analytics() -> dict[str, Any]:
     }
 
 
+def load_ao_chaikin_shadow_strategy() -> dict[str, Any]:
+    enabled = os.getenv("OIL_AO_CHAIKIN_SHADOW_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return build_shadow_strategy_payload(
+        AO_CHAIKIN_SHADOW_PATH,
+        enabled=enabled,
+        period_days=30,
+    )
+
+
 def load_trade_review_for_day(
     target_day: date,
     limit: int = 200,
@@ -5497,6 +5513,7 @@ def build_dashboard_html() -> str:
           <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория <span class="quality-tab-count" id="qualityTradesCount">0</span></button>
           <button class="quality-tab" type="button" data-quality-tab="exits">Выходы <span class="quality-tab-count" id="qualityExitsCount">0</span></button>
           <button class="quality-tab" type="button" data-quality-tab="hypotheses">Гипотезы <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="shadow">AO и Чайкин <span class="quality-tab-count" id="qualityShadowCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
           <div class="table-scroll desktop-table">
@@ -5525,6 +5542,29 @@ def build_dashboard_html() -> str:
         <div id="qualityPanelHypotheses" class="quality-panel">
           <div class="muted" style="margin-bottom:10px;">Уникальные движения, где стратегия не вошла, а затем цена прошла в предполагаемую сторону больше обычного шума. Повторные наблюдения одного движения объединены.</div>
           <div id="strategyHypothesesBody" class="quality-card-list"></div>
+        </div>
+        <div id="qualityPanelShadow" class="quality-panel">
+          <div class="allocator-section-head">
+            <h3>Теневая стратегия AO и Чайкина</h3>
+            <div class="muted">Независимая проверка новой схемы</div>
+          </div>
+          <div class="muted" id="shadowStrategyMeta" style="margin-bottom:10px;">Теневая стратегия ещё не начала наблюдение.</div>
+          <div class="trade-review-summary" id="shadowStrategyOverview"></div>
+          <div class="allocator-section-head">
+            <h3>Открытые теневые позиции</h3>
+            <div class="muted">Расчёт на один лот, реальные заявки не меняются</div>
+          </div>
+          <div id="shadowStrategyOpen" class="quality-card-list"></div>
+          <div class="allocator-section-head">
+            <h3>Последние решения</h3>
+            <div class="muted">Сначала самые свежие закрытые часовые свечи</div>
+          </div>
+          <div id="shadowStrategyDecisions" class="quality-card-list"></div>
+          <div class="allocator-section-head">
+            <h3>Закрытые теневые сделки</h3>
+            <div class="muted">Результат на один лот с оценочной комиссией</div>
+          </div>
+          <div id="shadowStrategyTrades" class="quality-card-list"></div>
         </div>
       </div>
     </section>
@@ -5656,6 +5696,12 @@ def build_dashboard_html() -> str:
         BLOCK: 'БЛОК',
       };
       return `<span class="badge ${css}">${escapeHtml(labelMap[raw] || raw)}</span>`;
+    }
+
+    function shadowDecisionBadge(value) {
+      const raw = String(value || 'НЕТ ВХОДА').toUpperCase();
+      const css = raw === 'ВХОД' ? 'long' : raw === 'ВЫХОД' ? 'short' : 'hold';
+      return `<span class="badge ${css}">${escapeHtml(raw)}</span>`;
     }
 
     function higherTFBadge(state) {
@@ -7176,14 +7222,24 @@ def build_dashboard_html() -> str:
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const strategyHypotheses = Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : [];
+      const shadowStrategy = data.ao_chaikin_shadow || {};
+      const shadowSummary = shadowStrategy.summary || {};
+      const shadowSettings = shadowStrategy.settings || {};
+      const shadowOpenPositions = Array.isArray(shadowStrategy.open_positions) ? shadowStrategy.open_positions : [];
+      const shadowClosedTrades = Array.isArray(shadowStrategy.closed_trades) ? shadowStrategy.closed_trades : [];
+      const shadowDecisions = Array.isArray(shadowStrategy.decisions) ? shadowStrategy.decisions : [];
       const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const materialQualityExits = qualityExits
         .filter((item) => item.is_material_early_exit)
         .sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const sortedStrategyHypotheses = strategyHypotheses.slice().sort((a, b) => String(b.last_observed_at || b.observed_at || '').localeCompare(String(a.last_observed_at || a.observed_at || '')));
+      const sortedShadowDecisions = shadowDecisions.slice().sort((a, b) => String(b.candle_closed_at || '').localeCompare(String(a.candle_closed_at || '')));
+      const sortedShadowTrades = shadowClosedTrades.slice().sort((a, b) => String(b.candle_closed_at || '').localeCompare(String(a.candle_closed_at || '')));
+      const sortedShadowOpen = shadowOpenPositions.slice().sort((a, b) => String(b.candle_closed_at || '').localeCompare(String(a.candle_closed_at || '')));
       document.getElementById('qualityTradesCount').textContent = String(Math.min(sortedQualityTrades.length, 20));
       document.getElementById('qualityExitsCount').textContent = String(Math.min(materialQualityExits.length, 12));
       document.getElementById('qualityHypothesesCount').textContent = String(Math.min(sortedStrategyHypotheses.length, 12));
+      document.getElementById('qualityShadowCount').textContent = String(Number(shadowSummary.entries || 0));
       tradeQualityMeta.textContent = tradeQuality.available
         ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Расчёт обновляется раз в час и использует часовые свечи, минуты - только на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
@@ -7331,6 +7387,59 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет HOLD-гипотез с подтверждённым движением.</div>';
+
+      const shadowStrategyMeta = document.getElementById('shadowStrategyMeta');
+      const shadowStrategyOverview = document.getElementById('shadowStrategyOverview');
+      const shadowStrategyOpen = document.getElementById('shadowStrategyOpen');
+      const shadowStrategyDecisions = document.getElementById('shadowStrategyDecisions');
+      const shadowStrategyTrades = document.getElementById('shadowStrategyTrades');
+      const shadowCard = (item) => {
+        const hasResult = item.estimated_net_rub_1lot != null;
+        const result = Number(item.estimated_net_rub_1lot || 0);
+        const resultClass = result >= 0 ? 'good' : 'bad';
+        const resultText = hasResult ? formatSignedRub(result) : String(item.decision || 'НЕТ ВХОДА');
+        const direction = String(item.direction || 'НЕТ').toLowerCase();
+        const entryDetails = item.entry_time
+          ? `<div class="quality-card-note"><strong>Теневая позиция:</strong> вход ${escapeHtml(formatMoscowTime(item.entry_time))} по цене ${escapeHtml(formatPrice(item.entry_price))}; расчёт на один лот.</div>`
+          : '';
+        return `<article class="quality-card">
+          <div class="quality-card-head">
+            <div>
+              <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${shadowDecisionBadge(item.decision)}</div>
+              <div class="quality-card-meta">${escapeHtml(formatMoscowTime(item.candle_closed_at || ''))} · направление ${escapeHtml(direction)}</div>
+            </div>
+            <div class="quality-card-result ${hasResult ? resultClass : ''}">${escapeHtml(resultText)}</div>
+          </div>
+          <div class="quality-metric-grid">
+            <div class="quality-metric"><div class="quality-metric-label">Сила AO</div><div class="quality-metric-value">${escapeHtml(Number(item.ao_strength_pct || 0).toFixed(2))}%</div><div class="quality-metric-note">порог ${escapeHtml(Number(item.minimum_strength_pct ?? shadowSettings.minimum_strength_pct ?? 0.7).toFixed(2))}%</div></div>
+            <div class="quality-metric"><div class="quality-metric-label">AO 5 и 34</div><div class="quality-metric-value">${escapeHtml(Number(item.ao || 0).toFixed(3))}</div><div class="quality-metric-note">предыдущий ${escapeHtml(Number(item.previous_ao || 0).toFixed(3))}</div></div>
+            <div class="quality-metric"><div class="quality-metric-label">Осциллятор Чайкина</div><div class="quality-metric-value">${escapeHtml(String(item.chaikin_status || 'НЕЙТРАЛЕН').toLowerCase())}</div><div class="quality-metric-note">изменение ${escapeHtml(Number(item.chaikin_change || 0).toFixed(1))}</div></div>
+            <div class="quality-metric"><div class="quality-metric-label">Ослабление движения</div><div class="quality-metric-value">${escapeHtml(String(item.opposite_ao_bars || 0))} из 3</div><div class="quality-metric-note">для расчётного выхода</div></div>
+          </div>
+          <div class="quality-card-note"><strong>Почему:</strong> ${escapeHtml(item.reason || 'Причина не сохранена')}</div>
+          ${entryDetails}
+        </article>`;
+      };
+      shadowStrategyMeta.textContent = shadowStrategy.enabled
+        ? `Наблюдение активно · часовые свечи · AO ${shadowSettings.ao_periods || '5 и 34'} · Чайкин ${shadowSettings.chaikin_periods || '5 и 20'} · обновлено ${formatMoscowTime(shadowStrategy.generated_at || '')}. На реальные заявки не влияет.`
+        : 'Теневая стратегия выключена и не влияет на реальные заявки.';
+      shadowStrategyOverview.innerHTML = shadowStrategy.available ? [
+        buildTradeSummaryCard('Проверок свечей', String(shadowSummary.checks || 0), `${shadowSummary.no_entries || 0} без входа`),
+        buildTradeSummaryCard('Теневых входов', String(shadowSummary.entries || 0), `${shadowSummary.open_positions || 0} сейчас открыто`),
+        buildTradeSummaryCard('Закрыто сделок', String(shadowSummary.closed_trades || 0), `${shadowSummary.wins || 0} в плюс · ${shadowSummary.losses || 0} в минус`),
+        buildTradeSummaryCard('Итог на 1 лот', formatSignedRub(shadowSummary.net_result_rub_1lot || 0), 'после оценочной комиссии', Number(shadowSummary.net_result_rub_1lot || 0) >= 0 ? 'good' : 'bad'),
+        buildTradeSummaryCard('Доля прибыльных', shadowSummary.win_rate_pct == null ? 'нет базы' : `${Number(shadowSummary.win_rate_pct).toFixed(1)}%`, 'только закрытые теневые сделки'),
+        buildTradeSummaryCard('Удержали движение', shadowSummary.average_capture_pct == null ? 'нет базы' : `${Number(shadowSummary.average_capture_pct).toFixed(1)}%`, 'средняя доля лучшего движения'),
+      ].join('') : '';
+      shadowStrategyOpen.innerHTML = sortedShadowOpen.length
+        ? sortedShadowOpen.map(shadowCard).join('')
+        : '<div class="muted">Открытых теневых позиций сейчас нет.</div>';
+      shadowStrategyDecisions.innerHTML = sortedShadowDecisions.length
+        ? sortedShadowDecisions.slice(0, 24).map(shadowCard).join('')
+        : '<div class="muted">Решения появятся после первой закрытой часовой свечи.</div>';
+      shadowStrategyTrades.innerHTML = sortedShadowTrades.length
+        ? sortedShadowTrades.slice(0, 20).map(shadowCard).join('')
+        : '<div class="muted">Закрытых теневых сделок пока нет.</div>';
 
 const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available
@@ -7616,6 +7725,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "runtime": runtime,
         "news": load_news_snapshot(),
         "signal_ai_shadow": load_signal_ai_shadow_summary(),
+        "ao_chaikin_shadow": load_ao_chaikin_shadow_strategy(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),
         "allocator_workspace": load_allocator_workspace(target_day, display_states, portfolio_view),

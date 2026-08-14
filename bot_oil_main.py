@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import ta
+from ao_chaikin_shadow import AoChaikinShadowJournal
 from dotenv import load_dotenv
 from active_contracts import get_instrument_history_symbol, replace_with_active_symbols
 from custom_instruments import merge_with_custom_symbols
@@ -125,6 +126,7 @@ NEWS_SEEN_PATH = STATE_DIR / "_news_seen.json"
 CASH_MANAGER_STATE_PATH = STATE_DIR / "_cash_manager.json"
 LOG_DIR = Path(__file__).with_name("logs")
 SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
+AO_CHAIKIN_SHADOW_PATH = LOG_DIR / "ao_chaikin_shadow.jsonl"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
@@ -134,6 +136,7 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
+AO_CHAIKIN_SHADOW_JOURNAL: AoChaikinShadowJournal | None = None
 TRADE_QUALITY_REFRESH_SECONDS = 3600
 TRADE_QUALITY_ANALYTICS_VERSION = 8
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
@@ -3746,6 +3749,59 @@ def enrich_news_biases_with_ai(active: dict[str, NewsBias]) -> dict[str, NewsBia
 
 def get_signal_ai_shadow_enabled() -> bool:
     return parse_bool_env("OIL_SIGNAL_AI_SHADOW_ENABLED", False)
+
+
+def get_ao_chaikin_shadow_enabled() -> bool:
+    return parse_bool_env("OIL_AO_CHAIKIN_SHADOW_ENABLED", False)
+
+
+def observe_ao_chaikin_shadow_strategy(
+    instrument: InstrumentConfig,
+    candles: pd.DataFrame,
+    *,
+    interval_minutes: int,
+) -> None:
+    """Record an independent hourly opinion without changing live decisions."""
+    if not get_ao_chaikin_shadow_enabled() or interval_minutes != 60:
+        return
+    global AO_CHAIKIN_SHADOW_JOURNAL
+    if AO_CHAIKIN_SHADOW_JOURNAL is None:
+        AO_CHAIKIN_SHADOW_JOURNAL = AoChaikinShadowJournal(AO_CHAIKIN_SHADOW_PATH)
+
+    point_value = 1.0
+    if instrument.min_price_increment > 0.0 and instrument.min_price_increment_amount > 0.0:
+        point_value = instrument.min_price_increment_amount / instrument.min_price_increment
+    minimum_strength_pct = max(
+        0.0,
+        parse_float_env("OIL_AO_CHAIKIN_SHADOW_MIN_STRENGTH_PCT", 0.7),
+    )
+    commission_rate = max(
+        0.0,
+        parse_float_env("OIL_AO_CHAIKIN_SHADOW_COMMISSION_RATE", 0.00025),
+    )
+    try:
+        created = AO_CHAIKIN_SHADOW_JOURNAL.observe(
+            symbol=instrument.symbol,
+            candles=candles,
+            point_value=point_value,
+            minimum_strength_pct=minimum_strength_pct,
+            commission_rate=commission_rate,
+        )
+    except Exception as error:
+        logging.warning(
+            "symbol=%s ao_chaikin_shadow_unavailable error=%s",
+            instrument.symbol,
+            error,
+        )
+        return
+    for row in created:
+        logging.info(
+            "symbol=%s ao_chaikin_shadow decision=%s direction=%s candle=%s",
+            instrument.symbol,
+            row.get("decision"),
+            row.get("direction"),
+            row.get("candle_closed_at"),
+        )
 
 
 def load_signal_ai_shadow_index() -> dict[str, dict[str, Any]]:
@@ -10558,6 +10614,12 @@ def process_instrument(
             logging.info("symbol=%s status=waiting_for_candles", instrument.symbol)
             return None
         raise
+
+    observe_ao_chaikin_shadow_strategy(
+        instrument,
+        lower_df,
+        interval_minutes=signal_interval_minutes,
+    )
 
     higher_tf_df: pd.DataFrame | None = None
     if (

@@ -52,8 +52,42 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('id="qualityTradesCount"', html)
         self.assertIn('id="qualityExitsCount"', html)
         self.assertIn('id="qualityHypothesesCount"', html)
+        self.assertIn('id="qualityShadowCount"', html)
+        self.assertIn('id="shadowStrategyDecisions"', html)
+        self.assertIn("Теневая стратегия AO и Чайкина", html)
         self.assertIn('class="quality-ai"', quality_render)
         self.assertNotIn("buildReviewRowRich(", quality_render)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_ao_chaikin_shadow_payload_is_loaded_newest_first_with_russian_decisions(self) -> None:
+        rows = [
+            {
+                "symbol": "VBU6",
+                "candle_closed_at": "2026-08-14T12:00:00+03:00",
+                "decision": "ВХОД",
+                "position_after": "ЛОНГ",
+                "minimum_strength_pct": 0.7,
+            },
+            {
+                "symbol": "VBU6",
+                "candle_closed_at": "2026-08-14T15:00:00+03:00",
+                "decision": "ВЫХОД",
+                "position_after": "НЕТ",
+                "estimated_net_rub_1lot": 20.0,
+            },
+        ]
+        with TemporaryDirectory() as temp_dir:
+            path = dashboard.Path(temp_dir) / "ao-shadow.jsonl"
+            path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+            with patch.object(dashboard, "AO_CHAIKIN_SHADOW_PATH", path), patch.dict(
+                dashboard.os.environ,
+                {"OIL_AO_CHAIKIN_SHADOW_ENABLED": "1"},
+            ):
+                result = dashboard.load_ao_chaikin_shadow_strategy()
+
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["decisions"][0]["decision"], "ВЫХОД")
+        self.assertEqual(result["decisions"][1]["decision"], "ВХОД")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_allocator_is_embedded_in_trade_review_and_removed_from_site_nav(self) -> None:

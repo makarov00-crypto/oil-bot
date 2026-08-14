@@ -37,6 +37,7 @@ struct DashboardPayload: Decodable {
     let signalObservations: SignalObservationSummary?
     let tradeQuality: TradeQualityPayload?
     let signalAIShadow: SignalAIShadowPayload?
+    let aoChaikinShadow: AOChaikinShadowPayload?
 
     enum CodingKeys: String, CodingKey {
         case generatedAtMoscow = "generated_at_moscow"
@@ -57,6 +58,112 @@ struct DashboardPayload: Decodable {
         case signalObservations = "signal_observations"
         case tradeQuality = "trade_quality"
         case signalAIShadow = "signal_ai_shadow"
+        case aoChaikinShadow = "ao_chaikin_shadow"
+    }
+}
+
+struct AOChaikinShadowPayload: Decodable {
+    let available: Bool
+    let enabled: Bool
+    let generatedAt: String?
+    let periodDays: Int?
+    let settings: AOChaikinShadowSettings?
+    let summary: AOChaikinShadowSummary?
+    let openPositions: [AOChaikinShadowEvent]
+    let closedTrades: [AOChaikinShadowEvent]
+    let decisions: [AOChaikinShadowEvent]
+
+    enum CodingKeys: String, CodingKey {
+        case available, enabled, settings, summary, decisions
+        case generatedAt = "generated_at"
+        case periodDays = "period_days"
+        case openPositions = "open_positions"
+        case closedTrades = "closed_trades"
+    }
+}
+
+struct AOChaikinShadowSettings: Decodable {
+    let timeframe: String?
+    let aoPeriods: String?
+    let chaikinPeriods: String?
+    let minimumStrengthPct: Double?
+    let exitRule: String?
+    let quantityBasis: String?
+
+    enum CodingKeys: String, CodingKey {
+        case timeframe
+        case aoPeriods = "ao_periods"
+        case chaikinPeriods = "chaikin_periods"
+        case minimumStrengthPct = "minimum_strength_pct"
+        case exitRule = "exit_rule"
+        case quantityBasis = "quantity_basis"
+    }
+}
+
+struct AOChaikinShadowSummary: Decodable {
+    let checks: Int?
+    let entries: Int?
+    let noEntries: Int?
+    let closedTrades: Int?
+    let openPositions: Int?
+    let wins: Int?
+    let losses: Int?
+    let netResultRub1Lot: Double?
+    let winRatePct: Double?
+    let averageCapturePct: Double?
+    let chaikinConfirmingEntries: Int?
+    let chaikinContradictoryEntries: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case checks, entries, wins, losses
+        case noEntries = "no_entries"
+        case closedTrades = "closed_trades"
+        case openPositions = "open_positions"
+        case netResultRub1Lot = "net_result_rub_1lot"
+        case winRatePct = "win_rate_pct"
+        case averageCapturePct = "average_capture_pct"
+        case chaikinConfirmingEntries = "chaikin_confirming_entries"
+        case chaikinContradictoryEntries = "chaikin_contradictory_entries"
+    }
+}
+
+struct AOChaikinShadowEvent: Decodable, Identifiable {
+    let key: String?
+    let symbol: String
+    let candleClosedAt: String?
+    let decision: String?
+    let direction: String?
+    let positionAfter: String?
+    let price: Double?
+    let ao: Double?
+    let previousAO: Double?
+    let aoStrengthPct: Double?
+    let minimumStrengthPct: Double?
+    let oppositeAOBars: Int?
+    let chaikinChange: Double?
+    let chaikinStatus: String?
+    let reason: String?
+    let entryTime: String?
+    let entryPrice: Double?
+    let estimatedNetRub1Lot: Double?
+    let capturePct: Double?
+
+    var id: String { key ?? "\(symbol)|\(candleClosedAt ?? "")|\(decision ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case key, symbol, decision, direction, price, ao, reason
+        case candleClosedAt = "candle_closed_at"
+        case positionAfter = "position_after"
+        case previousAO = "previous_ao"
+        case aoStrengthPct = "ao_strength_pct"
+        case minimumStrengthPct = "minimum_strength_pct"
+        case oppositeAOBars = "opposite_ao_bars"
+        case chaikinChange = "chaikin_change"
+        case chaikinStatus = "chaikin_status"
+        case entryTime = "entry_time"
+        case entryPrice = "entry_price"
+        case estimatedNetRub1Lot = "estimated_net_rub_1lot"
+        case capturePct = "capture_pct"
     }
 }
 

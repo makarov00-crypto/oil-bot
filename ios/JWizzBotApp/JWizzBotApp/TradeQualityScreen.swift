@@ -4,7 +4,7 @@ struct TradeQualityScreen: View {
     @ObservedObject var store: DashboardStore
     @State private var segment = 0
 
-    private let sections = ["Итог", "Сделки", "ИИ"]
+    private let sections = ["Итог", "Сделки", "ИИ", "AO и Чайкин"]
 
     var body: some View {
         Group {
@@ -18,8 +18,10 @@ struct TradeQualityScreen: View {
                         overviewContent(payload: payload, quality: quality)
                     } else if segment == 1 {
                         tradesContent(payload: payload, quality: quality)
-                    } else {
+                    } else if segment == 2 {
                         shadowAIContent(payload.signalAIShadow)
+                    } else {
+                        aoChaikinContent(payload: payload, shadow: payload.aoChaikinShadow)
                     }
                 }
                 .refreshable { await store.load(date: store.selectedDate) }
@@ -238,6 +240,117 @@ struct TradeQualityScreen: View {
         } else {
             EmptyGlassState(title: "Теневой ИИ выключен", subtitle: "Рекомендации пока не собираются.", systemImage: "brain.head.profile")
         }
+    }
+
+    @ViewBuilder
+    private func aoChaikinContent(payload: DashboardPayload, shadow: AOChaikinShadowPayload?) -> some View {
+        if let shadow, shadow.enabled {
+            let summary = shadow.summary
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    SectionHeader(
+                        title: "Теневая стратегия AO и Чайкина",
+                        subtitle: "Часовые свечи; только наблюдение, реальные заявки не меняются."
+                    )
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        MetricGlassTile(title: "Проверок", value: "\(summary?.checks ?? 0)")
+                        MetricGlassTile(title: "Входов", value: "\(summary?.entries ?? 0)", tone: .green)
+                        MetricGlassTile(title: "Закрыто", value: "\(summary?.closedTrades ?? 0)")
+                        MetricGlassTile(title: "Открыто", value: "\(summary?.openPositions ?? 0)", tone: .orange)
+                        MetricGlassTile(title: "Итог на 1 лот", value: formatRub(summary?.netResultRub1Lot), tone: statusTone(for: summary?.netResultRub1Lot))
+                        MetricGlassTile(title: "Прибыльных", value: formatPct(summary?.winRatePct))
+                    }
+                    InfoRow(title: "AO", value: shadow.settings?.aoPeriods ?? "5 и 34")
+                    InfoRow(title: "Осциллятор Чайкина", value: shadow.settings?.chaikinPeriods ?? "5 и 20")
+                    InfoRow(title: "Порог силы", value: formatPct(shadow.settings?.minimumStrengthPct))
+                    InfoRow(title: "Правило выхода", value: shadow.settings?.exitRule ?? "три столбца против позиции")
+                }
+            }
+
+            if !shadow.openPositions.isEmpty {
+                GlassCard {
+                    SectionHeader(title: "Открытые теневые позиции", subtitle: "Текущий расчёт на один лот.")
+                }
+                ForEach(shadow.openPositions.sorted { ($0.candleClosedAt ?? "") > ($1.candleClosedAt ?? "") }) { item in
+                    aoChaikinEventCard(item, payload: payload)
+                }
+            }
+
+            GlassCard {
+                SectionHeader(title: "Последние решения", subtitle: "Сначала самые свежие закрытые часовые свечи.")
+            }
+            let decisions = shadow.decisions.sorted { ($0.candleClosedAt ?? "") > ($1.candleClosedAt ?? "") }
+            if decisions.isEmpty {
+                EmptyGlassState(
+                    title: "Решений пока нет",
+                    subtitle: "Первая запись появится после закрытия часовой свечи.",
+                    systemImage: "waveform.path.ecg"
+                )
+            } else {
+                ForEach(Array(decisions.prefix(24))) { item in
+                    aoChaikinEventCard(item, payload: payload)
+                }
+            }
+
+            if !shadow.closedTrades.isEmpty {
+                GlassCard {
+                    SectionHeader(title: "Закрытые теневые сделки", subtitle: "Результат на один лот после оценочной комиссии.")
+                }
+                ForEach(shadow.closedTrades.sorted { ($0.candleClosedAt ?? "") > ($1.candleClosedAt ?? "") }.prefix(20)) { item in
+                    aoChaikinEventCard(item, payload: payload)
+                }
+            }
+        } else {
+            EmptyGlassState(
+                title: "Теневая стратегия выключена",
+                subtitle: "Расчёт AO и осциллятора Чайкина пока не собирается.",
+                systemImage: "waveform.path.ecg"
+            )
+        }
+    }
+
+    private func aoChaikinEventCard(_ item: AOChaikinShadowEvent, payload: DashboardPayload) -> some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(instrumentName(item.symbol, payload: payload)).font(.headline)
+                        Text(shadowEventTime(item.candleClosedAt)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    SignalPill(text: item.decision ?? "НЕТ ВХОДА", raw: item.direction)
+                }
+                InfoRow(title: "Направление", value: (item.direction ?? "нет").lowercased())
+                InfoRow(title: "Сила AO", value: formatPct(item.aoStrengthPct))
+                InfoRow(title: "AO 5 и 34", value: String(format: "%.3f", item.ao ?? 0.0))
+                InfoRow(title: "Осциллятор Чайкина", value: (item.chaikinStatus ?? "нейтрален").lowercased())
+                InfoRow(title: "Ослабление движения", value: "\(item.oppositeAOBars ?? 0) из 3")
+                if let result = item.estimatedNetRub1Lot {
+                    InfoRow(title: "Результат на 1 лот", value: formatRub(result), accent: statusTone(for: result))
+                }
+                Text(item.reason ?? "Причина не сохранена")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let entryTime = item.entryTime, !entryTime.isEmpty {
+                    Text("Теневой вход: \(shadowEventTime(entryTime)) по цене \(formatPrice(item.entryPrice)).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func shadowEventTime(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "-" }
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let regular = ISO8601DateFormatter()
+        guard let date = precise.date(from: raw) ?? regular.date(from: raw) else { return raw }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.timeZone = TimeZone(identifier: "Europe/Moscow")
+        formatter.dateFormat = "dd.MM HH:mm"
+        return formatter.string(from: date)
     }
 
     private func holdRow(hours: Int, value: Double?, delta: Double?) -> some View {
