@@ -7003,6 +7003,7 @@ def build_dashboard_html() -> str:
             const actionTone = rawAction === 'ENTER' || rawAction === 'HOLD' ? 'long' : rawAction === 'EXIT' || rawAction === 'REVERSE' ? 'short' : 'hold';
             const confidence = unavailable ? '—' : `${(Number(ai.confidence || 0) * 100).toFixed(0)}%`;
             const decisionTime = formatMoscowTime(item.time || '');
+            const reviewedTime = item.reviewed_at ? formatMoscowTime(item.reviewed_at) : '';
             const candleTime = item.candle_time ? `${String(item.candle_time).slice(0, 16)}–${String(item.candle_time).slice(11, 13) ? String(Number(String(item.candle_time).slice(11, 13)) + 1).padStart(2, '0') + ':00' : ''} МСК` : '';
             const retryText = unavailable && item.next_retry_at
               ? ` Повторная попытка после ${formatMoscowTime(item.next_retry_at)} МСК.`
@@ -7031,7 +7032,7 @@ def build_dashboard_html() -> str:
               <div class="shadow-ai-head">
                 <div>
                   <div class="shadow-ai-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
-                  <div class="shadow-ai-meta">Решение: ${escapeHtml(decisionTime)} МСК${candleTime ? `<br>Свеча: ${escapeHtml(candleTime)}` : ''}</div>
+                  <div class="shadow-ai-meta">Сигнал: ${escapeHtml(decisionTime)} МСК${reviewedTime ? `<br>ИИ ответил: ${escapeHtml(reviewedTime)} МСК` : ''}${candleTime ? `<br>Свеча: ${escapeHtml(candleTime)}` : ''}</div>
                 </div>
                 <div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge ${actionTone}">${escapeHtml(action)}</span><span class="muted">уверенность ${escapeHtml(confidence)}</span></div>
               </div>

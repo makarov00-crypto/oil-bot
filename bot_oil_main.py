@@ -3803,7 +3803,8 @@ def signal_ai_shadow_failure_record(candidate: dict[str, Any], error_text: str, 
     now = datetime.now(UTC).astimezone(MOSCOW_TZ)
     next_retry_at = now + timedelta(seconds=get_signal_ai_shadow_retry_delay_seconds(attempt))
     return {
-        "time": now.isoformat(),
+        "time": str(candidate.get("shadow_ai_observed_at") or now.isoformat()),
+        "last_attempt_at": now.isoformat(),
         "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
         "symbol": str(candidate.get("symbol") or "").upper(),
         "signal": str(candidate.get("signal") or "").upper(),
@@ -3958,6 +3959,7 @@ def retry_signal_ai_shadow_reviews() -> int:
             "reason": str(observation.get("decision_reason") or ""),
             "shadow_ai_context": shadow_context,
             "observation_uid": str(observation.get("observation_uid") or ""),
+            "shadow_ai_observed_at": str(observation.get("observed_at") or ""),
             "retry_attempt": attempt,
         })
 
@@ -3993,7 +3995,8 @@ def retry_signal_ai_shadow_reviews() -> int:
             continue
         review_payload = review.as_dict()
         append_signal_ai_shadow_record({
-            "time": reviewed_at,
+            "time": str(candidate.get("shadow_ai_observed_at") or reviewed_at),
+            "reviewed_at": reviewed_at,
             "key": str(candidate.get("shadow_ai_key") or ""),
             "symbol": symbol,
             "signal": str(candidate.get("signal") or "").upper(),
