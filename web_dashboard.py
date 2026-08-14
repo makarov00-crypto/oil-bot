@@ -7004,6 +7004,11 @@ def build_dashboard_html() -> str:
             const confidence = unavailable ? '—' : `${(Number(ai.confidence || 0) * 100).toFixed(0)}%`;
             const decisionTime = formatMoscowTime(item.time || '');
             const candleTime = item.candle_time ? `${String(item.candle_time).slice(0, 16)}–${String(item.candle_time).slice(11, 13) ? String(Number(String(item.candle_time).slice(11, 13)) + 1).padStart(2, '0') + ':00' : ''} МСК` : '';
+            const retryText = unavailable && item.next_retry_at
+              ? ` Повторная попытка после ${formatMoscowTime(item.next_retry_at)} МСК.`
+              : unavailable && Number(item.attempt || 0) >= 3
+                ? ' Лимит повторных попыток исчерпан.'
+                : '';
             const outcome4h = item.shadow_ai_outcomes?.['4h'];
             let outcomeText = unavailable ? 'Проверка не применяется: рекомендации ИИ нет.' : (item.shadow_ai_4h_due ? 'Ждём первую доступную цену рынка.' : 'Горизонт ещё не наступил.');
             if (outcome4h?.status === 'unavailable') outcomeText = 'Цена рынка недоступна.';
@@ -7031,7 +7036,7 @@ def build_dashboard_html() -> str:
                 <div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge ${actionTone}">${escapeHtml(action)}</span><span class="muted">уверенность ${escapeHtml(confidence)}</span></div>
               </div>
               <div class="shadow-ai-grid">
-                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Почему</div><div class="shadow-ai-field-value">${escapeHtml(unavailable ? (item.error || 'Внешний ИИ не вернул ответ.') : (ai.reason || 'Пояснение не сохранено.'))}</div></div>
+                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Почему</div><div class="shadow-ai-field-value">${escapeHtml(unavailable ? `${item.error || 'Внешний ИИ не вернул ответ.'}${retryText}` : (ai.reason || 'Пояснение не сохранено.'))}</div></div>
                 <div class="shadow-ai-field"><div class="shadow-ai-field-label">Риск</div><div class="shadow-ai-field-value">${escapeHtml(ai.risk_note || 'Отдельный риск не указан.')}</div></div>
                 <div class="shadow-ai-field"><div class="shadow-ai-field-label">Проверка через 4 часа</div><div class="shadow-ai-field-value">${escapeHtml(outcomeText)}</div></div>
               </div>

@@ -932,6 +932,9 @@ def append_signal_observation_decision(
         "risk_per_contract_rub": float(candidate.get("risk_per_contract_rub") or 0.0),
         "shadow_ai_status": str(candidate.get("shadow_ai_status") or ""),
         "shadow_ai_error": str(candidate.get("shadow_ai_error") or ""),
+        "shadow_ai_retry_attempt": int(candidate.get("shadow_ai_retry_attempt") or 0),
+        "shadow_ai_next_retry_at": str(candidate.get("shadow_ai_next_retry_at") or ""),
+        "shadow_ai_context": candidate.get("shadow_ai_context") if isinstance(candidate.get("shadow_ai_context"), dict) else {},
     }
     shadow_ai = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
     if shadow_ai:
@@ -3774,6 +3777,45 @@ def build_shadow_ai_key(candidate: dict[str, Any]) -> str:
     )
 
 
+def get_signal_ai_shadow_retry_delay_seconds(attempt: int) -> int:
+    """Use a bounded backoff so an unavailable model cannot flood the API."""
+    try:
+        base_delay = max(60, int(os.getenv("OIL_SIGNAL_AI_SHADOW_RETRY_SECONDS", "300")))
+    except ValueError:
+        base_delay = 300
+    return min(30 * 60, base_delay * max(1, int(attempt or 1)))
+
+
+def get_signal_ai_shadow_max_attempts() -> int:
+    try:
+        return max(1, min(5, int(os.getenv("OIL_SIGNAL_AI_SHADOW_MAX_ATTEMPTS", "3"))))
+    except ValueError:
+        return 3
+
+
+def append_signal_ai_shadow_record(row: dict[str, Any]) -> None:
+    SIGNAL_AI_SHADOW_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with SIGNAL_AI_SHADOW_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def signal_ai_shadow_failure_record(candidate: dict[str, Any], error_text: str, attempt: int) -> dict[str, Any]:
+    now = datetime.now(UTC).astimezone(MOSCOW_TZ)
+    next_retry_at = now + timedelta(seconds=get_signal_ai_shadow_retry_delay_seconds(attempt))
+    return {
+        "time": now.isoformat(),
+        "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
+        "symbol": str(candidate.get("symbol") or "").upper(),
+        "signal": str(candidate.get("signal") or "").upper(),
+        "strategy": str(candidate.get("strategy_name") or ""),
+        "candle_time": str(candidate.get("candle_time") or ""),
+        "status": "unavailable",
+        "error": error_text,
+        "attempt": int(attempt),
+        "next_retry_at": next_retry_at.isoformat(),
+    }
+
+
 def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
     """Attach AI opinions for later comparison; never change live trade decisions."""
     if not candidates or not get_signal_ai_shadow_enabled():
@@ -3819,66 +3861,171 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
     except Exception as error:
         logging.warning("Теневой ИИ-разбор сигналов не выполнен: %s", error)
         error_text = f"Теневой ИИ не ответил: {error}"
-        now = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
-        SIGNAL_AI_SHADOW_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with SIGNAL_AI_SHADOW_PATH.open("a", encoding="utf-8") as handle:
-            for candidate in pending:
-                symbol = str(candidate.get("symbol") or "").upper()
-                candidate["shadow_ai_status"] = "unavailable"
-                candidate["shadow_ai_error"] = error_text
-                handle.write(json.dumps({
-                    "time": now,
-                    "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
-                    "symbol": symbol,
-                    "signal": str(candidate.get("signal") or "").upper(),
-                    "strategy": str(candidate.get("strategy_name") or ""),
-                    "candle_time": str(candidate.get("candle_time") or ""),
-                    "status": "unavailable",
-                    "error": error_text,
-                }, ensure_ascii=False) + "\n")
-                state = load_state(symbol)
-                state.last_shadow_ai_status = "unavailable"
-                state.last_shadow_ai_error = error_text
-                save_state(symbol, state)
-        return
-    SIGNAL_AI_SHADOW_PATH.parent.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
-    with SIGNAL_AI_SHADOW_PATH.open("a", encoding="utf-8") as handle:
         for candidate in pending:
             symbol = str(candidate.get("symbol") or "").upper()
-            review = reviews.get(symbol)
-            if review is None:
-                continue
-            review_payload = review.as_dict()
-            candidate["shadow_ai"] = review_payload
-            candidate["shadow_ai_status"] = "ready"
-            row = {
-                "time": now,
-                "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
-                "symbol": symbol,
-                "signal": str(candidate.get("signal") or "").upper(),
-                "strategy": str(candidate.get("strategy_name") or ""),
-                "candle_time": str(candidate.get("candle_time") or ""),
-                "review": review_payload,
-                "status": "ready",
-            }
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            failure = signal_ai_shadow_failure_record(candidate, error_text, 1)
+            candidate["shadow_ai_status"] = "unavailable"
+            candidate["shadow_ai_error"] = error_text
+            candidate["shadow_ai_retry_attempt"] = int(failure["attempt"])
+            candidate["shadow_ai_next_retry_at"] = str(failure["next_retry_at"])
+            append_signal_ai_shadow_record(failure)
             state = load_state(symbol)
-            state.last_shadow_ai_action = review.action
-            state.last_shadow_ai_direction = review.direction
-            state.last_shadow_ai_confidence = review.confidence
-            state.last_shadow_ai_reason = review.reason
-            state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
-            state.last_shadow_ai_status = "ready"
-            state.last_shadow_ai_error = ""
+            state.last_shadow_ai_status = "unavailable"
+            state.last_shadow_ai_error = error_text
             save_state(symbol, state)
-            logging.info(
-                "symbol=%s signal_ai_shadow action=%s direction=%s confidence=%.2f",
-                symbol,
-                review.action,
-                review.direction,
-                review.confidence,
+        return
+    now = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
+    for candidate in pending:
+        symbol = str(candidate.get("symbol") or "").upper()
+        review = reviews.get(symbol)
+        if review is None:
+            continue
+        review_payload = review.as_dict()
+        candidate["shadow_ai"] = review_payload
+        candidate["shadow_ai_status"] = "ready"
+        append_signal_ai_shadow_record({
+            "time": now,
+            "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
+            "symbol": symbol,
+            "signal": str(candidate.get("signal") or "").upper(),
+            "strategy": str(candidate.get("strategy_name") or ""),
+            "candle_time": str(candidate.get("candle_time") or ""),
+            "review": review_payload,
+            "status": "ready",
+        })
+        state = load_state(symbol)
+        state.last_shadow_ai_action = review.action
+        state.last_shadow_ai_direction = review.direction
+        state.last_shadow_ai_confidence = review.confidence
+        state.last_shadow_ai_reason = review.reason
+        state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
+        state.last_shadow_ai_status = "ready"
+        state.last_shadow_ai_error = ""
+        save_state(symbol, state)
+        logging.info(
+            "symbol=%s signal_ai_shadow action=%s direction=%s confidence=%.2f",
+            symbol,
+            review.action,
+            review.direction,
+            review.confidence,
+        )
+
+
+def retry_signal_ai_shadow_reviews() -> int:
+    """Retry unavailable shadow reviews after the trade decision has already completed."""
+    if not get_signal_ai_shadow_enabled():
+        return 0
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return 0
+    now = datetime.now(UTC).astimezone(MOSCOW_TZ)
+    observations = load_signal_observations(TRADE_DB_PATH, limit=800, newest_first=True)
+    observations_by_key: dict[str, dict[str, Any]] = {}
+    for observation in observations:
+        context = observation.get("context") if isinstance(observation.get("context"), dict) else {}
+        key = ":".join([
+            str(observation.get("symbol") or "").upper(),
+            str(observation.get("signal") or "").upper(),
+            str(context.get("candle_time") or observation.get("observation_key") or ""),
+        ])
+        if key:
+            observations_by_key.setdefault(key, observation)
+
+    pending: list[dict[str, Any]] = []
+    for key, failure in load_signal_ai_shadow_index().items():
+        if str(failure.get("status") or "").lower() != "unavailable":
+            continue
+        attempt = int(failure.get("attempt") or 1)
+        if attempt >= get_signal_ai_shadow_max_attempts():
+            continue
+        due_at = parse_state_datetime(str(failure.get("next_retry_at") or ""))
+        if due_at is None or due_at.astimezone(MOSCOW_TZ) > now:
+            continue
+        observation = observations_by_key.get(key)
+        if not observation:
+            continue
+        context = observation.get("context") if isinstance(observation.get("context"), dict) else {}
+        shadow_context = context.get("shadow_ai_context") if isinstance(context.get("shadow_ai_context"), dict) else {}
+        if not shadow_context:
+            # Old journal rows did not retain the model prompt context and are kept as-is.
+            continue
+        pending.append({
+            "shadow_ai_key": key,
+            "symbol": str(observation.get("symbol") or "").upper(),
+            "signal": str(observation.get("signal") or "").upper(),
+            "strategy_name": str(observation.get("strategy") or ""),
+            "candle_time": str(context.get("candle_time") or observation.get("observation_key") or ""),
+            "reason": str(observation.get("decision_reason") or ""),
+            "shadow_ai_context": shadow_context,
+            "observation_uid": str(observation.get("observation_uid") or ""),
+            "retry_attempt": attempt,
+        })
+
+    if not pending:
+        return 0
+    try:
+        reviews = request_signal_ai_reviews(api_key, pending)
+    except Exception as error:
+        error_text = f"Теневой ИИ не ответил повторно: {error}"
+        for candidate in pending:
+            attempt = int(candidate.get("retry_attempt") or 1) + 1
+            failure = signal_ai_shadow_failure_record(candidate, error_text, attempt)
+            append_signal_ai_shadow_record(failure)
+            update_signal_observation_context(
+                TRADE_DB_PATH,
+                str(candidate.get("observation_uid") or ""),
+                {
+                    "shadow_ai_status": "unavailable",
+                    "shadow_ai_error": error_text,
+                    "shadow_ai_retry_attempt": attempt,
+                    "shadow_ai_next_retry_at": str(failure["next_retry_at"]),
+                },
             )
+        logging.warning("Теневой ИИ повторно не ответил: %s", error)
+        return 0
+
+    completed = 0
+    reviewed_at = now.isoformat()
+    for candidate in pending:
+        symbol = str(candidate.get("symbol") or "").upper()
+        review = reviews.get(symbol)
+        if review is None:
+            continue
+        review_payload = review.as_dict()
+        append_signal_ai_shadow_record({
+            "time": reviewed_at,
+            "key": str(candidate.get("shadow_ai_key") or ""),
+            "symbol": symbol,
+            "signal": str(candidate.get("signal") or "").upper(),
+            "strategy": str(candidate.get("strategy_name") or ""),
+            "candle_time": str(candidate.get("candle_time") or ""),
+            "review": review_payload,
+            "status": "ready",
+            "retry_attempt": int(candidate.get("retry_attempt") or 1),
+        })
+        update_signal_observation_context(
+            TRADE_DB_PATH,
+            str(candidate.get("observation_uid") or ""),
+            {
+                "shadow_ai": review_payload,
+                "shadow_ai_status": "ready",
+                "shadow_ai_error": "",
+                "shadow_ai_retry_attempt": int(candidate.get("retry_attempt") or 1),
+                "shadow_ai_next_retry_at": "",
+            },
+        )
+        state = load_state(symbol)
+        state.last_shadow_ai_action = review.action
+        state.last_shadow_ai_direction = review.direction
+        state.last_shadow_ai_confidence = review.confidence
+        state.last_shadow_ai_reason = review.reason
+        state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
+        state.last_shadow_ai_status = "ready"
+        state.last_shadow_ai_error = ""
+        save_state(symbol, state)
+        completed += 1
+        logging.info("symbol=%s signal_ai_shadow retry_completed attempt=%s", symbol, candidate.get("retry_attempt"))
+    return completed
 
 
 def floor_time_slot(dt: datetime, minutes: int) -> datetime:
@@ -10950,6 +11097,9 @@ def run_bot() -> int:
                             defer_reason = str(item.get("defer_reason") or "кандидат отложен аллокатором")
                             mark_cycle_deferred_candidate(item, defer_reason)
                             logging.info("symbol=%s status=entry_deferred_cycle_rank reason=%s", symbol, defer_reason)
+                        retried_shadow_reviews = retry_signal_ai_shadow_reviews()
+                        if retried_shadow_reviews:
+                            logging.info("signal_ai_shadow_retries_completed count=%s", retried_shadow_reviews)
                         recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)
                         journal_integrity_alert = ""
                         if recovered_closes:

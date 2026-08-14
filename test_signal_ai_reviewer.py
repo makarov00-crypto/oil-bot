@@ -63,6 +63,37 @@ class SignalAiReviewerTests(unittest.TestCase):
         self.assertEqual(state.last_shadow_ai_status, "unavailable")
         self.assertIn("тайм-аут", logged)
 
+    @patch.dict(os.environ, {"OIL_SIGNAL_AI_SHADOW_ENABLED": "1", "OPENAI_API_KEY": "key"}, clear=False)
+    def test_shadow_retry_updates_saved_observation_after_provider_recovers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "trade.sqlite3"
+            shadow_path = Path(directory) / "shadow.jsonl"
+            candidate = {"symbol": "GLU6", "signal": "LONG", "strategy_name": "reversal_1h", "candle_time": "2026-08-14 16:00"}
+            failure = bot.signal_ai_shadow_failure_record(candidate, "тайм-аут", 1)
+            failure["next_retry_at"] = "2020-01-01T00:00:00+03:00"
+            shadow_path.write_text(json.dumps(failure, ensure_ascii=False) + "\n", encoding="utf-8")
+            uid = append_signal_observation(db_path, {
+                "observed_at": "2026-08-14T17:00:00+03:00", "observation_key": "2026-08-14 16:00",
+                "symbol": "GLU6", "signal": "LONG", "strategy": "reversal_1h", "decision": "selected",
+                "context": {
+                    "candle_time": "2026-08-14 16:00",
+                    "shadow_ai_status": "unavailable",
+                    "shadow_ai_context": {"macd": 1.0, "rsi": 55.0},
+                },
+            })
+            review = reviewer.SignalAiReview("GLU6", "ВХОД", "ЛОНГ", 0.8, "импульс", "стоп")
+            state = bot.InstrumentState()
+            with patch.object(bot, "TRADE_DB_PATH", db_path), patch.object(bot, "SIGNAL_AI_SHADOW_PATH", shadow_path), patch.object(
+                bot, "request_signal_ai_reviews", return_value={"GLU6": review}
+            ), patch.object(bot, "load_state", return_value=state), patch.object(bot, "save_state"):
+                completed = bot.retry_signal_ai_shadow_reviews()
+
+            row = next(item for item in load_signal_observations(db_path) if item["observation_uid"] == uid)
+            self.assertEqual(completed, 1)
+            self.assertEqual(row["context"]["shadow_ai_status"], "ready")
+            self.assertEqual(row["context"]["shadow_ai"]["action"], "ВХОД")
+            self.assertEqual(state.last_shadow_ai_action, "ВХОД")
+
     def test_shadow_outcomes_are_saved_for_each_due_hour(self) -> None:
         observed_at = "2026-08-01T10:00:00+03:00"
         with tempfile.TemporaryDirectory() as directory:
