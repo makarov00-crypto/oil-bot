@@ -23,7 +23,11 @@ from ao_chaikin_shadow import (
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
-def prepared_frame(ao_values: list[float], prices: list[float] | None = None) -> pd.DataFrame:
+def prepared_frame(
+    ao_values: list[float],
+    prices: list[float] | None = None,
+    chaikin_values: list[float] | None = None,
+) -> pd.DataFrame:
     closes = prices or [100.0] * len(ao_values)
     return pd.DataFrame(
         {
@@ -35,14 +39,15 @@ def prepared_frame(ao_values: list[float], prices: list[float] | None = None) ->
             "close": closes,
             "volume": [1000.0] * len(ao_values),
             "shadow_ao": ao_values,
-            "shadow_chaikin": [10.0 + index * 2.0 for index in range(len(ao_values))],
+            "shadow_atr": [value * 0.01 for value in closes],
+            "shadow_chaikin": chaikin_values or [10.0 + index * 2.0 for index in range(len(ao_values))],
         }
     )
 
 
 class AoChaikinShadowTests(unittest.TestCase):
-    def test_enters_after_two_strengthening_ao_bars_above_relative_threshold(self) -> None:
-        frame = prepared_frame([0.6, 0.8])
+    def test_enters_on_ao_zero_cross_with_atr_relative_strength(self) -> None:
+        frame = prepared_frame([-0.1, 0.8])
 
         result = evaluate_shadow_candle(
             frame,
@@ -50,24 +55,24 @@ class AoChaikinShadowTests(unittest.TestCase):
             None,
             symbol="VBU6",
             point_value=1.0,
-            minimum_strength_pct=0.7,
+            minimum_strength_atr_ratio=0.7,
         )
 
         self.assertEqual(result["decision"], DECISION_ENTRY)
         self.assertEqual(result["direction"], DIRECTION_LONG)
         self.assertEqual(result["chaikin_status"], CHAIKIN_CONFIRMS)
-        self.assertIn("Два последовательных столбца AO", result["reason"])
+        self.assertIn("AO недавно пересёк ноль", result["reason"])
 
-    def test_relative_strength_has_same_meaning_at_different_price_scales(self) -> None:
+    def test_atr_relative_strength_has_same_meaning_at_different_price_scales(self) -> None:
         small = evaluate_shadow_candle(
-            prepared_frame([0.6, 0.8], [100.0, 100.0]),
+            prepared_frame([-0.6, 0.8], [100.0, 100.0]),
             1,
             None,
             symbol="VBU6",
             point_value=1.0,
         )
         large = evaluate_shadow_candle(
-            prepared_frame([60.0, 80.0], [10000.0, 10000.0]),
+            prepared_frame([-60.0, 80.0], [10000.0, 10000.0]),
             1,
             None,
             symbol="LKU6",
@@ -76,11 +81,11 @@ class AoChaikinShadowTests(unittest.TestCase):
 
         self.assertEqual(small["decision"], DECISION_ENTRY)
         self.assertEqual(large["decision"], DECISION_ENTRY)
-        self.assertEqual(small["ao_strength_pct"], large["ao_strength_pct"])
+        self.assertEqual(small["ao_strength_atr_ratio"], large["ao_strength_atr_ratio"])
 
     def test_rejects_direction_when_relative_strength_is_too_low(self) -> None:
         result = evaluate_shadow_candle(
-            prepared_frame([0.4, 0.5]),
+            prepared_frame([-0.1, 0.3]),
             1,
             None,
             symbol="VBU6",
@@ -89,6 +94,29 @@ class AoChaikinShadowTests(unittest.TestCase):
 
         self.assertEqual(result["decision"], DECISION_NO_ENTRY)
         self.assertIn("ниже порога", result["reason"])
+
+    def test_allows_one_strengthening_candle_after_ao_zero_cross(self) -> None:
+        result = evaluate_shadow_candle(
+            prepared_frame([-0.1, 0.4, 0.6]),
+            2,
+            None,
+            symbol="VBU6",
+            point_value=1.0,
+        )
+
+        self.assertEqual(result["decision"], DECISION_ENTRY)
+
+    def test_rejects_ao_acceleration_without_recent_zero_cross(self) -> None:
+        result = evaluate_shadow_candle(
+            prepared_frame([0.4, 0.6]),
+            1,
+            None,
+            symbol="VBU6",
+            point_value=1.0,
+        )
+
+        self.assertEqual(result["decision"], DECISION_NO_ENTRY)
+        self.assertIn("двух последовательных", result["reason"])
 
     def test_exits_after_three_opposite_ao_bars_and_calculates_one_lot_result(self) -> None:
         frame = prepared_frame([10.0, 9.0, 8.0, 7.0], [100.0, 102.0, 104.0, 103.0])
@@ -115,6 +143,22 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(result["gross_result_rub_1lot"], 3.0)
         self.assertEqual(result["estimated_net_rub_1lot"], 2.95)
         self.assertEqual(result["capture_pct"], 60.0)
+
+    def test_exits_after_two_opposite_ao_bars_when_chaikin_confirms_reversal(self) -> None:
+        frame = prepared_frame([10.0, 9.0, 8.0], [100.0, 102.0, 101.0], [20.0, 16.0, 12.0])
+        previous = {
+            "position_after": DIRECTION_LONG,
+            "entry_time": "2026-08-14T09:00:00+03:00",
+            "entry_price": 100.0,
+            "best_price": 103.0,
+            "worst_price": 99.0,
+        }
+
+        result = evaluate_shadow_candle(frame, 2, previous, symbol="VBU6", point_value=1.0)
+
+        self.assertEqual(result["decision"], DECISION_EXIT)
+        self.assertEqual(result["opposite_ao_bars"], 2)
+        self.assertIn("подтверждены", result["reason"])
 
     def test_journal_writes_only_one_record_for_the_same_closed_candle(self) -> None:
         candles = pd.DataFrame(

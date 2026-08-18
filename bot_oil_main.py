@@ -3771,9 +3771,9 @@ def observe_ao_chaikin_shadow_strategy(
     point_value = 1.0
     if instrument.min_price_increment > 0.0 and instrument.min_price_increment_amount > 0.0:
         point_value = instrument.min_price_increment_amount / instrument.min_price_increment
-    minimum_strength_pct = max(
+    minimum_strength_atr_ratio = max(
         0.0,
-        parse_float_env("OIL_AO_CHAIKIN_SHADOW_MIN_STRENGTH_PCT", 0.7),
+        parse_float_env("OIL_AO_CHAIKIN_SHADOW_MIN_AO_ATR_RATIO", 0.35),
     )
     commission_rate = max(
         0.0,
@@ -3784,7 +3784,7 @@ def observe_ao_chaikin_shadow_strategy(
             symbol=instrument.symbol,
             candles=candles,
             point_value=point_value,
-            minimum_strength_pct=minimum_strength_pct,
+            minimum_strength_atr_ratio=minimum_strength_atr_ratio,
             commission_rate=commission_rate,
         )
     except Exception as error:

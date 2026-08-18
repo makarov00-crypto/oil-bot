@@ -7411,10 +7411,10 @@ def build_dashboard_html() -> str:
             <div class="quality-card-result ${hasResult ? resultClass : ''}">${escapeHtml(resultText)}</div>
           </div>
           <div class="quality-metric-grid">
-            <div class="quality-metric"><div class="quality-metric-label">Сила AO</div><div class="quality-metric-value">${escapeHtml(Number(item.ao_strength_pct || 0).toFixed(2))}%</div><div class="quality-metric-note">порог ${escapeHtml(Number(item.minimum_strength_pct ?? shadowSettings.minimum_strength_pct ?? 0.7).toFixed(2))}%</div></div>
+            <div class="quality-metric"><div class="quality-metric-label">Сила AO / ATR</div><div class="quality-metric-value">${escapeHtml(Number(item.ao_strength_atr_ratio || 0).toFixed(2))} ATR</div><div class="quality-metric-note">порог ${escapeHtml(Number(item.minimum_strength_atr_ratio ?? shadowSettings.minimum_strength_atr_ratio ?? 0.35).toFixed(2))} ATR</div></div>
             <div class="quality-metric"><div class="quality-metric-label">AO 5 и 34</div><div class="quality-metric-value">${escapeHtml(Number(item.ao || 0).toFixed(3))}</div><div class="quality-metric-note">предыдущий ${escapeHtml(Number(item.previous_ao || 0).toFixed(3))}</div></div>
             <div class="quality-metric"><div class="quality-metric-label">Осциллятор Чайкина</div><div class="quality-metric-value">${escapeHtml(String(item.chaikin_status || 'НЕЙТРАЛЕН').toLowerCase())}</div><div class="quality-metric-note">изменение ${escapeHtml(Number(item.chaikin_change || 0).toFixed(1))}</div></div>
-            <div class="quality-metric"><div class="quality-metric-label">Ослабление движения</div><div class="quality-metric-value">${escapeHtml(String(item.opposite_ao_bars || 0))} из 3</div><div class="quality-metric-note">для расчётного выхода</div></div>
+            <div class="quality-metric"><div class="quality-metric-label">Ослабление движения</div><div class="quality-metric-value">${escapeHtml(String(item.opposite_ao_bars || 0))} AO-бар.</div><div class="quality-metric-note">выход: 2 с Чайкиным или 3</div></div>
           </div>
           <div class="quality-card-note"><strong>Почему:</strong> ${escapeHtml(item.reason || 'Причина не сохранена')}</div>
           ${entryDetails}
