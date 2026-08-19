@@ -24,7 +24,7 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 DEFAULT_AI_API_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_AI_API_MODE = "responses"
 
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_OUTPUT_PATH = BASE_DIR / "logs" / "ai_reviews" / "latest_review.md"
 
 SYSTEM_INSTRUCTIONS = """Ты рыночный аналитик для фьючерсного бота на Мосбирже.

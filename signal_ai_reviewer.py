@@ -63,7 +63,7 @@ class SignalAiReview:
 
 
 def get_signal_ai_model() -> str:
-    return os.getenv("OIL_SIGNAL_AI_MODEL", "").strip() or os.getenv("OIL_AI_MODEL", "").strip() or "gpt-4.1-mini"
+    return os.getenv("OIL_SIGNAL_AI_MODEL", "").strip() or os.getenv("OIL_AI_MODEL", "").strip() or "gpt-5.6-luna"
 
 
 def get_ai_api_mode() -> str:
