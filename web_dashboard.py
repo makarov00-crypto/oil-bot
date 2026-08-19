@@ -1366,7 +1366,12 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         "abstain_correct_4h": 0,
     }
     shadow_outcomes_by_key: dict[str, dict[str, Any]] = {}
-    for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800, newest_first=True):
+    shadow_observations = load_signal_observations_from_storage(
+        TRADE_DB_PATH,
+        newest_first=True,
+        context_key="shadow_ai",
+    )
+    for row in shadow_observations:
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
         shadow_status = str(context.get("shadow_ai_status") or "").lower()
@@ -1414,7 +1419,7 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
             latest[key] = row
     # The database is authoritative for executed candidates. It also retains an
     # explicit provider failure when the external AI could not answer in time.
-    for row in load_signal_observations_from_storage(TRADE_DB_PATH, limit=800, newest_first=True):
+    for row in shadow_observations:
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
         shadow_status = str(context.get("shadow_ai_status") or "").lower()

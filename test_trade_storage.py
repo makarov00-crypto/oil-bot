@@ -534,6 +534,34 @@ class TradeStorageTests(unittest.TestCase):
             self.assertEqual(evaluated[0]["move_pct"], 1.5)
             self.assertTrue(evaluated[0]["favorable"])
 
+    def test_signal_observation_context_filter_keeps_only_shadow_ai_rows(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "trade_analytics.sqlite3"
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-08-10T10:00:00+03:00",
+                    "symbol": "BRU6",
+                    "signal": "LONG",
+                    "decision": "selected",
+                    "context": {"shadow_ai": {"action": "ВХОД"}},
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    "observed_at": "2026-08-10T11:00:00+03:00",
+                    "symbol": "NGQ6",
+                    "signal": "SHORT",
+                    "decision": "deferred",
+                    "context": {"allocator_summary": "обычное наблюдение"},
+                },
+            )
+            rows = load_signal_observations(db_path, context_key="shadow_ai")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["symbol"], "BRU6")
+
     def test_signal_observation_dedupes_same_candle_setup(self) -> None:
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "trade_analytics.sqlite3"
