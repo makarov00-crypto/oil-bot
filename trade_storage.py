@@ -253,7 +253,6 @@ def _signal_observation_uid(row: dict[str, Any]) -> str:
         "symbol": str(row.get("symbol") or "").upper(),
         "signal": str(row.get("signal") or "").upper(),
         "strategy": str(row.get("strategy") or row.get("strategy_name") or ""),
-        "decision": str(row.get("decision") or ""),
     }
     payload = json.dumps(base, ensure_ascii=True, sort_keys=True)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
@@ -267,6 +266,16 @@ def append_signal_observation(db_path: Path, row: dict[str, Any]) -> str:
     observed_at = str(row.get("observed_at") or row.get("time") or "")
     observation_uid = str(row.get("observation_uid") or _signal_observation_uid(row))
     with _connect(db_path) as connection:
+        existing = connection.execute(
+            "SELECT decision FROM signal_observations WHERE observation_uid = ?",
+            (observation_uid,),
+        ).fetchone()
+        decision_priority = {"selected": 2, "deferred": 1}
+        if existing is not None and (
+            decision_priority.get(str(existing[0] or "").lower(), 0)
+            > decision_priority.get(str(row.get("decision") or "").lower(), 0)
+        ):
+            return observation_uid
         connection.execute(
             """
             INSERT OR REPLACE INTO signal_observations (

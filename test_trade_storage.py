@@ -33,8 +33,9 @@ class TradeStorageTests(unittest.TestCase):
     def test_news_events_are_deduped_and_summarized(self) -> None:
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
+            observed_at = datetime.now(timezone.utc).isoformat()
             row = {
-                "observed_at": "2026-05-12T10:00:00+03:00",
+                "observed_at": observed_at,
                 "symbol": "USDRUBF",
                 "category": "валюта",
                 "bias": "LONG",
@@ -67,7 +68,7 @@ class TradeStorageTests(unittest.TestCase):
             }
 
             first_uid = append_news_event(db_path, row)
-            second_uid = append_news_event(db_path, {**row, "observed_at": "2026-05-12T10:05:00+03:00"})
+            second_uid = append_news_event(db_path, {**row, "observed_at": observed_at})
             rows = load_news_events(db_path)
 
             self.assertEqual(first_uid, second_uid)
@@ -598,6 +599,49 @@ class TradeStorageTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["decision_reason"], "повторный проход цикла")
         self.assertEqual(rows[0]["observed_price"], 80.2)
+
+    def test_signal_observation_keeps_final_selected_decision_for_same_candle(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "trade_analytics.sqlite3"
+            base = {
+                "symbol": "BRK6",
+                "signal": "LONG",
+                "strategy": "reversal_1h",
+                "context": {"candle_time": "2026-08-20 10:00"},
+            }
+            first_uid = append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "observed_at": "2026-08-20T11:00:00+03:00",
+                    "decision": "deferred",
+                    "decision_reason": "проиграл конкуренцию",
+                },
+            )
+            second_uid = append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "observed_at": "2026-08-20T11:02:00+03:00",
+                    "decision": "selected",
+                    "decision_reason": "кандидат выбран",
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "observed_at": "2026-08-20T11:03:00+03:00",
+                    "decision": "deferred",
+                    "decision_reason": "устаревший повтор",
+                },
+            )
+            rows = load_signal_observations(db_path)
+
+        self.assertEqual(first_uid, second_uid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["decision"], "selected")
+        self.assertEqual(rows[0]["decision_reason"], "кандидат выбран")
 
     def test_signal_observation_unavailable_is_finalized_without_fake_result(self) -> None:
         with TemporaryDirectory() as temp_dir:

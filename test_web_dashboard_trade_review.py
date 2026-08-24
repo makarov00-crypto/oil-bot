@@ -176,6 +176,48 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertFalse(summary["readiness"]["ready"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_shadow_ai_summary_dedupes_deferred_then_selected_candidate(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
+            shadow_path = dashboard.Path(temp_dir) / "shadow.jsonl"
+            shadow_path.write_text("", encoding="utf-8")
+            base = {
+                "symbol": "BRU6",
+                "signal": "LONG",
+                "strategy": "reversal_1h",
+                "context": {
+                    "candle_time": "2026-08-20 10:00",
+                    "shadow_ai": {"action": "ВХОД", "confidence": 0.8},
+                    "shadow_ai_outcomes": {"4h": {"favorable": True}},
+                },
+            }
+            append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "observation_uid": "legacy-deferred",
+                    "observed_at": "2026-08-20T11:00:00+03:00",
+                    "decision": "deferred",
+                },
+            )
+            append_signal_observation(
+                db_path,
+                {
+                    **base,
+                    "observation_uid": "legacy-selected",
+                    "observed_at": "2026-08-20T11:02:00+03:00",
+                    "decision": "selected",
+                },
+            )
+            with patch.object(dashboard, "TRADE_DB_PATH", db_path), patch.object(
+                dashboard, "SIGNAL_AI_SHADOW_PATH", shadow_path
+            ):
+                summary = dashboard.load_signal_ai_shadow_summary()
+
+        self.assertEqual(summary["evaluated_4h"], 1)
+        self.assertEqual(summary["enter_evaluated_4h"], 1)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_quality_lab_uses_unambiguous_labels(self) -> None:
         html = dashboard.build_dashboard_html()
 

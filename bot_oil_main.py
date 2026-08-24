@@ -1,4 +1,5 @@
 import json
+import hashlib
 import logging
 import math
 import os
@@ -938,6 +939,9 @@ def append_signal_observation_decision(
         "shadow_ai_retry_attempt": int(candidate.get("shadow_ai_retry_attempt") or 0),
         "shadow_ai_next_retry_at": str(candidate.get("shadow_ai_next_retry_at") or ""),
         "shadow_ai_context": candidate.get("shadow_ai_context") if isinstance(candidate.get("shadow_ai_context"), dict) else {},
+        "ai_canary_bucket": int(candidate.get("ai_canary_bucket") or 0),
+        "ai_canary_percent": int(candidate.get("ai_canary_percent") or 0),
+        "ai_canary_result": str(candidate.get("ai_canary_result") or ""),
     }
     shadow_ai = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
     if shadow_ai:
@@ -971,7 +975,11 @@ def append_signal_observation_decision(
         "setup_quality": str(candidate.get("setup_quality_label") or ""),
         "observed_price": float(candidate.get("observed_price") or 0.0),
         "horizon_minutes": resolved_horizon_minutes,
-        "context": {key: value for key, value in context.items() if value not in ("", None, 0.0)},
+        "context": {
+            key: value
+            for key, value in context.items()
+            if value not in ("", None, 0.0) or key in {"ai_canary_bucket", "ai_canary_percent"}
+        },
     }
     return append_signal_observation(TRADE_DB_PATH, row)
 
@@ -3751,6 +3759,18 @@ def get_signal_ai_shadow_enabled() -> bool:
     return parse_bool_env("OIL_SIGNAL_AI_SHADOW_ENABLED", False)
 
 
+def get_signal_ai_mode() -> str:
+    mode = os.getenv("OIL_SIGNAL_AI_MODE", "shadow").strip().lower()
+    return mode if mode in {"shadow", "canary"} else "shadow"
+
+
+def get_signal_ai_canary_percent() -> int:
+    try:
+        return max(0, min(100, int(os.getenv("OIL_SIGNAL_AI_CANARY_PERCENT", "25"))))
+    except ValueError:
+        return 25
+
+
 def get_ao_chaikin_shadow_enabled() -> bool:
     return parse_bool_env("OIL_AO_CHAIKIN_SHADOW_ENABLED", False)
 
@@ -3831,6 +3851,54 @@ def build_shadow_ai_key(candidate: dict[str, Any]) -> str:
             str(candidate.get("candle_time") or ""),
         ]
     )
+
+
+def get_signal_ai_canary_bucket(candidate: dict[str, Any]) -> int:
+    digest = hashlib.sha256(build_shadow_ai_key(candidate).encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % 100
+
+
+def filter_signal_ai_canary_candidates(
+    candidates: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply a deterministic, fail-open AI veto to a small candidate cohort."""
+    if not get_signal_ai_shadow_enabled() or get_signal_ai_mode() != "canary":
+        return candidates, []
+
+    canary_percent = get_signal_ai_canary_percent()
+    allowed: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    expected_directions = {"LONG": "ЛОНГ", "SHORT": "ШОРТ"}
+    for candidate in candidates:
+        bucket = get_signal_ai_canary_bucket(candidate)
+        candidate["ai_canary_bucket"] = bucket
+        candidate["ai_canary_percent"] = canary_percent
+        if bucket >= canary_percent:
+            candidate["ai_canary_result"] = "control"
+            allowed.append(candidate)
+            continue
+
+        review = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
+        status = str(candidate.get("shadow_ai_status") or "").strip().lower()
+        action = str(review.get("action") or "").strip().upper()
+        expected_direction = expected_directions.get(str(candidate.get("signal") or "").strip().upper(), "")
+        ai_direction = str(review.get("direction") or "").strip().upper()
+
+        if status == "ready" and action in {"ВХОД", "ENTER"} and ai_direction == expected_direction:
+            candidate["ai_canary_result"] = "supported"
+            allowed.append(candidate)
+            continue
+        if status == "ready" and action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"}:
+            candidate["ai_canary_result"] = "blocked"
+            candidate["defer_kind"] = "ai_canary"
+            reason = str(review.get("reason") or "преимущества для нового входа недостаточно")
+            candidate["defer_reason"] = f"ИИ canary не поддержал вход: {reason[:240]}"
+            blocked.append(candidate)
+            continue
+
+        candidate["ai_canary_result"] = "fallback"
+        allowed.append(candidate)
+    return allowed, blocked
 
 
 def get_signal_ai_shadow_retry_delay_seconds(attempt: int) -> int:
@@ -11090,7 +11158,9 @@ def run_bot() -> int:
                             if candidate:
                                 cycle_candidates.append(candidate)
                         apply_signal_ai_shadow_reviews(cycle_candidates)
-                        selected_candidates, deferred_candidates = rank_cycle_entry_candidates(cycle_candidates)
+                        ranked_candidates, ai_canary_deferred = filter_signal_ai_canary_candidates(cycle_candidates)
+                        selected_candidates, deferred_candidates = rank_cycle_entry_candidates(ranked_candidates)
+                        deferred_candidates = [*ai_canary_deferred, *deferred_candidates]
                         for item in deferred_candidates:
                             append_signal_observation_decision(
                                 item,
@@ -11098,7 +11168,7 @@ def run_bot() -> int:
                                 decision_reason=str(item.get("defer_reason") or "кандидат отложен аллокатором"),
                             )
                         rotation_target_symbol = ""
-                        rotation_plan = select_capital_rotation_plan(watchlist, cycle_candidates)
+                        rotation_plan = select_capital_rotation_plan(watchlist, ranked_candidates)
                         if rotation_plan:
                             rotation_target_symbol = execute_capital_rotation_plan(client, config, rotation_plan)
                         selected_symbols: set[str] = set()

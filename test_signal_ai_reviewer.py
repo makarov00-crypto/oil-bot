@@ -48,6 +48,72 @@ class SignalAiReviewerTests(unittest.TestCase):
         self.assertEqual(save.call_count, 2)
         save.assert_called_with("BRU6", state)
 
+    @patch.dict(
+        os.environ,
+        {
+            "OIL_SIGNAL_AI_SHADOW_ENABLED": "1",
+            "OIL_SIGNAL_AI_MODE": "canary",
+            "OIL_SIGNAL_AI_CANARY_PERCENT": "25",
+        },
+        clear=False,
+    )
+    def test_canary_blocks_only_ready_ai_abstention_in_its_cohort(self) -> None:
+        blocked_candidate = {
+            "symbol": "BRU6",
+            "signal": "LONG",
+            "candle_time": "2026-08-20 10:00",
+            "shadow_ai_status": "ready",
+            "shadow_ai": {"action": "ВОЗДЕРЖАТЬСЯ", "direction": "ЛОНГ", "reason": "поздний вход"},
+        }
+        supported_candidate = {
+            "symbol": "NGQ6",
+            "signal": "SHORT",
+            "candle_time": "2026-08-20 10:00",
+            "shadow_ai_status": "ready",
+            "shadow_ai": {"action": "ВХОД", "direction": "ШОРТ"},
+        }
+        fallback_candidate = {
+            "symbol": "GLU6",
+            "signal": "LONG",
+            "candle_time": "2026-08-20 10:00",
+            "shadow_ai_status": "unavailable",
+        }
+        with patch.object(bot, "get_signal_ai_canary_bucket", side_effect=[5, 5, 5]):
+            allowed, blocked = bot.filter_signal_ai_canary_candidates(
+                [blocked_candidate, supported_candidate, fallback_candidate]
+            )
+
+        self.assertEqual(allowed, [supported_candidate, fallback_candidate])
+        self.assertEqual(blocked, [blocked_candidate])
+        self.assertEqual(blocked_candidate["defer_kind"], "ai_canary")
+        self.assertIn("поздний вход", blocked_candidate["defer_reason"])
+        self.assertEqual(supported_candidate["ai_canary_result"], "supported")
+        self.assertEqual(fallback_candidate["ai_canary_result"], "fallback")
+
+    @patch.dict(
+        os.environ,
+        {
+            "OIL_SIGNAL_AI_SHADOW_ENABLED": "1",
+            "OIL_SIGNAL_AI_MODE": "canary",
+            "OIL_SIGNAL_AI_CANARY_PERCENT": "25",
+        },
+        clear=False,
+    )
+    def test_canary_keeps_control_cohort_unmodified(self) -> None:
+        candidate = {
+            "symbol": "BRU6",
+            "signal": "LONG",
+            "candle_time": "2026-08-20 10:00",
+            "shadow_ai_status": "ready",
+            "shadow_ai": {"action": "ВОЗДЕРЖАТЬСЯ", "direction": "ЛОНГ"},
+        }
+        with patch.object(bot, "get_signal_ai_canary_bucket", return_value=25):
+            allowed, blocked = bot.filter_signal_ai_canary_candidates([candidate])
+
+        self.assertEqual(allowed, [candidate])
+        self.assertEqual(blocked, [])
+        self.assertEqual(candidate["ai_canary_result"], "control")
+
     @patch.dict(os.environ, {"OIL_SIGNAL_AI_SHADOW_ENABLED": "1", "OPENAI_API_KEY": "key"}, clear=False)
     def test_shadow_timeout_is_recorded_and_does_not_keep_previous_verdict(self) -> None:
         candidate = {"symbol": "GLU6", "signal": "LONG", "strategy_name": "reversal_1h", "candle_time": "2026-08-14 16:00"}

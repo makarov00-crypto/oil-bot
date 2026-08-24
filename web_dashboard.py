@@ -1366,11 +1366,28 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         "abstain_correct_4h": 0,
     }
     shadow_outcomes_by_key: dict[str, dict[str, Any]] = {}
-    shadow_observations = load_signal_observations_from_storage(
+    raw_shadow_observations = load_signal_observations_from_storage(
         TRADE_DB_PATH,
         newest_first=True,
         context_key="shadow_ai",
     )
+    shadow_observations_by_key: dict[str, dict[str, Any]] = {}
+    decision_priority = {"selected": 2, "deferred": 1}
+    for row in raw_shadow_observations:
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        candle_time = str(context.get("candle_time") or row.get("observation_key") or "")
+        key = ":".join([str(row.get("symbol") or "").upper(), str(row.get("signal") or "").upper(), candle_time])
+        current = shadow_observations_by_key.get(key)
+        if current is None:
+            shadow_observations_by_key[key] = row
+            continue
+        current_rank = decision_priority.get(str(current.get("decision") or "").lower(), 0)
+        row_rank = decision_priority.get(str(row.get("decision") or "").lower(), 0)
+        if row_rank > current_rank or (
+            row_rank == current_rank and str(row.get("observed_at") or "") > str(current.get("observed_at") or "")
+        ):
+            shadow_observations_by_key[key] = row
+    shadow_observations = list(shadow_observations_by_key.values())
     for row in shadow_observations:
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
         shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
