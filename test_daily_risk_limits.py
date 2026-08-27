@@ -251,7 +251,7 @@ class DailyRiskLimitTests(unittest.TestCase):
     def test_active_contracts_keep_template_allocation_classes(self) -> None:
         self.assertEqual(mod.get_instrument_allocation_weight("GLU6"), ("средний", 1.0))
         self.assertEqual(mod.get_instrument_allocation_weight("SRU6"), ("средний", 1.0))
-        self.assertEqual(mod.get_instrument_allocation_weight("BRU6"), ("тяжёлый", 0.85))
+        self.assertEqual(mod.get_instrument_allocation_weight("BRV6"), ("тяжёлый", 0.85))
 
     def test_recent_strategy_performance_keeps_history_across_contract_rollover(self) -> None:
         today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()

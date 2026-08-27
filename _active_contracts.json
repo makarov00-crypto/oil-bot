@@ -2,45 +2,45 @@
   "contracts": [
     {
       "template_symbol": "BRK6",
-      "active_symbol": "BRU6",
+      "active_symbol": "BRV6",
       "disabled": false,
-      "updated_at": "2026-08-05T00:00:00+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
     },
     {
       "template_symbol": "BMM6",
-      "active_symbol": "BRU6",
+      "active_symbol": "BRV6",
       "disabled": false,
-      "updated_at": "2026-08-05T00:00:00+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
     },
     {
       "template_symbol": "BMN6",
-      "active_symbol": "BRU6",
+      "active_symbol": "BRV6",
       "disabled": false,
-      "updated_at": "2026-08-05T00:00:00+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
     },
     {
       "template_symbol": "BMQ6",
-      "active_symbol": "BRU6",
+      "active_symbol": "BRV6",
       "disabled": false,
-      "updated_at": "2026-08-12T00:00:00+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
     },
     {
       "template_symbol": "NGJ6",
-      "active_symbol": "NGQ6",
+      "active_symbol": "NGU6",
       "disabled": false,
-      "updated_at": "2026-07-28T15:47:35+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
     },
     {
       "template_symbol": "NGK6",
-      "active_symbol": "NGQ6",
+      "active_symbol": "NGU6",
       "disabled": false,
-      "updated_at": "2026-07-28T15:47:35+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
     },
     {
       "template_symbol": "NGM6",
-      "active_symbol": "NGQ6",
+      "active_symbol": "NGU6",
       "disabled": false,
-      "updated_at": "2026-08-12T00:00:00+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
     },
     {
       "template_symbol": "GNM6",
@@ -86,9 +86,21 @@
     },
     {
       "template_symbol": "NGN6",
-      "active_symbol": "NGQ6",
+      "active_symbol": "NGU6",
       "disabled": false,
-      "updated_at": "2026-07-28T17:00:20+00:00"
+      "updated_at": "2026-08-27T13:46:12+00:00"
+    },
+    {
+      "template_symbol": "BRU6",
+      "active_symbol": "BRV6",
+      "disabled": false,
+      "updated_at": "2026-08-27T13:46:12+00:00"
+    },
+    {
+      "template_symbol": "NGQ6",
+      "active_symbol": "NGU6",
+      "disabled": false,
+      "updated_at": "2026-08-27T13:46:12+00:00"
     }
   ]
 }

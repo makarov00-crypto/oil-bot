@@ -217,7 +217,7 @@ class TradeQualityTests(unittest.TestCase):
         summary = summarize_trade_quality(trades)
 
         self.assertEqual(len(summary), 1)
-        self.assertEqual(summary[0]["symbol"], "BRU6")
+        self.assertEqual(summary[0]["symbol"], "BRV6")
         self.assertEqual(summary[0]["trades"], 2)
         self.assertEqual(summary[0]["net_pnl_rub"], 300.0)
 
