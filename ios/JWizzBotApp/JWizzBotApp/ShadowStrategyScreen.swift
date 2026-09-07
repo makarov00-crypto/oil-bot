@@ -102,7 +102,11 @@ struct ShadowStrategyScreen: View {
                     InfoRow(title: "Вход", value: settings.entryRule ?? "пересечение нуля AO и усиление")
                     InfoRow(
                         title: "Минимальная сила",
-                        value: String(format: "%.2f обычного движения", settings.minimumStrengthATRRatio ?? 0.35)
+                        value: String(format: "%.2f обычного движения", settings.minimumStrengthATRRatio ?? 0.60)
+                    )
+                    InfoRow(
+                        title: "Выход после ослабления",
+                        value: String(format: "не более %.0f%% импульса от пика", (settings.exitAORetentionRatio ?? 0.70) * 100.0)
                     )
                     InfoRow(title: "Выход", value: settings.exitRule ?? "ослабление AO против позиции")
                 }
@@ -337,15 +341,20 @@ struct ShadowStrategyScreen: View {
                         Text(formatShadowTime(item.candleClosedAt)).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    SignalPill(text: item.decision ?? "НЕТ ВХОДА", raw: item.direction)
+                    SignalPill(text: item.decision ?? "НЕТ ВХОДА", raw: shadowDirectionTone(item.direction))
                 }
                 InfoRow(title: "Направление", value: displayShadowDirection(item.direction))
                 InfoRow(
                     title: "Сила AO",
                     value: String(format: "%.2f обычного движения", item.aoStrengthATRRatio ?? 0.0)
                 )
+                InfoRow(
+                    title: "Остаток импульса от пика",
+                    value: item.aoPeakRetentionRatio.map { String(format: "%.1f%%", $0 * 100.0) } ?? "-"
+                )
                 InfoRow(title: "Поток Чайкина", value: (item.chaikinStatus ?? "нейтрален").lowercased())
-                InfoRow(title: "Против позиции подряд", value: "\(item.oppositeAOBars ?? 0) столбца AO")
+                InfoRow(title: "Ослаблений AO подряд", value: "\(item.oppositeAOBars ?? 0) из 3")
+                InfoRow(title: "Цена подтвердила выход", value: item.priceConfirmsExit == true ? "да" : "нет")
                 if let result = item.estimatedNetRub1Lot {
                     InfoRow(title: "Результат на 1 лот", value: formatRub(result), accent: statusTone(for: result))
                 }
@@ -372,9 +381,17 @@ struct ShadowStrategyScreen: View {
 
     private func displayShadowDirection(_ raw: String?) -> String {
         switch (raw ?? "").uppercased() {
-        case "LONG": return "лонг"
-        case "SHORT": return "шорт"
+        case "LONG", "ЛОНГ": return "лонг"
+        case "SHORT", "ШОРТ": return "шорт"
         default: return "нет позиции"
+        }
+    }
+
+    private func shadowDirectionTone(_ raw: String?) -> String? {
+        switch (raw ?? "").uppercased() {
+        case "LONG", "ЛОНГ": return "LONG"
+        case "SHORT", "ШОРТ": return "SHORT"
+        default: return nil
         }
     }
 

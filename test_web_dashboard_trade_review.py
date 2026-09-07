@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from ao_chaikin_shadow import STRATEGY_VERSION
 from trade_storage import append_signal_observation
 
 try:
@@ -74,6 +75,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_ao_chaikin_shadow_payload_is_loaded_newest_first_with_russian_decisions(self) -> None:
         rows = [
             {
+                "version": STRATEGY_VERSION,
                 "symbol": "VBU6",
                 "candle_closed_at": "2026-08-14T12:00:00+03:00",
                 "decision": "ВХОД",
@@ -81,6 +83,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 "minimum_strength_pct": 0.7,
             },
             {
+                "version": STRATEGY_VERSION,
                 "symbol": "VBU6",
                 "candle_closed_at": "2026-08-14T15:00:00+03:00",
                 "decision": "ВЫХОД",

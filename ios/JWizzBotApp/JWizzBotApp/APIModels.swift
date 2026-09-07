@@ -88,6 +88,7 @@ struct AOChaikinShadowSettings: Decodable {
     let chaikinPeriods: String?
     let entryRule: String?
     let minimumStrengthATRRatio: Double?
+    let exitAORetentionRatio: Double?
     let exitRule: String?
     let quantityBasis: String?
 
@@ -97,6 +98,7 @@ struct AOChaikinShadowSettings: Decodable {
         case chaikinPeriods = "chaikin_periods"
         case entryRule = "entry_rule"
         case minimumStrengthATRRatio = "minimum_strength_atr_ratio"
+        case exitAORetentionRatio = "exit_ao_retention_ratio"
         case exitRule = "exit_rule"
         case quantityBasis = "quantity_basis"
     }
@@ -143,6 +145,10 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
     let minimumStrengthPct: Double?
     let aoStrengthATRRatio: Double?
     let minimumStrengthATRRatio: Double?
+    let peakAOMagnitude: Double?
+    let aoPeakRetentionRatio: Double?
+    let exitAORetentionRatio: Double?
+    let priceConfirmsExit: Bool?
     let oppositeAOBars: Int?
     let chaikinChange: Double?
     let chaikinStatus: String?
@@ -165,6 +171,10 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
         case minimumStrengthPct = "minimum_strength_pct"
         case aoStrengthATRRatio = "ao_strength_atr_ratio"
         case minimumStrengthATRRatio = "minimum_strength_atr_ratio"
+        case peakAOMagnitude = "peak_ao_magnitude"
+        case aoPeakRetentionRatio = "ao_peak_retention_ratio"
+        case exitAORetentionRatio = "exit_ao_retention_ratio"
+        case priceConfirmsExit = "price_confirms_exit"
         case oppositeAOBars = "opposite_ao_bars"
         case chaikinChange = "chaikin_change"
         case chaikinStatus = "chaikin_status"

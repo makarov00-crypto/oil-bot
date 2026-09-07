@@ -26,7 +26,9 @@ POSITION_FLAT = "НЕТ"
 CHAIKIN_CONFIRMS = "ПОДТВЕРЖДАЕТ"
 CHAIKIN_CONTRADICTS = "ПРОТИВОРЕЧИТ"
 CHAIKIN_NEUTRAL = "НЕЙТРАЛЕН"
-STRATEGY_VERSION = 2
+STRATEGY_VERSION = 3
+DEFAULT_MINIMUM_STRENGTH_ATR_RATIO = 0.60
+DEFAULT_EXIT_AO_RETENTION_RATIO = 0.70
 
 
 def prepare_shadow_indicators(candles: pd.DataFrame) -> pd.DataFrame:
@@ -107,15 +109,17 @@ def _opposite_ao_bars(frame: pd.DataFrame, index: int, position: str) -> int:
     return count
 
 
-def _recent_ao_zero_cross(frame: pd.DataFrame, index: int, direction: str) -> bool:
-    """Accept the crossover candle and one subsequent strengthening candle."""
-    for current_index in range(max(1, index - 1), index + 1):
-        previous_ao = _number(frame.iloc[current_index - 1]["shadow_ao"])
-        current_ao = _number(frame.iloc[current_index]["shadow_ao"])
-        if direction == DIRECTION_LONG and previous_ao <= 0.0 < current_ao:
-            return True
-        if direction == DIRECTION_SHORT and previous_ao >= 0.0 > current_ao:
-            return True
+def _confirmed_ao_zero_cross(frame: pd.DataFrame, index: int, direction: str) -> bool:
+    """Require the crossover bar and a second closed strengthening bar."""
+    if index < 2:
+        return False
+    before_cross = _number(frame.iloc[index - 2]["shadow_ao"])
+    first = _number(frame.iloc[index - 1]["shadow_ao"])
+    second = _number(frame.iloc[index]["shadow_ao"])
+    if direction == DIRECTION_LONG:
+        return before_cross <= 0.0 < first < second
+    if direction == DIRECTION_SHORT:
+        return before_cross >= 0.0 > first > second
     return False
 
 
@@ -149,7 +153,8 @@ def evaluate_shadow_candle(
     *,
     symbol: str,
     point_value: float,
-    minimum_strength_atr_ratio: float = 0.35,
+    minimum_strength_atr_ratio: float = DEFAULT_MINIMUM_STRENGTH_ATR_RATIO,
+    exit_ao_retention_ratio: float = DEFAULT_EXIT_AO_RETENTION_RATIO,
     commission_rate: float = 0.00025,
 ) -> dict[str, Any]:
     if index < 1:
@@ -166,12 +171,12 @@ def evaluate_shadow_candle(
     long_pattern = (
         ao_value > 0.0
         and ao_value > previous_ao
-        and _recent_ao_zero_cross(frame, index, DIRECTION_LONG)
+        and _confirmed_ao_zero_cross(frame, index, DIRECTION_LONG)
     )
     short_pattern = (
         ao_value < 0.0
         and ao_value < previous_ao
-        and _recent_ao_zero_cross(frame, index, DIRECTION_SHORT)
+        and _confirmed_ao_zero_cross(frame, index, DIRECTION_SHORT)
     )
 
     position_before = str((previous or {}).get("position_after") or POSITION_FLAT)
@@ -188,6 +193,9 @@ def evaluate_shadow_candle(
     entry_price = _number((previous or {}).get("entry_price"))
     best_price = _number((previous or {}).get("best_price"), entry_price)
     worst_price = _number((previous or {}).get("worst_price"), entry_price)
+    peak_ao_magnitude = _number((previous or {}).get("peak_ao_magnitude"))
+    ao_peak_retention_ratio = None
+    price_confirms_exit = False
 
     if position_before == POSITION_FLAT:
         if long_pattern and strength_atr_ratio >= minimum_strength_atr_ratio:
@@ -203,11 +211,13 @@ def evaluate_shadow_candle(
             entry_price = close_price
             best_price = close_price
             worst_price = close_price
+            peak_ao_magnitude = abs(ao_value)
+            ao_peak_retention_ratio = 1.0
             chaikin_status = _chaikin_status(chaikin_value, previous_chaikin, direction)
             reason = (
-                f"AO недавно пересёк ноль и усиливается в сторону {direction.lower()}; "
+                f"Две закрытые свечи AO подтвердили пересечение нуля в сторону {direction.lower()}; "
                 f"сила {strength_atr_ratio:.2f} ATR при пороге {minimum_strength_atr_ratio:.2f} ATR. "
-                f"Осциллятор Чайкина: {chaikin_status.lower()}."
+                f"Поток объёма Чайкина используется как дополнительная оценка: {chaikin_status.lower()}."
             )
         elif (long_pattern or short_pattern) and strength_atr_ratio < minimum_strength_atr_ratio:
             reason = (
@@ -215,9 +225,9 @@ def evaluate_shadow_candle(
                 f"порога {minimum_strength_atr_ratio:.2f} ATR."
             )
         elif ao_value > 0.0:
-            reason = "AO выше нуля, но двух последовательных усиливающихся столбцов для лонга нет."
+            reason = "AO выше нуля, но нет второй закрытой усиливающейся свечи сразу после пересечения."
         elif ao_value < 0.0:
-            reason = "AO ниже нуля, но двух последовательных усиливающихся столбцов для шорта нет."
+            reason = "AO ниже нуля, но нет второй закрытой усиливающейся свечи сразу после пересечения."
         else:
             reason = "AO находится около нуля, направленного входа нет."
     else:
@@ -229,26 +239,54 @@ def evaluate_shadow_candle(
             best_price = min(best_price, _number(row["low"], close_price))
             worst_price = max(worst_price, _number(row["high"], close_price))
 
-        confirmed_reversal = opposite_bars >= 2 and chaikin_status == CHAIKIN_CONTRADICTS
-        if opposite_bars >= 3 or confirmed_reversal:
+        favorable_ao_magnitude = (
+            max(0.0, ao_value)
+            if position_before == DIRECTION_LONG
+            else max(0.0, -ao_value)
+        )
+        peak_ao_magnitude = max(peak_ao_magnitude, favorable_ao_magnitude)
+        ao_peak_retention_ratio = (
+            favorable_ao_magnitude / peak_ao_magnitude
+            if peak_ao_magnitude > 0.0
+            else 0.0
+        )
+        previous_close = _number(previous_row["close"], close_price)
+        price_confirms_exit = (
+            close_price < previous_close
+            if position_before == DIRECTION_LONG
+            else close_price > previous_close
+        )
+        ao_crossed_against_position = (
+            ao_value <= 0.0
+            if position_before == DIRECTION_LONG
+            else ao_value >= 0.0
+        )
+        momentum_exhausted = (
+            opposite_bars >= 3
+            and ao_peak_retention_ratio <= exit_ao_retention_ratio
+            and price_confirms_exit
+        )
+        if ao_crossed_against_position or momentum_exhausted:
             decision = DECISION_EXIT
             position_after = POSITION_FLAT
-            if confirmed_reversal:
+            if ao_crossed_against_position:
                 reason = (
-                    "Два последовательных столбца AO против позиции подтверждены "
-                    "осциллятором Чайкина. Теневая позиция закрыта на окончании часовой свечи."
+                    "AO пересёк ноль против открытой позиции. Защитный выход выполнен "
+                    "на окончании часовой свечи."
                 )
             else:
                 reason = (
-                    "Три последовательных столбца AO ослабляют открытое движение. "
+                    f"Три последовательных столбца AO ослабляют движение, импульс сохранил "
+                    f"только {ao_peak_retention_ratio * 100.0:.1f}% от пика, и цена подтвердила замедление. "
                     "Теневая позиция закрыта на окончании часовой свечи."
                 )
         else:
             decision = DECISION_HOLD
             position_after = position_before
             reason = (
-                f"Направление удерживается; противоположных столбцов AO подряд: {opposite_bars} из 3. "
-                f"Осциллятор Чайкина: {chaikin_status.lower()}."
+                f"Направление удерживается; ослаблений AO подряд: {opposite_bars} из 3, "
+                f"сохранено {ao_peak_retention_ratio * 100.0:.1f}% импульса от пика. "
+                f"Поток объёма Чайкина: {chaikin_status.lower()}."
             )
 
     gross_result = None
@@ -288,6 +326,10 @@ def evaluate_shadow_candle(
         "atr": round(atr, 6),
         "ao_strength_atr_ratio": round(strength_atr_ratio, 4),
         "minimum_strength_atr_ratio": round(minimum_strength_atr_ratio, 4),
+        "peak_ao_magnitude": round(peak_ao_magnitude, 6),
+        "ao_peak_retention_ratio": round(ao_peak_retention_ratio, 4) if ao_peak_retention_ratio is not None else None,
+        "exit_ao_retention_ratio": round(exit_ao_retention_ratio, 4),
+        "price_confirms_exit": price_confirms_exit,
         "opposite_ao_bars": opposite_bars,
         "chaikin": round(chaikin_value, 6),
         "chaikin_change": round(chaikin_value - previous_chaikin, 6),
@@ -660,7 +702,12 @@ class AoChaikinShadowJournal:
         self.history_symbol_resolver = history_symbol_resolver or (lambda symbol: symbol)
         self.records = read_shadow_records(path)
         self.latest_by_symbol: dict[str, dict[str, Any]] = {}
-        for row in sorted(self.records, key=lambda item: str(item.get("candle_closed_at") or "")):
+        current_records = [
+            row
+            for row in self.records
+            if int(_number(row.get("version"))) == STRATEGY_VERSION
+        ]
+        for row in sorted(current_records, key=lambda item: str(item.get("candle_closed_at") or "")):
             self.latest_by_symbol[str(row.get("symbol") or "").upper()] = row
 
     def _append(self, row: dict[str, Any]) -> None:
@@ -676,7 +723,8 @@ class AoChaikinShadowJournal:
         symbol: str,
         candles: pd.DataFrame,
         point_value: float,
-        minimum_strength_atr_ratio: float = 0.35,
+        minimum_strength_atr_ratio: float = DEFAULT_MINIMUM_STRENGTH_ATR_RATIO,
+        exit_ao_retention_ratio: float = DEFAULT_EXIT_AO_RETENTION_RATIO,
         commission_rate: float = 0.00025,
     ) -> list[dict[str, Any]]:
         frame = prepare_shadow_indicators(candles)
@@ -717,6 +765,7 @@ class AoChaikinShadowJournal:
                 symbol=symbol,
                 point_value=point_value,
                 minimum_strength_atr_ratio=minimum_strength_atr_ratio,
+                exit_ao_retention_ratio=exit_ao_retention_ratio,
                 commission_rate=commission_rate,
             )
             if str((previous or {}).get("key") or "") == str(row.get("key") or ""):
@@ -738,7 +787,11 @@ def build_shadow_strategy_payload(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=MOSCOW_TZ)
     cutoff = current_time.astimezone(MOSCOW_TZ) - timedelta(days=max(1, period_days))
-    all_records = read_shadow_records(path)
+    all_records = [
+        row
+        for row in read_shadow_records(path)
+        if int(_number(row.get("version"))) == STRATEGY_VERSION
+    ]
 
     def parsed_time(row: dict[str, Any]) -> datetime:
         try:
@@ -768,11 +821,19 @@ def build_shadow_strategy_payload(
     contradictory_entries = sum(1 for row in entries if row.get("chaikin_status") == CHAIKIN_CONTRADICTS)
     configured_strength_atr_ratio = next(
         (
-            _number(row.get("minimum_strength_atr_ratio"), 0.35)
+            _number(row.get("minimum_strength_atr_ratio"), DEFAULT_MINIMUM_STRENGTH_ATR_RATIO)
             for row in records
             if row.get("minimum_strength_atr_ratio") is not None
         ),
-        0.35,
+        DEFAULT_MINIMUM_STRENGTH_ATR_RATIO,
+    )
+    configured_exit_ao_retention_ratio = next(
+        (
+            _number(row.get("exit_ao_retention_ratio"), DEFAULT_EXIT_AO_RETENTION_RATIO)
+            for row in records
+            if row.get("exit_ao_retention_ratio") is not None
+        ),
+        DEFAULT_EXIT_AO_RETENTION_RATIO,
     )
 
     return {
@@ -784,9 +845,10 @@ def build_shadow_strategy_payload(
             "timeframe": "1 час",
             "ao_periods": "5 и 34",
             "chaikin_periods": "5 и 20",
-            "entry_rule": "пересечение AO нуля и усиление не позднее следующей свечи",
+            "entry_rule": "две закрытые усиливающиеся свечи AO сразу после пересечения нуля",
             "minimum_strength_atr_ratio": configured_strength_atr_ratio,
-            "exit_rule": "два противоположных AO с Чайкиным против позиции или три противоположных AO",
+            "exit_ao_retention_ratio": configured_exit_ao_retention_ratio,
+            "exit_rule": "три ослабления AO, остаток не более 70% от пика и подтверждение ценой; защитный выход при пересечении нуля",
             "quantity_basis": "1 лот для диагностики",
         },
         "summary": {

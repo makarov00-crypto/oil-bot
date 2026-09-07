@@ -85,7 +85,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
       <div>
         <div class="status" id="strategyStatus">ЗАГРУЗКА</div>
         <h1>Теневая стратегия</h1>
-        <p>Проверка входов по AO и потоку объёма Чайкина. Реальные заявки не меняются, результаты сравниваются с действующей часовой стратегией на одинаковом периоде.</p>
+        <p>Вход после двух закрытых усиливающихся свечей AO, выход после подтверждённого истощения импульса. Поток объёма Чайкина влияет только на оценку качества. Реальные заявки не меняются.</p>
       </div>
       <div class="updated" id="updatedAt">Обновление: -</div>
     </section>
@@ -139,7 +139,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
       const rollover=item.exit_kind==='СМЕНА КОНТРАКТА' ? `<div class="event-reason warn"><strong>Смена контракта:</strong> продолжение в ${{esc(item.rollover_to_symbol||'-')}}.</div>` : '';
       return `<article class="event"><div class="event-head"><div><div class="event-title">${{esc(instrument(item.symbol,catalog))}}</div><div class="event-time">${{esc(time(item.candle_closed_at))}} · ${{esc(String(item.direction||'нет').toLowerCase())}}</div></div><span class="badge ${{isExit?'exit':'entry'}}">${{esc(item.decision||'НЕТ ВХОДА')}}</span></div>
         ${{result==null?'':`<div class="event-result ${{tone(result)}}">${{esc(signedRub(result))}}</div>`}}
-        <div class="event-details"><div class="event-detail"><span>Сила AO относительно обычного движения</span><b>${{Number(item.ao_strength_atr_ratio||0).toFixed(2)}} раза</b></div><div class="event-detail"><span>Поток объёма Чайкина</span><b>${{esc(String(item.chaikin_status||'нейтрален').toLowerCase())}}</b></div><div class="event-detail"><span>Против позиции подряд</span><b>${{Number(item.opposite_ao_bars||0)}} столбца AO</b></div><div class="event-detail"><span>Цена</span><b class="mono">${{Number(item.price||0).toLocaleString('ru-RU')}}</b></div></div>
+        <div class="event-details"><div class="event-detail"><span>Сила AO относительно обычного движения</span><b>${{Number(item.ao_strength_atr_ratio||0).toFixed(2)}} раза</b></div><div class="event-detail"><span>Остаток импульса от пика</span><b>${{item.ao_peak_retention_ratio==null?'-':`${{(Number(item.ao_peak_retention_ratio)*100).toFixed(1)}}%`}}</b></div><div class="event-detail"><span>Ослаблений AO подряд</span><b>${{Number(item.opposite_ao_bars||0)}} из 3</b></div><div class="event-detail"><span>Цена подтвердила выход</span><b>${{item.price_confirms_exit?'да':'нет'}}</b></div><div class="event-detail"><span>Поток объёма Чайкина</span><b>${{esc(String(item.chaikin_status||'нейтрален').toLowerCase())}}</b></div><div class="event-detail"><span>Цена</span><b class="mono">${{Number(item.price||0).toLocaleString('ru-RU')}}</b></div></div>
         <div class="event-reason">${{esc(item.reason||'Причина не сохранена')}}</div>${{rollover}}</article>`;
     }}
 
