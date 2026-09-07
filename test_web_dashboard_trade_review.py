@@ -52,11 +52,23 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('id="qualityTradesCount"', html)
         self.assertIn('id="qualityExitsCount"', html)
         self.assertIn('id="qualityHypothesesCount"', html)
-        self.assertIn('id="qualityShadowCount"', html)
-        self.assertIn('id="shadowStrategyDecisions"', html)
-        self.assertIn("Теневая стратегия AO и Чайкина", html)
+        self.assertNotIn('id="qualityShadowCount"', html)
+        self.assertNotIn('id="shadowStrategyDecisions"', html)
         self.assertIn('class="quality-ai"', quality_render)
         self.assertNotIn("buildReviewRowRich(", quality_render)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_shadow_strategy_has_a_dedicated_page_and_navigation_link(self) -> None:
+        dashboard_html = dashboard.build_dashboard_html()
+        shadow_html = dashboard.build_shadow_strategy_html()
+
+        self.assertIn('href="/shadow-strategy"', dashboard_html)
+        self.assertIn('class="site-nav__link is-active"', shadow_html)
+        self.assertIn('id="strategyComparison"', shadow_html)
+        self.assertIn('id="instrumentComparison"', shadow_html)
+        self.assertIn('id="tabExits"', shadow_html)
+        self.assertIn('id="exitHorizons"', shadow_html)
+        self.assertIn('id="shadowStrategyDecisions"', shadow_html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_ao_chaikin_shadow_payload_is_loaded_newest_first_with_russian_decisions(self) -> None:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -324,9 +325,339 @@ def read_shadow_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or ""))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=MOSCOW_TZ)
+
+
+def _average_capture_pct(rows: list[dict[str, Any]], *, shadow: bool) -> float | None:
+    captures: list[float] = []
+    for row in rows:
+        if shadow:
+            if row.get("capture_pct") is not None:
+                captures.append(max(0.0, min(100.0, _number(row.get("capture_pct")))))
+            continue
+        mfe = _number(row.get("mfe_pct"))
+        if mfe <= 0.0:
+            continue
+        realized = _number(row.get("realized_price_pct"))
+        captures.append(max(0.0, min(100.0, realized / mfe * 100.0)))
+    return round(statistics.mean(captures), 1) if captures else None
+
+
+def _strategy_metrics(
+    rows: list[dict[str, Any]],
+    *,
+    shadow: bool,
+) -> dict[str, Any]:
+    net_values: list[float] = []
+    gross_values: list[float] = []
+    commission_values: list[float] = []
+    for row in rows:
+        if shadow:
+            net_values.append(_number(row.get("estimated_net_rub_1lot")))
+            gross_values.append(_number(row.get("gross_result_rub_1lot")))
+            commission_values.append(_number(row.get("estimated_commission_rub_1lot")))
+            continue
+        quantity = max(1.0, abs(_number(row.get("qty_lots"), 1.0)))
+        net = _number(row.get("pnl_rub")) / quantity
+        commission = _number(row.get("commission_rub")) / quantity
+        net_values.append(net)
+        gross_values.append(net + commission)
+        commission_values.append(commission)
+
+    wins = [value for value in net_values if value > 0.0]
+    losses = [value for value in net_values if value < 0.0]
+    return {
+        "closed_trades": len(rows),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate_pct": round(len(wins) / len(rows) * 100.0, 1) if rows else None,
+        "gross_result_rub_1lot": round(sum(gross_values), 2),
+        "commission_rub_1lot": round(sum(commission_values), 2),
+        "net_result_rub_1lot": round(sum(net_values), 2),
+        "average_result_rub_1lot": round(statistics.mean(net_values), 2) if net_values else None,
+        "median_result_rub_1lot": round(statistics.median(net_values), 2) if net_values else None,
+        "average_win_rub_1lot": round(statistics.mean(wins), 2) if wins else None,
+        "average_loss_rub_1lot": round(statistics.mean(losses), 2) if losses else None,
+        "average_capture_pct": _average_capture_pct(rows, shadow=shadow),
+    }
+
+
+def _shadow_point_value(row: dict[str, Any]) -> float | None:
+    entry_price = _number(row.get("entry_price"))
+    exit_price = _number(row.get("price"))
+    direction = str(row.get("direction") or "").upper()
+    direction_sign = 1.0 if direction == DIRECTION_LONG else -1.0
+    price_move = (exit_price - entry_price) * direction_sign
+    gross_result = _number(row.get("gross_result_rub_1lot"))
+    if abs(price_move) > 1e-12 and abs(gross_result) > 1e-12:
+        return abs(gross_result / price_move)
+
+    best_price = _number(row.get("best_price"))
+    best_move = (best_price - entry_price) * direction_sign
+    best_result = _number(row.get("best_result_rub_1lot"))
+    if abs(best_move) > 1e-12 and abs(best_result) > 1e-12:
+        return abs(best_result / best_move)
+    return None
+
+
+def build_shadow_exit_analytics(
+    shadow_records: list[dict[str, Any]],
+    *,
+    horizons: tuple[int, ...] = (1, 2, 4, 8),
+) -> dict[str, Any]:
+    records_with_time = [
+        (row, _parse_iso_datetime(row.get("candle_closed_at")))
+        for row in shadow_records
+        if int(_number(row.get("version"))) == STRATEGY_VERSION
+    ]
+    records_with_time = [(row, value) for row, value in records_with_time if value is not None]
+    records_with_time.sort(key=lambda item: item[1])
+    by_symbol: dict[str, list[tuple[dict[str, Any], datetime]]] = {}
+    for row, candle_time in records_with_time:
+        by_symbol.setdefault(str(row.get("symbol") or "").upper(), []).append((row, candle_time))
+
+    exits = [
+        (row, candle_time)
+        for row, candle_time in records_with_time
+        if row.get("decision") == DECISION_EXIT
+        and row.get("exit_kind") != "СМЕНА КОНТРАКТА"
+    ]
+    aggregates = {
+        hours: {"actual": [], "held": [], "deltas": []}
+        for hours in horizons
+        if hours > 0
+    }
+    trade_rows: list[dict[str, Any]] = []
+    for exit_row, exit_time in exits:
+        symbol = str(exit_row.get("symbol") or "").upper()
+        point_value = _shadow_point_value(exit_row)
+        if point_value is None:
+            continue
+        direction_sign = 1.0 if str(exit_row.get("direction") or "").upper() == DIRECTION_LONG else -1.0
+        exit_price = _number(exit_row.get("price"))
+        actual_net = _number(exit_row.get("estimated_net_rub_1lot"))
+        future_rows = [
+            future_row
+            for future_row, future_time in by_symbol.get(symbol, [])
+            if future_time > exit_time and future_row.get("price") is not None
+        ]
+        holds: dict[str, dict[str, Any]] = {}
+        for hours, aggregate in aggregates.items():
+            if len(future_rows) < hours:
+                continue
+            future = future_rows[hours - 1]
+            delta = (_number(future.get("price")) - exit_price) * direction_sign * point_value
+            held_net = actual_net + delta
+            aggregate["actual"].append(actual_net)
+            aggregate["held"].append(held_net)
+            aggregate["deltas"].append(delta)
+            holds[str(hours)] = {
+                "price": round(_number(future.get("price")), 8),
+                "candle_closed_at": future.get("candle_closed_at"),
+                "net_result_rub_1lot": round(held_net, 2),
+                "delta_rub_1lot": round(delta, 2),
+            }
+        trade_rows.append(
+            {
+                "key": exit_row.get("key"),
+                "symbol": symbol,
+                "direction": exit_row.get("direction"),
+                "entry_time": exit_row.get("entry_time"),
+                "exit_time": exit_row.get("candle_closed_at"),
+                "actual_net_rub_1lot": round(actual_net, 2),
+                "best_result_rub_1lot": round(_number(exit_row.get("best_result_rub_1lot")), 2),
+                "capture_pct": exit_row.get("capture_pct"),
+                "exit_reason": exit_row.get("reason"),
+                "holds": holds,
+            }
+        )
+
+    horizon_rows: list[dict[str, Any]] = []
+    for hours, aggregate in aggregates.items():
+        deltas = aggregate["deltas"]
+        better = sum(1 for value in deltas if value > 0.01)
+        worse = sum(1 for value in deltas if value < -0.01)
+        horizon_rows.append(
+            {
+                "additional_hours": hours,
+                "evaluated": len(deltas),
+                "better": better,
+                "worse": worse,
+                "unchanged": len(deltas) - better - worse,
+                "better_pct": round(better / len(deltas) * 100.0, 1) if deltas else None,
+                "actual_net_rub_1lot": round(sum(aggregate["actual"]), 2),
+                "held_net_rub_1lot": round(sum(aggregate["held"]), 2),
+                "delta_rub_1lot": round(sum(deltas), 2),
+                "average_delta_rub_1lot": round(statistics.mean(deltas), 2) if deltas else None,
+            }
+        )
+
+    evaluated_horizons = [row for row in horizon_rows if row["evaluated"]]
+    best_horizon = max(evaluated_horizons, key=lambda row: row["delta_rub_1lot"], default=None)
+    captures = [
+        _number(row.get("capture_pct"))
+        for row, _ in exits
+        if row.get("capture_pct") is not None
+    ]
+    gave_back_profit = sum(
+        1
+        for row, _ in exits
+        if _number(row.get("estimated_net_rub_1lot")) < 0.0
+        and _number(row.get("best_result_rub_1lot"))
+        > _number(row.get("estimated_commission_rub_1lot"))
+    )
+    trade_rows.sort(key=lambda row: str(row.get("exit_time") or ""), reverse=True)
+    return {
+        "available": bool(exits),
+        "basis": "следующие закрытые часовые свечи, один лот",
+        "closed_trades": len(exits),
+        "average_capture_pct": round(statistics.mean(captures), 1) if captures else None,
+        "losses_after_profitable_move": gave_back_profit,
+        "horizons": horizon_rows,
+        "best_horizon": best_horizon if best_horizon and best_horizon["delta_rub_1lot"] > 0.0 else None,
+        "trades": trade_rows[:60],
+    }
+
+
+def build_shadow_strategy_comparison(
+    shadow_records: list[dict[str, Any]],
+    live_trades: list[dict[str, Any]],
+    *,
+    history_symbol_resolver: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    resolver = history_symbol_resolver or (lambda symbol: symbol)
+    current_version_records = [
+        row
+        for row in shadow_records
+        if int(_number(row.get("version"))) == STRATEGY_VERSION
+        and _parse_iso_datetime(row.get("candle_closed_at")) is not None
+    ]
+    if not current_version_records:
+        return {"available": False, "basis": "один лот", "by_symbol": []}
+
+    period_start = min(
+        _parse_iso_datetime(row.get("candle_closed_at"))
+        for row in current_version_records
+    )
+    period_end = max(
+        _parse_iso_datetime(row.get("candle_closed_at"))
+        for row in current_version_records
+    )
+    assert period_start is not None and period_end is not None
+    shadow_closed = [row for row in current_version_records if row.get("decision") == DECISION_EXIT]
+    matching_live: list[dict[str, Any]] = []
+    for row in live_trades:
+        entry_time = _parse_iso_datetime(row.get("entry_time"))
+        exit_time = _parse_iso_datetime(row.get("exit_time"))
+        if (
+            entry_time is not None
+            and exit_time is not None
+            and period_start <= entry_time <= exit_time <= period_end
+        ):
+            matching_live.append(row)
+
+    shadow_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    live_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for row in shadow_closed:
+        symbol = resolver(str(row.get("symbol") or "").upper())
+        shadow_by_symbol.setdefault(symbol, []).append(row)
+    for row in matching_live:
+        symbol = resolver(str(row.get("symbol") or "").upper())
+        live_by_symbol.setdefault(symbol, []).append(row)
+
+    by_symbol: list[dict[str, Any]] = []
+    for symbol in sorted(set(shadow_by_symbol) | set(live_by_symbol)):
+        by_symbol.append(
+            {
+                "symbol": symbol,
+                "current": _strategy_metrics(live_by_symbol.get(symbol, []), shadow=False),
+                "shadow": _strategy_metrics(shadow_by_symbol.get(symbol, []), shadow=True),
+            }
+        )
+
+    shadow_losses = [row for row in shadow_closed if _number(row.get("estimated_net_rub_1lot")) < 0.0]
+    profitable_before_loss = sum(
+        1
+        for row in shadow_losses
+        if _number(row.get("best_result_rub_1lot"))
+        > _number(row.get("estimated_commission_rub_1lot"))
+    )
+    current_metrics = _strategy_metrics(matching_live, shadow=False)
+    shadow_metrics = _strategy_metrics(shadow_closed, shadow=True)
+    current_metrics["actual_net_result_rub"] = round(
+        sum(_number(row.get("pnl_rub")) for row in matching_live),
+        2,
+    )
+    return {
+        "available": True,
+        "basis": "один лот после оценочной комиссии",
+        "period_start": period_start.astimezone(MOSCOW_TZ).isoformat(),
+        "period_end": period_end.astimezone(MOSCOW_TZ).isoformat(),
+        "current": current_metrics,
+        "shadow": shadow_metrics,
+        "difference": {
+            "win_rate_pct_points": round(
+                _number(shadow_metrics.get("win_rate_pct"))
+                - _number(current_metrics.get("win_rate_pct")),
+                1,
+            ),
+            "net_result_rub_1lot": round(
+                _number(shadow_metrics.get("net_result_rub_1lot"))
+                - _number(current_metrics.get("net_result_rub_1lot")),
+                2,
+            ),
+        },
+        "exit_diagnostics": {
+            "losses_after_profitable_move": profitable_before_loss,
+            "losses_total": len(shadow_losses),
+        },
+        "by_symbol": by_symbol,
+    }
+
+
+def _build_rollover_exit(previous: dict[str, Any], replacement_symbol: str) -> dict[str, Any]:
+    row = dict(previous)
+    symbol = str(previous.get("symbol") or "").upper()
+    candle_closed_at = str(previous.get("candle_closed_at") or "")
+    gross_result = _number(previous.get("gross_result_rub_1lot"))
+    best_result = _number(previous.get("best_result_rub_1lot"))
+    capture_pct = None
+    if best_result > 0.0:
+        capture_pct = max(0.0, min(100.0, gross_result / best_result * 100.0))
+    row.update(
+        {
+            "version": STRATEGY_VERSION,
+            "key": f"{symbol}:{candle_closed_at}:rollover:{replacement_symbol}",
+            "recorded_at": datetime.now(timezone.utc).astimezone(MOSCOW_TZ).isoformat(),
+            "decision": DECISION_EXIT,
+            "position_before": previous.get("position_after"),
+            "position_after": POSITION_FLAT,
+            "exit_kind": "СМЕНА КОНТРАКТА",
+            "rollover_to_symbol": replacement_symbol,
+            "reason": (
+                f"Контракт {symbol} заменён на {replacement_symbol}. Теневая позиция закрыта "
+                "по последней доступной цене старого контракта и не переносится между разными ценовыми шкалами."
+            ),
+            "capture_pct": round(capture_pct, 1) if capture_pct is not None else None,
+        }
+    )
+    return row
+
+
 class AoChaikinShadowJournal:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        history_symbol_resolver: Callable[[str], str] | None = None,
+    ) -> None:
         self.path = path
+        self.history_symbol_resolver = history_symbol_resolver or (lambda symbol: symbol)
         self.records = read_shadow_records(path)
         self.latest_by_symbol: dict[str, dict[str, Any]] = {}
         for row in sorted(self.records, key=lambda item: str(item.get("candle_closed_at") or "")):
@@ -353,6 +684,19 @@ class AoChaikinShadowJournal:
             return []
 
         symbol = symbol.upper()
+        created: list[dict[str, Any]] = []
+        history_symbol = self.history_symbol_resolver(symbol)
+        for previous_symbol, stale_row in list(self.latest_by_symbol.items()):
+            if previous_symbol == symbol:
+                continue
+            if self.history_symbol_resolver(previous_symbol) != history_symbol:
+                continue
+            if str(stale_row.get("position_after") or "") not in {DIRECTION_LONG, DIRECTION_SHORT}:
+                continue
+            rollover_exit = _build_rollover_exit(stale_row, symbol)
+            self._append(rollover_exit)
+            created.append(rollover_exit)
+
         previous = self.latest_by_symbol.get(symbol)
         previous_time = str((previous or {}).get("candle_closed_at") or "")
         indices: list[int] = []
@@ -365,7 +709,6 @@ class AoChaikinShadowJournal:
                 if _iso_moscow(frame.iloc[index]["candle_closed_at"]) > previous_time
             ]
 
-        created: list[dict[str, Any]] = []
         for index in indices:
             row = evaluate_shadow_candle(
                 frame,

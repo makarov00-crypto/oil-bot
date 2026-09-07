@@ -59,6 +59,19 @@ struct MoreScreen: View {
                             )
                         }
                         .buttonStyle(.plain)
+
+                        Divider().overlay(Color.white.opacity(0.08))
+
+                        NavigationLink {
+                            ShadowStrategyScreen(store: store)
+                        } label: {
+                            menuRow(
+                                title: "Теневая стратегия",
+                                subtitle: "Сравнение AO и потока Чайкина с рабочей стратегией",
+                                systemImage: "waveform.path.ecg"
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }

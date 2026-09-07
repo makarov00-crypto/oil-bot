@@ -15,6 +15,8 @@ from ao_chaikin_shadow import (
     DECISION_NO_ENTRY,
     DIRECTION_LONG,
     POSITION_FLAT,
+    build_shadow_exit_analytics,
+    build_shadow_strategy_comparison,
     build_shadow_strategy_payload,
     evaluate_shadow_candle,
 )
@@ -178,6 +180,152 @@ class AoChaikinShadowTests(unittest.TestCase):
 
         self.assertEqual(len(first), 1)
         self.assertEqual(second, [])
+
+    def test_journal_closes_replaced_contract_instead_of_leaving_stale_position(self) -> None:
+        old_row = {
+            "version": 2,
+            "key": "BRU6:2026-08-27T16:00:00+03:00",
+            "recorded_at": "2026-08-27T16:00:01+03:00",
+            "candle_closed_at": "2026-08-27T16:00:00+03:00",
+            "symbol": "BRU6",
+            "decision": "УДЕРЖАНИЕ",
+            "direction": DIRECTION_LONG,
+            "position_before": DIRECTION_LONG,
+            "position_after": DIRECTION_LONG,
+            "price": 98.0,
+            "entry_time": "2026-08-27T15:00:00+03:00",
+            "entry_price": 97.5,
+            "best_price": 98.2,
+            "worst_price": 97.4,
+            "gross_result_rub_1lot": 50.0,
+            "estimated_commission_rub_1lot": 10.0,
+            "estimated_net_rub_1lot": 40.0,
+            "best_result_rub_1lot": 70.0,
+        }
+        candles = pd.DataFrame(
+            {
+                "time": pd.date_range("2026-08-28T00:00:00Z", periods=40, freq="h"),
+                "open": [100.0] * 40,
+                "high": [101.0] * 40,
+                "low": [99.0] * 40,
+                "close": [100.0] * 40,
+                "volume": [1000.0] * 40,
+            }
+        )
+        resolver = lambda symbol: "BRV6" if symbol in {"BRU6", "BRV6"} else symbol
+
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "shadow.jsonl"
+            path.write_text(json.dumps(old_row, ensure_ascii=False) + "\n", encoding="utf-8")
+            journal = AoChaikinShadowJournal(path, history_symbol_resolver=resolver)
+            created = journal.observe(symbol="BRV6", candles=candles, point_value=1.0)
+
+        rollover = next(row for row in created if row.get("exit_kind") == "СМЕНА КОНТРАКТА")
+        self.assertEqual(rollover["symbol"], "BRU6")
+        self.assertEqual(rollover["rollover_to_symbol"], "BRV6")
+        self.assertEqual(rollover["position_after"], POSITION_FLAT)
+        self.assertEqual(rollover["estimated_net_rub_1lot"], 40.0)
+
+    def test_comparison_uses_same_period_and_normalizes_live_trades_to_one_lot(self) -> None:
+        shadow_records = [
+            {
+                "version": 2,
+                "symbol": "VBU6",
+                "candle_closed_at": "2026-08-20T10:00:00+03:00",
+                "decision": DECISION_ENTRY,
+                "position_after": DIRECTION_LONG,
+            },
+            {
+                "version": 2,
+                "symbol": "VBU6",
+                "candle_closed_at": "2026-08-20T13:00:00+03:00",
+                "decision": DECISION_EXIT,
+                "position_after": POSITION_FLAT,
+                "estimated_net_rub_1lot": 80.0,
+                "gross_result_rub_1lot": 100.0,
+                "estimated_commission_rub_1lot": 20.0,
+                "capture_pct": 50.0,
+            },
+        ]
+        live_trades = [
+            {
+                "symbol": "VBU6",
+                "entry_time": "2026-08-20T11:00:00+03:00",
+                "exit_time": "2026-08-20T12:00:00+03:00",
+                "pnl_rub": 120.0,
+                "commission_rub": 30.0,
+                "qty_lots": 3,
+                "mfe_pct": 1.0,
+                "realized_price_pct": 0.5,
+            },
+            {
+                "symbol": "VBU6",
+                "entry_time": "2026-08-19T11:00:00+03:00",
+                "exit_time": "2026-08-19T12:00:00+03:00",
+                "pnl_rub": 999.0,
+                "commission_rub": 1.0,
+                "qty_lots": 1,
+            },
+        ]
+
+        result = build_shadow_strategy_comparison(
+            shadow_records,
+            live_trades,
+            history_symbol_resolver=lambda symbol: symbol,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["current"]["closed_trades"], 1)
+        self.assertEqual(result["current"]["net_result_rub_1lot"], 40.0)
+        self.assertEqual(result["current"]["commission_rub_1lot"], 10.0)
+        self.assertEqual(result["shadow"]["net_result_rub_1lot"], 80.0)
+        self.assertEqual(result["by_symbol"][0]["symbol"], "VBU6")
+
+    def test_exit_analytics_compares_next_closed_hourly_candles(self) -> None:
+        records = [
+            {
+                "version": 2,
+                "key": "TEST:2026-08-01T10:00:00+03:00",
+                "symbol": "TEST",
+                "candle_closed_at": "2026-08-01T10:00:00+03:00",
+                "decision": DECISION_EXIT,
+                "direction": DIRECTION_LONG,
+                "entry_time": "2026-08-01T08:00:00+03:00",
+                "entry_price": 100.0,
+                "price": 110.0,
+                "gross_result_rub_1lot": 10.0,
+                "estimated_commission_rub_1lot": 2.0,
+                "estimated_net_rub_1lot": 8.0,
+                "best_result_rub_1lot": 14.0,
+                "capture_pct": 71.4,
+            },
+            {
+                "version": 2,
+                "key": "TEST:2026-08-01T11:00:00+03:00",
+                "symbol": "TEST",
+                "candle_closed_at": "2026-08-01T11:00:00+03:00",
+                "decision": DECISION_NO_ENTRY,
+                "price": 112.0,
+            },
+            {
+                "version": 2,
+                "key": "TEST:2026-08-01T12:00:00+03:00",
+                "symbol": "TEST",
+                "candle_closed_at": "2026-08-01T12:00:00+03:00",
+                "decision": DECISION_NO_ENTRY,
+                "price": 108.0,
+            },
+        ]
+
+        analytics = build_shadow_exit_analytics(records)
+
+        self.assertTrue(analytics["available"])
+        self.assertEqual(analytics["closed_trades"], 1)
+        self.assertEqual(analytics["horizons"][0]["additional_hours"], 1)
+        self.assertEqual(analytics["horizons"][0]["held_net_rub_1lot"], 10.0)
+        self.assertEqual(analytics["horizons"][0]["delta_rub_1lot"], 2.0)
+        self.assertEqual(analytics["horizons"][1]["held_net_rub_1lot"], 6.0)
+        self.assertEqual(analytics["horizons"][1]["delta_rub_1lot"], -2.0)
 
     def test_dashboard_payload_is_sorted_newest_first(self) -> None:
         rows = [

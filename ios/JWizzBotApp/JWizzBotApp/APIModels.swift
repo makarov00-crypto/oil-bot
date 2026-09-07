@@ -86,7 +86,8 @@ struct AOChaikinShadowSettings: Decodable {
     let timeframe: String?
     let aoPeriods: String?
     let chaikinPeriods: String?
-    let minimumStrengthPct: Double?
+    let entryRule: String?
+    let minimumStrengthATRRatio: Double?
     let exitRule: String?
     let quantityBasis: String?
 
@@ -94,7 +95,8 @@ struct AOChaikinShadowSettings: Decodable {
         case timeframe
         case aoPeriods = "ao_periods"
         case chaikinPeriods = "chaikin_periods"
-        case minimumStrengthPct = "minimum_strength_pct"
+        case entryRule = "entry_rule"
+        case minimumStrengthATRRatio = "minimum_strength_atr_ratio"
         case exitRule = "exit_rule"
         case quantityBasis = "quantity_basis"
     }
@@ -139,6 +141,8 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
     let previousAO: Double?
     let aoStrengthPct: Double?
     let minimumStrengthPct: Double?
+    let aoStrengthATRRatio: Double?
+    let minimumStrengthATRRatio: Double?
     let oppositeAOBars: Int?
     let chaikinChange: Double?
     let chaikinStatus: String?
@@ -147,6 +151,8 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
     let entryPrice: Double?
     let estimatedNetRub1Lot: Double?
     let capturePct: Double?
+    let exitKind: String?
+    let rolloverToSymbol: String?
 
     var id: String { key ?? "\(symbol)|\(candleClosedAt ?? "")|\(decision ?? "")" }
 
@@ -157,6 +163,8 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
         case previousAO = "previous_ao"
         case aoStrengthPct = "ao_strength_pct"
         case minimumStrengthPct = "minimum_strength_pct"
+        case aoStrengthATRRatio = "ao_strength_atr_ratio"
+        case minimumStrengthATRRatio = "minimum_strength_atr_ratio"
         case oppositeAOBars = "opposite_ao_bars"
         case chaikinChange = "chaikin_change"
         case chaikinStatus = "chaikin_status"
@@ -164,6 +172,185 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
         case entryPrice = "entry_price"
         case estimatedNetRub1Lot = "estimated_net_rub_1lot"
         case capturePct = "capture_pct"
+        case exitKind = "exit_kind"
+        case rolloverToSymbol = "rollover_to_symbol"
+    }
+}
+
+struct ShadowStrategyWorkspace: Decodable {
+    let generatedAtMoscow: String?
+    let strategy: AOChaikinShadowPayload
+    let comparison: ShadowStrategyComparison
+    let exitAnalytics: ShadowStrategyExitAnalytics
+    let instrumentCatalog: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAtMoscow = "generated_at_moscow"
+        case strategy, comparison
+        case exitAnalytics = "exit_analytics"
+        case instrumentCatalog = "instrument_catalog"
+    }
+}
+
+struct ShadowStrategyComparison: Decodable {
+    let available: Bool
+    let basis: String?
+    let periodStart: String?
+    let periodEnd: String?
+    let current: ShadowStrategyMetrics?
+    let shadow: ShadowStrategyMetrics?
+    let difference: ShadowStrategyDifference?
+    let exitDiagnostics: ShadowExitDiagnostics?
+    let bySymbol: [ShadowStrategySymbolComparison]
+
+    enum CodingKeys: String, CodingKey {
+        case available, basis, current, shadow, difference
+        case periodStart = "period_start"
+        case periodEnd = "period_end"
+        case exitDiagnostics = "exit_diagnostics"
+        case bySymbol = "by_symbol"
+    }
+}
+
+struct ShadowStrategyMetrics: Decodable {
+    let closedTrades: Int?
+    let wins: Int?
+    let losses: Int?
+    let winRatePct: Double?
+    let grossResultRub1Lot: Double?
+    let commissionRub1Lot: Double?
+    let netResultRub1Lot: Double?
+    let averageResultRub1Lot: Double?
+    let medianResultRub1Lot: Double?
+    let averageWinRub1Lot: Double?
+    let averageLossRub1Lot: Double?
+    let averageCapturePct: Double?
+    let actualNetResultRub: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case wins, losses
+        case closedTrades = "closed_trades"
+        case winRatePct = "win_rate_pct"
+        case grossResultRub1Lot = "gross_result_rub_1lot"
+        case commissionRub1Lot = "commission_rub_1lot"
+        case netResultRub1Lot = "net_result_rub_1lot"
+        case averageResultRub1Lot = "average_result_rub_1lot"
+        case medianResultRub1Lot = "median_result_rub_1lot"
+        case averageWinRub1Lot = "average_win_rub_1lot"
+        case averageLossRub1Lot = "average_loss_rub_1lot"
+        case averageCapturePct = "average_capture_pct"
+        case actualNetResultRub = "actual_net_result_rub"
+    }
+}
+
+struct ShadowStrategyDifference: Decodable {
+    let winRatePctPoints: Double?
+    let netResultRub1Lot: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case winRatePctPoints = "win_rate_pct_points"
+        case netResultRub1Lot = "net_result_rub_1lot"
+    }
+}
+
+struct ShadowExitDiagnostics: Decodable {
+    let lossesAfterProfitableMove: Int?
+    let lossesTotal: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case lossesAfterProfitableMove = "losses_after_profitable_move"
+        case lossesTotal = "losses_total"
+    }
+}
+
+struct ShadowStrategySymbolComparison: Decodable, Identifiable {
+    let symbol: String
+    let current: ShadowStrategyMetrics
+    let shadow: ShadowStrategyMetrics
+
+    var id: String { symbol }
+}
+
+struct ShadowStrategyExitAnalytics: Decodable {
+    let available: Bool
+    let basis: String?
+    let closedTrades: Int?
+    let averageCapturePct: Double?
+    let lossesAfterProfitableMove: Int?
+    let horizons: [ShadowExitHorizon]
+    let bestHorizon: ShadowExitHorizon?
+    let trades: [ShadowExitTrade]
+
+    enum CodingKeys: String, CodingKey {
+        case available, basis, horizons, trades
+        case closedTrades = "closed_trades"
+        case averageCapturePct = "average_capture_pct"
+        case lossesAfterProfitableMove = "losses_after_profitable_move"
+        case bestHorizon = "best_horizon"
+    }
+}
+
+struct ShadowExitHorizon: Decodable, Identifiable {
+    let additionalHours: Int
+    let evaluated: Int?
+    let better: Int?
+    let worse: Int?
+    let unchanged: Int?
+    let betterPct: Double?
+    let actualNetRub1Lot: Double?
+    let heldNetRub1Lot: Double?
+    let deltaRub1Lot: Double?
+    let averageDeltaRub1Lot: Double?
+
+    var id: Int { additionalHours }
+
+    enum CodingKeys: String, CodingKey {
+        case evaluated, better, worse, unchanged
+        case additionalHours = "additional_hours"
+        case betterPct = "better_pct"
+        case actualNetRub1Lot = "actual_net_rub_1lot"
+        case heldNetRub1Lot = "held_net_rub_1lot"
+        case deltaRub1Lot = "delta_rub_1lot"
+        case averageDeltaRub1Lot = "average_delta_rub_1lot"
+    }
+}
+
+struct ShadowExitTrade: Decodable, Identifiable {
+    let key: String?
+    let symbol: String
+    let direction: String?
+    let entryTime: String?
+    let exitTime: String?
+    let actualNetRub1Lot: Double?
+    let bestResultRub1Lot: Double?
+    let capturePct: Double?
+    let exitReason: String?
+    let holds: [String: ShadowExitHold]
+
+    var id: String { key ?? "\(symbol)|\(exitTime ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case key, symbol, direction, holds
+        case entryTime = "entry_time"
+        case exitTime = "exit_time"
+        case actualNetRub1Lot = "actual_net_rub_1lot"
+        case bestResultRub1Lot = "best_result_rub_1lot"
+        case capturePct = "capture_pct"
+        case exitReason = "exit_reason"
+    }
+}
+
+struct ShadowExitHold: Decodable {
+    let price: Double?
+    let candleClosedAt: String?
+    let netResultRub1Lot: Double?
+    let deltaRub1Lot: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case price
+        case candleClosedAt = "candle_closed_at"
+        case netResultRub1Lot = "net_result_rub_1lot"
+        case deltaRub1Lot = "delta_rub_1lot"
     }
 }
 

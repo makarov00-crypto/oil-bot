@@ -3786,7 +3786,10 @@ def observe_ao_chaikin_shadow_strategy(
         return
     global AO_CHAIKIN_SHADOW_JOURNAL
     if AO_CHAIKIN_SHADOW_JOURNAL is None:
-        AO_CHAIKIN_SHADOW_JOURNAL = AoChaikinShadowJournal(AO_CHAIKIN_SHADOW_PATH)
+        AO_CHAIKIN_SHADOW_JOURNAL = AoChaikinShadowJournal(
+            AO_CHAIKIN_SHADOW_PATH,
+            history_symbol_resolver=get_instrument_history_symbol,
+        )
 
     point_value = 1.0
     if instrument.min_price_increment > 0.0 and instrument.min_price_increment_amount > 0.0:

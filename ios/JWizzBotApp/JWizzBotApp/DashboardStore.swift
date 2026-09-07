@@ -5,6 +5,7 @@ import Combine
 final class DashboardStore: ObservableObject {
     @Published private(set) var payload: DashboardPayload?
     @Published private(set) var allocatorPayload: AllocatorWorkspace?
+    @Published private(set) var shadowStrategyPayload: ShadowStrategyWorkspace?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastLoadedAt: Date?
@@ -19,6 +20,7 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var isAddingInstrument = false
     @Published private(set) var addInstrumentMessage: String?
     @Published private(set) var allocatorErrorMessage: String?
+    @Published private(set) var shadowStrategyErrorMessage: String?
 
     private let dashboardURL = URL(string: "https://jwizzbot.ru/api/dashboard")!
     private let aiReviewRefreshURL = URL(string: "https://jwizzbot.ru/api/ai-review/refresh")!
@@ -26,6 +28,7 @@ final class DashboardStore: ObservableObject {
     private let tradeRecoveryURL = URL(string: "https://jwizzbot.ru/api/trades/recover")!
     private let addInstrumentURL = URL(string: "https://jwizzbot.ru/api/instruments/add")!
     private let allocatorURL = URL(string: "https://jwizzbot.ru/api/allocator")!
+    private let shadowStrategyURL = URL(string: "https://jwizzbot.ru/api/shadow-strategy")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -91,6 +94,24 @@ final class DashboardStore: ObservableObject {
             allocatorErrorMessage = nil
         } catch {
             allocatorErrorMessage = describe(error)
+        }
+    }
+
+    func loadShadowStrategy() async {
+        do {
+            let (data, response) = try await session.data(from: shadowStrategyURL)
+            guard let http = response as? HTTPURLResponse else {
+                throw DashboardLoadError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw DashboardLoadError.httpStatus(http.statusCode)
+            }
+            shadowStrategyPayload = try JSONDecoder().decode(ShadowStrategyWorkspace.self, from: data)
+            shadowStrategyErrorMessage = nil
+        } catch {
+            if !isCancellation(error) {
+                shadowStrategyErrorMessage = describe(error)
+            }
         }
     }
 
