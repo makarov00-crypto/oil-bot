@@ -419,6 +419,39 @@ def evaluate_signal_core(
         and not rsi_short_extreme_bad
     )
 
+    # A fresh AO zero-line crossing catches the first hour of a movement that
+    # can precede the slower MACD confirmation.  It is intentionally available
+    # only in a mixed market: trend and expansion already use the normal path,
+    # while chop/compression remain blocked.  The smaller position size is
+    # applied by the allocator from the explicit reason below.
+    ao_impulse_floor = max(float(last.get("atr", 0.0)) * 0.12, abs(close) * 0.0005)
+    early_ao_long = prev2_ao <= 0.0 < prev_ao < ao and ao >= ao_impulse_floor
+    early_ao_short = prev2_ao >= 0.0 > prev_ao > ao and -ao >= ao_impulse_floor
+    early_momentum_long_ok = (
+        regime == "mixed"
+        and early_ao_long
+        and close >= ema20
+        and ema20 >= prev_ema20
+        and rsi >= max(47.0, prev_rsi)
+        and rsi <= profile.late_rsi_long
+        and chaikin >= prev_chaikin
+        and volume_ratio >= max(0.75, soft_volume_floor)
+        and body_ratio >= max(0.60, soft_impulse_floor)
+        and soft_volatility_ok
+    )
+    early_momentum_short_ok = (
+        regime == "mixed"
+        and early_ao_short
+        and close <= ema20
+        and ema20 <= prev_ema20
+        and rsi <= min(53.0, prev_rsi)
+        and rsi >= profile.late_rsi_short
+        and chaikin <= prev_chaikin
+        and volume_ratio >= max(0.75, soft_volume_floor)
+        and body_ratio >= max(0.60, soft_impulse_floor)
+        and soft_volatility_ok
+    )
+
     late_long = (
         long_cross_age is None
         or long_cross_age > late_cross_age_limit
@@ -558,7 +591,7 @@ def evaluate_signal_core(
 
     regime_allows_long = regime in {"trend", "expansion"} or compression_long_ok
     regime_allows_short = regime in {"trend", "expansion"} or compression_short_ok
-    long_ok = (
+    normal_long_ok = (
         regime_allows_long
         and (trend_up or expansion_up or early_long_ok)
         and (recent_long_cross or trend_long_continuation_ok)
@@ -570,11 +603,11 @@ def evaluate_signal_core(
         and entry_volume_ok
         and entry_impulse_ok
         and soft_volatility_ok
-        and not hard_late_long
+        and (not hard_late_long or early_momentum_long_ok)
         and not exhausted_long_entry
         and not rsi_long_extreme_bad
     )
-    short_ok = (
+    normal_short_ok = (
         regime_allows_short
         and (trend_down or expansion_down or early_short_ok)
         and (recent_short_cross or trend_short_continuation_ok)
@@ -584,18 +617,24 @@ def evaluate_signal_core(
         and entry_volume_ok
         and entry_impulse_ok
         and soft_volatility_ok
-        and not hard_late_short
+        and (not hard_late_short or early_momentum_short_ok)
         and not exhausted_short_entry
         and not rsi_short_extreme_bad
     )
+    long_ok = normal_long_ok or early_momentum_long_ok
+    short_ok = normal_short_ok or early_momentum_short_ok
     if long_warnings:
         long_reasons.extend(long_warnings)
     if short_warnings:
         short_reasons.extend(short_warnings)
 
     if long_ok:
+        if early_momentum_long_ok and not normal_long_ok:
+            long_reasons.append("ранний импульс AO: две растущие свечи выше нуля, стартовый размер 50%")
         return "LONG", f"Сигнал LONG ({strategy_label}): " + "; ".join(long_reasons) + "."
     if short_ok:
+        if early_momentum_short_ok and not normal_short_ok:
+            short_reasons.append("ранний импульс AO: две снижающиеся свечи ниже нуля, стартовый размер 50%")
         return "SHORT", f"Сигнал SHORT ({strategy_label}): " + "; ".join(short_reasons) + "."
     return (
         "HOLD",

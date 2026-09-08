@@ -397,9 +397,9 @@ class PositionSizingTests(unittest.TestCase):
             )
 
         self.assertEqual(sizing["entry_edge_score"], 0.8)
-        self.assertEqual(sizing["risk_tier"], "сильный")
-        self.assertEqual(sizing["risk_multiplier"], 1.8)
-        self.assertEqual(sizing["risk_budget_rub"], 1800.0)
+        self.assertEqual(sizing["risk_tier"], "сильный, без расширения риска")
+        self.assertEqual(sizing["risk_multiplier"], 1.4)
+        self.assertEqual(sizing["risk_budget_rub"], 1400.0)
 
     def test_real_edge_below_strong_boundary_keeps_good_risk_budget(self) -> None:
         self.config.risk_per_trade_pct = 0.01

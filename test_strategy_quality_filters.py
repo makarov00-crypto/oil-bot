@@ -532,6 +532,44 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertFalse(mod.unified_trailing_reversal_confirmed(intact, "LONG"))
         self.assertTrue(mod.unified_trailing_reversal_confirmed(reversed_df, "LONG"))
 
+    def test_unified_reversal_admits_early_ao_momentum_in_mixed_regime(self) -> None:
+        df = candle_rows(
+            [
+                {"close": 100.0, "ema20": 100.0, "ema50": 100.3, "rsi": 44.0, "macd": 0.03, "macd_signal": 0.0, "ao": -0.08},
+                {"close": 100.0, "ema20": 100.0, "ema50": 100.3, "rsi": 44.0, "macd": 0.03, "macd_signal": 0.0, "ao": -0.07},
+                {"close": 100.0, "ema20": 100.0, "ema50": 100.3, "rsi": 45.0, "macd": 0.03, "macd_signal": 0.0, "ao": -0.06},
+                {"close": 100.0, "ema20": 100.0, "ema50": 100.3, "rsi": 45.0, "macd": 0.03, "macd_signal": 0.0, "ao": -0.05},
+                {"close": 100.0, "ema20": 100.0, "ema50": 100.3, "rsi": 46.0, "macd": 0.03, "macd_signal": 0.0, "ao": -0.04},
+                {"close": 100.1, "ema20": 100.0, "ema50": 100.3, "rsi": 47.0, "macd": 0.03, "macd_signal": 0.0, "ao": -0.02},
+                {"close": 100.3, "ema20": 100.1, "ema50": 100.3, "rsi": 49.0, "macd": 0.03, "macd_signal": 0.0, "ao": 0.04, "chaikin": 1.0},
+                {"open": 100.3, "close": 100.7, "high": 100.8, "low": 100.2, "ema20": 100.2, "ema50": 100.3, "rsi": 52.0, "macd": 0.03, "macd_signal": 0.0, "ao": 0.10, "chaikin": 2.0, "volume": 110.0, "volume_avg": 100.0, "body": 0.40, "body_avg": 0.50, "atr": 0.20},
+            ]
+        )
+        instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
+
+        signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("ранний импульс AO", reason)
+
+    def test_unified_exit_waits_for_ao_exhaustion_after_peak(self) -> None:
+        premature = candle_rows(
+            [
+                {"close": 102.0, "ema20": 100.0, "macd": 0.30, "macd_signal": 0.15, "ao": 0.30},
+                {"close": 99.8, "ema20": 100.5, "macd": 0.08, "macd_signal": 0.13, "ao": 0.25},
+            ]
+        )
+        exhausted = candle_rows(
+            [
+                {"close": 102.0, "ema20": 100.0, "macd": 0.30, "macd_signal": 0.15, "ao": 0.30},
+                {"close": 100.6, "ema20": 100.4, "macd": 0.15, "macd_signal": 0.14, "ao": 0.20},
+                {"close": 99.8, "ema20": 100.2, "macd": 0.08, "macd_signal": 0.13, "ao": 0.08},
+            ]
+        )
+
+        self.assertFalse(mod.unified_trailing_reversal_confirmed(premature, "LONG", 0.30))
+        self.assertTrue(mod.unified_trailing_reversal_confirmed(exhausted, "LONG", 0.30))
+
     def test_recovery_mode_allows_only_unified_reversal(self) -> None:
         state = mod.InstrumentState(last_setup_quality_label="strong", last_market_regime="trend_expansion")
 

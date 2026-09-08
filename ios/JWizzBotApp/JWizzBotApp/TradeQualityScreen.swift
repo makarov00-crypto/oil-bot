@@ -69,7 +69,10 @@ struct TradeQualityScreen: View {
                     MetricGlassTile(title: "Удержали прибыли", value: formatPct(overview?.profitCapturePct))
                     MetricGlassTile(title: "Комиссии", value: formatRub(overview?.commissionRub), tone: .orange)
                     MetricGlassTile(title: "Ранние выходы", value: "\(overview?.materialEarlyExitCount ?? 0)")
-                    MetricGlassTile(title: "Пропущенные входы", value: "\(overview?.missedEntriesCount ?? 0)")
+                    MetricGlassTile(
+                        title: "Проверка удержаний",
+                        value: "\(overview?.strategyHypothesesPositiveCount ?? 0) из \(overview?.strategyHypothesesEvaluatedCount ?? 0)"
+                    )
                 }
             }
         }

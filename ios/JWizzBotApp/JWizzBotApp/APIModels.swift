@@ -397,6 +397,9 @@ struct TradeQualityOverview: Decodable {
     let averageEarlyExit4hPct: Double?
     let missedEntriesCount: Int?
     let missedEntriesMove4hPct: Double?
+    let strategyHypothesesEvaluatedCount: Int?
+    let strategyHypothesesPositiveCount: Int?
+    let strategyHypothesesPositiveRatePct: Double?
 
     enum CodingKeys: String, CodingKey {
         case closedTrades = "closed_trades"
@@ -411,6 +414,9 @@ struct TradeQualityOverview: Decodable {
         case averageEarlyExit4hPct = "average_early_exit_4h_pct"
         case missedEntriesCount = "missed_entries_count"
         case missedEntriesMove4hPct = "missed_entries_move_4h_pct"
+        case strategyHypothesesEvaluatedCount = "strategy_hypotheses_evaluated_count"
+        case strategyHypothesesPositiveCount = "strategy_hypotheses_positive_count"
+        case strategyHypothesesPositiveRatePct = "strategy_hypotheses_positive_rate_pct"
     }
 }
 

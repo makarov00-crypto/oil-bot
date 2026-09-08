@@ -358,6 +358,12 @@ class InstrumentState:
     entry_commission_rub: float = 0.0
     entry_risk_rub: float = 0.0
     entry_risk_budget_rub: float = 0.0
+    entry_stop_price: float | None = None
+    entry_emergency_stop_price: float | None = None
+    entry_stop_distance_pct: float = 0.0
+    entry_stop_description: str = ""
+    entry_peak_ao_abs: float = 0.0
+    last_entry_path: str = ""
     entry_commission_accounted: bool = False
     realized_gross_pnl_rub: float = 0.0
     realized_commission_rub: float = 0.0
@@ -570,6 +576,15 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_entry_reason = ""
     state.pending_exit_reason = ""
     state.pending_observation_uid = ""
+
+
+def clear_entry_protection(state: InstrumentState) -> None:
+    state.entry_stop_price = None
+    state.entry_emergency_stop_price = None
+    state.entry_stop_distance_pct = 0.0
+    state.entry_stop_description = ""
+    state.entry_peak_ao_abs = 0.0
+    state.last_entry_path = ""
 
 
 def clear_delayed_close_recovery(state: InstrumentState) -> None:
@@ -1617,6 +1632,9 @@ def build_trade_quality_analytics(
         if float(item.get("move_4h_pct") or 0.0) >= float(item.get("threshold_pct") or 0.35)
     ]
     missed_entries = [item for item in material_evaluations if item.get("source_kind") == "allocator_deferred"]
+    all_strategy_hypothesis_evaluations = [
+        item for item in missed_entry_evaluations if item.get("source_kind") == "strategy_hold"
+    ]
     raw_strategy_hypotheses = [item for item in material_evaluations if item.get("source_kind") == "strategy_hold"]
     strategy_hypotheses = group_strategy_hypotheses(raw_strategy_hypotheses)
     unexecuted_entries = [
@@ -1631,6 +1649,23 @@ def build_trade_quality_analytics(
                 sum(float(item.get("best_move_4h_pct") or 0.0) for item in strategy_hypotheses) / len(strategy_hypotheses), 3
             ) if strategy_hypotheses else None,
             "strategy_hypotheses_observations_count": len(raw_strategy_hypotheses),
+            "strategy_hypotheses_evaluated_count": len(all_strategy_hypothesis_evaluations),
+            "strategy_hypotheses_positive_count": sum(
+                1 for item in all_strategy_hypothesis_evaluations
+                if float(item.get("move_4h_pct") or 0.0) > 0.0
+            ),
+            "strategy_hypotheses_positive_rate_pct": round(
+                sum(
+                    1 for item in all_strategy_hypothesis_evaluations
+                    if float(item.get("move_4h_pct") or 0.0) > 0.0
+                ) / len(all_strategy_hypothesis_evaluations) * 100.0,
+                1,
+            ) if all_strategy_hypothesis_evaluations else None,
+            "strategy_hypotheses_average_all_move_4h_pct": round(
+                sum(float(item.get("move_4h_pct") or 0.0) for item in all_strategy_hypothesis_evaluations)
+                / len(all_strategy_hypothesis_evaluations),
+                3,
+            ) if all_strategy_hypothesis_evaluations else None,
             "unexecuted_entries_count": len(unexecuted_entries),
             "unexecuted_entries_move_4h_pct": round(
                 sum(float(item.get("move_4h_pct") or 0.0) for item in unexecuted_entries) / len(unexecuted_entries), 3
@@ -6737,6 +6772,7 @@ def sync_state_with_portfolio(
         state.entry_commission_accounted = False
         state.entry_risk_rub = 0.0
         state.entry_risk_budget_rub = 0.0
+        clear_entry_protection(state)
         state.max_price = None
         state.min_price = None
         state.position_side = "FLAT"
@@ -8570,6 +8606,7 @@ def calculate_position_sizing_context(
     entry_price: float,
     signal: str,
     strategy_name: str = "",
+    stop_distance_price: float | None = None,
 ) -> dict[str, Any]:
     session_name = get_market_session()
     session_multiplier = get_session_position_multiplier(session_name, instrument.symbol)
@@ -8626,6 +8663,8 @@ def calculate_position_sizing_context(
         * daily_loss_recovery_multiplier
         * max(session_multiplier, 0.0)
     )
+    entry_path_multiplier = 0.50 if state.last_entry_path == "early_momentum" else 1.0
+    target_trade_margin *= entry_path_multiplier
     edge_cap_margin = allocatable_margin * entry_edge_cap_multiplier
     if edge_cap_margin > 0.0:
         target_trade_margin = min(target_trade_margin, edge_cap_margin)
@@ -8637,15 +8676,17 @@ def calculate_position_sizing_context(
     risk_multiplier = 1.0
     risk_tier = "обычный"
     if entry_edge_score >= 0.80 and entry_edge_label in {"confirmed", "high"}:
-        risk_multiplier = 1.80
-        risk_tier = "сильный"
+        risk_multiplier = 1.40
+        risk_tier = "сильный, без расширения риска"
     elif entry_edge_score >= 0.70 and entry_edge_label in {"moderate", "confirmed", "high"}:
         risk_multiplier = 1.40
         risk_tier = "хороший"
 
     step_price = instrument.min_price_increment
     step_money = instrument.min_price_increment_amount
-    stop_distance = entry_price * config.stop_loss_pct
+    stop_distance = float(stop_distance_price or 0.0)
+    if stop_distance <= 0.0:
+        stop_distance = entry_price * config.stop_loss_pct
     money_risk_per_contract = 0.0
     risk_budget = 0.0
     if step_price > 0 and step_money > 0 and stop_distance > 0 and equity > 0 and config.risk_per_trade_pct > 0:
@@ -8745,6 +8786,8 @@ def calculate_position_sizing_context(
 
     if broker_limit > 0:
         raw_qty = min(raw_qty, broker_limit)
+    if state.last_entry_path == "early_momentum" and broker_limit > 0:
+        raw_qty = min(raw_qty, max(1, (broker_limit + 1) // 2))
     if qty_by_risk > 0:
         raw_qty = min(raw_qty, qty_by_risk)
     elif risk_budget > 0.0:
@@ -8802,7 +8845,10 @@ def calculate_position_sizing_context(
         "daily_loss_recovery_active": daily_loss_recovery_active,
         "daily_loss_recovery_reason": daily_loss_recovery_reason,
         "base_trade_share": base_trade_share,
+        "entry_path": state.last_entry_path or "standard",
+        "entry_path_multiplier": entry_path_multiplier,
         "target_trade_margin_rub": target_trade_margin,
+        "stop_distance_price": stop_distance,
         "margin_per_lot_rub": margin_per_lot,
         "qty_by_target": qty_by_target,
         "qty_by_allocatable": qty_by_allocatable,
@@ -9257,6 +9303,81 @@ def assess_unified_trend_alive(df: pd.DataFrame, side: str) -> tuple[float, str]
     return score, f"{label}: оценка {score:.2f}"
 
 
+def build_unified_entry_stop_plan(
+    df: pd.DataFrame,
+    entry_price: float,
+    side: str,
+    config: BotConfig,
+) -> dict[str, float | str]:
+    """Create one hourly stop plan shared by every reversal_1h instrument.
+
+    The working level is sized from both ATR and the nearest recent swing.  It
+    is checked by a completed hourly candle; a wider emergency level remains
+    active for a real adverse move between candles.
+    """
+    direction = str(side or "").upper()
+    if entry_price <= 0.0 or direction not in {"LONG", "SHORT"} or df.empty:
+        return {"working_stop_price": 0.0, "emergency_stop_price": 0.0, "distance": 0.0, "description": ""}
+    last = df.iloc[-1]
+    atr = max(0.0, float(last.get("atr") or 0.0))
+    base_distance = max(entry_price * float(config.stop_loss_pct or 0.0), entry_price * 0.004)
+    atr_distance = max(base_distance, atr * 1.25)
+    recent = df.iloc[-min(len(df), 5):]
+    if direction == "LONG":
+        swing_distance = max(0.0, entry_price - float(recent["low"].min()))
+    else:
+        swing_distance = max(0.0, float(recent["high"].max()) - entry_price)
+    # Do not import a much older structural low/high as an unlimited risk.
+    working_distance = max(atr_distance, min(swing_distance + atr * 0.20, atr_distance * 1.80))
+    emergency_distance = max(working_distance * 1.45, atr * 2.40, entry_price * 0.012)
+    working_stop = entry_price - working_distance if direction == "LONG" else entry_price + working_distance
+    emergency_stop = entry_price - emergency_distance if direction == "LONG" else entry_price + emergency_distance
+    return {
+        "working_stop_price": round(working_stop, 8),
+        "emergency_stop_price": round(emergency_stop, 8),
+        "distance": working_distance,
+        "description": (
+            f"часовой защитный уровень: ATR x1.25 и локальный экстремум; "
+            f"рабочая дистанция {working_distance / entry_price * 100:.2f}%, "
+            f"аварийная {emergency_distance / entry_price * 100:.2f}%"
+        ),
+    }
+
+
+def update_unified_ao_peak(state: InstrumentState, df: pd.DataFrame) -> None:
+    if df.empty or state.position_side not in {"LONG", "SHORT"}:
+        return
+    last = df.iloc[-1]
+    if not bool(last.get("is_complete", True)):
+        return
+    ao = float(last.get("ao", float(last.get("macd") or 0.0) - float(last.get("macd_signal") or 0.0)))
+    favorable_ao = ao if state.position_side == "LONG" else -ao
+    if favorable_ao > 0.0:
+        state.entry_peak_ao_abs = max(float(state.entry_peak_ao_abs or 0.0), favorable_ao)
+
+
+def unified_exit_momentum_exhausted(df: pd.DataFrame, side: str, peak_ao_abs: float) -> bool:
+    """Exit only after hourly price and AO both confirm that momentum is spent."""
+    if len(df) < 3:
+        return False
+    last, prev, prev2 = df.iloc[-1], df.iloc[-2], df.iloc[-3]
+    if not bool(last.get("is_complete", True)):
+        return False
+    ao_values = [float(row.get("ao", float(row.get("macd") or 0.0) - float(row.get("macd_signal") or 0.0))) for _, row in df.iloc[-3:].iterrows()]
+    close = float(last["close"])
+    ema20 = float(last["ema20"])
+    if side == "LONG":
+        weakening = ao_values[0] > ao_values[1] > ao_values[2]
+        retained = ao_values[-1] / peak_ao_abs if peak_ao_abs > 0.0 else 0.0
+        return weakening and retained <= 0.70 and close < ema20 and close <= float(prev["close"])
+    if side == "SHORT":
+        favorable = [-value for value in ao_values]
+        weakening = favorable[0] > favorable[1] > favorable[2]
+        retained = favorable[-1] / peak_ao_abs if peak_ao_abs > 0.0 else 0.0
+        return weakening and retained <= 0.70 and close > ema20 and close >= float(prev["close"])
+    return False
+
+
 def reversal_turnover_gate(
     instrument: InstrumentConfig,
     state: InstrumentState,
@@ -9291,7 +9412,11 @@ def reversal_turnover_gate(
     return allowed, reason
 
 
-def unified_trailing_reversal_confirmed(df: pd.DataFrame, side: str) -> bool:
+def unified_trailing_reversal_confirmed(
+    df: pd.DataFrame,
+    side: str,
+    peak_ao_abs: float = 0.0,
+) -> bool:
     """Require a completed-candle reversal before a profitable reversal trade trails out."""
     if len(df) < 2:
         return False
@@ -9307,10 +9432,14 @@ def unified_trailing_reversal_confirmed(df: pd.DataFrame, side: str) -> bool:
     ao = float(last.get("ao", macd - macd_signal))
     prev_ao = float(prev.get("ao", float(prev["macd"]) - float(prev["macd_signal"])))
     if side == "LONG":
-        return close < ema20 and close <= prev_close and macd < macd_signal and ao <= prev_ao
-    if side == "SHORT":
-        return close > ema20 and close >= prev_close and macd > macd_signal and ao >= prev_ao
-    return False
+        basic_reversal = close < ema20 and close <= prev_close and macd < macd_signal and ao <= prev_ao
+    elif side == "SHORT":
+        basic_reversal = close > ema20 and close >= prev_close and macd > macd_signal and ao >= prev_ao
+    else:
+        return False
+    if not basic_reversal:
+        return False
+    return peak_ao_abs <= 0.0 or unified_exit_momentum_exhausted(df, side, peak_ao_abs)
 
 def price_has_new_extreme_since_exit(
     instrument: InstrumentConfig,
@@ -10044,6 +10173,7 @@ def sync_pending_order(
             state.entry_commission_accounted = False
             state.entry_risk_rub = 0.0
             state.entry_risk_budget_rub = 0.0
+            clear_entry_protection(state)
             state.max_price = None
             state.min_price = None
             state.position_qty = 0
@@ -10132,6 +10262,7 @@ def open_position(
     entry_reason: str = "",
     cash_fund: CashFundConfig | None = None,
     quantity_cap: int | None = None,
+    entry_df: pd.DataFrame | None = None,
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
@@ -10183,6 +10314,10 @@ def open_position(
         )
         return
     price = get_last_price(client, instrument)
+    side = "LONG" if signal == "LONG" else "SHORT"
+    stop_plan: dict[str, float | str] = {}
+    if is_unified_reversal_strategy(strategy_name) and entry_df is not None:
+        stop_plan = build_unified_entry_stop_plan(entry_df, price, side, config)
     allocator_sizing = calculate_position_sizing_context(
         client,
         config,
@@ -10191,6 +10326,7 @@ def open_position(
         price,
         signal,
         strategy_name,
+        stop_distance_price=float(stop_plan.get("distance") or 0.0),
     )
     quantity = int(allocator_sizing.get("quantity") or 0)
     if quantity > 0 and quantity_cap is not None and quantity_cap > 0:
@@ -10243,7 +10379,14 @@ def open_position(
         state.last_entry_allocator_time = datetime.now(UTC).isoformat()
         state.entry_risk_rub = 0.0
         state.entry_risk_budget_rub = 0.0
-    side = "LONG" if signal == "LONG" else "SHORT"
+    state.entry_stop_price = float(stop_plan.get("working_stop_price") or 0.0) or None
+    state.entry_emergency_stop_price = float(stop_plan.get("emergency_stop_price") or 0.0) or None
+    state.entry_stop_distance_pct = (
+        round(float(stop_plan.get("distance") or 0.0) / price * 100.0, 4)
+        if price > 0.0 else 0.0
+    )
+    state.entry_stop_description = str(stop_plan.get("description") or "")
+    state.entry_peak_ao_abs = 0.0
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
         if signal == "LONG"
@@ -10296,6 +10439,7 @@ def open_position(
         order_id = place_market_order(client, config, instrument, quantity, direction)
     except RequestError as error:
         request_reason = summarize_order_request_error(instrument, error)
+        clear_entry_protection(state)
         state.execution_status = "rejected"
         state.last_error = request_reason
         state.last_signal_summary = [request_reason, *state.last_signal_summary[:2]]
@@ -10386,6 +10530,7 @@ def close_position(
         state.entry_commission_accounted = False
         state.entry_risk_rub = 0.0
         state.entry_risk_budget_rub = 0.0
+        clear_entry_protection(state)
         state.max_price = None
         state.min_price = None
         state.position_qty = 0
@@ -10487,12 +10632,18 @@ def check_exit(
             adaptive_exit_reason,
         )
     is_unified_reversal = is_unified_reversal_strategy(state.entry_strategy)
+    if is_unified_reversal:
+        update_unified_ao_peak(state, exit_df)
     trend_alive_score, trend_alive_reason = (
         assess_unified_trend_alive(exit_df, state.position_side)
         if is_unified_reversal
         else (0.0, "")
     )
     trend_alive = is_unified_reversal and trend_alive_score >= 0.65
+    exit_momentum_exhausted = (
+        unified_exit_momentum_exhausted(exit_df, state.position_side, state.entry_peak_ao_abs)
+        if is_unified_reversal else True
+    )
     prev = exit_df.iloc[-2]
     prev2 = exit_df.iloc[-3]
     macd = float(last["macd"])
@@ -10510,7 +10661,8 @@ def check_exit(
         profit_pct = (price - state.entry_price) / state.entry_price
         if profit_pct >= exit_profile.breakeven_profit_pct:
             state.breakeven_armed = True
-        stop_price = state.entry_price * (1 - config.stop_loss_pct)
+        stop_price = state.entry_stop_price or state.entry_price * (1 - config.stop_loss_pct)
+        emergency_stop_price = state.entry_emergency_stop_price or stop_price
         if state.breakeven_armed:
             stop_price = max(stop_price, state.entry_price)
         trailing_price = (state.max_price or price) * (1 - exit_profile.trailing_stop_pct)
@@ -10527,15 +10679,17 @@ def check_exit(
         turnover_allowed, turnover_reason = reversal_turnover_gate(instrument, state, price, fresh_signal)
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
-        if price <= stop_price:
-            close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} <= {stop_price:.4f}")
+        if price <= emergency_stop_price:
+            close_position(client, config, instrument, state, f"Аварийный стоп: цена {price:.4f} <= {emergency_stop_price:.4f}")
+        elif price <= stop_price and (not is_unified_reversal or (bool(last.get("is_complete", True)) and close <= stop_price)):
+            close_position(client, config, instrument, state, f"Часовой защитный стоп: цена {price:.4f} <= {stop_price:.4f}")
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
             price <= trailing_price
             and (
                 not is_unified_reversal
-                or (min_hold_passed and not trend_alive and unified_trailing_reversal_confirmed(exit_df, "LONG"))
+                or (min_hold_passed and not trend_alive and unified_trailing_reversal_confirmed(exit_df, "LONG", state.entry_peak_ao_abs))
             )
         ):
             suffix = " с подтверждением разворота" if is_unified_reversal else ""
@@ -10545,9 +10699,10 @@ def check_exit(
             and state.breakeven_armed
             and rsi >= profile.rsi_exit_long
             and not (is_unified_reversal and unified_reversal_pressure_intact(exit_df, "LONG"))
+            and (not is_unified_reversal or state.entry_peak_ao_abs <= 0.0 or exit_momentum_exhausted)
         ):
             close_position(client, config, instrument, state, f"RSI вышел в зону перегрева: {rsi:.2f} >= {profile.rsi_exit_long:.2f}")
-        elif min_hold_passed and macd_down and not trend_alive and turnover_allowed:
+        elif min_hold_passed and macd_down and not trend_alive and turnover_allowed and (state.entry_peak_ao_abs <= 0.0 or exit_momentum_exhausted):
             close_position(client, config, instrument, state, "MACD подтверждённо развернулся вниз и цена потеряла EMA20")
         elif min_hold_passed and opposite_signal_confirmed and not trend_alive and turnover_allowed:
             close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал SHORT")
@@ -10557,7 +10712,8 @@ def check_exit(
         profit_pct = (state.entry_price - price) / state.entry_price
         if profit_pct >= exit_profile.breakeven_profit_pct:
             state.breakeven_armed = True
-        stop_price = state.entry_price * (1 + config.stop_loss_pct)
+        stop_price = state.entry_stop_price or state.entry_price * (1 + config.stop_loss_pct)
+        emergency_stop_price = state.entry_emergency_stop_price or stop_price
         if state.breakeven_armed:
             stop_price = min(stop_price, state.entry_price)
         trailing_price = (state.min_price or price) * (1 + exit_profile.trailing_stop_pct)
@@ -10574,15 +10730,17 @@ def check_exit(
         turnover_allowed, turnover_reason = reversal_turnover_gate(instrument, state, price, fresh_signal)
         min_hold_passed = position_held_long_enough(state, config, exit_profile.min_hold_minutes)
         profit_lock_reason = build_profit_lock_exit_reason(instrument, state, price)
-        if price >= stop_price:
-            close_position(client, config, instrument, state, f"Стоп-лосс: цена {price:.4f} >= {stop_price:.4f}")
+        if price >= emergency_stop_price:
+            close_position(client, config, instrument, state, f"Аварийный стоп: цена {price:.4f} >= {emergency_stop_price:.4f}")
+        elif price >= stop_price and (not is_unified_reversal or (bool(last.get("is_complete", True)) and close >= stop_price)):
+            close_position(client, config, instrument, state, f"Часовой защитный стоп: цена {price:.4f} >= {stop_price:.4f}")
         elif min_hold_passed and profit_lock_reason:
             close_position(client, config, instrument, state, profit_lock_reason)
         elif (
             price >= trailing_price
             and (
                 not is_unified_reversal
-                or (min_hold_passed and not trend_alive and unified_trailing_reversal_confirmed(exit_df, "SHORT"))
+                or (min_hold_passed and not trend_alive and unified_trailing_reversal_confirmed(exit_df, "SHORT", state.entry_peak_ao_abs))
             )
         ):
             suffix = " с подтверждением разворота" if is_unified_reversal else ""
@@ -10592,6 +10750,7 @@ def check_exit(
             and state.breakeven_armed
             and rsi <= profile.rsi_exit_short
             and not (is_unified_reversal and unified_reversal_pressure_intact(exit_df, "SHORT"))
+            and (not is_unified_reversal or state.entry_peak_ao_abs <= 0.0 or exit_momentum_exhausted)
             and (
                 instrument.symbol not in {"VBM6", "USDRUBF"}
                 or macd_up
@@ -10600,7 +10759,7 @@ def check_exit(
             )
         ):
             close_position(client, config, instrument, state, f"RSI вышел в зону перепроданности: {rsi:.2f} <= {profile.rsi_exit_short:.2f}")
-        elif min_hold_passed and macd_up and not trend_alive and turnover_allowed:
+        elif min_hold_passed and macd_up and not trend_alive and turnover_allowed and (state.entry_peak_ao_abs <= 0.0 or exit_momentum_exhausted):
             close_position(client, config, instrument, state, "MACD подтверждённо развернулся вверх и цена вернулась выше EMA20")
         elif min_hold_passed and opposite_signal_confirmed and not trend_alive and turnover_allowed:
             close_position(client, config, instrument, state, "Появился подтверждённый противоположный сигнал LONG")
@@ -10773,6 +10932,11 @@ def process_instrument(
     state.last_market_regime_reason = str(regime_metrics.get("regime_reason") or "")
     state.last_setup_quality_score = setup_quality_score
     state.last_setup_quality_label = setup_quality_label
+    state.last_entry_path = (
+        "early_momentum"
+        if signal in {"LONG", "SHORT"} and "ранний импульс ao" in reason.lower()
+        else "standard" if signal in {"LONG", "SHORT"} else ""
+    )
     entry_edge_score, entry_edge_label, entry_edge_reason = get_entry_edge_profile(
         state,
         instrument.symbol,
@@ -11087,6 +11251,7 @@ def process_instrument(
                                                 reason,
                                                 cash_fund,
                                                 entry_quantity_cap,
+                                                lower_df,
                                             )
                         else:
                             logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)

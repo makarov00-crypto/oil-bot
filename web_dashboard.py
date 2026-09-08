@@ -595,8 +595,8 @@ def build_docs_html() -> str:
             <h3>Проверяем силу движения</h3>
             <p>
               Смотрим объём, импульс свечи, `ATR` и режим рынка. Слабый объём, сжатие и пила должны блокировать плохие перевороты.
-              При сильном свежем импульсе стратегия может пропустить ранний вход даже до полного выравнивания структуры, если объём
-              и тело свечи действительно живые.
+              В смешанном режиме разрешён осторожный ранний вход: две усиливающиеся часовые свечи `AO` после нулевой линии,
+              цена у `EMA20`, объём и тело свечи не слабые, а поток Чайкина не противоречит движению. Такой вход открывается половинным размером.
             </p>
           </div>
         </article>
@@ -640,9 +640,10 @@ def build_docs_html() -> str:
         </article>
         <article class="overview-card">
           <h3>Выход из сделки</h3>
-          <p>
-            Для unified-группы отключён `profit-lock`. Выход строится через стоп, трейлинг, `RSI`, противоположный сигнал и подтверждённый разворот `MACD`.
-          </p>
+            <p>
+              Для unified-группы отключён `profit-lock`. Рабочий защитный уровень рассчитывается от `ATR` и локального экстремума и подтверждается часовой свечой;
+              аварийный уровень остаётся на случай сильного движения между свечами. Прибыльный тренд закрывается только когда цена и `AO` вместе подтверждают истощение импульса.
+            </p>
         </article>
         <article class="overview-card">
           <h3>Почему бывает HOLD</h3>
@@ -7285,7 +7286,13 @@ def build_dashboard_html() -> str:
         buildTradeSummaryCard('Удержали прибыли', capture, 'доля полученной цены от максимального движения'),
         buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
         buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
-        buildTradeSummaryCard('Гипотезы HOLD', String(qualityOverview.strategy_hypotheses_count || 0), qualityOverview.strategy_hypotheses_move_4h_pct == null ? 'не являются ошибками' : `${qualityOverview.strategy_hypotheses_observations_count || 0} наблюдений · среднее +${Number(qualityOverview.strategy_hypotheses_move_4h_pct).toFixed(2)}% за 4ч`),
+        buildTradeSummaryCard(
+          'Проверка удержаний',
+          `${qualityOverview.strategy_hypotheses_positive_count || 0} из ${qualityOverview.strategy_hypotheses_evaluated_count || 0}`,
+          qualityOverview.strategy_hypotheses_evaluated_count
+            ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_observations_count || 0} существенных`
+            : 'часовые окна после HOLD ещё копятся'
+        ),
       ].join('') : '';
       tradeQualityBody.innerHTML = qualityRows.length
         ? qualityRows.map((row) => {
