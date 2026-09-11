@@ -79,6 +79,11 @@ RUNTIME_STALE_MINUTES = 10
 
 
 app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
     "BRK6": "BR-5.26 Нефть Brent",
@@ -7661,8 +7666,8 @@ def docs() -> str:
 
 
 @app.get("/shadow-strategy", response_class=HTMLResponse)
-def shadow_strategy() -> str:
-    return build_shadow_strategy_html()
+def shadow_strategy() -> HTMLResponse:
+    return HTMLResponse(content=build_shadow_strategy_html(), headers=NO_CACHE_HEADERS)
 
 
 @app.get("/allocator", response_class=RedirectResponse)
@@ -7747,8 +7752,8 @@ def api_allocator(date: str | None = None) -> dict:
 
 
 @app.get("/api/shadow-strategy", response_class=JSONResponse)
-def api_shadow_strategy() -> dict:
-    return load_shadow_strategy_workspace()
+def api_shadow_strategy() -> JSONResponse:
+    return JSONResponse(content=load_shadow_strategy_workspace(), headers=NO_CACHE_HEADERS)
 
 
 @app.post("/api/ai-review/refresh", response_class=JSONResponse)
