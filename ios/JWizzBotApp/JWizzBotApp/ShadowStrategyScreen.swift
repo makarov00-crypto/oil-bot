@@ -161,7 +161,10 @@ struct ShadowStrategyScreen: View {
             Text(title).font(.headline)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 MetricGlassTile(title: "Закрыто", value: "\(metrics.closedTrades ?? 0)")
-                MetricGlassTile(title: "Прибыльных", value: formatPct(metrics.winRatePct))
+                MetricGlassTile(
+                    title: "В плюс",
+                    value: "\(metrics.wins ?? 0) из \(metrics.closedTrades ?? 0) (\(formatPct(metrics.winRatePct)))"
+                )
                 MetricGlassTile(
                     title: "Итог на 1 лот",
                     value: formatRub(metrics.netResultRub1Lot),
@@ -204,11 +207,11 @@ struct ShadowStrategyScreen: View {
                         Divider().overlay(Color.white.opacity(0.08))
                         InfoRow(
                             title: "Рабочая",
-                            value: "\(row.current.closedTrades ?? 0) сделок · \(formatPct(row.current.winRatePct)) · \(formatRub(row.current.netResultRub1Lot))"
+                            value: "\(row.current.closedTrades ?? 0) сделок · \(row.current.wins ?? 0) в плюс (\(formatPct(row.current.winRatePct))) · \(formatRub(row.current.netResultRub1Lot))"
                         )
                         InfoRow(
                             title: "Теневая",
-                            value: "\(row.shadow.closedTrades ?? 0) сделок · \(formatPct(row.shadow.winRatePct)) · \(formatRub(row.shadow.netResultRub1Lot))"
+                            value: "\(row.shadow.closedTrades ?? 0) сделок · \(row.shadow.wins ?? 0) в плюс (\(formatPct(row.shadow.winRatePct))) · \(formatRub(row.shadow.netResultRub1Lot))"
                         )
                     }
                 }

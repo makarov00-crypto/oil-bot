@@ -91,7 +91,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
     </section>
 
     <section class="section" id="strategyComparison">
-      <div class="section-head"><div><h2>Сравнение стратегий</h2><div class="muted" id="comparisonPeriod">Общий период ещё рассчитывается.</div></div><div class="muted">Один лот после комиссии</div></div>
+      <div class="section-head"><div><h2>Сравнение стратегий</h2><div class="muted" id="comparisonPeriod">Период закрытий ещё рассчитывается.</div></div><div class="muted">Один лот после комиссии</div></div>
       <div class="comparison-grid">
         <article class="strategy-summary"><div class="strategy-label">Рабочая стратегия</div><div class="strategy-title">Часовой разворот</div><div class="metric-grid" id="currentMetrics"></div></article>
         <article class="strategy-summary shadow"><div class="strategy-label">Теневой эксперимент</div><div class="strategy-title">AO и поток Чайкина</div><div class="metric-grid" id="shadowMetrics"></div></article>
@@ -107,7 +107,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
       <button class="tab" type="button" data-tab="decisions">Журнал решений</button>
     </div>
 
-    <section class="tab-panel active" id="tabInstruments"><div class="section-head"><div><h2>По инструментам</h2><div class="muted">Где новая схема улучшает или ухудшает результат.</div></div></div><div class="table-scroll"><table><thead><tr><th>Инструмент</th><th>Рабочая: сделки</th><th>Рабочая: прибыльных</th><th>Рабочая: итог</th><th>Теневая: сделки</th><th>Теневая: прибыльных</th><th>Теневая: итог</th><th>Разница</th></tr></thead><tbody id="instrumentComparison"></tbody></table></div></section>
+    <section class="tab-panel active" id="tabInstruments"><div class="section-head"><div><h2>По инструментам</h2><div class="muted">Где новая схема улучшает или ухудшает результат.</div></div></div><div class="table-scroll"><table><thead><tr><th>Инструмент</th><th>Рабочая: сделки</th><th>Рабочая: в плюс</th><th>Рабочая: итог</th><th>Теневая: сделки</th><th>Теневая: в плюс</th><th>Теневая: итог</th><th>Разница</th></tr></thead><tbody id="instrumentComparison"></tbody></table></div></section>
     <section class="tab-panel" id="tabExits"><div class="section-head"><div><h2>Удержание после выхода</h2><div class="muted" id="exitAnalyticsSummary">Проверяем следующие закрытые часовые свечи.</div></div><div class="muted">Один лот</div></div><div class="horizon-grid" id="exitHorizons"></div><div class="findings" id="exitFindings"></div><div class="table-scroll" style="margin-top:14px"><table><thead><tr><th>Сделка</th><th>Фактический выход</th><th>Ещё 1 свеча</th><th>Ещё 2 свечи</th><th>Ещё 4 свечи</th><th>Ещё 8 свечей</th><th>Удержано от максимума</th></tr></thead><tbody id="exitTrades"></tbody></table></div></section>
     <section class="tab-panel" id="tabPositions"><div class="section-head"><div><h2>Открытые позиции</h2><div class="muted">Текущая оценка на один лот.</div></div></div><div class="events" id="shadowStrategyOpen"></div></section>
     <section class="tab-panel" id="tabTrades"><div class="section-head"><div><h2>Закрытые сделки</h2><div class="muted">Сначала самые свежие результаты.</div></div></div><div class="events" id="shadowStrategyTrades"></div></section>
@@ -125,7 +125,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
     function renderSummary(target, data) {{
       document.getElementById(target).innerHTML = [
         metric('Закрыто',String(data.closed_trades||0),`${{data.wins||0}} в плюс · ${{data.losses||0}} в минус`),
-        metric('Прибыльных',pct(data.win_rate_pct),'доля закрытых сделок'),
+        metric('В плюс',`${{Number(data.wins||0)}} из ${{Number(data.closed_trades||0)}}`,pct(data.win_rate_pct)+' закрытых сделок'),
         metric('Итог на 1 лот',signedRub(data.net_result_rub_1lot),'после комиссии',tone(data.net_result_rub_1lot)),
         metric('До комиссии',signedRub(data.gross_result_rub_1lot),'движение цены',tone(data.gross_result_rub_1lot)),
         metric('Комиссии',signedRub(-Number(data.commission_rub_1lot||0)),'оценка расходов','bad'),
@@ -174,7 +174,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
       document.getElementById('strategyStatus').textContent=shadow.enabled?'НАБЛЮДЕНИЕ АКТИВНО':'НАБЛЮДЕНИЕ ВЫКЛЮЧЕНО';
       document.getElementById('updatedAt').textContent=`Обновление: ${{data.generated_at_moscow||'-'}}`;
       if(!comparison.available) {{ document.getElementById('strategyComparison').innerHTML='<div class="empty">Для сравнения пока недостаточно завершённых часовых наблюдений.</div>'; return; }}
-      document.getElementById('comparisonPeriod').textContent=`${{time(comparison.period_start)}} — ${{time(comparison.period_end)}} · одинаковый период`;
+      document.getElementById('comparisonPeriod').textContent=`${{time(comparison.period_start)}} — ${{time(comparison.period_end)}} · закрытия в период`;
       renderSummary('currentMetrics',comparison.current||{{}}); renderSummary('shadowMetrics',comparison.shadow||{{}});
       const diff=comparison.difference||{{}}; const exits=comparison.exit_diagnostics||{{}};
       document.getElementById('comparisonFindings').innerHTML=[
@@ -183,7 +183,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
         `<div class="finding"><strong>Возврат прибыли</strong>${{Number(exits.losses_after_profitable_move||0)}} из ${{Number(exits.losses_total||0)}} убыточных сделок ранее покрывали комиссию</div>`,
       ].join('');
       const rows=Array.isArray(comparison.by_symbol)?comparison.by_symbol:[];
-      document.getElementById('instrumentComparison').innerHTML=rows.map((row)=>{{const current=row.current||{{}};const experiment=row.shadow||{{}};const delta=Number(experiment.net_result_rub_1lot||0)-Number(current.net_result_rub_1lot||0);return `<tr><td><strong>${{esc(row.symbol)}}</strong><div class="instrument-name">${{esc(instrument(row.symbol,catalog))}}</div></td><td>${{current.closed_trades||0}}</td><td>${{pct(current.win_rate_pct)}}</td><td class="mono ${{tone(current.net_result_rub_1lot)}}">${{esc(signedRub(current.net_result_rub_1lot))}}</td><td>${{experiment.closed_trades||0}}</td><td>${{pct(experiment.win_rate_pct)}}</td><td class="mono ${{tone(experiment.net_result_rub_1lot)}}">${{esc(signedRub(experiment.net_result_rub_1lot))}}</td><td class="mono ${{tone(delta)}}">${{esc(signedRub(delta))}}</td></tr>`;}}).join('')||'<tr><td colspan="8" class="muted">Нет данных по инструментам.</td></tr>';
+      document.getElementById('instrumentComparison').innerHTML=rows.map((row)=>{{const current=row.current||{{}};const experiment=row.shadow||{{}};const delta=Number(experiment.net_result_rub_1lot||0)-Number(current.net_result_rub_1lot||0);const positive=(metrics)=>`${{Number(metrics.wins||0)}} из ${{Number(metrics.closed_trades||0)}} (${{pct(metrics.win_rate_pct)}})`;return `<tr><td><strong>${{esc(row.symbol)}}</strong><div class="instrument-name">${{esc(instrument(row.symbol,catalog))}}</div></td><td>${{current.closed_trades||0}}</td><td>${{esc(positive(current))}}</td><td class="mono ${{tone(current.net_result_rub_1lot)}}">${{esc(signedRub(current.net_result_rub_1lot))}}</td><td>${{experiment.closed_trades||0}}</td><td>${{esc(positive(experiment))}}</td><td class="mono ${{tone(experiment.net_result_rub_1lot)}}">${{esc(signedRub(experiment.net_result_rub_1lot))}}</td><td class="mono ${{tone(delta)}}">${{esc(signedRub(delta))}}</td></tr>`;}}).join('')||'<tr><td colspan="8" class="muted">Нет данных по инструментам.</td></tr>';
       renderExitAnalytics(exitAnalytics,catalog);
       const open=Array.isArray(shadow.open_positions)?shadow.open_positions:[]; const trades=Array.isArray(shadow.closed_trades)?shadow.closed_trades:[]; const decisions=Array.isArray(shadow.decisions)?shadow.decisions:[];
       renderEvents('shadowStrategyOpen',open,catalog,30,'Открытых теневых позиций сейчас нет.');

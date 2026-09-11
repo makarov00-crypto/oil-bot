@@ -308,7 +308,7 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(rollover["position_after"], POSITION_FLAT)
         self.assertEqual(rollover["estimated_net_rub_1lot"], 40.0)
 
-    def test_comparison_uses_same_period_and_normalizes_live_trades_to_one_lot(self) -> None:
+    def test_comparison_uses_closures_in_period_and_normalizes_live_trades_to_one_lot(self) -> None:
         shadow_records = [
             {
                 "version": STRATEGY_VERSION,
@@ -343,9 +343,9 @@ class AoChaikinShadowTests(unittest.TestCase):
             {
                 "symbol": "VBU6",
                 "entry_time": "2026-08-19T11:00:00+03:00",
-                "exit_time": "2026-08-19T12:00:00+03:00",
-                "pnl_rub": 999.0,
-                "commission_rub": 1.0,
+                "exit_time": "2026-08-20T12:30:00+03:00",
+                "pnl_rub": 60.0,
+                "commission_rub": 12.0,
                 "qty_lots": 1,
             },
         ]
@@ -357,9 +357,10 @@ class AoChaikinShadowTests(unittest.TestCase):
         )
 
         self.assertTrue(result["available"])
-        self.assertEqual(result["current"]["closed_trades"], 1)
-        self.assertEqual(result["current"]["net_result_rub_1lot"], 40.0)
-        self.assertEqual(result["current"]["commission_rub_1lot"], 10.0)
+        self.assertEqual(result["current"]["closed_trades"], 2)
+        self.assertEqual(result["current"]["wins"], 2)
+        self.assertEqual(result["current"]["net_result_rub_1lot"], 100.0)
+        self.assertEqual(result["current"]["commission_rub_1lot"], 22.0)
         self.assertEqual(result["shadow"]["net_result_rub_1lot"], 80.0)
         self.assertEqual(result["by_symbol"][0]["symbol"], "VBU6")
 

@@ -594,13 +594,10 @@ def build_shadow_strategy_comparison(
     shadow_closed = [row for row in current_version_records if row.get("decision") == DECISION_EXIT]
     matching_live: list[dict[str, Any]] = []
     for row in live_trades:
-        entry_time = _parse_iso_datetime(row.get("entry_time"))
         exit_time = _parse_iso_datetime(row.get("exit_time"))
-        if (
-            entry_time is not None
-            and exit_time is not None
-            and period_start <= entry_time <= exit_time <= period_end
-        ):
+        # Сравниваем реализованные результаты в окне наблюдения: вход мог быть
+        # раньше запуска теневого журнала, но закрытие уже относится к периоду.
+        if exit_time is not None and period_start <= exit_time <= period_end:
             matching_live.append(row)
 
     shadow_by_symbol: dict[str, list[dict[str, Any]]] = {}
@@ -637,7 +634,7 @@ def build_shadow_strategy_comparison(
     )
     return {
         "available": True,
-        "basis": "один лот после оценочной комиссии",
+        "basis": "закрытия за период, один лот после комиссии",
         "period_start": period_start.astimezone(MOSCOW_TZ).isoformat(),
         "period_end": period_end.astimezone(MOSCOW_TZ).isoformat(),
         "current": current_metrics,
