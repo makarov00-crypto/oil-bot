@@ -415,6 +415,7 @@ class AoChaikinShadowTests(unittest.TestCase):
             {
                 "version": STRATEGY_VERSION,
                 "symbol": "VBU6",
+                "key": "VBU6:2026-08-14T12:00:00+03:00",
                 "candle_closed_at": "2026-08-14T12:00:00+03:00",
                 "recorded_at": "2026-08-14T12:00:01+03:00",
                 "decision": DECISION_ENTRY,
@@ -424,6 +425,7 @@ class AoChaikinShadowTests(unittest.TestCase):
             {
                 "version": STRATEGY_VERSION,
                 "symbol": "VBU6",
+                "key": "VBU6:2026-08-14T15:00:00+03:00",
                 "candle_closed_at": "2026-08-14T15:00:00+03:00",
                 "recorded_at": "2026-08-14T15:00:01+03:00",
                 "decision": DECISION_EXIT,
@@ -446,6 +448,7 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["closed_trades"], 1)
         self.assertEqual(payload["summary"]["net_result_rub_1lot"], 25.0)
         self.assertEqual(payload["decisions"][0]["symbol"], "VBZ6")
+        self.assertTrue(payload["decisions"][0]["key"].startswith("VBZ6:"))
 
     def test_dashboard_payload_does_not_mix_previous_strategy_version(self) -> None:
         rows = [

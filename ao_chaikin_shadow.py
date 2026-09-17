@@ -786,8 +786,27 @@ def build_shadow_strategy_payload(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=MOSCOW_TZ)
     cutoff = current_time.astimezone(MOSCOW_TZ) - timedelta(days=max(1, period_days))
+    def display_record(row: dict[str, Any]) -> dict[str, Any]:
+        """Resolve retired contract names in values returned to the dashboard.
+
+        The journal key remains immutable on disk for deduplication and audit,
+        but its first component is a symbol and must not expose a retired
+        contract in the user-facing shadow-strategy payload.
+        """
+        displayed = dict(row)
+        displayed["symbol"] = get_instrument_history_symbol(str(row.get("symbol") or ""))
+        raw_key = str(row.get("key") or "")
+        if raw_key:
+            raw_symbol, separator, remainder = raw_key.partition(":")
+            displayed["key"] = (
+                f"{get_instrument_history_symbol(raw_symbol)}{separator}{remainder}"
+                if separator
+                else get_instrument_history_symbol(raw_symbol)
+            )
+        return displayed
+
     all_records = [
-        {**row, "symbol": get_instrument_history_symbol(str(row.get("symbol") or ""))}
+        display_record(row)
         for row in read_shadow_records(path)
         if int(_number(row.get("version"))) == STRATEGY_VERSION
     ]
