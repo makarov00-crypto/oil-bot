@@ -98,8 +98,10 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
     "IMOEXF": "IMOEXF Индекс МосБиржи",
     "RNM6": "ROSN-6.26 Роснефть",
     "RNU6": "ROSN-9.26 Роснефть",
+    "RNZ6": "ROSN-12.26 Роснефть",
     "SRM6": "SBRF-6.26 Сбер Банк",
     "SRU6": "SBRF-9.26 Сбер Банк",
+    "SRZ6": "SBRF-12.26 Сбер Банк",
     "GNM6": "GOLDM-6.26 Золото (мини)",
     "GNU6": "GOLDM-9.26 Золото (мини)",
     "GLU6": "GL-9.26 Золото",
@@ -110,13 +112,16 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
     "NGQ6": "NG-8.26 Природный газ",
     "NGU6": "NG-9.26 Природный газ",
     "LKU6": "LKOH-9.26 Лукойл",
+    "LKZ6": "LKOH-12.26 Лукойл",
     "ONU6": "OZON-9.26 Озон",
+    "ONZ6": "OZON-12.26 Озон",
     "RBM6": "RGBI-6.26 Индекс гос. облигаций",
     "RBU6": "RGBI-9.26 Индекс гос. облигаций",
     "UCM6": "UCNY-6.26 Доллар США - Юань",
     "UCU6": "UCNY-9.26 Доллар США - Юань",
     "VBM6": "VTBR-6.26 Банк ВТБ",
     "VBU6": "VTBR-9.26 Банк ВТБ",
+    "VBZ6": "VTBR-12.26 Банк ВТБ",
 }
 
 
@@ -1474,6 +1479,7 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         }
     reviews = sorted(latest.values(), key=lambda item: str(item.get("time") or ""), reverse=True)[:limit]
     for item in reviews:
+        item["symbol"] = get_instrument_history_symbol(str(item.get("symbol") or ""))
         item["shadow_ai_outcomes"] = shadow_outcomes_by_key.get(str(item.get("key") or ""), {})
         item["shadow_ai_4h_due"] = False
         try:
@@ -3069,7 +3075,10 @@ def load_shadow_strategy_workspace() -> dict[str, Any]:
     generated_at = datetime.now(timezone.utc)
     strategy = load_ao_chaikin_shadow_strategy()
     quality = load_trade_quality_analytics()
-    shadow_records = read_shadow_records(AO_CHAIKIN_SHADOW_PATH)
+    shadow_records = [
+        {**row, "symbol": get_instrument_history_symbol(str(row.get("symbol") or ""))}
+        for row in read_shadow_records(AO_CHAIKIN_SHADOW_PATH)
+    ]
     comparison = build_shadow_strategy_comparison(
         shadow_records,
         list(quality.get("trades") or []),
@@ -5698,8 +5707,10 @@ def build_dashboard_html() -> str:
       IMOEXF: 'IMOEXF Индекс МосБиржи',
       RNM6: 'ROSN-6.26 Роснефть',
       RNU6: 'ROSN-9.26 Роснефть',
+      RNZ6: 'ROSN-12.26 Роснефть',
       SRM6: 'SBRF-6.26 Сбер Банк',
       SRU6: 'SBRF-9.26 Сбер Банк',
+      SRZ6: 'SBRF-12.26 Сбер Банк',
       GNM6: 'GOLDM-6.26 Золото (мини)',
       GNU6: 'GOLDM-9.26 Золото (мини)',
       GLU6: 'GL-9.26 Золото',
@@ -5710,13 +5721,16 @@ def build_dashboard_html() -> str:
       NGQ6: 'NG-8.26 Природный газ',
       NGU6: 'NG-9.26 Природный газ',
       LKU6: 'LKOH-9.26 Лукойл',
+      LKZ6: 'LKOH-12.26 Лукойл',
       ONU6: 'OZON-9.26 Озон',
+      ONZ6: 'OZON-12.26 Озон',
       RBM6: 'RGBI-6.26 Индекс гос. облигаций',
       RBU6: 'RGBI-9.26 Индекс гос. облигаций',
       UCM6: 'UCNY-6.26 Доллар США - Юань',
       UCU6: 'UCNY-9.26 Доллар США - Юань',
       VBM6: 'VTBR-6.26 Банк ВТБ',
       VBU6: 'VTBR-9.26 Банк ВТБ',
+      VBZ6: 'VTBR-12.26 Банк ВТБ',
     };
 
     function renderInstrumentLabel(symbol, explicitName = '') {

@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from active_contracts import get_instrument_history_symbol
+
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
@@ -785,7 +787,7 @@ def build_shadow_strategy_payload(
         current_time = current_time.replace(tzinfo=MOSCOW_TZ)
     cutoff = current_time.astimezone(MOSCOW_TZ) - timedelta(days=max(1, period_days))
     all_records = [
-        row
+        {**row, "symbol": get_instrument_history_symbol(str(row.get("symbol") or ""))}
         for row in read_shadow_records(path)
         if int(_number(row.get("version"))) == STRATEGY_VERSION
     ]

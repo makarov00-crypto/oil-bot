@@ -56,33 +56,33 @@
     },
     {
       "template_symbol": "ONU6",
-      "active_symbol": "ONU6",
+      "active_symbol": "ONZ6",
       "disabled": false,
-      "updated_at": "2026-07-29T00:00:00+00:00"
+      "updated_at": "2026-09-17T13:57:45+00:00"
     },
     {
       "template_symbol": "RNM6",
-      "active_symbol": "RNU6",
+      "active_symbol": "RNZ6",
       "disabled": false,
-      "updated_at": ""
+      "updated_at": "2026-09-17T13:57:45+00:00"
     },
     {
       "template_symbol": "SRM6",
-      "active_symbol": "SRU6",
+      "active_symbol": "SRZ6",
       "disabled": false,
-      "updated_at": ""
+      "updated_at": "2026-09-17T13:57:45+00:00"
     },
     {
       "template_symbol": "LKU6",
-      "active_symbol": "LKU6",
+      "active_symbol": "LKZ6",
       "disabled": false,
-      "updated_at": "2026-07-29T00:00:00+00:00"
+      "updated_at": "2026-09-17T13:57:45+00:00"
     },
     {
       "template_symbol": "VBM6",
-      "active_symbol": "VBU6",
+      "active_symbol": "VBZ6",
       "disabled": false,
-      "updated_at": ""
+      "updated_at": "2026-09-17T13:57:45+00:00"
     },
     {
       "template_symbol": "NGN6",
@@ -101,6 +101,24 @@
       "active_symbol": "NGU6",
       "disabled": false,
       "updated_at": "2026-08-27T13:46:12+00:00"
+    },
+    {
+      "template_symbol": "RNU6",
+      "active_symbol": "RNZ6",
+      "disabled": false,
+      "updated_at": "2026-09-17T13:57:45+00:00"
+    },
+    {
+      "template_symbol": "SRU6",
+      "active_symbol": "SRZ6",
+      "disabled": false,
+      "updated_at": "2026-09-17T13:57:45+00:00"
+    },
+    {
+      "template_symbol": "VBU6",
+      "active_symbol": "VBZ6",
+      "disabled": false,
+      "updated_at": "2026-09-17T13:57:45+00:00"
     }
   ]
 }

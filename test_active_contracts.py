@@ -85,6 +85,13 @@ class ActiveContractsTest(unittest.TestCase):
         self.assertEqual(contracts["BMM6"], "BRU6")
         self.assertEqual(contracts["BMQ6"], "BRU6")
 
+    def test_retired_alias_keeps_the_canonical_template_after_rollover(self) -> None:
+        upsert_active_contract("SRM6", "SRU6")
+        upsert_active_contract("SRM6", "SRZ6")
+
+        self.assertEqual(get_active_contract_template("SRU6"), "SRM6")
+        self.assertEqual(get_active_contract_template("SRZ6"), "SRM6")
+
 
 if __name__ == "__main__":
     unittest.main()

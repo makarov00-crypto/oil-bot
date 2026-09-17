@@ -1,9 +1,10 @@
 import unittest
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from active_contracts import get_active_contract_symbol
 from ao_chaikin_shadow import STRATEGY_VERSION
 from trade_storage import append_signal_observation
 
@@ -28,12 +29,13 @@ class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_news_coverage_payload_includes_human_keywords(self) -> None:
         payload = dashboard.build_news_coverage_payload()
+        ozon_symbol = get_active_contract_symbol("ONU6")
 
         self.assertFalse(payload["missing_symbols"])
         self.assertIn("BRV6", payload["news_symbols"])
-        self.assertIn("ONU6", payload["news_symbols"])
+        self.assertIn(ozon_symbol, payload["news_symbols"])
         self.assertIn("баррель", payload["keyword_samples"]["BRV6"])
-        self.assertIn("озон", payload["keyword_samples"]["ONU6"])
+        self.assertIn("озон", payload["keyword_samples"][ozon_symbol])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_dashboard_hides_internal_news_keyword_dictionary(self) -> None:
@@ -73,11 +75,16 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_ao_chaikin_shadow_payload_is_loaded_newest_first_with_russian_decisions(self) -> None:
+        candle_time = datetime.now(timezone.utc).astimezone(dashboard.MOSCOW_TZ).replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
         rows = [
             {
                 "version": STRATEGY_VERSION,
                 "symbol": "VBU6",
-                "candle_closed_at": "2026-08-14T12:00:00+03:00",
+                "candle_closed_at": candle_time.isoformat(),
                 "decision": "ВХОД",
                 "position_after": "ЛОНГ",
                 "minimum_strength_pct": 0.7,
@@ -85,7 +92,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
             {
                 "version": STRATEGY_VERSION,
                 "symbol": "VBU6",
-                "candle_closed_at": "2026-08-14T15:00:00+03:00",
+                "candle_closed_at": (candle_time + timedelta(hours=3)).isoformat(),
                 "decision": "ВЫХОД",
                 "position_after": "НЕТ",
                 "estimated_net_rub_1lot": 20.0,
@@ -850,7 +857,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
         catalog = dashboard.build_instrument_catalog()
 
-        for symbol in ["BMM6", "NGK6", "ONU6", "SRM6", "LKU6", "USDRUBF", "CNYRUBF", "VBM6", "IMOEXF"]:
+        for symbol in ["BMM6", "NGK6", "ONU6", "ONZ6", "SRM6", "SRZ6", "LKU6", "LKZ6", "RNZ6", "USDRUBF", "CNYRUBF", "VBM6", "VBZ6", "IMOEXF"]:
             with self.subTest(symbol=symbol):
                 self.assertIn(symbol, catalog)
                 self.assertNotEqual(catalog[symbol], symbol)

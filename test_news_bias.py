@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import unittest
 from unittest.mock import patch
 
+from active_contracts import get_active_contract_symbol
 import bot_oil_main as bot
 from news_bias import NewsBias, NewsMessage, calibrate_news_biases, detect_news_bias, select_active_biases
 from news_ingest import fetch_web_news_items
@@ -34,11 +35,12 @@ class NewsBiasTests(unittest.TestCase):
         )
 
         items = detect_news_bias(message)
-        ozon = next(item for item in items if item.symbol == "ONU6")
+        active_symbol = get_active_contract_symbol("ONU6")
+        ozon = next(item for item in items if item.symbol == active_symbol)
 
         self.assertEqual(ozon.bias, "LONG")
         self.assertEqual(ozon.category, "ритейл")
-        self.assertTrue(ozon.summary.startswith("ONU6:"))
+        self.assertTrue(ozon.summary.startswith(f"{active_symbol}:"))
         self.assertTrue(len(ozon.topics) >= 1)
         self.assertGreater(ozon.source_speed, 0.8)
         self.assertGreater(ozon.source_reliability, 0.7)
@@ -51,11 +53,12 @@ class NewsBiasTests(unittest.TestCase):
         )
 
         items = detect_news_bias(message)
-        lukoil = next(item for item in items if item.symbol == "LKU6")
+        active_symbol = get_active_contract_symbol("LKU6")
+        lukoil = next(item for item in items if item.symbol == active_symbol)
 
         self.assertEqual(lukoil.bias, "LONG")
         self.assertEqual(lukoil.category, "нефть")
-        self.assertTrue(lukoil.summary.startswith("LKU6:"))
+        self.assertTrue(lukoil.summary.startswith(f"{active_symbol}:"))
 
     def test_fast_telegram_can_make_strong_intraday_news_actionable(self) -> None:
         message = NewsMessage(

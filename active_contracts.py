@@ -99,10 +99,11 @@ def get_instrument_history_symbol(symbol: str) -> str:
 
 def get_active_contract_template(symbol: str) -> str | None:
     normalized_symbol = _normalize_symbol(symbol)
+    active_symbol = get_active_contract_symbol(normalized_symbol)
     for item in list_active_contracts():
         if item["disabled"]:
             continue
-        if item["active_symbol"] == normalized_symbol:
+        if item["active_symbol"] == active_symbol:
             return item["template_symbol"]
     return None
 

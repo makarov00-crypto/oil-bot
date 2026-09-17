@@ -445,6 +445,7 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["entries"], 1)
         self.assertEqual(payload["summary"]["closed_trades"], 1)
         self.assertEqual(payload["summary"]["net_result_rub_1lot"], 25.0)
+        self.assertEqual(payload["decisions"][0]["symbol"], "VBZ6")
 
     def test_dashboard_payload_does_not_mix_previous_strategy_version(self) -> None:
         rows = [
