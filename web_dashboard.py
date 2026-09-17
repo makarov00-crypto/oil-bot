@@ -17,6 +17,7 @@ from ao_chaikin_shadow import (
     build_shadow_exit_analytics,
     build_shadow_strategy_comparison,
     build_shadow_strategy_payload,
+    normalize_shadow_record_for_display,
     read_shadow_records,
 )
 from active_contracts import get_instrument_history_symbol, list_active_contracts, replace_with_active_symbols
@@ -1479,7 +1480,21 @@ def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
         }
     reviews = sorted(latest.values(), key=lambda item: str(item.get("time") or ""), reverse=True)[:limit]
     for item in reviews:
-        item["symbol"] = get_instrument_history_symbol(str(item.get("symbol") or ""))
+        raw_symbol = str(item.get("symbol") or "")
+        item["symbol"] = get_instrument_history_symbol(raw_symbol)
+        raw_key = str(item.get("key") or "")
+        if raw_key:
+            key_symbol, separator, remainder = raw_key.partition(":")
+            item["key"] = (
+                f"{get_instrument_history_symbol(key_symbol)}{separator}{remainder}"
+                if separator
+                else get_instrument_history_symbol(key_symbol)
+            )
+        review = item.get("review")
+        if isinstance(review, dict):
+            review = dict(review)
+            review["symbol"] = get_instrument_history_symbol(str(review.get("symbol") or raw_symbol))
+            item["review"] = review
         item["shadow_ai_outcomes"] = shadow_outcomes_by_key.get(str(item.get("key") or ""), {})
         item["shadow_ai_4h_due"] = False
         try:
@@ -3075,10 +3090,7 @@ def load_shadow_strategy_workspace() -> dict[str, Any]:
     generated_at = datetime.now(timezone.utc)
     strategy = load_ao_chaikin_shadow_strategy()
     quality = load_trade_quality_analytics()
-    shadow_records = [
-        {**row, "symbol": get_instrument_history_symbol(str(row.get("symbol") or ""))}
-        for row in read_shadow_records(AO_CHAIKIN_SHADOW_PATH)
-    ]
+    shadow_records = [normalize_shadow_record_for_display(row) for row in read_shadow_records(AO_CHAIKIN_SHADOW_PATH)]
     comparison = build_shadow_strategy_comparison(
         shadow_records,
         list(quality.get("trades") or []),

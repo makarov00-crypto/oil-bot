@@ -690,6 +690,28 @@ def _build_rollover_exit(previous: dict[str, Any], replacement_symbol: str) -> d
     return row
 
 
+def normalize_shadow_record_for_display(row: dict[str, Any]) -> dict[str, Any]:
+    """Resolve retired symbols in a journal row returned to a user-facing view."""
+    displayed = dict(row)
+    raw_symbol = str(row.get("symbol") or "")
+    active_symbol = get_instrument_history_symbol(raw_symbol)
+    displayed["symbol"] = active_symbol
+    raw_key = str(row.get("key") or "")
+    if raw_key:
+        key_symbol, separator, remainder = raw_key.partition(":")
+        displayed["key"] = (
+            f"{get_instrument_history_symbol(key_symbol)}{separator}{remainder}"
+            if separator
+            else get_instrument_history_symbol(key_symbol)
+        )
+    if row.get("exit_kind") == "СМЕНА КОНТРАКТА" and raw_symbol.upper() != active_symbol:
+        displayed["reason"] = (
+            f"Контракт заменён на {active_symbol}. Теневая позиция закрыта "
+            "по последней доступной цене до rollover и не переносится между разными ценовыми шкалами."
+        )
+    return displayed
+
+
 class AoChaikinShadowJournal:
     def __init__(
         self,
@@ -786,27 +808,8 @@ def build_shadow_strategy_payload(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=MOSCOW_TZ)
     cutoff = current_time.astimezone(MOSCOW_TZ) - timedelta(days=max(1, period_days))
-    def display_record(row: dict[str, Any]) -> dict[str, Any]:
-        """Resolve retired contract names in values returned to the dashboard.
-
-        The journal key remains immutable on disk for deduplication and audit,
-        but its first component is a symbol and must not expose a retired
-        contract in the user-facing shadow-strategy payload.
-        """
-        displayed = dict(row)
-        displayed["symbol"] = get_instrument_history_symbol(str(row.get("symbol") or ""))
-        raw_key = str(row.get("key") or "")
-        if raw_key:
-            raw_symbol, separator, remainder = raw_key.partition(":")
-            displayed["key"] = (
-                f"{get_instrument_history_symbol(raw_symbol)}{separator}{remainder}"
-                if separator
-                else get_instrument_history_symbol(raw_symbol)
-            )
-        return displayed
-
     all_records = [
-        display_record(row)
+        normalize_shadow_record_for_display(row)
         for row in read_shadow_records(path)
         if int(_number(row.get("version"))) == STRATEGY_VERSION
     ]
