@@ -92,7 +92,16 @@ def build_signal_ai_prompt(candidates: Iterable[dict[str, Any]]) -> str:
                 "priority_score": round(float(candidate.get("priority_score") or 0.0), 3),
                 "entry_edge_score": round(float(candidate.get("entry_edge_score") or 0.0), 3),
                 "market_regime": str(candidate.get("market_regime") or ""),
+                "market_regime_confidence": round(float(candidate.get("regime_confidence") or 0.0), 3),
                 "setup_quality": str(candidate.get("setup_quality_label") or ""),
+                "learning": {
+                    "adjustment": round(float(candidate.get("learning_adjustment") or 0.0), 3),
+                    "reason": str(candidate.get("learning_reason") or "")[:500],
+                },
+                "news_priority": {
+                    "adjustment": round(float(candidate.get("news_priority_adjustment") or 0.0), 3),
+                    "reason": str(candidate.get("news_priority_reason") or "")[:500],
+                },
                 "context": context,
             }
         )

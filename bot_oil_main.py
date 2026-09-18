@@ -11219,6 +11219,15 @@ def process_instrument(
                                                 "risk_per_contract_rub": float((allocator_sizing or {}).get("money_risk_per_contract_rub") or 0.0),
                                                 "shadow_ai_context": {
                                                     "close": round(float(lower_df.iloc[-1].get("close") or 0.0), 6),
+                                                    "ema20": round(float(lower_df.iloc[-1].get("ema20") or 0.0), 6),
+                                                    "distance_to_ema20_pct": round(
+                                                        abs(
+                                                            float(lower_df.iloc[-1].get("close") or 0.0)
+                                                            - float(lower_df.iloc[-1].get("ema20") or 0.0)
+                                                        )
+                                                        / max(abs(float(lower_df.iloc[-1].get("close") or 0.0)), 1e-9),
+                                                        5,
+                                                    ),
                                                     "macd": round(float(lower_df.iloc[-1].get("macd") or 0.0), 6),
                                                     "macd_signal": round(float(lower_df.iloc[-1].get("macd_signal") or 0.0), 6),
                                                     "macd_histogram": round(
@@ -11228,6 +11237,10 @@ def process_instrument(
                                                     ),
                                                     "ao": round(float(lower_df.iloc[-1].get("ao") or 0.0), 6),
                                                     "rsi": round(float(lower_df.iloc[-1].get("rsi") or 0.0), 3),
+                                                    "stochastic_k": round(float(lower_df.iloc[-1].get("stoch_k") or 0.0), 3),
+                                                    "stochastic_d": round(float(lower_df.iloc[-1].get("stoch_d") or 0.0), 3),
+                                                    "entry_path": str(state.last_entry_path or "standard"),
+                                                    "late_entry_warning": "late entry мягкий" in reason.lower(),
                                                     "volume_ratio": round(float(regime_metrics.get("volume_ratio") or 0.0), 3),
                                                     "atr_pct": round(float(regime_metrics.get("atr_pct") or 0.0), 5),
                                                     "session": session_name,

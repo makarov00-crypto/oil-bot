@@ -15,10 +15,25 @@ from trade_storage import append_signal_observation, load_signal_observations
 class SignalAiReviewerTests(unittest.TestCase):
     def test_build_prompt_keeps_only_structured_candidate_context(self) -> None:
         prompt = reviewer.build_signal_ai_prompt([
-            {"symbol": "BRU6", "signal": "LONG", "strategy_name": "reversal_1h", "reason": "MACD вверх", "shadow_ai_context": {"volume_ratio": 1.4}}
+            {
+                "symbol": "BRU6",
+                "signal": "LONG",
+                "strategy_name": "reversal_1h",
+                "reason": "MACD вверх",
+                "regime_confidence": 0.82,
+                "learning_adjustment": -0.04,
+                "learning_reason": "обучение режима: штраф",
+                "news_priority_adjustment": 0.03,
+                "news_priority_reason": "новости поддерживают",
+                "shadow_ai_context": {"volume_ratio": 1.4, "stochastic_k": 84.0},
+            }
         ])
         self.assertIn("BRU6", prompt)
         self.assertIn("volume_ratio", prompt)
+        self.assertIn("market_regime_confidence", prompt)
+        self.assertIn("learning", prompt)
+        self.assertIn("news_priority", prompt)
+        self.assertIn("stochastic_k", prompt)
 
     def test_parses_strict_review(self) -> None:
         payload = {"reviews": [{"symbol": "BRU6", "action": "ВХОД", "direction": "ЛОНГ", "confidence": 0.86, "reason": "импульс", "risk_note": "стоп"}]}
