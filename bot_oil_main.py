@@ -648,6 +648,26 @@ def sync_legacy_delayed_close_fields(state: InstrumentState) -> None:
     state.delayed_close_submitted_at = str(item.get("submitted_at") or "")
 
 
+def delayed_close_snapshot_identity(item: dict[str, Any]) -> tuple[str, int, float, str] | None:
+    """Возвращает ключ исходной позиции для незавершённого закрытия.
+
+    Повторная проверка одной и той же заявки может сгенерировать новую причину
+    выхода и время отправки. Это не новая позиция и не должно создавать вторую
+    запись в очереди. Неполные снимки намеренно не объединяются: без времени
+    входа или цены их нельзя безопасно отнести к одной позиции.
+    """
+    side = str(item.get("side") or "").upper()
+    qty = int(item.get("qty") or 0)
+    entry_time = parse_state_datetime(str(item.get("entry_time") or ""))
+    try:
+        entry_price = float(item.get("entry_price"))
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    if side not in {"LONG", "SHORT"} or qty <= 0 or entry_time is None or entry_price <= 0:
+        return None
+    return side, qty, round(entry_price, 6), entry_time.astimezone(UTC).isoformat()
+
+
 def ensure_delayed_close_queue(state: InstrumentState) -> list[dict[str, Any]]:
     queue = list(state.delayed_close_queue or [])
     if not queue and state.delayed_close_recovery_needed and state.delayed_close_side and int(state.delayed_close_qty or 0) > 0:
@@ -663,7 +683,23 @@ def ensure_delayed_close_queue(state: InstrumentState) -> list[dict[str, Any]]:
                 "submitted_at": state.delayed_close_submitted_at or "",
             }
         )
-    state.delayed_close_queue = queue
+    queue.sort(key=lambda item: str(item.get("submitted_at") or ""))
+    unique_queue: list[dict[str, Any]] = []
+    seen_identities: set[tuple[str, int, float, str]] = set()
+    for item in queue:
+        identity = delayed_close_snapshot_identity(item)
+        if identity is not None and identity in seen_identities:
+            logging.warning(
+                "delayed_close_duplicate_discarded side=%s qty=%s entry_time=%s",
+                identity[0],
+                identity[1],
+                identity[3],
+            )
+            continue
+        if identity is not None:
+            seen_identities.add(identity)
+        unique_queue.append(item)
+    state.delayed_close_queue = unique_queue
     sync_legacy_delayed_close_fields(state)
     return state.delayed_close_queue
 
@@ -671,9 +707,8 @@ def ensure_delayed_close_queue(state: InstrumentState) -> list[dict[str, Any]]:
 def enqueue_delayed_close_snapshot(state: InstrumentState, snapshot: dict[str, Any]) -> None:
     queue = ensure_delayed_close_queue(state)
     queue.append(snapshot)
-    queue.sort(key=lambda item: str(item.get("submitted_at") or ""))
     state.delayed_close_queue = queue
-    sync_legacy_delayed_close_fields(state)
+    ensure_delayed_close_queue(state)
 
 
 def parse_state_datetime(value: str) -> datetime | None:

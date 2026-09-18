@@ -53,6 +53,42 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertTrue(state.delayed_close_recovery_needed)
         self.assertEqual(state.delayed_close_side, "LONG")
 
+    def test_defer_close_recovery_deduplicates_same_original_position(self) -> None:
+        state = mod.InstrumentState()
+        entry_time = datetime(2026, 4, 8, 10, 0, tzinfo=timezone.utc)
+
+        with patch.object(mod, "save_state", lambda *args, **kwargs: None):
+            mod.defer_close_recovery_to_broker_ops(
+                self.instrument,
+                state,
+                previous_side="SHORT",
+                previous_qty=4,
+                previous_entry_price=12.525,
+                previous_entry_commission=12.53,
+                previous_strategy="reversal_1h",
+                previous_exit_reason="Первичная причина выхода",
+                previous_entry_time=entry_time,
+                pending_submitted_at=entry_time,
+                grace_seconds=None,
+            )
+            mod.defer_close_recovery_to_broker_ops(
+                self.instrument,
+                state,
+                previous_side="SHORT",
+                previous_qty=4,
+                previous_entry_price=12.525,
+                previous_entry_commission=12.53,
+                previous_strategy="reversal_1h",
+                previous_exit_reason="Повторная причина выхода",
+                previous_entry_time=entry_time,
+                pending_submitted_at=entry_time + timedelta(hours=1),
+                grace_seconds=None,
+            )
+
+        queue = mod.ensure_delayed_close_queue(state)
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(queue[0]["reason"], "Первичная причина выхода")
+
     def test_reconcile_delayed_close_recovers_oldest_and_keeps_next(self) -> None:
         state = mod.InstrumentState(
             delayed_close_queue=[
