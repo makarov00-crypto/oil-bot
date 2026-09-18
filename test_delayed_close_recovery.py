@@ -290,6 +290,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(mod.ensure_delayed_close_queue(state), [])
         self.assertFalse(state.delayed_close_recovery_needed)
         self.assertEqual(find_close.call_args.kwargs["target_day"], submitted_at.astimezone(mod.MOSCOW_TZ).date())
+        self.assertEqual(find_close.call_args.kwargs["not_before"], submitted_at - timedelta(seconds=60))
         confirm_close.assert_not_called()
 
     def test_confirm_pending_open_does_not_duplicate_existing_active_open(self) -> None:

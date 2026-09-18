@@ -2811,13 +2811,16 @@ def reconcile_delayed_close_from_broker(
         # одиночное закрытие с недостоверным PnL — снимаем только хвост очереди.
         delayed_day = delayed_submitted_at.astimezone(MOSCOW_TZ).date() if delayed_submitted_at is not None else None
         if delayed_day is not None and delayed_day < current_moscow_time().date():
+            historical_not_before = close_not_before
+            if historical_not_before is not None:
+                historical_not_before -= timedelta(seconds=60)
             historical_close_time, _, _, _ = find_recent_live_close_details(
                 client,
                 config,
                 instrument,
                 previous_side,
                 previous_qty,
-                not_before=close_not_before,
+                not_before=historical_not_before,
                 target_day=delayed_day,
             )
             if historical_close_time is not None:
