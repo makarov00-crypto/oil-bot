@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import ta
-from ao_chaikin_shadow import AoChaikinShadowJournal
+from ao_chaikin_shadow import AoChaikinShadowJournal, build_shadow_exit_analytics, read_shadow_records
 from dotenv import load_dotenv
 from active_contracts import get_instrument_history_symbol, replace_with_active_symbols
 from custom_instruments import merge_with_custom_symbols
@@ -3876,7 +3876,60 @@ def get_ao_chaikin_shadow_enabled() -> bool:
     return parse_bool_env("OIL_AO_CHAIKIN_SHADOW_ENABLED", False)
 
 
+def build_conditional_shadow_exit_report(
+    trade: dict[str, Any],
+    experiment: dict[str, Any],
+) -> str:
+    """Describe a completed shadow-only two-hour exit observation."""
+    held = (trade.get("holds") or {}).get("2") or {}
+    delta = float(held.get("delta_rub_1lot") or 0.0)
+    outcome = "лучше" if delta > 0.01 else "хуже" if delta < -0.01 else "без заметной разницы"
+    return build_telegram_card(
+        "Проверка удержания после выхода",
+        "🔎",
+        [
+            f"Инструмент: {trade.get('symbol') or '-'} · {str(trade.get('direction') or '-').lower()}",
+            f"Обычный выход: {format_rub(trade.get('actual_net_rub_1lot'), signed=True)}",
+            f"Если удержать ещё 2 часа: {format_rub(held.get('net_result_rub_1lot'), signed=True)}",
+            f"Разница: {format_rub(delta, signed=True)} · {outcome}",
+            f"Накоплено наблюдений: {int(experiment.get('evaluated') or 0)} из {int((experiment.get('readiness') or {}).get('target_evaluated') or 20)}",
+            "Это только наблюдение: реальные правила выхода не менялись.",
+        ],
+    )
+
+
+def notify_completed_conditional_shadow_exit_reports(config: BotConfig) -> None:
+    """Send each completed shadow observation once, without affecting orders."""
+    analytics = build_shadow_exit_analytics(read_shadow_records(AO_CHAIKIN_SHADOW_PATH))
+    experiment = analytics.get("conditional_two_hour_experiment") or {}
+    completed = [
+        row
+        for row in analytics.get("trades") or []
+        if row.get("conditional_two_hour_eligible") and (row.get("holds") or {}).get("2")
+    ]
+    if not completed:
+        return
+    meta = load_meta_state()
+    reported = {
+        str(key)
+        for key in meta.get("conditional_shadow_exit_reported_keys", [])
+        if str(key).strip()
+    }
+    pending = [row for row in reversed(completed) if str(row.get("key") or "") not in reported]
+    if not pending:
+        return
+    for row in pending:
+        key = str(row.get("key") or "")
+        if not key:
+            continue
+        send_msg(config, build_conditional_shadow_exit_report(row, experiment))
+        reported.add(key)
+    meta["conditional_shadow_exit_reported_keys"] = sorted(reported)[-200:]
+    save_meta_state(meta)
+
+
 def observe_ao_chaikin_shadow_strategy(
+    config: BotConfig,
     instrument: InstrumentConfig,
     candles: pd.DataFrame,
     *,
@@ -3932,6 +3985,11 @@ def observe_ao_chaikin_shadow_strategy(
             row.get("direction"),
             row.get("candle_closed_at"),
         )
+    if created:
+        try:
+            notify_completed_conditional_shadow_exit_reports(config)
+        except Exception as error:
+            logging.warning("Не удалось подготовить отчёт по теневому выходу: %s", error)
 
 
 def load_signal_ai_shadow_index() -> dict[str, dict[str, Any]]:
@@ -10918,6 +10976,7 @@ def process_instrument(
         raise
 
     observe_ao_chaikin_shadow_strategy(
+        config,
         instrument,
         lower_df,
         interval_minutes=signal_interval_minutes,

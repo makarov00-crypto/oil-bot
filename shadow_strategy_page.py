@@ -53,6 +53,11 @@ def build_shadow_strategy_page(site_nav: str) -> str:
     .horizon {{ min-width:0; padding:14px; border:1px solid var(--line); border-radius:8px; background:rgba(8,17,32,.64); }}
     .horizon-title {{ font-weight:700; }} .horizon-value {{ margin-top:9px; font:700 18px/1.2 "JetBrains Mono",monospace; }}
     .horizon-note {{ margin-top:6px; color:var(--muted); font-size:11px; line-height:1.4; }}
+    .readiness {{ margin:0 0 16px; padding:18px; border:1px solid rgba(67,197,255,.34); border-radius:10px; background:linear-gradient(135deg,rgba(67,197,255,.10),rgba(8,17,32,.72)); }}
+    .readiness-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }}
+    .readiness-status {{ flex:0 0 auto; padding:6px 9px; border:1px solid var(--line); border-radius:8px; font-size:11px; font-weight:700; }}
+    .readiness-status.wait {{ color:var(--warn); border-color:rgba(255,202,98,.4); }} .readiness-status.ready {{ color:var(--good); border-color:rgba(55,230,164,.4); }} .readiness-status.stop {{ color:var(--bad); border-color:rgba(255,107,135,.4); }}
+    .readiness-text {{ margin:8px 0 0; color:#cfdded; line-height:1.5; }}
     .tabs {{ display:flex; gap:8px; overflow:auto; padding:20px 0 0; scrollbar-width:thin; }}
     .tab {{ flex:0 0 auto; padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--muted); font:700 13px/1 "Manrope",sans-serif; cursor:pointer; }}
     .tab.active {{ color:#fff; border-color:rgba(67,197,255,.5); background:rgba(67,197,255,.16); }}
@@ -108,7 +113,7 @@ def build_shadow_strategy_page(site_nav: str) -> str:
     </div>
 
     <section class="tab-panel active" id="tabInstruments"><div class="section-head"><div><h2>По инструментам</h2><div class="muted">Где новая схема улучшает или ухудшает результат.</div></div></div><div class="table-scroll"><table><thead><tr><th>Инструмент</th><th>Рабочая: сделки</th><th>Рабочая: в плюс</th><th>Рабочая: итог</th><th>Теневая: сделки</th><th>Теневая: в плюс</th><th>Теневая: итог</th><th>Разница</th></tr></thead><tbody id="instrumentComparison"></tbody></table></div></section>
-    <section class="tab-panel" id="tabExits"><div class="section-head"><div><h2>Удержание после выхода</h2><div class="muted" id="exitAnalyticsSummary">Проверяем следующие закрытые часовые свечи.</div></div><div class="muted">Один лот</div></div><div class="horizon-grid" id="exitHorizons"></div><div class="findings" id="exitFindings"></div><div class="table-scroll" style="margin-top:14px"><table><thead><tr><th>Сделка</th><th>Фактический выход</th><th>Ещё 1 свеча</th><th>Ещё 2 свечи</th><th>Ещё 4 свечи</th><th>Ещё 8 свечей</th><th>Удержано от максимума</th></tr></thead><tbody id="exitTrades"></tbody></table></div></section>
+    <section class="tab-panel" id="tabExits"><div class="section-head"><div><h2>Удержание после выхода</h2><div class="muted" id="exitAnalyticsSummary">Проверяем следующие закрытые часовые свечи.</div></div><div class="muted">Один лот</div></div><div class="readiness" id="conditionalReadiness"></div><div class="horizon-grid" id="exitHorizons"></div><div class="findings" id="exitFindings"></div><div class="table-scroll" style="margin-top:14px"><table><thead><tr><th>Сделка</th><th>Фактический выход</th><th>Ещё 1 свеча</th><th>Ещё 2 свечи</th><th>Ещё 4 свечи</th><th>Ещё 8 свечей</th><th>Удержано от максимума</th></tr></thead><tbody id="exitTrades"></tbody></table></div></section>
     <section class="tab-panel" id="tabPositions"><div class="section-head"><div><h2>Открытые позиции</h2><div class="muted">Текущая оценка на один лот.</div></div></div><div class="events" id="shadowStrategyOpen"></div></section>
     <section class="tab-panel" id="tabTrades"><div class="section-head"><div><h2>Закрытые сделки</h2><div class="muted">Сначала самые свежие результаты.</div></div></div><div class="events" id="shadowStrategyTrades"></div></section>
     <section class="tab-panel" id="tabDecisions"><div class="section-head"><div><h2>Журнал решений</h2><div class="muted">Входы, удержания, выходы и причины.</div></div></div><div class="events" id="shadowStrategyDecisions"></div></section>
@@ -147,7 +152,22 @@ def build_shadow_strategy_page(site_nav: str) -> str:
       document.getElementById(target).innerHTML = items.length ? items.slice(0,limit).map((item)=>eventCard(item,catalog)).join('') : `<div class="empty">${{esc(empty)}}</div>`;
     }}
 
+    function renderConditionalReadiness(conditional) {{
+      const readiness=conditional?.readiness||{{}};
+      const evaluated=Number(conditional?.evaluated||0); const target=Number(readiness.target_evaluated||20);
+      const status=readiness.status||'data_insufficient';
+      const view=status==='ready_for_limited_trial'
+        ? {{label:'МОЖНО ГОТОВИТЬ ОГРАНИЧЕННУЮ ПРОВЕРКУ',cls:'ready',text:'Условия наблюдения выполнены. Это не меняет реальные выходы: отдельное решение принимается только после повторной проверки результатов.'}}
+        : status==='not_confirmed'
+        ? {{label:'ГИПОТЕЗА ПОКА НЕ ПОДТВЕРЖДЕНА',cls:'stop',text:'Набран достаточный объём, но хотя бы один критерий качества не выполнен. Реальные выходы остаются без изменений.'}}
+        : {{label:'ДАННЫХ ПОКА МАЛО',cls:'wait',text:`Нужно ещё ${{Math.max(0,Number(readiness.remaining ?? target-evaluated))}} завершённых наблюдений. Реальные выходы не меняются.`}};
+      const dominant=readiness.dominant_symbol ? `${{readiness.dominant_symbol}} · ${{pct(readiness.dominant_symbol_share_pct)}} вклада` : 'пока нет';
+      document.getElementById('conditionalReadiness').innerHTML=`<div class="readiness-head"><div><h3>Готовность проверки: удержать ещё 2 часа</h3><div class="readiness-text">Подходят только выходы при истощении импульса, когда сохранено не менее половины пика и поток Чайкина не подтверждает разворот.</div></div><div class="readiness-status ${{view.cls}}">${{view.label}}</div></div><div class="metric-grid"><div class="metric"><div class="metric-label">Завершено наблюдений</div><div class="metric-value">${{evaluated}} из ${{target}}</div><div class="metric-note">минимум для вывода</div></div><div class="metric"><div class="metric-label">Улучшение результата</div><div class="metric-value ${{tone(conditional?.delta_rub_1lot)}}">${{esc(signedRub(conditional?.delta_rub_1lot))}}</div><div class="metric-note">после комиссии, один лот</div></div><div class="metric"><div class="metric-label">Когда было лучше</div><div class="metric-value">${{pct(conditional?.better_pct)}}</div><div class="metric-note">нужно не менее ${{Number(readiness.minimum_better_pct||60)}}%</div></div><div class="metric"><div class="metric-label">Разнообразие инструментов</div><div class="metric-value">${{Number(readiness.unique_symbols||0)}} из ${{Number(readiness.minimum_symbols||3)}}</div><div class="metric-note">лидер: ${{esc(dominant)}}</div></div></div><div class="readiness-text"><strong>Текущий вывод:</strong> ${{view.text}}</div>`;
+    }}
+
     function renderExitAnalytics(data,catalog) {{
+      const conditional=data?.conditional_two_hour_experiment||{{}};
+      renderConditionalReadiness(conditional);
       if(!data?.available) {{
         document.getElementById('exitHorizons').innerHTML='<div class="empty">Для проверки выходов пока недостаточно закрытых сделок.</div>';
         document.getElementById('exitTrades').innerHTML='<tr><td colspan="7" class="muted">История ещё собирается.</td></tr>';
@@ -157,7 +177,6 @@ def build_shadow_strategy_page(site_nav: str) -> str:
       const horizons=Array.isArray(data.horizons)?data.horizons:[];
       document.getElementById('exitHorizons').innerHTML=horizons.map((row)=>`<div class="horizon"><div class="horizon-title">Ещё ${{row.additional_hours}} час. свеч.</div><div class="horizon-value ${{tone(row.delta_rub_1lot)}}">${{esc(signedRub(row.delta_rub_1lot))}}</div><div class="horizon-note">лучше в ${{pct(row.better_pct)}} случаев · проверено ${{row.evaluated}}</div></div>`).join('');
       const best=data.best_horizon;
-      const conditional=data.conditional_two_hour_experiment||{{}};
       document.getElementById('exitFindings').innerHTML=[
         `<div class="finding"><strong>Вернули прибыль рынку</strong>${{Number(data.losses_after_profitable_move||0)}} сделок успевали покрыть комиссию, но закрылись в минус.</div>`,
         best?`<div class="finding"><strong>Лучший общий результат</strong>Ещё ${{best.additional_hours}} час. свеч.: ${{esc(signedRub(best.delta_rub_1lot))}} к фактическим выходам.</div>`:'<div class="finding"><strong>Простое ожидание не помогает</strong>Ни одно фиксированное окно пока не улучшило общий результат.</div>',

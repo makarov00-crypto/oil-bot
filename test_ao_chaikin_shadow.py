@@ -444,6 +444,9 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(experiment["evaluated"], 1)
         self.assertEqual(experiment["better"], 0)
         self.assertEqual(experiment["delta_rub_1lot"], -2.0)
+        self.assertEqual(experiment["readiness"]["status"], "data_insufficient")
+        self.assertEqual(experiment["readiness"]["remaining"], 19)
+        self.assertEqual(experiment["by_symbol"][0]["symbol"], "TEST")
 
     def test_dashboard_payload_is_sorted_newest_first(self) -> None:
         rows = [

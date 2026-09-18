@@ -66,3 +66,48 @@ class TelegramReportsTest(unittest.TestCase):
             mod.notify_signal_change(config, instrument, state, "LONG", 71.5, "reason")
 
         send_msg.assert_not_called()
+
+    def test_conditional_shadow_exit_report_is_compact_and_does_not_claim_rule_change(self) -> None:
+        report = mod.build_conditional_shadow_exit_report(
+            {
+                "symbol": "BRV6",
+                "direction": "ЛОНГ",
+                "actual_net_rub_1lot": 120.0,
+                "holds": {"2": {"net_result_rub_1lot": 150.0, "delta_rub_1lot": 30.0}},
+            },
+            {"evaluated": 4, "readiness": {"target_evaluated": 20}},
+        )
+
+        self.assertIn("🔎 Проверка удержания после выхода", report)
+        self.assertIn("BRV6 · лонг", report)
+        self.assertIn("Разница: +30.00 RUB · лучше", report)
+        self.assertIn("4 из 20", report)
+        self.assertIn("реальные правила выхода не менялись", report)
+
+    def test_completed_conditional_shadow_exit_is_reported_once(self) -> None:
+        analytics = {
+            "trades": [
+                {
+                    "key": "BRV6:2026-09-18T12:00:00+03:00",
+                    "symbol": "BRV6",
+                    "direction": "ЛОНГ",
+                    "actual_net_rub_1lot": 120.0,
+                    "conditional_two_hour_eligible": True,
+                    "holds": {"2": {"net_result_rub_1lot": 150.0, "delta_rub_1lot": 30.0}},
+                }
+            ],
+            "conditional_two_hour_experiment": {"evaluated": 1, "readiness": {"target_evaluated": 20}},
+        }
+        config = object()
+        with (
+            patch.object(mod, "read_shadow_records", return_value=[]),
+            patch.object(mod, "build_shadow_exit_analytics", return_value=analytics),
+            patch.object(mod, "load_meta_state", return_value={}),
+            patch.object(mod, "send_msg") as send_msg,
+            patch.object(mod, "save_meta_state") as save_meta,
+        ):
+            mod.notify_completed_conditional_shadow_exit_reports(config)
+
+        send_msg.assert_called_once()
+        saved = save_meta.call_args.args[0]
+        self.assertEqual(saved["conditional_shadow_exit_reported_keys"], ["BRV6:2026-09-18T12:00:00+03:00"])

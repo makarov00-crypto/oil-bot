@@ -499,6 +499,7 @@ def build_shadow_exit_analytics(
         if hours > 0
     }
     conditional_two_hour = {"actual": [], "held": [], "deltas": []}
+    conditional_by_symbol: dict[str, dict[str, list[float]]] = {}
     trade_rows: list[dict[str, Any]] = []
     for exit_row, exit_time in exits:
         symbol = str(exit_row.get("symbol") or "").upper()
@@ -538,6 +539,13 @@ def build_shadow_exit_analytics(
                 conditional_two_hour["actual"].append(actual_net)
                 conditional_two_hour["held"].append(held_net)
                 conditional_two_hour["deltas"].append(delta)
+                by_symbol_metrics = conditional_by_symbol.setdefault(
+                    symbol,
+                    {"actual": [], "held": [], "deltas": []},
+                )
+                by_symbol_metrics["actual"].append(actual_net)
+                by_symbol_metrics["held"].append(held_net)
+                by_symbol_metrics["deltas"].append(delta)
         trade_rows.append(
             {
                 "key": exit_row.get("key"),
@@ -549,6 +557,8 @@ def build_shadow_exit_analytics(
                 "best_result_rub_1lot": round(_number(exit_row.get("best_result_rub_1lot")), 2),
                 "capture_pct": exit_row.get("capture_pct"),
                 "exit_reason": exit_row.get("reason"),
+                "exit_kind": exit_row.get("exit_kind"),
+                "chaikin_status": exit_row.get("chaikin_status"),
                 "conditional_two_hour_eligible": conditional_two_hour_eligible,
                 "holds": holds,
             }
@@ -592,6 +602,51 @@ def build_shadow_exit_analytics(
     conditional_deltas = conditional_two_hour["deltas"]
     conditional_better = sum(1 for value in conditional_deltas if value > 0.01)
     conditional_worse = sum(1 for value in conditional_deltas if value < -0.01)
+    conditional_symbol_rows = []
+    for symbol, metrics in conditional_by_symbol.items():
+        deltas = metrics["deltas"]
+        conditional_symbol_rows.append(
+            {
+                "symbol": symbol,
+                "evaluated": len(deltas),
+                "better": sum(1 for value in deltas if value > 0.01),
+                "delta_rub_1lot": round(sum(deltas), 2),
+            }
+        )
+    conditional_symbol_rows.sort(key=lambda row: (-row["evaluated"], row["symbol"]))
+    positive_deltas = [max(0.0, row["delta_rub_1lot"]) for row in conditional_symbol_rows]
+    dominant_symbol = max(conditional_symbol_rows, key=lambda row: row["delta_rub_1lot"], default=None)
+    dominant_share_pct = (
+        round(max(0.0, dominant_symbol["delta_rub_1lot"]) / sum(positive_deltas) * 100.0, 1)
+        if dominant_symbol and sum(positive_deltas) > 0.0
+        else None
+    )
+    readiness_target = 20
+    readiness = {
+        "target_evaluated": readiness_target,
+        "remaining": max(0, readiness_target - len(conditional_deltas)),
+        "minimum_better_pct": 60.0,
+        "minimum_symbols": 3,
+        "maximum_dominant_symbol_pct": 60.0,
+        "unique_symbols": len(conditional_symbol_rows),
+        "dominant_symbol": dominant_symbol["symbol"] if dominant_symbol else None,
+        "dominant_symbol_share_pct": dominant_share_pct,
+    }
+    readiness["status"] = (
+        "data_insufficient"
+        if len(conditional_deltas) < readiness_target
+        else "ready_for_limited_trial"
+        if (
+            conditional_better / len(conditional_deltas) * 100.0 >= readiness["minimum_better_pct"]
+            and sum(conditional_deltas) > 0.0
+            and readiness["unique_symbols"] >= readiness["minimum_symbols"]
+            and (
+                dominant_share_pct is None
+                or dominant_share_pct <= readiness["maximum_dominant_symbol_pct"]
+            )
+        )
+        else "not_confirmed"
+    )
     return {
         "available": bool(exits),
         "basis": "следующие закрытые часовые свечи, один лот",
@@ -615,6 +670,8 @@ def build_shadow_exit_analytics(
             "actual_net_rub_1lot": round(sum(conditional_two_hour["actual"]), 2),
             "held_net_rub_1lot": round(sum(conditional_two_hour["held"]), 2),
             "delta_rub_1lot": round(sum(conditional_deltas), 2),
+            "by_symbol": conditional_symbol_rows,
+            "readiness": readiness,
         },
         "trades": trade_rows[:60],
     }
