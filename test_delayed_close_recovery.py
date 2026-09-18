@@ -121,7 +121,9 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             calls.append(kwargs["previous_side"])
             return kwargs["previous_side"] == "LONG"
 
-        with patch.object(mod, "confirm_pending_close_from_broker", fake_confirm), patch.object(
+        with patch.object(
+            mod, "current_moscow_time", return_value=datetime(2026, 4, 8, 12, 0, tzinfo=mod.MOSCOW_TZ)
+        ), patch.object(mod, "confirm_pending_close_from_broker", fake_confirm), patch.object(
             mod, "save_state", lambda *args, **kwargs: None
         ):
             recovered = mod.reconcile_delayed_close_from_broker(None, None, self.instrument, state)
