@@ -28,6 +28,9 @@ POSITION_FLAT = "НЕТ"
 CHAIKIN_CONFIRMS = "ПОДТВЕРЖДАЕТ"
 CHAIKIN_CONTRADICTS = "ПРОТИВОРЕЧИТ"
 CHAIKIN_NEUTRAL = "НЕЙТРАЛЕН"
+EXIT_KIND_PROTECTIVE = "ЗАЩИТНЫЙ ВЫХОД"
+EXIT_KIND_MOMENTUM_EXHAUSTION = "ИСТОЩЕНИЕ ИМПУЛЬСА"
+CONDITIONAL_EXIT_MIN_RETENTION_RATIO = 0.5
 STRATEGY_VERSION = 3
 DEFAULT_MINIMUM_STRENGTH_ATR_RATIO = 0.60
 DEFAULT_EXIT_AO_RETENTION_RATIO = 0.70
@@ -196,8 +199,14 @@ def evaluate_shadow_candle(
     best_price = _number((previous or {}).get("best_price"), entry_price)
     worst_price = _number((previous or {}).get("worst_price"), entry_price)
     peak_ao_magnitude = _number((previous or {}).get("peak_ao_magnitude"))
+    entry_ao = (previous or {}).get("entry_ao")
+    entry_atr = (previous or {}).get("entry_atr")
+    entry_ao_strength_atr_ratio = (previous or {}).get("entry_ao_strength_atr_ratio")
+    entry_chaikin = (previous or {}).get("entry_chaikin")
+    entry_chaikin_status = str((previous or {}).get("entry_chaikin_status") or "")
     ao_peak_retention_ratio = None
     price_confirms_exit = False
+    exit_kind = ""
 
     if position_before == POSITION_FLAT:
         if long_pattern and strength_atr_ratio >= minimum_strength_atr_ratio:
@@ -216,6 +225,11 @@ def evaluate_shadow_candle(
             peak_ao_magnitude = abs(ao_value)
             ao_peak_retention_ratio = 1.0
             chaikin_status = _chaikin_status(chaikin_value, previous_chaikin, direction)
+            entry_ao = round(ao_value, 6)
+            entry_atr = round(atr, 6)
+            entry_ao_strength_atr_ratio = round(strength_atr_ratio, 4)
+            entry_chaikin = round(chaikin_value, 6)
+            entry_chaikin_status = chaikin_status
             reason = (
                 f"Две закрытые свечи AO подтвердили пересечение нуля в сторону {direction.lower()}; "
                 f"сила {strength_atr_ratio:.2f} ATR при пороге {minimum_strength_atr_ratio:.2f} ATR. "
@@ -272,11 +286,13 @@ def evaluate_shadow_candle(
             decision = DECISION_EXIT
             position_after = POSITION_FLAT
             if ao_crossed_against_position:
+                exit_kind = EXIT_KIND_PROTECTIVE
                 reason = (
                     "AO пересёк ноль против открытой позиции. Защитный выход выполнен "
                     "на окончании часовой свечи."
                 )
             else:
+                exit_kind = EXIT_KIND_MOMENTUM_EXHAUSTION
                 reason = (
                     f"Три последовательных столбца AO ослабляют движение, импульс сохранил "
                     f"только {ao_peak_retention_ratio * 100.0:.1f}% от пика, и цена подтвердила замедление. "
@@ -331,6 +347,7 @@ def evaluate_shadow_candle(
         "peak_ao_magnitude": round(peak_ao_magnitude, 6),
         "ao_peak_retention_ratio": round(ao_peak_retention_ratio, 4) if ao_peak_retention_ratio is not None else None,
         "exit_ao_retention_ratio": round(exit_ao_retention_ratio, 4),
+        "exit_kind": exit_kind,
         "price_confirms_exit": price_confirms_exit,
         "opposite_ao_bars": opposite_bars,
         "chaikin": round(chaikin_value, 6),
@@ -339,6 +356,11 @@ def evaluate_shadow_candle(
         "reason": reason,
         "entry_time": entry_time,
         "entry_price": round(entry_price, 6) if entry_price > 0.0 else None,
+        "entry_ao": entry_ao,
+        "entry_atr": entry_atr,
+        "entry_ao_strength_atr_ratio": entry_ao_strength_atr_ratio,
+        "entry_chaikin": entry_chaikin,
+        "entry_chaikin_status": entry_chaikin_status,
         "best_price": round(best_price, 6) if entry_price > 0.0 else None,
         "worst_price": round(worst_price, 6) if entry_price > 0.0 else None,
         "gross_result_rub_1lot": round(gross_result, 2) if gross_result is not None else None,
@@ -476,6 +498,7 @@ def build_shadow_exit_analytics(
         for hours in horizons
         if hours > 0
     }
+    conditional_two_hour = {"actual": [], "held": [], "deltas": []}
     trade_rows: list[dict[str, Any]] = []
     for exit_row, exit_time in exits:
         symbol = str(exit_row.get("symbol") or "").upper()
@@ -491,6 +514,11 @@ def build_shadow_exit_analytics(
             if future_time > exit_time and future_row.get("price") is not None
         ]
         holds: dict[str, dict[str, Any]] = {}
+        conditional_two_hour_eligible = (
+            exit_row.get("exit_kind") == EXIT_KIND_MOMENTUM_EXHAUSTION
+            and _number(exit_row.get("ao_peak_retention_ratio")) >= CONDITIONAL_EXIT_MIN_RETENTION_RATIO
+            and str(exit_row.get("chaikin_status") or "") != CHAIKIN_CONFIRMS
+        )
         for hours, aggregate in aggregates.items():
             if len(future_rows) < hours:
                 continue
@@ -506,6 +534,10 @@ def build_shadow_exit_analytics(
                 "net_result_rub_1lot": round(held_net, 2),
                 "delta_rub_1lot": round(delta, 2),
             }
+            if hours == 2 and conditional_two_hour_eligible:
+                conditional_two_hour["actual"].append(actual_net)
+                conditional_two_hour["held"].append(held_net)
+                conditional_two_hour["deltas"].append(delta)
         trade_rows.append(
             {
                 "key": exit_row.get("key"),
@@ -517,6 +549,7 @@ def build_shadow_exit_analytics(
                 "best_result_rub_1lot": round(_number(exit_row.get("best_result_rub_1lot")), 2),
                 "capture_pct": exit_row.get("capture_pct"),
                 "exit_reason": exit_row.get("reason"),
+                "conditional_two_hour_eligible": conditional_two_hour_eligible,
                 "holds": holds,
             }
         )
@@ -556,6 +589,9 @@ def build_shadow_exit_analytics(
         > _number(row.get("estimated_commission_rub_1lot"))
     )
     trade_rows.sort(key=lambda row: str(row.get("exit_time") or ""), reverse=True)
+    conditional_deltas = conditional_two_hour["deltas"]
+    conditional_better = sum(1 for value in conditional_deltas if value > 0.01)
+    conditional_worse = sum(1 for value in conditional_deltas if value < -0.01)
     return {
         "available": bool(exits),
         "basis": "следующие закрытые часовые свечи, один лот",
@@ -564,6 +600,22 @@ def build_shadow_exit_analytics(
         "losses_after_profitable_move": gave_back_profit,
         "horizons": horizon_rows,
         "best_horizon": best_horizon if best_horizon and best_horizon["delta_rub_1lot"] > 0.0 else None,
+        "conditional_two_hour_experiment": {
+            "rule": (
+                "истощение импульса, сохранено не менее 50% пика, "
+                "поток Чайкина не подтверждает разворот"
+            ),
+            "evaluated": len(conditional_deltas),
+            "better": conditional_better,
+            "worse": conditional_worse,
+            "unchanged": len(conditional_deltas) - conditional_better - conditional_worse,
+            "better_pct": round(conditional_better / len(conditional_deltas) * 100.0, 1)
+            if conditional_deltas
+            else None,
+            "actual_net_rub_1lot": round(sum(conditional_two_hour["actual"]), 2),
+            "held_net_rub_1lot": round(sum(conditional_two_hour["held"]), 2),
+            "delta_rub_1lot": round(sum(conditional_deltas), 2),
+        },
         "trades": trade_rows[:60],
     }
 

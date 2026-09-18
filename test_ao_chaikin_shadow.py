@@ -64,6 +64,8 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(result["decision"], DECISION_ENTRY)
         self.assertEqual(result["direction"], DIRECTION_LONG)
         self.assertEqual(result["chaikin_status"], CHAIKIN_CONFIRMS)
+        self.assertEqual(result["entry_ao_strength_atr_ratio"], result["ao_strength_atr_ratio"])
+        self.assertEqual(result["entry_chaikin_status"], CHAIKIN_CONFIRMS)
         self.assertIn("Две закрытые свечи AO", result["reason"])
 
     def test_does_not_enter_on_first_ao_zero_cross_bar(self) -> None:
@@ -161,6 +163,7 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(result["capture_pct"], 60.0)
         self.assertEqual(result["ao_peak_retention_ratio"], 0.6)
         self.assertTrue(result["price_confirms_exit"])
+        self.assertEqual(result["exit_kind"], "ИСТОЩЕНИЕ ИМПУЛЬСА")
 
     def test_chaikin_does_not_force_exit_after_two_opposite_ao_bars(self) -> None:
         frame = prepared_frame([10.0, 9.0, 8.0], [100.0, 102.0, 101.0], [20.0, 16.0, 12.0])
@@ -209,7 +212,32 @@ class AoChaikinShadowTests(unittest.TestCase):
         result = evaluate_shadow_candle(frame, 2, previous, symbol="VBU6", point_value=1.0)
 
         self.assertEqual(result["decision"], DECISION_EXIT)
+        self.assertEqual(result["exit_kind"], "ЗАЩИТНЫЙ ВЫХОД")
         self.assertIn("пересёк ноль против", result["reason"])
+
+    def test_exit_preserves_entry_context(self) -> None:
+        frame = prepared_frame([10.0, 9.0, 8.0, 6.0], [100.0, 105.0, 104.0, 103.0])
+        previous = {
+            "position_after": DIRECTION_LONG,
+            "entry_time": "2026-08-14T09:00:00+03:00",
+            "entry_price": 100.0,
+            "best_price": 105.0,
+            "worst_price": 99.0,
+            "peak_ao_magnitude": 10.0,
+            "entry_ao": 0.8,
+            "entry_atr": 1.2,
+            "entry_ao_strength_atr_ratio": 0.67,
+            "entry_chaikin": 14.5,
+            "entry_chaikin_status": CHAIKIN_CONFIRMS,
+        }
+
+        result = evaluate_shadow_candle(frame, 3, previous, symbol="VBU6", point_value=1.0)
+
+        self.assertEqual(result["entry_ao"], 0.8)
+        self.assertEqual(result["entry_atr"], 1.2)
+        self.assertEqual(result["entry_ao_strength_atr_ratio"], 0.67)
+        self.assertEqual(result["entry_chaikin"], 14.5)
+        self.assertEqual(result["entry_chaikin_status"], CHAIKIN_CONFIRMS)
 
     def test_journal_writes_only_one_record_for_the_same_closed_candle(self) -> None:
         candles = pd.DataFrame(
@@ -381,6 +409,9 @@ class AoChaikinShadowTests(unittest.TestCase):
                 "estimated_net_rub_1lot": 8.0,
                 "best_result_rub_1lot": 14.0,
                 "capture_pct": 71.4,
+                "exit_kind": "ИСТОЩЕНИЕ ИМПУЛЬСА",
+                "ao_peak_retention_ratio": 0.6,
+                "chaikin_status": "ПРОТИВОРЕЧИТ",
             },
             {
                 "version": STRATEGY_VERSION,
@@ -409,6 +440,10 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(analytics["horizons"][0]["delta_rub_1lot"], 2.0)
         self.assertEqual(analytics["horizons"][1]["held_net_rub_1lot"], 6.0)
         self.assertEqual(analytics["horizons"][1]["delta_rub_1lot"], -2.0)
+        experiment = analytics["conditional_two_hour_experiment"]
+        self.assertEqual(experiment["evaluated"], 1)
+        self.assertEqual(experiment["better"], 0)
+        self.assertEqual(experiment["delta_rub_1lot"], -2.0)
 
     def test_dashboard_payload_is_sorted_newest_first(self) -> None:
         rows = [

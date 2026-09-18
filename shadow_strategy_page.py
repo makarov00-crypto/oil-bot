@@ -157,10 +157,12 @@ def build_shadow_strategy_page(site_nav: str) -> str:
       const horizons=Array.isArray(data.horizons)?data.horizons:[];
       document.getElementById('exitHorizons').innerHTML=horizons.map((row)=>`<div class="horizon"><div class="horizon-title">Ещё ${{row.additional_hours}} час. свеч.</div><div class="horizon-value ${{tone(row.delta_rub_1lot)}}">${{esc(signedRub(row.delta_rub_1lot))}}</div><div class="horizon-note">лучше в ${{pct(row.better_pct)}} случаев · проверено ${{row.evaluated}}</div></div>`).join('');
       const best=data.best_horizon;
+      const conditional=data.conditional_two_hour_experiment||{{}};
       document.getElementById('exitFindings').innerHTML=[
         `<div class="finding"><strong>Вернули прибыль рынку</strong>${{Number(data.losses_after_profitable_move||0)}} сделок успевали покрыть комиссию, но закрылись в минус.</div>`,
         best?`<div class="finding"><strong>Лучший общий результат</strong>Ещё ${{best.additional_hours}} час. свеч.: ${{esc(signedRub(best.delta_rub_1lot))}} к фактическим выходам.</div>`:'<div class="finding"><strong>Простое ожидание не помогает</strong>Ни одно фиксированное окно пока не улучшило общий результат.</div>',
         best?`<div class="finding"><strong>Важное ограничение</strong>Такой выход был лучше только в ${{pct(best.better_pct)}} случаев. Нельзя просто задерживать каждую сделку.</div>`:'',
+        conditional.evaluated?`<div class="finding"><strong>Условные 2 часа</strong>${{esc(conditional.rule||'')}}: лучше в ${{pct(conditional.better_pct)}} случаев, разница ${{esc(signedRub(conditional.delta_rub_1lot))}}. Это наблюдение, реальные выходы не меняются.</div>`:'<div class="finding"><strong>Условные 2 часа</strong>Наблюдение начато: ждём первых завершённых подходящих выходов.</div>',
       ].join('');
       const trades=Array.isArray(data.trades)?data.trades:[];
       const holdCell=(item,hours)=>{{const value=item.holds?.[String(hours)];return value?`<span class="mono ${{tone(value.delta_rub_1lot)}}">${{esc(signedRub(value.delta_rub_1lot))}}</span>`:'<span class="muted">ещё нет</span>';}};
