@@ -256,6 +256,40 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertEqual(mod.ensure_delayed_close_queue(state), [])
         self.assertFalse(state.delayed_close_recovery_needed)
 
+    def test_reconcile_historical_delayed_close_clears_confirmed_orphan_without_journal(self) -> None:
+        submitted_at = datetime(2026, 4, 8, 17, 26, tzinfo=timezone.utc)
+        state = mod.InstrumentState(
+            delayed_close_queue=[
+                {
+                    "side": "SHORT",
+                    "qty": 4,
+                    "entry_price": 12.525,
+                    "entry_commission_rub": 12.53,
+                    "strategy": "reversal_1h",
+                    "reason": "Трейлинг-стоп",
+                    "entry_time": datetime(2026, 4, 8, 9, 0, tzinfo=timezone.utc).isoformat(),
+                    "submitted_at": submitted_at.isoformat(),
+                }
+            ]
+        )
+        mod.sync_legacy_delayed_close_fields(state)
+        confirmed_at = submitted_at + timedelta(seconds=10)
+
+        with patch.object(mod, "current_moscow_time", return_value=datetime(2026, 4, 10, tzinfo=mod.MOSCOW_TZ)), patch.object(
+            mod, "has_journal_event_since", return_value=False
+        ), patch.object(
+            mod, "find_recent_live_close_details", return_value=(confirmed_at, 1.0, 12.588, "close-op")
+        ) as find_close, patch.object(
+            mod, "confirm_pending_close_from_broker"
+        ) as confirm_close, patch.object(mod, "save_state", lambda *args, **kwargs: None):
+            recovered = mod.reconcile_delayed_close_from_broker(None, None, self.instrument, state)
+
+        self.assertFalse(recovered)
+        self.assertEqual(mod.ensure_delayed_close_queue(state), [])
+        self.assertFalse(state.delayed_close_recovery_needed)
+        self.assertEqual(find_close.call_args.kwargs["target_day"], submitted_at.astimezone(mod.MOSCOW_TZ).date())
+        confirm_close.assert_not_called()
+
     def test_confirm_pending_open_does_not_duplicate_existing_active_open(self) -> None:
         state = mod.InstrumentState(
             position_side="SHORT",
