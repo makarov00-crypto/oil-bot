@@ -61,6 +61,7 @@ def list_active_contracts() -> list[dict[str, Any]]:
             {
                 "template_symbol": template_symbol,
                 "active_symbol": active_symbol,
+                "canonical_template": _normalize_symbol(item.get("canonical_template")) or template_symbol,
                 "disabled": disabled,
                 "updated_at": item.get("updated_at") or "",
             }
@@ -100,12 +101,14 @@ def get_instrument_history_symbol(symbol: str) -> str:
 def get_active_contract_template(symbol: str) -> str | None:
     normalized_symbol = _normalize_symbol(symbol)
     active_symbol = get_active_contract_symbol(normalized_symbol)
-    for item in list_active_contracts():
-        if item["disabled"]:
-            continue
-        if item["active_symbol"] == active_symbol:
-            return item["template_symbol"]
-    return None
+    candidates = [
+        item
+        for item in list_active_contracts()
+        if not item["disabled"] and item["active_symbol"] == active_symbol
+    ]
+    if not candidates:
+        return None
+    return candidates[0]["canonical_template"]
 
 
 def replace_with_active_symbols(base_symbols: list[str]) -> list[str]:
@@ -136,7 +139,9 @@ def upsert_active_contract(template_symbol: str, active_symbol: str | None, *, d
         if _normalize_symbol(item.get("template_symbol")) != normalized_template:
             continue
         previous_active = _normalize_symbol(item.get("active_symbol"))
+        canonical_template = _normalize_symbol(item.get("canonical_template")) or normalized_template
         item["active_symbol"] = normalized_active
+        item["canonical_template"] = canonical_template
         item["disabled"] = bool(disabled)
         item["updated_at"] = now_iso
 
@@ -147,6 +152,7 @@ def upsert_active_contract(template_symbol: str, active_symbol: str | None, *, d
                 if _normalize_symbol(related_item.get("active_symbol")) != previous_active:
                     continue
                 related_item["active_symbol"] = normalized_active
+                related_item["canonical_template"] = canonical_template
                 related_item["updated_at"] = now_iso
 
             has_previous_alias = any(
@@ -158,10 +164,17 @@ def upsert_active_contract(template_symbol: str, active_symbol: str | None, *, d
                     {
                         "template_symbol": previous_active,
                         "active_symbol": normalized_active,
+                        "canonical_template": canonical_template,
                         "disabled": False,
                         "updated_at": now_iso,
                     }
                 )
+        if normalized_active:
+            for related_item in contracts:
+                if _normalize_symbol(related_item.get("active_symbol")) != normalized_active:
+                    continue
+                if not _normalize_symbol(related_item.get("canonical_template")):
+                    related_item["canonical_template"] = canonical_template
         _write_payload(payload)
         return {
             "status": "updated",
@@ -175,6 +188,7 @@ def upsert_active_contract(template_symbol: str, active_symbol: str | None, *, d
         {
             "template_symbol": normalized_template,
             "active_symbol": normalized_active,
+            "canonical_template": normalized_template,
             "disabled": bool(disabled),
             "updated_at": now_iso,
         }

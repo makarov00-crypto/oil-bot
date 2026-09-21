@@ -44,15 +44,17 @@
     },
     {
       "template_symbol": "GNM6",
-      "active_symbol": "GLU6",
+      "active_symbol": "GDZ6",
       "disabled": false,
-      "updated_at": "2026-08-05T00:00:00+00:00"
+      "updated_at": "2026-09-21T09:44:02+00:00",
+      "canonical_template": "GNM6"
     },
     {
       "template_symbol": "GNU6",
-      "active_symbol": "GLU6",
+      "active_symbol": "GDZ6",
       "disabled": false,
-      "updated_at": "2026-08-07T00:00:00+00:00"
+      "updated_at": "2026-09-21T09:40:49+00:00",
+      "canonical_template": "GNM6"
     },
     {
       "template_symbol": "ONU6",
@@ -119,6 +121,13 @@
       "active_symbol": "VBZ6",
       "disabled": false,
       "updated_at": "2026-09-17T13:57:45+00:00"
+    },
+    {
+      "template_symbol": "GLU6",
+      "active_symbol": "GDZ6",
+      "disabled": false,
+      "updated_at": "2026-09-21T09:40:49+00:00",
+      "canonical_template": "GNM6"
     }
   ]
 }
