@@ -108,8 +108,8 @@ struct ShadowStrategyScreen: View {
             }
             InfoRow(title: "Вход подтверждён", value: "\(cohort?.enterCorrect ?? 0) из \(cohort?.enter ?? 0)")
             InfoRow(title: "Пропуск оправдан", value: "\(cohort?.abstainCorrect ?? 0) из \(cohort?.abstain ?? 0)")
-            InfoRow(title: "Среднее движение при «Вход»", value: percentage(cohort?.enterAverageMovePct))
-            InfoRow(title: "Среднее движение при «Пропустить»", value: percentage(cohort?.abstainAverageMovePct))
+            InfoRow(title: "Среднее движение при «Вход»", value: movement(cohort?.enterAverageMovePct))
+            InfoRow(title: "Среднее движение при «Пропустить»", value: movement(cohort?.abstainAverageMovePct))
         }
     }
 
@@ -138,6 +138,11 @@ struct ShadowStrategyScreen: View {
     private func percentage(_ value: Double?) -> String {
         guard let value else { return "—" }
         return String(format: "%.1f%%", value)
+    }
+
+    private func movement(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%+.3f%%", value)
     }
 
     private func rub(_ value: Double?) -> String {
