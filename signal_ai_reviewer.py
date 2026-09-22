@@ -16,11 +16,17 @@ DEFAULT_AI_API_MODE = "responses"
 SYSTEM_INSTRUCTIONS = """Ты второй, теневой аналитический слой фьючерсного торгового бота.
 
 Оценивай только переданный структурированный контекст. Не придумывай факты и не
-используй внешние данные. Ты не управляешь сделками: результат нужен для сравнения
-с работающей стратегией. При конфликте или нехватке данных выбирай ABSTAIN.
+используй внешние данные. Ты не управляешь сделками: результат нужен для проверки
+качества сигналов текущей стратегии. При конфликте или нехватке данных выбирай ABSTAIN.
 
-Оцени, стоит ли поддержать вход, удержание или выход. Учитывай направление MACD и
-AO, RSI, объём, волатильность, режим рынка, новости и уже открытую позицию.
+Оцени, стоит ли поддержать предложенный вход. Сначала учитывай правила стратегии,
+указанной в каждом кандидате. Для ao_chaikin_1h вход задают две закрытые свечи
+AO(5,34), пересечение нуля и сила не менее 0.60 ATR; Чайкин — дополнительная
+оценка качества, MACD и RSI не являются обязательным подтверждением. Для
+reversal_1h оценивай его собственные условия. Не отклоняй AO-вход лишь из-за
+отсутствия MACD cross или высокого Stochastic. Учитывай волатильность, объём,
+режим рынка и новости как риски. Уверенность отражает вероятность благоприятного
+движения в течение четырёх часов, а не силу формулировки ответа.
 Используй только русские значения из схемы.
 """
 
@@ -83,11 +89,19 @@ def build_signal_ai_prompt(candidates: Iterable[dict[str, Any]]) -> str:
     items: list[dict[str, Any]] = []
     for candidate in candidates:
         context = candidate.get("shadow_ai_context") if isinstance(candidate.get("shadow_ai_context"), dict) else {}
+        if str(candidate.get("strategy_name") or "") == "ao_chaikin_1h":
+            context = {key: value for key, value in context.items() if key not in {"ao", "late_entry_warning"}}
         items.append(
             {
                 "symbol": str(candidate.get("symbol") or "").upper(),
                 "strategy_signal": str(candidate.get("signal") or "").upper(),
                 "strategy": str(candidate.get("strategy_name") or ""),
+                "strategy_rules": (
+                    "AO(5,34): пересечение нуля и вторая закрытая усиливающаяся свеча; "
+                    "сила >=0.60 ATR; Чайкин оценивает качество, но не блокирует вход"
+                    if str(candidate.get("strategy_name") or "") == "ao_chaikin_1h"
+                    else "Правила часового разворота; оценивать по исходному сигналу и его причинам"
+                ),
                 "entry_reason": str(candidate.get("reason") or "")[:900],
                 "priority_score": round(float(candidate.get("priority_score") or 0.0), 3),
                 "entry_edge_score": round(float(candidate.get("entry_edge_score") or 0.0), 3),
@@ -107,7 +121,8 @@ def build_signal_ai_prompt(candidates: Iterable[dict[str, Any]]) -> str:
         )
     return (
         "Верни один объект reviews для каждого кандидата. ВХОД означает, что ты поддерживаешь "
-        "вход текущей стратегии; ВОЗДЕРЖАТЬСЯ означает, что преимущества недостаточно.\n\n"
+        "вход указанной стратегии; ВОЗДЕРЖАТЬСЯ означает, что преимущества недостаточно. "
+        "Не считай старые результаты reversal_1h доказательством качества AO/Чайкин.\n\n"
         + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
     )
 

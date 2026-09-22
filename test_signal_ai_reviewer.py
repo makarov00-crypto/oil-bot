@@ -13,6 +13,25 @@ from trade_storage import append_signal_observation, load_signal_observations
 
 
 class SignalAiReviewerTests(unittest.TestCase):
+    def test_ao_prompt_uses_live_ao_indicators_without_legacy_ao(self) -> None:
+        prompt = reviewer.build_signal_ai_prompt([{
+            "symbol": "BRV6", "signal": "LONG", "strategy_name": "ao_chaikin_1h",
+            "shadow_ai_context": {"ao": -10, "ao_5_34": 12, "ao_strength_atr_ratio": 0.8,
+                                  "chaikin_5_20": 5, "late_entry_warning": True},
+        }])
+        self.assertIn('"ao_5_34":12', prompt)
+        self.assertNotIn('"ao":-10', prompt)
+        self.assertNotIn("late_entry_warning", prompt)
+
+    @patch.dict(os.environ, {"OIL_SIGNAL_AI_SHADOW_ENABLED": "1", "OIL_SIGNAL_AI_MODE": "canary", "OIL_SIGNAL_AI_CANARY_PERCENT": "100"}, clear=False)
+    def test_ao_candidate_stays_shadow_only_even_when_ai_abstains(self) -> None:
+        candidate = {"symbol": "BRV6", "signal": "LONG", "strategy_name": "ao_chaikin_1h",
+                     "shadow_ai_status": "ready", "shadow_ai": {"action": "ВОЗДЕРЖАТЬСЯ"}}
+        allowed, blocked = bot.filter_signal_ai_canary_candidates([candidate])
+        self.assertEqual(allowed, [candidate])
+        self.assertEqual(blocked, [])
+        self.assertEqual(candidate["ai_canary_result"], "shadow_only_ao")
+
     def test_build_prompt_keeps_only_structured_candidate_context(self) -> None:
         prompt = reviewer.build_signal_ai_prompt([
             {

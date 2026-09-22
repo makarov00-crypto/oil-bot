@@ -86,6 +86,22 @@ def entry_ao_peak(df: pd.DataFrame, side: str) -> float:
     return 0.0
 
 
+def build_entry_context(df: pd.DataFrame) -> dict[str, float]:
+    """Use the same closed AO/Chaikin candle as the live entry evaluator."""
+    frame = _closed_indicators(df)
+    if len(frame) < 2:
+        return {}
+    current, previous = frame.iloc[-1], frame.iloc[-2]
+    atr = float(current["shadow_atr"])
+    return {
+        "ao_5_34": round(float(current["shadow_ao"]), 6),
+        "ao_previous": round(float(previous["shadow_ao"]), 6),
+        "ao_strength_atr_ratio": round(abs(float(current["shadow_ao"])) / atr, 4) if atr > 0 else 0.0,
+        "chaikin_5_20": round(float(current["shadow_chaikin"]), 6),
+        "chaikin_previous": round(float(previous["shadow_chaikin"]), 6),
+    }
+
+
 def evaluate_position(
     df: pd.DataFrame,
     side: str,

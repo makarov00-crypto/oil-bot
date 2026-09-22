@@ -50,6 +50,7 @@ from trade_storage import (
     summarize_news_source_stats,
 )
 from shadow_strategy_page import build_shadow_strategy_page
+from strategy_research import AO_ROLLOUT_AT, build_ai_research, build_ao_execution_research
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -149,7 +150,7 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
-        ("/shadow-strategy", "Теневая стратегия", "shadow"),
+        ("/shadow-strategy", "Исследования", "shadow"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
@@ -3070,6 +3071,23 @@ def load_shadow_strategy_workspace() -> dict[str, Any]:
 
 def build_shadow_strategy_html() -> str:
     return build_shadow_strategy_page(build_site_nav("shadow"))
+
+
+def load_strategy_research_workspace() -> dict[str, Any]:
+    observations = load_signal_observations_from_storage(
+        TRADE_DB_PATH, newest_first=True, since=AO_ROLLOUT_AT.isoformat()
+    )
+    ai_observations = load_signal_observations_from_storage(
+        TRADE_DB_PATH, newest_first=True, context_key="shadow_ai"
+    )
+    records = read_shadow_records(AO_CHAIKIN_SHADOW_PATH)
+    exit_analytics = build_shadow_exit_analytics(records)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "execution": build_ao_execution_research(observations),
+        "ai": build_ai_research(ai_observations),
+        "exit_experiment": exit_analytics.get("conditional_two_hour_experiment") or {},
+    }
 
 
 def load_trade_review_for_day(
@@ -7739,6 +7757,11 @@ def api_allocator(date: str | None = None) -> dict:
 @app.get("/api/shadow-strategy", response_class=JSONResponse)
 def api_shadow_strategy() -> JSONResponse:
     return JSONResponse(content=load_shadow_strategy_workspace(), headers=NO_CACHE_HEADERS)
+
+
+@app.get("/api/strategy-research", response_class=JSONResponse)
+def api_strategy_research() -> JSONResponse:
+    return JSONResponse(content=load_strategy_research_workspace(), headers=NO_CACHE_HEADERS)
 
 
 @app.post("/api/ai-review/refresh", response_class=JSONResponse)

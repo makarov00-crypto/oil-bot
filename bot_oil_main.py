@@ -49,6 +49,7 @@ from news_ingest import (
 )
 from strategy_engine import evaluate_primary_signal_bundle, evaluate_owned_signal_bundle
 from strategies.ao_chaikin_1h import (
+    build_entry_context as build_ao_chaikin_entry_context,
     RISK_MULTIPLIER as AO_RISK_MULTIPLIER,
     is_ao_chaikin_strategy,
     evaluate_position as evaluate_ao_chaikin_position,
@@ -4044,6 +4045,13 @@ def filter_signal_ai_canary_candidates(
     blocked: list[dict[str, Any]] = []
     expected_directions = {"LONG": "ЛОНГ", "SHORT": "ШОРТ"}
     for candidate in candidates:
+        # The canary evidence was collected on reversal_1h. AO/Chaikin has a
+        # different entry rule and needs its own shadow sample before an AI veto.
+        if is_ao_chaikin_strategy(candidate.get("strategy_name")):
+            candidate["ai_canary_result"] = "shadow_only_ao"
+            candidate["ai_canary_percent"] = 0
+            allowed.append(candidate)
+            continue
         bucket = get_signal_ai_canary_bucket(candidate)
         candidate["ai_canary_bucket"] = bucket
         candidate["ai_canary_percent"] = canary_percent
@@ -11493,7 +11501,7 @@ def process_instrument(
                                                 "open_risk_reserved_rub": float((allocator_sizing or {}).get("reserved_open_risk_rub") or 0.0),
                                                 "open_risk_available_rub": float((allocator_sizing or {}).get("available_open_risk_rub") or 0.0),
                                                 "risk_per_contract_rub": float((allocator_sizing or {}).get("money_risk_per_contract_rub") or 0.0),
-                                                "shadow_ai_context": {
+                                                    "shadow_ai_context": {
                                                     "close": round(float(lower_df.iloc[-1].get("close") or 0.0), 6),
                                                     "ema20": round(float(lower_df.iloc[-1].get("ema20") or 0.0), 6),
                                                     "distance_to_ema20_pct": round(
@@ -11523,6 +11531,11 @@ def process_instrument(
                                                     "news_bias": format_trading_news_bias_label(news_bias),
                                                     "news_impact": describe_news_bias_impact(signal, news_bias),
                                                     "position": "FLAT",
+                                                    **(
+                                                        build_ao_chaikin_entry_context(lower_df)
+                                                        if is_ao_chaikin_strategy(primary_strategy_name)
+                                                        else {}
+                                                    ),
                                                 },
                                             }
                                             state.last_allocator_summary = (

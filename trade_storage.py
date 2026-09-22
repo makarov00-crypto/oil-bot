@@ -620,6 +620,7 @@ def load_signal_observations(
     unevaluated_only: bool = False,
     newest_first: bool = False,
     context_key: str | None = None,
+    since: str | None = None,
 ) -> list[dict[str, Any]]:
     ensure_trade_db(db_path)
     query = "SELECT * FROM signal_observations"
@@ -628,6 +629,9 @@ def load_signal_observations(
     if target_day is not None:
         clauses.append("observed_date = ?")
         params.append(target_day.isoformat())
+    if since:
+        clauses.append("observed_at >= ?")
+        params.append(since)
     if unevaluated_only:
         clauses.append("(evaluated_at IS NULL OR evaluated_at = '')")
     if context_key:

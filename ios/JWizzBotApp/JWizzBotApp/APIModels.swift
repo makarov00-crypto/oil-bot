@@ -187,6 +187,108 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
     }
 }
 
+struct StrategyResearchWorkspace: Decodable {
+    let generatedAt: String?
+    let execution: StrategyExecutionResearch
+    let ai: StrategyAIResearch
+    let exitExperiment: StrategyExitExperiment
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case execution, ai
+        case exitExperiment = "exit_experiment"
+    }
+}
+
+struct StrategyExecutionResearch: Decodable {
+    let candidates: Int
+    let selected: Int
+    let confirmed: Int
+    let selectedUnconfirmed: Int
+    let deferred: Int
+    let recent: [StrategyExecutionEvent]
+
+    enum CodingKeys: String, CodingKey {
+        case candidates, selected, confirmed, deferred, recent
+        case selectedUnconfirmed = "selected_unconfirmed"
+    }
+}
+
+struct StrategyExecutionEvent: Decodable, Identifiable {
+    let symbol: String
+    let signal: String
+    let observedAt: String
+    let decision: String
+    let executionStatus: String
+    let deferKind: String
+
+    var id: String { "\(symbol):\(signal):\(observedAt)" }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, signal, decision
+        case observedAt = "observed_at"
+        case executionStatus = "execution_status"
+        case deferKind = "defer_kind"
+    }
+}
+
+struct StrategyAIResearch: Decodable {
+    let basis: String
+    let byStrategy: [String: StrategyAICohort]
+
+    enum CodingKeys: String, CodingKey {
+        case basis
+        case byStrategy = "by_strategy"
+    }
+}
+
+struct StrategyAICohort: Decodable {
+    let evaluated: Int
+    let marketFavorable: Int
+    let marketFavorablePct: Double?
+    let enter: Int
+    let enterCorrect: Int
+    let enterCorrectPct: Double?
+    let enterAverageMovePct: Double?
+    let abstain: Int
+    let abstainCorrect: Int
+    let abstainCorrectPct: Double?
+    let abstainAverageMovePct: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case evaluated, enter, abstain
+        case marketFavorable = "market_favorable"
+        case marketFavorablePct = "market_favorable_pct"
+        case enterCorrect = "enter_correct"
+        case enterCorrectPct = "enter_correct_pct"
+        case enterAverageMovePct = "enter_average_move_pct"
+        case abstainCorrect = "abstain_correct"
+        case abstainCorrectPct = "abstain_correct_pct"
+        case abstainAverageMovePct = "abstain_average_move_pct"
+    }
+}
+
+struct StrategyExitExperiment: Decodable {
+    let evaluated: Int?
+    let deltaRub1Lot: Double?
+    let readiness: ShadowConditionalReadiness?
+
+    enum CodingKeys: String, CodingKey {
+        case evaluated, readiness
+        case deltaRub1Lot = "delta_rub_1lot"
+    }
+}
+
+struct ShadowConditionalReadiness: Decodable {
+    let status: String?
+    let targetEvaluated: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case targetEvaluated = "target_evaluated"
+    }
+}
+
 struct ShadowStrategyWorkspace: Decodable {
     let generatedAtMoscow: String?
     let strategy: AOChaikinShadowPayload

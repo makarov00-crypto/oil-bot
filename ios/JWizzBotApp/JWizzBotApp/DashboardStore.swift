@@ -5,7 +5,7 @@ import Combine
 final class DashboardStore: ObservableObject {
     @Published private(set) var payload: DashboardPayload?
     @Published private(set) var allocatorPayload: AllocatorWorkspace?
-    @Published private(set) var shadowStrategyPayload: ShadowStrategyWorkspace?
+    @Published private(set) var shadowStrategyPayload: StrategyResearchWorkspace?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastLoadedAt: Date?
@@ -28,7 +28,7 @@ final class DashboardStore: ObservableObject {
     private let tradeRecoveryURL = URL(string: "https://jwizzbot.ru/api/trades/recover")!
     private let addInstrumentURL = URL(string: "https://jwizzbot.ru/api/instruments/add")!
     private let allocatorURL = URL(string: "https://jwizzbot.ru/api/allocator")!
-    private let shadowStrategyURL = URL(string: "https://jwizzbot.ru/api/shadow-strategy")!
+    private let shadowStrategyURL = URL(string: "https://jwizzbot.ru/api/strategy-research")!
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -106,7 +106,7 @@ final class DashboardStore: ObservableObject {
             guard (200..<300).contains(http.statusCode) else {
                 throw DashboardLoadError.httpStatus(http.statusCode)
             }
-            shadowStrategyPayload = try JSONDecoder().decode(ShadowStrategyWorkspace.self, from: data)
+            shadowStrategyPayload = try JSONDecoder().decode(StrategyResearchWorkspace.self, from: data)
             shadowStrategyErrorMessage = nil
         } catch {
             if !isCancellation(error) {
