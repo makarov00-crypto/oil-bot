@@ -1131,7 +1131,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
             ]
             decisions_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
 
-            with patch.object(dashboard, "ALLOCATOR_DECISIONS_PATH", decisions_path):
+            with patch.object(dashboard, "ALLOCATOR_DECISIONS_PATH", decisions_path), patch.object(
+                dashboard, "load_signal_observations_from_storage", return_value=[]
+            ):
                 loaded = dashboard.load_allocator_decisions_for_day(date(2026, 4, 24))
 
         self.assertEqual(len(loaded), 1)
