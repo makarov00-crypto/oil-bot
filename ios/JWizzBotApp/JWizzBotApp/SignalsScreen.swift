@@ -158,6 +158,9 @@ struct SignalsScreen: View {
 
     private func displayScope(for state: InstrumentSignalState) -> String {
         let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if strategy == "ao_chaikin_1h" {
+            return "AO / ЧАЙКИН 1Ч"
+        }
         if strategy == "reversal_15m" {
             return "АРХИВ 15М"
         }
@@ -169,6 +172,9 @@ struct SignalsScreen: View {
 
     private func scopeRaw(for state: InstrumentSignalState) -> String? {
         let strategy = (state.strategyName ?? state.entryStrategy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if strategy == "ao_chaikin_1h" {
+            return "AO / ЧАЙКИН"
+        }
         if strategy == "reversal_15m" || strategy == "reversal_1h" {
             return "UNIFIED"
         }

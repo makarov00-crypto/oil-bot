@@ -110,6 +110,7 @@ struct PositionsScreen: View {
         switch value {
         case "reversal_15m": return "Архив 15м"
         case "reversal_1h": return "Часовой разворот"
+        case "ao_chaikin_1h": return "AO / Чайкин 1ч"
         case "momentum_breakout": return "Импульсный пробой"
         case "trend_pullback": return "Откат по тренду"
         case "trend_rollover": return "Перезапуск тренда"

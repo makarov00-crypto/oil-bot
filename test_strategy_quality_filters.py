@@ -95,10 +95,10 @@ class StrategyQualityFilterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = make_config()
 
-    def test_all_default_symbols_use_unified_reversal_only(self) -> None:
+    def test_all_default_symbols_use_ao_chaikin_for_new_entries(self) -> None:
         for symbol in DEFAULT_SYMBOLS.split(","):
             self.assertTrue(uses_unified_reversal_1h(symbol), symbol)
-            self.assertEqual(get_primary_strategies(symbol), ["reversal_1h"])
+            self.assertEqual(get_primary_strategies(symbol), ["ao_chaikin_1h"])
             self.assertEqual(get_secondary_strategies(symbol), [])
 
     def test_legacy_strategy_name_is_not_evaluated_live(self) -> None:

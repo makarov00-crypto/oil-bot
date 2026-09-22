@@ -47,7 +47,13 @@ from news_ingest import (
     fetch_posts_for_day,
     fetch_web_news_items,
 )
-from strategy_engine import evaluate_primary_signal_bundle
+from strategy_engine import evaluate_primary_signal_bundle, evaluate_owned_signal_bundle
+from strategies.ao_chaikin_1h import (
+    RISK_MULTIPLIER as AO_RISK_MULTIPLIER,
+    is_ao_chaikin_strategy,
+    evaluate_position as evaluate_ao_chaikin_position,
+    entry_ao_peak,
+)
 from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from trade_storage import (
     append_signal_observation,
@@ -3219,7 +3225,7 @@ def reconcile_missing_trade_closes_from_broker(
         if (
             open_day is not None
             and open_day < (target_day - timedelta(days=1))
-            and strategy_name not in {"", "reversal_15m", "reversal_1h"}
+            and strategy_name not in {"", "reversal_15m", "reversal_1h", "ao_chaikin_1h"}
         ):
             skipped_legacy_unmatched += 1
             continue
@@ -5539,11 +5545,15 @@ def session_allows_new_entries(session_name: str, symbol: str) -> bool:
     return True
 
 
-def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str) -> bool:
+def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str, strategy_name: str = "") -> bool:
     if session_name in {"CLOSED", "CLEARING"}:
         return False
     if session_name == "WEEKEND" and is_currency_symbol(symbol):
         return False
+    if is_ao_chaikin_strategy(strategy_name):
+        # AO already confirmed two completed hourly candles. MACD is not part
+        # of this strategy, including in evening/weekend sessions.
+        return signal in {"LONG", "SHORT"}
     if session_name == "MAIN":
         return True
 
@@ -5609,15 +5619,11 @@ def get_candles(
 
 
 def get_signal_interval_for_symbol(config: BotConfig, symbol: str):
-    if uses_unified_reversal_1h(symbol):
-        return SUPPORTED_INTERVALS[60]
-    return config.candle_interval
+    return SUPPORTED_INTERVALS[60]
 
 
 def get_signal_interval_minutes_for_symbol(config: BotConfig, symbol: str) -> int:
-    if uses_unified_reversal_1h(symbol):
-        return 60
-    return config.candle_interval_minutes
+    return 60
 
 
 def get_lower_tf_lookback_hours(
@@ -5664,10 +5670,16 @@ def is_unified_reversal_strategy(strategy_name: str | None) -> bool:
     return str(strategy_name or "").strip().lower() in UNIFIED_REVERSAL_STRATEGIES
 
 
+def is_local_hourly_strategy(strategy_name: str | None) -> bool:
+    return is_unified_reversal_strategy(strategy_name) or is_ao_chaikin_strategy(strategy_name)
+
+
 def get_unified_reversal_timeframe_label(strategy_name: str | None) -> str:
     strategy = str(strategy_name or "").strip().lower()
     if strategy == "reversal_1h":
         return "локальный 1ч"
+    if is_ao_chaikin_strategy(strategy):
+        return "AO/Чайкин 1ч · риск 50%"
     if strategy == "reversal_15m":
         return "локальный 15м"
     return ""
@@ -5845,6 +5857,23 @@ def evaluate_signal(
     higher_tf_bias: str,
 ) -> tuple[str, str, str]:
     return evaluate_primary_signal_bundle(df, config, instrument, higher_tf_bias)
+
+
+def evaluate_position_owned_signal(
+    df: pd.DataFrame,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    higher_tf_bias: str,
+    state: InstrumentState,
+) -> tuple[str, str, str]:
+    if state.position_side != "FLAT" or state.pending_order_action == "OPEN":
+        # Old state files without ownership are conservatively treated as
+        # legacy. Never assign the current primary to a recovered position.
+        if not state.entry_strategy:
+            state.entry_strategy = "reversal_1h"
+        owner = state.entry_strategy or "reversal_1h"
+        return evaluate_owned_signal_bundle(df, config, instrument, higher_tf_bias, owner)
+    return evaluate_signal(df, config, instrument, higher_tf_bias)
 
 
 def build_market_view_lines(
@@ -6081,7 +6110,7 @@ def regime_entry_block_reason(
     if signal not in {"LONG", "SHORT"}:
         return ""
 
-    if is_unified_reversal_strategy(strategy):
+    if is_local_hourly_strategy(strategy):
         return ""
     return f"стратегия {strategy or '-'} больше не используется в живом контуре."
 
@@ -7146,7 +7175,7 @@ def get_daily_loss_recovery_entry_reason(
             "мягкий дневной стоп: нужен подтверждённый режим рынка, "
             "текущая уверенность режима слишком низкая."
         )
-    if is_unified_reversal_strategy(state.last_strategy_name):
+    if is_local_hourly_strategy(state.last_strategy_name):
         return ""
     if str(state.last_higher_tf_bias or "").strip().upper() != signal:
         return "мягкий дневной стоп: вход разрешён только по направлению старшего ТФ."
@@ -7545,7 +7574,7 @@ def recovery_mode_block_reason(
     if not status["active"] or signal not in {"LONG", "SHORT"}:
         return ""
 
-    allowed_strategies = UNIFIED_REVERSAL_STRATEGIES
+    allowed_strategies = UNIFIED_REVERSAL_STRATEGIES | {"ao_chaikin_1h"}
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     regime = str(state.last_market_regime or "").strip().lower()
     higher_tf_bias = str(state.last_higher_tf_bias or "").strip().upper()
@@ -7556,7 +7585,7 @@ def recovery_mode_block_reason(
         return f"{status['reason']} Нужна только сильная точка входа."
     if regime not in {"trend_pullback", "trend_expansion", "impulse"}:
         return f"{status['reason']} Текущий режим {regime or '-'} слишком слабый для режима восстановления."
-    if not is_unified_reversal_strategy(strategy_name) and higher_tf_bias != signal:
+    if not is_local_hourly_strategy(strategy_name) and higher_tf_bias != signal:
         return f"{status['reason']} Нужен вход только по направлению старшего ТФ."
     return ""
 
@@ -7726,8 +7755,12 @@ def describe_capacity_block_reason(
     entry_price: float,
     signal: str,
     strategy_name: str = "",
+    stop_distance_price: float | None = None,
 ) -> str:
-    sizing = calculate_position_sizing_context(client, config, instrument, state, entry_price, signal, strategy_name)
+    sizing = calculate_position_sizing_context(
+        client, config, instrument, state, entry_price, signal, strategy_name,
+        stop_distance_price=stop_distance_price,
+    )
     broker_limit = int(sizing.get("broker_limit") or 0)
     margin_per_lot = float(sizing.get("margin_per_lot_rub") or 0.0)
     risk_budget = float(sizing.get("risk_budget_rub") or 0.0)
@@ -8549,6 +8582,10 @@ def select_capital_rotation_plan(
 
     best_candidate: dict[str, Any] | None = None
     for candidate in sorted(candidates, key=lambda item: float(item.get("priority_score") or 0.0), reverse=True):
+        if is_ao_chaikin_strategy(candidate.get("strategy_name")):
+            # The migration keeps existing positions under their original
+            # exit rules. Do not close one merely to fund an AO entry.
+            continue
         allocator_quantity = int(candidate.get("allocator_quantity") or 0)
         priority_score = float(candidate.get("priority_score") or 0.0)
         edge_score = float(candidate.get("entry_edge_score") or 0.0)
@@ -8568,6 +8605,8 @@ def select_capital_rotation_plan(
             continue
         state = load_state(symbol)
         if state.position_qty <= 0 or state.position_side == "FLAT" or has_pending_order(state):
+            continue
+        if is_ao_chaikin_strategy(state.entry_strategy):
             continue
         hold_score, hold_reason = calculate_open_position_hold_score(state, symbol)
         if hold_score > 0.52:
@@ -8714,7 +8753,9 @@ def calculate_reserved_open_risk_rub(
         if symbol.upper() == current_symbol.upper():
             continue
         open_state = load_state(symbol)
-        if open_state.position_side not in {"LONG", "SHORT"} or open_state.position_qty <= 0:
+        confirmed_open = open_state.position_side in {"LONG", "SHORT"} and open_state.position_qty > 0
+        pending_open = open_state.pending_order_action == "OPEN" and open_state.pending_order_qty > 0
+        if not confirmed_open and not pending_open:
             continue
         open_positions += 1
         stored_risk = max(0.0, float(open_state.entry_risk_rub or 0.0))
@@ -8732,6 +8773,7 @@ def calculate_position_sizing_context(
     strategy_name: str = "",
     stop_distance_price: float | None = None,
 ) -> dict[str, Any]:
+    ao_strategy = is_ao_chaikin_strategy(strategy_name)
     session_name = get_market_session()
     session_multiplier = get_session_position_multiplier(session_name, instrument.symbol)
     snapshot = get_account_snapshot(client, config)
@@ -8788,6 +8830,8 @@ def calculate_position_sizing_context(
         * max(session_multiplier, 0.0)
     )
     entry_path_multiplier = 0.50 if state.last_entry_path == "early_momentum" else 1.0
+    if ao_strategy:
+        entry_path_multiplier = AO_RISK_MULTIPLIER
     target_trade_margin *= entry_path_multiplier
     edge_cap_margin = allocatable_margin * entry_edge_cap_multiplier
     if edge_cap_margin > 0.0:
@@ -8805,6 +8849,9 @@ def calculate_position_sizing_context(
     elif entry_edge_score >= 0.70 and entry_edge_label in {"moderate", "confirmed", "high"}:
         risk_multiplier = 1.40
         risk_tier = "хороший"
+    if ao_strategy:
+        risk_multiplier = AO_RISK_MULTIPLIER
+        risk_tier = "AO/Чайкин: 50% базового риска"
 
     step_price = instrument.min_price_increment
     step_money = instrument.min_price_increment_amount
@@ -8829,11 +8876,13 @@ def calculate_position_sizing_context(
             config.risk_per_trade_pct,
             float(getattr(config, "max_open_risk_pct", config.risk_per_trade_pct * 4) or 0.0),
         )
-        max_open_risk_budget = equity * max_open_risk_pct
+        max_open_risk_budget = equity * max_open_risk_pct * (AO_RISK_MULTIPLIER if ao_strategy else 1.0)
         reserved_open_risk, open_positions_with_risk = calculate_reserved_open_risk_rub(
             config,
             instrument.symbol,
-            risk_budget,
+            # Untagged old risk must not shrink just because the new entry is
+            # half-sized. Keep a full legacy (including high-edge) fallback.
+            equity * config.risk_per_trade_pct * 1.40 if ao_strategy else risk_budget,
         )
         available_open_risk = max(0.0, max_open_risk_budget - reserved_open_risk)
         qty_by_open_risk = int(available_open_risk // money_risk_per_contract)
@@ -8929,6 +8978,16 @@ def calculate_position_sizing_context(
                 or available_open_risk >= money_risk_per_contract
             )
         )
+        if ao_strategy:
+            # Explicit user exception: allow one indivisible contract above
+            # the half-risk trade budget, but never above portfolio capacity.
+            can_use_indivisible_min_lot = (
+                broker_limit >= 1
+                and qty_by_allocatable >= 1
+                and margin_per_lot > 0.0
+                and money_risk_per_contract > 0.0
+                and available_open_risk >= money_risk_per_contract
+            )
         if can_use_indivisible_min_lot:
             raw_qty = 1
             risk_min_lot_override = True
@@ -8937,6 +8996,8 @@ def calculate_position_sizing_context(
     if qty_by_open_risk > 0:
         raw_qty = min(raw_qty, qty_by_open_risk)
     elif max_open_risk_budget > 0.0:
+        raw_qty = 0
+    if ao_strategy and (risk_budget <= 0.0 or money_risk_per_contract <= 0.0 or broker_limit <= 0):
         raw_qty = 0
 
     return {
@@ -9036,8 +9097,12 @@ def build_position_sizing_lines(
     signal: str,
     quantity: int,
     strategy_name: str = "",
+    stop_distance_price: float | None = None,
 ) -> list[str]:
-    sizing = calculate_position_sizing_context(client, config, instrument, state, entry_price, signal, strategy_name)
+    sizing = calculate_position_sizing_context(
+        client, config, instrument, state, entry_price, signal, strategy_name,
+        stop_distance_price=stop_distance_price,
+    )
     lines = [
         f"Сессия: {sizing['session_name']}",
         f"Множитель размера: {sizing['session_multiplier']:.2f}",
@@ -9468,6 +9533,20 @@ def build_unified_entry_stop_plan(
     }
 
 
+def build_strategy_entry_stop_plan(
+    df: pd.DataFrame | None, entry_price: float, side: str, config: BotConfig, strategy_name: str,
+) -> dict[str, float | str]:
+    if df is None or not is_local_hourly_strategy(strategy_name):
+        return {}
+    plan = build_unified_entry_stop_plan(df, entry_price, side, config)
+    if is_ao_chaikin_strategy(strategy_name):
+        # Size against the actual emergency boundary, not the tighter working
+        # level which is allowed to wait for a candle close.
+        plan["distance"] = abs(entry_price - float(plan["emergency_stop_price"]))
+        plan["description"] = str(plan["description"]) + "; риск 50% рассчитан до аварийного стопа"
+    return plan
+
+
 def update_unified_ao_peak(state: InstrumentState, df: pd.DataFrame) -> None:
     if df.empty or state.position_side not in {"LONG", "SHORT"}:
         return
@@ -9646,6 +9725,21 @@ def position_reentry_allowed(
     current_price: float,
     signal_df: pd.DataFrame | None = None,
 ) -> tuple[bool, str]:
+    if is_ao_chaikin_strategy(state.last_strategy_name):
+        if not state.last_exit_time:
+            return True, ""
+        if signal_df is None or signal_df.empty or "time" not in signal_df:
+            return False, "AO/Чайкин: ждём новую закрытую часовую свечу после выхода."
+        last_exit = pd.to_datetime(state.last_exit_time, utc=True, errors="coerce")
+        candles = signal_df
+        if "is_complete" in candles:
+            candles = candles[candles["is_complete"].eq(True)]
+        if candles.empty or pd.isna(last_exit):
+            return False, "AO/Чайкин: время последнего выхода или свечи не подтверждено."
+        closed_at = pd.to_datetime(candles.iloc[-1]["time"], utc=True, errors="coerce") + pd.Timedelta(hours=1)
+        if pd.isna(closed_at) or closed_at <= last_exit or closed_at > pd.Timestamp.now(tz="UTC"):
+            return False, "AO/Чайкин: повторный вход по той же часовой свече запрещён."
+        return True, ""
     is_unified_reversal = uses_unified_reversal(instrument.symbol)
     template_symbol = get_symbol_template(instrument.symbol)
 
@@ -10439,9 +10533,7 @@ def open_position(
         return
     price = get_last_price(client, instrument)
     side = "LONG" if signal == "LONG" else "SHORT"
-    stop_plan: dict[str, float | str] = {}
-    if is_unified_reversal_strategy(strategy_name) and entry_df is not None:
-        stop_plan = build_unified_entry_stop_plan(entry_df, price, side, config)
+    stop_plan = build_strategy_entry_stop_plan(entry_df, price, side, config, strategy_name)
     allocator_sizing = calculate_position_sizing_context(
         client,
         config,
@@ -10479,13 +10571,19 @@ def open_position(
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=entry_waiting_cash_manager reason=%s", instrument.symbol, release_reason)
             return
-        block_reason = describe_capacity_block_reason(client, config, instrument, state, price, signal, strategy_name)
+        block_reason = describe_capacity_block_reason(
+            client, config, instrument, state, price, signal, strategy_name,
+            stop_distance_price=float(stop_plan.get("distance") or 0.0),
+        )
         state.last_error = block_reason
         state.last_signal_summary = [block_reason, *state.last_signal_summary[:2]]
         save_state(instrument.symbol, state)
         logging.info("symbol=%s status=entry_blocked reason=%s", instrument.symbol, block_reason)
         return
-    sizing_lines = build_position_sizing_lines(client, config, instrument, state, price, signal, quantity, strategy_name)
+    sizing_lines = build_position_sizing_lines(
+        client, config, instrument, state, price, signal, quantity, strategy_name,
+        stop_distance_price=float(stop_plan.get("distance") or 0.0),
+    )
     try:
         state.last_allocator_quantity = quantity
         state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
@@ -10510,7 +10608,10 @@ def open_position(
         if price > 0.0 else 0.0
     )
     state.entry_stop_description = str(stop_plan.get("description") or "")
-    state.entry_peak_ao_abs = 0.0
+    state.entry_peak_ao_abs = (
+        entry_ao_peak(entry_df, side)
+        if is_ao_chaikin_strategy(strategy_name) and entry_df is not None else 0.0
+    )
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
         if signal == "LONG"
@@ -10701,6 +10802,48 @@ def close_position(
     logging.info("symbol=%s status=close_submitted order_id=%s", instrument.symbol, order_id)
 
 
+def check_ao_chaikin_exit(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    df: pd.DataFrame,
+) -> None:
+    """Manage only positions explicitly opened by AO/Chaikin v3."""
+    price = get_last_price(client, instrument)
+    state.max_price = max(state.max_price or price, price)
+    state.min_price = min(state.min_price or price, price)
+    long_position = state.position_side == "LONG"
+    working_stop = state.entry_stop_price or state.entry_price * (1 - config.stop_loss_pct if long_position else 1 + config.stop_loss_pct)
+    emergency_stop = state.entry_emergency_stop_price or working_stop
+    if (price <= emergency_stop if long_position else price >= emergency_stop):
+        close_position(client, config, instrument, state, f"AO/Чайкин: аварийный стоп {emergency_stop:.4f}, цена {price:.4f}")
+        return
+
+    # Only a candle closed after the actual entry can confirm the working stop.
+    candles = df
+    if "is_complete" in candles:
+        candles = candles[candles["is_complete"].eq(True)]
+    if not candles.empty and "time" in candles:
+        close_times = pd.to_datetime(candles["time"], utc=True, errors="coerce") + pd.Timedelta(hours=1)
+        entered_at = pd.to_datetime(state.entry_time, utc=True, errors="coerce")
+        candles = candles[(close_times > entered_at) & (close_times <= pd.Timestamp.now(tz="UTC"))]
+        if not candles.empty:
+            close_price = float(candles.iloc[-1]["close"])
+            if (close_price <= working_stop if long_position else close_price >= working_stop):
+                close_position(client, config, instrument, state, f"AO/Чайкин: часовой защитный стоп {working_stop:.4f}, закрытие свечи {close_price:.4f}")
+                return
+
+    decision = evaluate_ao_chaikin_position(
+        df, state.position_side, state.entry_price, state.entry_time, state.entry_peak_ao_abs,
+    )
+    state.entry_peak_ao_abs = max(state.entry_peak_ao_abs, float(decision.get("peak_ao_magnitude") or 0.0))
+    if decision.get("should_exit"):
+        reason = str(decision.get("reason") or "Завершение импульса AO")
+        reason = reason.replace("Теневая позиция закрыта", "Выход по AO/Чайкину")
+        close_position(client, config, instrument, state, f"AO/Чайкин: {reason}")
+
+
 def check_exit(
     client: Client,
     config: BotConfig,
@@ -10711,6 +10854,9 @@ def check_exit(
     higher_tf_df: pd.DataFrame | None = None,
 ) -> None:
     if state.position_qty <= 0 or state.position_side == "FLAT" or state.entry_price is None:
+        return
+    if is_ao_chaikin_strategy(state.entry_strategy):
+        check_ao_chaikin_exit(client, config, instrument, state, df)
         return
 
     price = get_last_price(client, instrument)
@@ -10996,9 +11142,18 @@ def process_instrument(
         except RuntimeError as error:
             logging.info("symbol=%s status=waiting_for_higher_tf_exit_context reason=%s", instrument.symbol, error)
 
+    # Reconcile ownership before choosing signals: a just-filled or recovered
+    # legacy position must retain its own diagnostics as well as its exit rules.
+    if not config.dry_run:
+        sync_state_with_portfolio(client, config, instrument, state)
+        if has_pending_order(state):
+            reconcile_state_accounting(instrument.symbol, state)
+            save_state(instrument.symbol, state)
+            return
+
     higher_tf_bias = "" if uses_unified_reversal(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
-    signal, reason, primary_strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
-    context_higher_tf_bias = "" if is_unified_reversal_strategy(primary_strategy_name) else higher_tf_bias
+    signal, reason, primary_strategy_name = evaluate_position_owned_signal(lower_df, config, instrument, higher_tf_bias, state)
+    context_higher_tf_bias = "" if is_local_hourly_strategy(primary_strategy_name) else higher_tf_bias
     display_higher_tf_bias = get_unified_reversal_timeframe_label(primary_strategy_name) or higher_tf_bias
     news_bias = get_active_news_biases().get(instrument.symbol)
     signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
@@ -11015,13 +11170,6 @@ def process_instrument(
         else str(candle_time_value)
     )
     signal_changed = signal != state.last_signal
-
-    if not config.dry_run:
-        sync_state_with_portfolio(client, config, instrument, state)
-        if has_pending_order(state):
-            reconcile_state_accounting(instrument.symbol, state)
-            save_state(instrument.symbol, state)
-            return
 
     notify_periodic_status(
         config,
@@ -11186,6 +11334,9 @@ def process_instrument(
                                         current_price,
                                         signal,
                                         primary_strategy_name,
+                                        stop_distance_price=float(build_strategy_entry_stop_plan(
+                                            lower_df, current_price, signal, config, primary_strategy_name,
+                                        ).get("distance") or 0.0) if is_ao_chaikin_strategy(primary_strategy_name) else None,
                                     )
                                     state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
                                     state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
@@ -11203,7 +11354,7 @@ def process_instrument(
         logging.info("symbol=%s signal=%s side=%s qty=%s", instrument.symbol, signal, state.position_side, state.position_qty)
 
     if state.position_side == "FLAT":
-        if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol):
+        if signal in {"LONG", "SHORT"} and session_allows_new_entries(session_name, instrument.symbol) and session_signal_quality_ok(lower_df, signal, session_name, instrument.symbol, primary_strategy_name):
             daily_loss_block_reason = get_global_daily_loss_block_reason(client, config)
             if daily_loss_block_reason:
                 mark_daily_risk_stop_if_needed(state)

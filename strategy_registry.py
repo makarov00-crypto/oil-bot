@@ -1,11 +1,12 @@
 from instrument_groups import GROUP_BY_SYMBOL, get_symbol_template
+from strategies.ao_chaikin_1h import STRATEGY_NAME
 
 PRIMARY_STRATEGIES_BY_GROUP = {
-    "commodities": ["reversal_1h"],
-    "fx": ["reversal_1h"],
-    "equity_index": ["reversal_1h"],
-    "equity_futures": ["reversal_1h"],
-    "bond_index": ["reversal_1h"],
+    "commodities": [STRATEGY_NAME],
+    "fx": [STRATEGY_NAME],
+    "equity_index": [STRATEGY_NAME],
+    "equity_futures": [STRATEGY_NAME],
+    "bond_index": [STRATEGY_NAME],
 }
 
 
@@ -17,8 +18,8 @@ def get_primary_strategies(symbol: str) -> list[str]:
     template_symbol = get_symbol_template(symbol)
     group = GROUP_BY_SYMBOL.get(template_symbol)
     if group is not None:
-        return PRIMARY_STRATEGIES_BY_GROUP.get(group.name, ["reversal_1h"])
-    return ["reversal_1h"]
+        return PRIMARY_STRATEGIES_BY_GROUP.get(group.name, [STRATEGY_NAME])
+    return [STRATEGY_NAME]
 
 
 def get_secondary_strategies(symbol: str) -> list[str]:
