@@ -50,7 +50,8 @@ def build_signal_ai_entry_analytics(
               "closed": 0, "unmatched_closed": 0, "pending_closed": 0,
               "price_checked_4h": 0, "price_check_late": 0,
               "enter_favorable_4h": 0, "enter_checked_4h": 0,
-              "abstain_unfavorable_4h": 0, "abstain_checked_4h": 0}
+              "abstain_unfavorable_4h": 0, "abstain_checked_4h": 0,
+              "supported_losers": 0, "abstain_winners": 0}
     recent = []
     candidate_by_id = {}
     for row in candidates:
@@ -149,6 +150,10 @@ def build_signal_ai_entry_analytics(
         group["closed"] += 1
         group["net_pnl_rub"] += item["net"]
         group["wins"] += int(item["net"] > 0)
+        if item["action"] == "enter" and item["net"] < 0:
+            counts["supported_losers"] += 1
+        if item["action"] == "abstain" and item["net"] > 0:
+            counts["abstain_winners"] += 1
         if item["risk"] > 0:
             group["r_evaluated"] += 1
             group["r_sum"] += item["net"] / item["risk"]

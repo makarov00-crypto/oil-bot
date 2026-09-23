@@ -7089,7 +7089,7 @@ def build_dashboard_html() -> str:
           `Вход: ${aiCounts.enter_favorable_4h || 0} из ${aiCounts.enter_checked_4h || 0} по цене · пропуск: ${aiCounts.abstain_unfavorable_4h || 0} из ${aiCounts.abstain_checked_4h || 0} · поздняя цена: ${aiCounts.price_check_late || 0}`),
       ].join('') : '';
       document.getElementById('shadowAiNote').textContent = aiCounts.candidates
-        ? `${aiCounts.unavailable || 0} ответов ИИ не получено · ${aiCounts.unmatched_closed || 0} закрытых сделок без надёжной связи с кандидатом. NET считается только по закрытым сделкам; группы наблюдательные, эффект ИИ на результат пока не доказан. Проверка 4ч не является прибылью.`
+        ? `Ошибки на закрытых: ИИ поддержал убыточный вход ${aiCounts.supported_losers || 0} из ${aiGroups.enter?.closed || 0}; советовал пропустить прибыльный ${aiCounts.abstain_winners || 0} из ${aiGroups.abstain?.closed || 0}. ${aiCounts.unavailable || 0} ответов не получено · ${aiCounts.unmatched_closed || 0} закрытых без надёжной связи. Группы наблюдательные, эффект ИИ не доказан; проверка 4ч не является прибылью.`
         : 'После перехода на AO ещё нет кандидатов для оценки ИИ. Исторические ответы относились к прежней стратегии и не входят в эту выборку.';
       const shadowAiRows = document.getElementById('shadowAiRows');
       shadowAiRows.innerHTML = (shadowAi.recent || []).length

@@ -668,6 +668,8 @@ struct SignalAIEntryCounts: Decodable {
     let enterChecked4h: Int
     let abstainUnfavorable4h: Int
     let abstainChecked4h: Int
+    let supportedLosers: Int
+    let abstainWinners: Int
 
     enum CodingKeys: String, CodingKey {
         case candidates, reviewed, enter, abstain, unavailable, selected, confirmed, closed
@@ -678,6 +680,8 @@ struct SignalAIEntryCounts: Decodable {
         case enterChecked4h = "enter_checked_4h"
         case abstainUnfavorable4h = "abstain_unfavorable_4h"
         case abstainChecked4h = "abstain_checked_4h"
+        case supportedLosers = "supported_losers"
+        case abstainWinners = "abstain_winners"
     }
 }
 

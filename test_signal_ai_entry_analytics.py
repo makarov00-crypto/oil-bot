@@ -36,6 +36,7 @@ class SignalAIEntryAnalyticsTests(unittest.TestCase):
         self.assertEqual((counts["candidates"], counts["reviewed"], counts["confirmed"], counts["closed"]), (2, 2, 2, 1))
         self.assertEqual((counts["price_checked_4h"], counts["price_check_late"]), (2, 2))
         self.assertEqual(result["by_action"]["enter"]["net_pnl_rub"], -120.0)
+        self.assertEqual(counts["supported_losers"], 1)
         self.assertEqual(result["by_action"]["abstain"]["closed"], 0)
         self.assertEqual(result["by_action"]["abstain"]["net_pnl_rub"], 0.0)
 

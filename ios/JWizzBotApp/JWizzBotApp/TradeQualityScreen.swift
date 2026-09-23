@@ -220,6 +220,8 @@ struct TradeQualityScreen: View {
                         SectionHeader(title: "Результат закрытых", subtitle: "NET по журналу брокера. Группы наблюдательные; эффект ИИ на торговлю не доказан.")
                         aiOutcomeRow("ИИ: вход", data.byAction["enter"])
                         aiOutcomeRow("ИИ: пропустить", data.byAction["abstain"])
+                        InfoRow(title: "Поддержал убыточный", value: "\(c.supportedLosers) из \(data.byAction["enter"]?.closed ?? 0) закрытых")
+                        InfoRow(title: "Советовал пропустить прибыльный", value: "\(c.abstainWinners) из \(data.byAction["abstain"]?.closed ?? 0) закрытых")
                         Divider().overlay(Color.white.opacity(0.08))
                         InfoRow(title: "Диагностика цены 4ч", value: "\(c.priceChecked4h) проверено, \(c.priceCheckLate) поздних")
                         InfoRow(title: "Вход: цена по сигналу", value: "\(c.enterFavorable4h) из \(c.enterChecked4h)")
