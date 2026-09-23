@@ -149,9 +149,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
         html = dashboard.build_dashboard_html()
 
         self.assertIn('class="shadow-ai-card"', html)
-        self.assertIn('class="shadow-ai-field-label">Почему', html)
-        self.assertIn('class="shadow-ai-field-label">Риск', html)
-        self.assertIn('class="shadow-ai-field-label">Проверка через 4 часа', html)
+        self.assertIn('class="shadow-ai-field-label">Решение', html)
+        self.assertIn('class="shadow-ai-field-label">Итог NET', html)
+        self.assertIn('class="shadow-ai-field-label">Причина ИИ', html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_shadow_ai_abstention_is_correct_when_original_signal_loses(self) -> None:
