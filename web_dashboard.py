@@ -7082,12 +7082,12 @@ def build_dashboard_html() -> str:
           closed ? (Number(g.net_pnl_rub || 0) >= 0 ? 'good' : 'bad') : '');
       };
       const checked = Number(aiCounts.price_checked_4h || 0);
-      document.getElementById('shadowAiPerformance').innerHTML = [
+      document.getElementById('shadowAiPerformance').innerHTML = aiCounts.candidates ? [
         aiCard('ИИ: вход · NET закрытых', 'enter'),
         aiCard('ИИ: пропустить · NET закрытых', 'abstain'),
         buildTradeSummaryCard('Диагностика цены 4ч', checked ? `${checked} проверено` : '—',
           `Вход: ${aiCounts.enter_favorable_4h || 0} из ${aiCounts.enter_checked_4h || 0} по цене · пропуск: ${aiCounts.abstain_unfavorable_4h || 0} из ${aiCounts.abstain_checked_4h || 0} · поздняя цена: ${aiCounts.price_check_late || 0}`),
-      ].join('');
+      ].join('') : '';
       document.getElementById('shadowAiNote').textContent = aiCounts.candidates
         ? `${aiCounts.unavailable || 0} ответов ИИ не получено · ${aiCounts.unmatched_closed || 0} закрытых сделок без надёжной связи с кандидатом. NET считается только по закрытым сделкам; группы наблюдательные, эффект ИИ на результат пока не доказан. Проверка 4ч не является прибылью.`
         : 'После перехода на AO ещё нет кандидатов для оценки ИИ. Исторические ответы относились к прежней стратегии и не входят в эту выборку.';
@@ -7100,7 +7100,7 @@ def build_dashboard_html() -> str:
             const net = item.closed_net_pnl_rub == null ? 'сделка ещё не закрыта или не связана' : formatSignedRub(item.closed_net_pnl_rub);
             return `<article class="shadow-ai-card"><div class="shadow-ai-head"><div><div class="shadow-ai-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div><div class="shadow-ai-meta">${escapeHtml(formatMoscowTime(item.observed_at || ''))} МСК · ${escapeHtml(item.candidate_id || '')}</div></div><div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge hold">${escapeHtml(ai)}</span></div></div><div class="shadow-ai-grid"><div class="shadow-ai-field"><div class="shadow-ai-field-label">Решение</div><div class="shadow-ai-field-value">${escapeHtml(execution)}${item.defer_kind ? ' · '+escapeHtml(item.defer_kind) : ''}</div></div><div class="shadow-ai-field"><div class="shadow-ai-field-label">Итог NET</div><div class="shadow-ai-field-value">${escapeHtml(net)}</div></div><div class="shadow-ai-field"><div class="shadow-ai-field-label">Причина ИИ</div><div class="shadow-ai-field-value">${escapeHtml(item.ai_reason || 'Нет ответа')}<br><span class="muted">${escapeHtml(item.model || 'модель не записана')} · ${escapeHtml(item.prompt_version || 'версия промпта не записана')}</span></div></div></div></article>`;
           }).join('')
-        : '<div class="muted">Кандидатов AO пока нет.</div>';
+        : '';
 
       const review = data.trade_review || {};
       document.getElementById('reviewClosed').textContent = review.closed_count ?? 0;

@@ -156,7 +156,8 @@ def build_signal_ai_entry_analytics(
             recent_by_id[key]["closed_net_pnl_rub"] = round(item["net"], 2)
     for group in by_action.values():
         group["net_pnl_rub"] = round(group["net_pnl_rub"], 2)
-        group["average_r"] = round(group.pop("r_sum") / group["r_evaluated"], 3) if group["r_evaluated"] else None
+        r_sum = group.pop("r_sum")
+        group["average_r"] = round(r_sum / group["r_evaluated"], 3) if group["r_evaluated"] else None
     counts["pending_closed"] = max(0, counts["confirmed"] - sum(group["closed"] for group in by_action.values()))
     return {
         "strategy": AO_STRATEGY, "since": AO_ROLLOUT_AT.isoformat(),
