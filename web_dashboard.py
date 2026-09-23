@@ -5664,7 +5664,7 @@ def build_dashboard_html() -> str:
         <div class="quality-tabs" role="tablist" aria-label="Диагностика качества">
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
           <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория <span class="quality-tab-count" id="qualityTradesCount">0</span></button>
-          <button class="quality-tab" type="button" data-quality-tab="exits">Выходы <span class="quality-tab-count" id="qualityExitsCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="exits">Выходы</button>
           <button class="quality-tab" type="button" data-quality-tab="hypotheses">Гипотезы <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
@@ -5688,7 +5688,7 @@ def build_dashboard_html() -> str:
           <div id="qualityTradesBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelExits" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">Показываются только закрытия, после которых цена прошла в прежнюю сторону больше обычного шума.</div>
+          <div class="muted" style="margin-bottom:10px;">Условный выход AO показан отдельно от фактических ранних закрытий.</div>
           <div id="aoExitExperiment" class="quality-card-list" style="margin-bottom:12px;"></div>
           <div id="qualityExitsBody" class="quality-card-list"></div>
         </div>
@@ -7324,7 +7324,6 @@ def build_dashboard_html() -> str:
         .sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const sortedStrategyHypotheses = strategyHypotheses.slice().sort((a, b) => String(b.last_observed_at || b.observed_at || '').localeCompare(String(a.last_observed_at || a.observed_at || '')));
       document.getElementById('qualityTradesCount').textContent = String(Math.min(sortedQualityTrades.length, 20));
-      document.getElementById('qualityExitsCount').textContent = String(Math.min(materialQualityExits.length, 12));
       document.getElementById('qualityHypothesesCount').textContent = String(Math.min(sortedStrategyHypotheses.length, 12));
       document.querySelectorAll('[data-quality-strategy]').forEach((button) => {
         button.classList.toggle('active', button.dataset.qualityStrategy === selectedQualityStrategy);

@@ -53,7 +53,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('class="quality-card"', quality_render)
         self.assertIn('class="quality-horizon-grid"', quality_render)
         self.assertIn('id="qualityTradesCount"', html)
-        self.assertIn('id="qualityExitsCount"', html)
+        self.assertIn('data-quality-tab="exits"', html)
         self.assertIn('id="qualityHypothesesCount"', html)
         self.assertNotIn('id="qualityShadowCount"', html)
         self.assertNotIn('id="shadowStrategyDecisions"', html)
