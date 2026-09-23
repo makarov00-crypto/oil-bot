@@ -1633,6 +1633,7 @@ def build_trade_quality_analytics(
         evaluation = {
             **(cached or {}),
             "observation_uid": observation_uid,
+            "strategy": str(row.get("strategy") or ""),
             "symbol": symbol,
             "signal": direction,
             "observed_at": observed_at.isoformat(),
@@ -1732,6 +1733,7 @@ def build_trade_quality_analytics(
         "exit_diagnostics": sorted(
             [
                 {
+                    "strategy": item.get("strategy"),
                     "symbol": item.get("symbol"), "side": item.get("side"), "exit_time": item.get("exit_time"),
                     "exit_reason": item.get("exit_reason"), "net_pnl_rub": item.get("pnl_rub"),
                     "post_exit_4h_pct": item.get("post_exit_4h_pct"),

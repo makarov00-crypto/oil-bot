@@ -61,18 +61,13 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn("buildReviewRowRich(", quality_render)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_strategy_research_replaces_obsolete_comparison(self) -> None:
+    def test_exit_experiment_is_in_quality_and_research_page_redirects(self) -> None:
         dashboard_html = dashboard.build_dashboard_html()
-        shadow_html = dashboard.build_shadow_strategy_html()
-
-        self.assertIn('href="/shadow-strategy"', dashboard_html)
-        self.assertIn('class="site-nav__link is-active"', shadow_html)
+        self.assertNotIn('href="/shadow-strategy"', dashboard_html)
         self.assertIn('id="shadowAiCandidates"', dashboard_html)
         self.assertIn('id="shadowAiPerformance"', dashboard_html)
-        self.assertNotIn('id="executionCards"', shadow_html)
-        self.assertNotIn('id="aiSections"', shadow_html)
-        self.assertIn('id="exitExperiment"', shadow_html)
-        self.assertNotIn('id="strategyComparison"', shadow_html)
+        self.assertIn('id="aoExitExperiment"', dashboard_html)
+        self.assertEqual(dashboard.shadow_strategy().headers["location"], "/#trade-review-quality-exits")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_ao_chaikin_shadow_payload_is_loaded_newest_first_with_russian_decisions(self) -> None:
@@ -126,10 +121,13 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_trade_quality_events_are_loaded_newest_first(self) -> None:
         payload = {
             "version": 1,
-            "trades": [{"exit_time": "2026-08-11T10:00:00+03:00"}, {"exit_time": "2026-08-12T10:00:00+03:00"}],
-            "exit_diagnostics": [{"exit_time": "2026-08-10T10:00:00+03:00"}, {"exit_time": "2026-08-12T11:00:00+03:00"}],
+            "trades": [
+                {"strategy": "ao_chaikin_1h", "symbol": "BRV6", "exit_time": "2026-08-11T10:00:00+03:00", "pnl_rub": 10},
+                {"strategy": "ao_chaikin_1h", "symbol": "BRV6", "exit_time": "2026-08-12T10:00:00+03:00", "pnl_rub": -5},
+                {"strategy": "reversal_1h", "symbol": "BRV6", "exit_time": "2026-08-13T10:00:00+03:00", "pnl_rub": -100},
+            ],
             "missed_entries": [{"observed_at": "2026-08-09T10:00:00+03:00"}, {"observed_at": "2026-08-12T12:00:00+03:00"}],
-            "strategy_hypotheses": [{"observed_at": "2026-08-11T12:00:00+03:00"}],
+            "strategy_hypotheses": [{"strategy": "ao_chaikin_1h", "observed_at": "2026-08-11T12:00:00+03:00"}],
             "unexecuted_entries": [{"observed_at": "2026-08-11T13:00:00+03:00"}],
         }
         with TemporaryDirectory() as temp_dir:
@@ -139,10 +137,12 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 result = dashboard.load_trade_quality_analytics()
 
         self.assertEqual(result["trades"][0]["exit_time"], "2026-08-12T10:00:00+03:00")
-        self.assertEqual(result["exit_diagnostics"][0]["exit_time"], "2026-08-12T11:00:00+03:00")
-        self.assertEqual(result["missed_entries"][0]["observed_at"], "2026-08-12T12:00:00+03:00")
+        self.assertEqual(result["archive"]["trades"][0]["exit_time"], "2026-08-13T10:00:00+03:00")
+        self.assertEqual(result["overview"]["net_pnl_rub"], 5)
+        self.assertEqual(result["archive"]["overview"]["net_pnl_rub"], -100)
+        self.assertEqual(result["missed_entries"], [])
         self.assertEqual(result["strategy_hypotheses"][0]["observed_at"], "2026-08-11T12:00:00+03:00")
-        self.assertEqual(result["unexecuted_entries"][0]["observed_at"], "2026-08-11T13:00:00+03:00")
+        self.assertEqual(result["unexecuted_entries"], [])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_shadow_ai_review_uses_structured_fields(self) -> None:

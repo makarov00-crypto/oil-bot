@@ -54,24 +54,12 @@ struct MoreScreen: View {
                         } label: {
                             menuRow(
                                 title: "Качество торговли",
-                                subtitle: "Удержание прибыли, пропущенные входы и проверка решений ИИ",
+                                subtitle: "Сделки AO, выходы и проверка гипотез",
                                 systemImage: "chart.xyaxis.line"
                             )
                         }
                         .buttonStyle(.plain)
 
-                        Divider().overlay(Color.white.opacity(0.08))
-
-                        NavigationLink {
-                            ShadowStrategyScreen(store: store)
-                        } label: {
-                            menuRow(
-                                title: "Гипотеза выхода",
-                                subtitle: "Проверка условного удержания после сигнала истощения AO",
-                                systemImage: "waveform.path.ecg"
-                            )
-                        }
-                        .buttonStyle(.plain)
                     }
                 }
             }

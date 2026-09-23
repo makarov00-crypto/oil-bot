@@ -178,6 +178,14 @@ class TradeQualityTests(unittest.TestCase):
         self.assertEqual(grouped[1]["observation_count"], 2)
         self.assertEqual(grouped[1]["best_move_4h_pct"], 1.2)
 
+    def test_does_not_group_hold_hypotheses_across_strategies(self) -> None:
+        rows = [
+            {"symbol": "BRV6", "signal": "LONG", "strategy": "reversal_1h", "observed_at": "2026-09-22T22:00:00+03:00"},
+            {"symbol": "BRV6", "signal": "LONG", "strategy": "ao_chaikin_1h", "observed_at": "2026-09-22T23:00:00+03:00"},
+        ]
+
+        self.assertEqual(len(group_strategy_hypotheses(rows)), 2)
+
     def test_summarizes_early_exit_only_when_direction_continued(self) -> None:
         trade = {
             "symbol": "BRU6",

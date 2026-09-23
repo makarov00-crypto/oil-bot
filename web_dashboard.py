@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
+from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -49,10 +51,14 @@ from trade_storage import (
     summarize_news_allocator_impact,
     summarize_news_source_stats,
 )
-from shadow_strategy_page import build_shadow_strategy_page
 from strategy_research import AO_ROLLOUT_AT, build_ai_research, build_ao_execution_research
 from signal_ai_entry_analytics import build_signal_ai_entry_analytics
-from trade_quality import pair_closed_trades
+from trade_quality import (
+    build_trade_quality_overview,
+    pair_closed_trades,
+    summarize_trade_dimension,
+    summarize_trade_quality,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -152,7 +158,6 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
-        ("/shadow-strategy", "Гипотеза выхода", "shadow"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
@@ -3006,7 +3011,7 @@ def load_trade_quality_analytics() -> dict[str, Any]:
         rows = [item for item in rows if isinstance(item, dict)]
         return sorted(rows, key=lambda item: str(item.get(time_field) or ""), reverse=True)
 
-    return {
+    result = {
         "available": True,
         "version": int(payload.get("version") or 0),
         "generated_at": str(payload.get("generated_at") or ""),
@@ -3021,6 +3026,80 @@ def load_trade_quality_analytics() -> dict[str, Any]:
         "by_entry_quality": payload.get("by_entry_quality") if isinstance(payload.get("by_entry_quality"), list) else [],
         "exit_diagnostics": newest_first("exit_diagnostics", "exit_time"),
     }
+    result["missed_entry_evaluations"] = newest_first("missed_entry_evaluations", "observed_at")
+    missing_uids = {
+        str(row.get("observation_uid") or "")
+        for key in ("missed_entry_evaluations", "missed_entries", "strategy_hypotheses", "unexecuted_entries")
+        for row in result[key]
+        if not row.get("strategy") and row.get("observation_uid")
+    }
+    provenance: dict[str, str] = {}
+    if missing_uids and TRADE_DB_PATH.exists():
+        try:
+            with sqlite3.connect(f"file:{TRADE_DB_PATH}?mode=ro", uri=True) as connection:
+                for batch_start in range(0, len(missing_uids), 500):
+                    batch = list(missing_uids)[batch_start:batch_start + 500]
+                    placeholders = ",".join("?" for _ in batch)
+                    provenance.update(connection.execute(
+                        f"SELECT observation_uid, strategy FROM signal_observations WHERE observation_uid IN ({placeholders})",
+                        batch,
+                    ).fetchall())
+        except sqlite3.Error:
+            pass
+
+    def strategy_of(row: dict[str, Any]) -> str:
+        return str(row.get("strategy") or provenance.get(str(row.get("observation_uid") or "")) or "")
+
+    def cohort(strategy: str) -> dict[str, Any]:
+        trades = [row for row in result["trades"] if strategy_of(row) == strategy]
+        missed = [row for row in result["missed_entries"] if strategy_of(row) == strategy]
+        hypotheses = [row for row in result["strategy_hypotheses"] if strategy_of(row) == strategy]
+        evaluations = [row for row in result["missed_entry_evaluations"] if strategy_of(row) == strategy and row.get("source_kind") == "strategy_hold"]
+        overview = build_trade_quality_overview(trades, missed)
+        positive = sum(1 for row in evaluations if float(row.get("move_4h_pct") or 0) > 0)
+        overview.update({
+            "strategy_hypotheses_evaluated_count": len(evaluations),
+            "strategy_hypotheses_positive_count": positive,
+            "strategy_hypotheses_positive_rate_pct": round(positive / len(evaluations) * 100, 1) if evaluations else None,
+            "strategy_hypotheses_observations_count": sum(int(row.get("observation_count") or 1) for row in hypotheses),
+        })
+        exits = [{
+            "symbol": row.get("symbol"), "side": row.get("side"), "exit_time": row.get("exit_time"),
+            "exit_reason": row.get("exit_reason"), "net_pnl_rub": row.get("pnl_rub"),
+            "post_exit_4h_pct": row.get("post_exit_4h_pct"),
+            "threshold_pct": row.get("early_exit_threshold_pct"),
+            "is_material_early_exit": row.get("is_material_early_exit", False),
+        } for row in trades if row.get("post_exit_4h_pct") is not None]
+        return {
+            "strategy": strategy,
+            "trades": trades,
+            "by_symbol": summarize_trade_quality(trades),
+            "missed_entries": missed,
+            "strategy_hypotheses": hypotheses,
+            "unexecuted_entries": [row for row in result["unexecuted_entries"] if strategy_of(row) == strategy],
+            "overview": overview,
+            "by_regime": summarize_trade_dimension(trades, "market_regime"),
+            "by_entry_quality": summarize_trade_dimension(trades, "entry_edge_label"),
+            "exit_diagnostics": sorted(exits, key=lambda row: str(row.get("exit_time") or ""), reverse=True),
+        }
+
+    current = cohort("ao_chaikin_1h")
+    archive = cohort("reversal_1h")
+    result.update(current)
+    result["archive"] = archive
+    result["unattributed_hypotheses"] = sum(1 for row in result["missed_entry_evaluations"] if row.get("source_kind") == "strategy_hold" and not strategy_of(row))
+    result.pop("missed_entry_evaluations", None)
+    try:
+        stat = AO_CHAIKIN_SHADOW_PATH.stat()
+        result["exit_experiment"] = _exit_experiment_cached(str(AO_CHAIKIN_SHADOW_PATH), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        result["exit_experiment"] = {}
+    return result
+
+
+@lru_cache(maxsize=2)
+def _exit_experiment_cached(path: str, mtime_ns: int, size: int) -> dict[str, Any]:
+    return build_shadow_exit_analytics(read_shadow_records(Path(path))).get("conditional_two_hour_experiment") or {}
 
 
 def load_ao_chaikin_shadow_strategy() -> dict[str, Any]:
@@ -3069,10 +3148,6 @@ def load_shadow_strategy_workspace() -> dict[str, Any]:
         "exit_analytics": exit_analytics,
         "instrument_catalog": catalog,
     }
-
-
-def build_shadow_strategy_html() -> str:
-    return build_shadow_strategy_page(build_site_nav("shadow"))
 
 
 def load_strategy_research_workspace() -> dict[str, Any]:
@@ -5581,6 +5656,10 @@ def build_dashboard_html() -> str:
       </div>
       <div id="reviewTabQuality" class="review-tab-panel">
         <div class="muted" id="tradeQualityMeta">Качество сделок ещё рассчитывается.</div>
+        <div class="quality-tabs" role="group" aria-label="Стратегия для диагностики" style="margin:12px 0;">
+          <button class="quality-tab active" type="button" data-quality-strategy="current">AO / Чайкин · текущая</button>
+          <button class="quality-tab" type="button" data-quality-strategy="archive">Часовой разворот · архив</button>
+        </div>
         <div class="trade-review-summary" id="tradeQualityOverview"></div>
         <div class="quality-tabs" role="tablist" aria-label="Диагностика качества">
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
@@ -5610,6 +5689,7 @@ def build_dashboard_html() -> str:
         </div>
         <div id="qualityPanelExits" class="quality-panel">
           <div class="muted" style="margin-bottom:10px;">Показываются только закрытия, после которых цена прошла в прежнюю сторону больше обычного шума.</div>
+          <div id="aoExitExperiment" class="quality-card-list" style="margin-bottom:12px;"></div>
           <div id="qualityExitsBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelHypotheses" class="quality-panel">
@@ -6636,6 +6716,8 @@ def build_dashboard_html() -> str:
       });
     }
 
+    let selectedQualityStrategy = 'current';
+
     async function loadData() {
       const dateInput = document.getElementById('selectedDate');
       const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
@@ -7217,7 +7299,10 @@ def build_dashboard_html() -> str:
         }
       }
 
-      const tradeQuality = data.trade_quality || {};
+      const qualityWorkspace = data.trade_quality || {};
+      const tradeQuality = selectedQualityStrategy === 'archive'
+        ? (qualityWorkspace.archive || {})
+        : qualityWorkspace;
       const tradeQualityMeta = document.getElementById('tradeQualityMeta');
       const tradeQualityBody = document.getElementById('tradeQualityBody');
       const strategyHypothesesBody = document.getElementById('strategyHypothesesBody');
@@ -7241,15 +7326,20 @@ def build_dashboard_html() -> str:
       document.getElementById('qualityTradesCount').textContent = String(Math.min(sortedQualityTrades.length, 20));
       document.getElementById('qualityExitsCount').textContent = String(Math.min(materialQualityExits.length, 12));
       document.getElementById('qualityHypothesesCount').textContent = String(Math.min(sortedStrategyHypotheses.length, 12));
-      tradeQualityMeta.textContent = tradeQuality.available
-        ? `Период ${tradeQuality.period_days || 30} дней · обновлено ${formatMoscowTime(tradeQuality.generated_at || '')}. Расчёт обновляется раз в час и использует часовые свечи, минуты - только на границах сделки.`
+      document.querySelectorAll('[data-quality-strategy]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.qualityStrategy === selectedQualityStrategy);
+      });
+      tradeQualityMeta.textContent = qualityWorkspace.available
+        ? `${selectedQualityStrategy === 'archive' ? 'Архив часового разворота' : 'Текущая AO / Чайкин с 22.09'} · период ${qualityWorkspace.period_days || 30} дней · обновлено ${formatMoscowTime(qualityWorkspace.generated_at || '')}. Расчёт по часовым свечам; минутные данные — на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
       const capture = qualityOverview.profit_capture_pct == null ? '-' : `${Number(qualityOverview.profit_capture_pct).toFixed(1)}%`;
       const commissionShare = qualityOverview.commission_share_pct == null ? 'нет базы' : `${Number(qualityOverview.commission_share_pct).toFixed(1)}% валового результата`;
       const earlyExitSub = Number(qualityOverview.material_early_exit_count || 0)
         ? `среднее продолжение +${Number(qualityOverview.average_early_exit_4h_pct || 0).toFixed(2)}% за 4ч`
         : 'пока нет подтверждённых';
-      tradeQualityOverview.innerHTML = tradeQuality.available ? [
+      tradeQualityOverview.innerHTML = qualityWorkspace.available && Number(qualityOverview.closed_trades || 0) === 0
+        ? '<div class="muted">Закрытых сделок этой стратегии пока нет. Показатели результата появятся после первого закрытия; проверка условного выхода AO уже доступна во вкладке «Выходы».</div>'
+        : qualityWorkspace.available ? [
         buildTradeSummaryCard('Итог после комиссии', formatSignedRub(qualityOverview.net_pnl_rub || 0), `${Number(qualityOverview.closed_trades || 0)} закрытых сделок`, Number(qualityOverview.net_pnl_rub || 0) >= 0 ? 'good' : 'bad'),
         buildTradeSummaryCard('Доля прибыльных', `${Number(qualityOverview.win_rate_pct || 0).toFixed(1)}%`, `${Number(qualityOverview.wins || 0)} в плюс · ${Number(qualityOverview.losses || 0)} в минус`),
         buildTradeSummaryCard('Удержали прибыли', capture, 'доля полученной цены от максимального движения'),
@@ -7349,6 +7439,18 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет закрытых сделок для лаборатории за период.</div>';
+      const exitExperiment = qualityWorkspace.exit_experiment || {};
+      const exitExperimentEl = document.getElementById('aoExitExperiment');
+      exitExperimentEl.innerHTML = selectedQualityStrategy === 'current' ? `<article class="quality-card">
+        <div class="quality-card-head"><div><div class="quality-card-title">Гипотеза: удержать AO ещё 2 часа</div>
+        <div class="quality-card-meta">Теневые выходы AO · оценка на 1 лот · не фактический P&L</div></div></div>
+        <div class="quality-metric-grid">
+          <div class="quality-metric"><div class="quality-metric-label">Оценено</div><div class="quality-metric-value">${escapeHtml(String(exitExperiment.evaluated || 0))} / ${escapeHtml(String(exitExperiment.readiness?.target_evaluated || 20))}</div></div>
+          <div class="quality-metric"><div class="quality-metric-label">Лучше обычного выхода</div><div class="quality-metric-value">${escapeHtml(String(exitExperiment.better || 0))}</div></div>
+          <div class="quality-metric"><div class="quality-metric-label">Разница, ₽/лот</div><div class="quality-metric-value ${Number(exitExperiment.delta_rub_1lot || 0) >= 0 ? 'good' : 'bad'}">${escapeHtml(formatSignedRub(exitExperiment.delta_rub_1lot || 0))}</div></div>
+        </div>
+        <div class="quality-card-note">${escapeHtml(exitExperiment.readiness?.status === 'ready_for_limited_trial' ? 'Условия первичной проверки выполнены; нужен разбор перед изменением выхода.' : exitExperiment.readiness?.status === 'not_confirmed' ? 'На текущей выборке гипотеза не подтвердилась.' : 'Выборка пока мала для вывода.')}</div>
+      </article>` : '';
       qualityExitsBody.innerHTML = materialQualityExits.length
         ? materialQualityExits.slice(0, 12).map((item) => {
             const pnl = Number(item.net_pnl_rub || 0);
@@ -7589,15 +7691,26 @@ const aiReview = data.ai_review || {};
           document.getElementById('trade-review')?.scrollIntoView({block: 'start'});
         }
       }
-      document.querySelectorAll('.quality-tab').forEach((button) => {
+      document.querySelectorAll('.quality-tab[data-quality-tab]').forEach((button) => {
         button.addEventListener('click', () => {
           const target = button.dataset.qualityTab;
-          document.querySelectorAll('.quality-tab').forEach((item) => item.classList.toggle('active', item === button));
+          document.querySelectorAll('.quality-tab[data-quality-tab]').forEach((item) => item.classList.toggle('active', item === button));
           document.querySelectorAll('.quality-panel').forEach((panel) => {
             panel.classList.toggle('active', panel.id === `qualityPanel${target.charAt(0).toUpperCase()}${target.slice(1)}`);
           });
         });
       });
+      document.querySelectorAll('[data-quality-strategy]').forEach((button) => {
+        button.addEventListener('click', () => {
+          selectedQualityStrategy = button.dataset.qualityStrategy;
+          loadData();
+        });
+      });
+      if (window.location.hash === '#trade-review-quality-exits') {
+        document.querySelector('[data-review-tab="quality"]')?.click();
+        document.querySelector('[data-quality-tab="exits"]')?.click();
+        document.getElementById('trade-review')?.scrollIntoView({block: 'start'});
+      }
       document.addEventListener('click', (event) => {
         const trigger = event.target.closest('.js-news-popover');
         if (trigger) {
@@ -7629,9 +7742,9 @@ def docs() -> str:
     return build_docs_html()
 
 
-@app.get("/shadow-strategy", response_class=HTMLResponse)
-def shadow_strategy() -> HTMLResponse:
-    return HTMLResponse(content=build_shadow_strategy_html(), headers=NO_CACHE_HEADERS)
+@app.get("/shadow-strategy", response_class=RedirectResponse)
+def shadow_strategy() -> RedirectResponse:
+    return RedirectResponse(url="/#trade-review-quality-exits", status_code=307)
 
 
 @app.get("/allocator", response_class=RedirectResponse)

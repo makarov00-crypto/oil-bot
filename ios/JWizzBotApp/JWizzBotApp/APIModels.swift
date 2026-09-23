@@ -473,6 +473,9 @@ struct TradeQualityPayload: Decodable {
     let bySymbol: [TradeQualitySymbol]
     let trades: [TradeQualityTrade]
     let missedEntries: [MissedEntryQuality]
+    let exitExperiment: StrategyExitExperiment?
+    let strategyHypotheses: [QualityHypothesis]?
+    let exitDiagnostics: [QualityExit]?
 
     enum CodingKeys: String, CodingKey {
         case available
@@ -482,6 +485,45 @@ struct TradeQualityPayload: Decodable {
         case bySymbol = "by_symbol"
         case trades
         case missedEntries = "missed_entries"
+        case exitExperiment = "exit_experiment"
+        case strategyHypotheses = "strategy_hypotheses"
+        case exitDiagnostics = "exit_diagnostics"
+    }
+}
+
+struct QualityHypothesis: Decodable, Identifiable {
+    let observationUid: String?
+    let symbol: String
+    let signal: String?
+    let observedAt: String?
+    let bestMove4hPct: Double?
+    let reason: String?
+
+    var id: String { observationUid ?? "\(symbol):\(observedAt ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, signal, reason
+        case observationUid = "observation_uid"
+        case observedAt = "observed_at"
+        case bestMove4hPct = "best_move_4h_pct"
+    }
+}
+
+struct QualityExit: Decodable, Identifiable {
+    let symbol: String
+    let exitTime: String?
+    let postExit4hPct: Double?
+    let isMaterialEarlyExit: Bool?
+    let exitReason: String?
+
+    var id: String { "\(symbol):\(exitTime ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case exitTime = "exit_time"
+        case postExit4hPct = "post_exit_4h_pct"
+        case isMaterialEarlyExit = "is_material_early_exit"
+        case exitReason = "exit_reason"
     }
 }
 

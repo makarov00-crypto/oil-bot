@@ -240,7 +240,7 @@ def group_strategy_hypotheses(
 ) -> list[dict[str, Any]]:
     """Combine repeated HOLD diagnostics for one continuing directional move."""
     groups: list[list[dict[str, Any]]] = []
-    previous_by_key: dict[tuple[str, str], tuple[datetime, list[dict[str, Any]]]] = {}
+    previous_by_key: dict[tuple[str, str, str], tuple[datetime, list[dict[str, Any]]]] = {}
     for row in sorted(rows, key=lambda item: str(item.get("observed_at") or "")):
         symbol = str(row.get("symbol") or "").upper()
         signal = str(row.get("signal") or "").upper()
@@ -250,7 +250,7 @@ def group_strategy_hypotheses(
             continue
         if not symbol or signal not in {"LONG", "SHORT"} or observed_at.tzinfo is None:
             continue
-        key = (symbol, signal)
+        key = (symbol, signal, str(row.get("strategy") or ""))
         previous = previous_by_key.get(key)
         if previous is not None and observed_at - previous[0] <= max_gap:
             group = previous[1]

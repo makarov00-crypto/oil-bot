@@ -4,7 +4,7 @@ struct TradeQualityScreen: View {
     @ObservedObject var store: DashboardStore
     @State private var segment = 0
 
-    private let sections = ["Итог", "Сделки", "ИИ"]
+    private let sections = ["Итог", "Лаборатория", "Выходы", "Гипотезы"]
 
     var body: some View {
         Group {
@@ -18,8 +18,10 @@ struct TradeQualityScreen: View {
                         overviewContent(payload: payload, quality: quality)
                     } else if segment == 1 {
                         tradesContent(payload: payload, quality: quality)
+                    } else if segment == 2 {
+                        exitsContent(payload: payload, quality: quality)
                     } else {
-                        shadowAIContent(payload.signalAIEntry)
+                        hypothesesContent(payload: payload, quality: quality)
                     }
                 }
                 .refreshable { await store.load(date: store.selectedDate) }
@@ -60,10 +62,14 @@ struct TradeQualityScreen: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeader(
-                    title: "Результат за \(quality.periodDays ?? 30) дней",
+                    title: "AO / Чайкин · результат за \(quality.periodDays ?? 30) дней",
                     subtitle: "Расчёт по часовым свечам; минутные данные используются только на границах сделки."
                 )
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                if (overview?.closedTrades ?? 0) == 0 {
+                    Text("Закрытых сделок AO пока нет. Результаты появятся после первого закрытия; гипотеза удержания доступна в «Выходах».")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     MetricGlassTile(title: "После комиссий", value: formatRub(overview?.netPnlRub), tone: statusTone(for: overview?.netPnlRub))
                     MetricGlassTile(title: "Прибыльных", value: formatPct(overview?.winRatePct))
                     MetricGlassTile(title: "Удержали прибыли", value: formatPct(overview?.profitCapturePct))
@@ -73,6 +79,7 @@ struct TradeQualityScreen: View {
                         title: "Проверка удержаний",
                         value: "\(overview?.strategyHypothesesPositiveCount ?? 0) из \(overview?.strategyHypothesesEvaluatedCount ?? 0)"
                     )
+                    }
                 }
             }
         }
@@ -80,6 +87,10 @@ struct TradeQualityScreen: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeader(title: "По инструментам", subtitle: "Фактический результат и качество удержания движения.")
+                if quality.bySymbol.isEmpty {
+                    Text("Закрытых сделок AO по инструментам пока нет.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
                 ForEach(quality.bySymbol) { item in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -186,6 +197,56 @@ struct TradeQualityScreen: View {
                         Text(trade.exitReason ?? "Причина выхода не сохранена")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func exitsContent(payload: DashboardPayload, quality: TradeQualityPayload) -> some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Гипотеза выхода AO", subtitle: "Теневые выходы, один лот. Это оценка, не фактический результат торговли.")
+                let experiment = quality.exitExperiment
+                InfoRow(title: "Оценено", value: "\(experiment?.evaluated ?? 0) из \(experiment?.readiness?.targetEvaluated ?? 20)")
+                InfoRow(title: "Разница при удержании ещё 2ч", value: formatRub(experiment?.deltaRub1Lot))
+                Text(experiment?.readiness?.status == "ready_for_limited_trial"
+                    ? "Условия первичной проверки выполнены; нужен разбор перед изменением выхода."
+                    : experiment?.readiness?.status == "not_confirmed"
+                    ? "На текущей выборке гипотеза не подтвердилась."
+                    : "Выборка пока мала для вывода.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        let exits = (quality.exitDiagnostics ?? []).filter { $0.isMaterialEarlyExit == true }
+        if exits.isEmpty {
+            EmptyGlassState(title: "Ранних выходов AO пока нет", subtitle: "Появятся после закрытия и проверки следующего движения цены.", systemImage: "arrow.uturn.backward")
+        } else {
+            ForEach(Array(exits.prefix(12))) { item in
+                GlassCard {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(instrumentName(item.symbol, payload: payload)).font(.headline)
+                        InfoRow(title: "После выхода за 4ч", value: formatPct(item.postExit4hPct))
+                        Text(item.exitReason ?? "Причина выхода не сохранена").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hypothesesContent(payload: DashboardPayload, quality: TradeQualityPayload) -> some View {
+        let rows = quality.strategyHypotheses ?? []
+        if rows.isEmpty {
+            EmptyGlassState(title: "Гипотез AO пока нет", subtitle: "Здесь появятся проверенные движения после сигнала без входа.", systemImage: "chart.line.uptrend.xyaxis")
+        } else {
+            ForEach(Array(rows.prefix(12))) { item in
+                GlassCard {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(instrumentName(item.symbol, payload: payload)).font(.headline)
+                        InfoRow(title: "Лучшее движение за 4ч", value: formatPct(item.bestMove4hPct))
+                        Text(item.reason ?? "Причина не сохранена").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
