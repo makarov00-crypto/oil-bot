@@ -78,6 +78,10 @@ class SignalAiReviewerTests(unittest.TestCase):
             bot.apply_signal_ai_shadow_reviews([candidate])
 
         self.assertEqual(candidate["shadow_ai"]["action"], "ВХОД")
+        self.assertEqual(candidate["candidate_id"], "reversal_1h:BRU6:LONG:2026-08-07 12:00")
+        self.assertEqual(state.last_shadow_ai_candidate_id, candidate["candidate_id"])
+        self.assertTrue(candidate["shadow_ai_model"])
+        self.assertTrue(candidate["shadow_ai_prompt_version"])
         self.assertEqual(state.last_shadow_ai_action, "ВХОД")
         self.assertEqual(save.call_count, 2)
         save.assert_called_with("BRU6", state)

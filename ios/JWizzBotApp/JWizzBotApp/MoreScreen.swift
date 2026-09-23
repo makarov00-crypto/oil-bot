@@ -66,8 +66,8 @@ struct MoreScreen: View {
                             ShadowStrategyScreen(store: store)
                         } label: {
                             menuRow(
-                                title: "Исследования стратегии",
-                                subtitle: "Исполнение AO, качество теневого ИИ и гипотеза выхода",
+                                title: "Гипотеза выхода",
+                                subtitle: "Проверка условного удержания после сигнала истощения AO",
                                 systemImage: "waveform.path.ecg"
                             )
                         }

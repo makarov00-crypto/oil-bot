@@ -7,8 +7,6 @@ struct ShadowStrategyScreen: View {
         Group {
             if let research = store.shadowStrategyPayload {
                 ScreenContainer {
-                    executionSection(research.execution)
-                    aiSection(research.ai)
                     exitSection(research.exitExperiment)
                 }
                 .refreshable { await store.loadShadowStrategy() }
@@ -23,7 +21,7 @@ struct ShadowStrategyScreen: View {
             } else {
                 VStack(spacing: 14) {
                     ProgressView()
-                    Text("Загружаю исследования…")
+                    Text("Загружаю гипотезу выхода…")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -31,7 +29,7 @@ struct ShadowStrategyScreen: View {
                 .background(LiquidGlassBackground())
             }
         }
-        .navigationTitle("Исследования")
+        .navigationTitle("Гипотеза выхода")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -45,71 +43,6 @@ struct ShadowStrategyScreen: View {
             if store.shadowStrategyPayload == nil {
                 await store.loadShadowStrategy()
             }
-        }
-    }
-
-    private func executionSection(_ execution: StrategyExecutionResearch) -> some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 14) {
-                SectionHeader(
-                    title: "Исполнение AO / Чайкин",
-                    subtitle: "Сигналы после перехода на новую стратегию: от кандидата до подтверждённого входа."
-                )
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    MetricGlassTile(title: "Кандидаты", value: "\(execution.candidates)")
-                    MetricGlassTile(title: "Выбрано", value: "\(execution.selected)")
-                    MetricGlassTile(title: "Вход подтверждён", value: "\(execution.confirmed)", tone: .green)
-                    MetricGlassTile(title: "Без подтверждения", value: "\(execution.selectedUnconfirmed)", tone: execution.selectedUnconfirmed > 0 ? .orange : .white)
-                }
-                Text(execution.candidates == 0
-                    ? "После перехода ещё не было нового кандидата AO."
-                    : "Отложено аллокатором или ограничениями: \(execution.deferred).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(execution.recent.prefix(12)) { event in
-                    Divider().overlay(Color.white.opacity(0.08))
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("\(event.symbol) · \(event.signal)")
-                            .font(.subheadline.weight(.semibold))
-                        Text("\(event.observedAt) · \(event.decision) · \(event.executionStatus.isEmpty ? "нет подтверждения" : event.executionStatus)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-
-    private func aiSection(_ ai: StrategyAIResearch) -> some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(
-                    title: "Теневой ИИ",
-                    subtitle: "«Вход» и «Пропустить» проверяются по направлению цены через 4 часа. Комиссия и стоп в этой метрике не учтены."
-                )
-                aiCohort("AO / Чайкин · текущая", ai.byStrategy["ao_chaikin_1h"])
-                Divider().overlay(Color.white.opacity(0.08))
-                aiCohort("Часовой разворот · архив", ai.byStrategy["reversal_1h"])
-                Text("Архивные оценки нельзя переносить на AO. В новой стратегии ИИ пока только наблюдает за сигналами.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func aiCohort(_ title: String, _ cohort: StrategyAICohort?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.headline)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                MetricGlassTile(title: "Проверено", value: "\(cohort?.evaluated ?? 0)")
-                MetricGlassTile(title: "ИИ: вход", value: percentage(cohort?.enterCorrectPct))
-                MetricGlassTile(title: "ИИ: пропустить", value: percentage(cohort?.abstainCorrectPct))
-                MetricGlassTile(title: "Движение по сигналу", value: percentage(cohort?.marketFavorablePct))
-            }
-            InfoRow(title: "Вход подтверждён", value: "\(cohort?.enterCorrect ?? 0) из \(cohort?.enter ?? 0)")
-            InfoRow(title: "Пропуск оправдан", value: "\(cohort?.abstainCorrect ?? 0) из \(cohort?.abstain ?? 0)")
-            InfoRow(title: "Среднее движение при «Вход»", value: movement(cohort?.enterAverageMovePct))
-            InfoRow(title: "Среднее движение при «Пропустить»", value: movement(cohort?.abstainAverageMovePct))
         }
     }
 
@@ -133,16 +66,6 @@ struct ShadowStrategyScreen: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private func percentage(_ value: Double?) -> String {
-        guard let value else { return "—" }
-        return String(format: "%.1f%%", value)
-    }
-
-    private func movement(_ value: Double?) -> String {
-        guard let value else { return "—" }
-        return String(format: "%+.3f%%", value)
     }
 
     private func rub(_ value: Double?) -> String {

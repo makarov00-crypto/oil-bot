@@ -51,6 +51,8 @@ from trade_storage import (
 )
 from shadow_strategy_page import build_shadow_strategy_page
 from strategy_research import AO_ROLLOUT_AT, build_ai_research, build_ao_execution_research
+from signal_ai_entry_analytics import build_signal_ai_entry_analytics
+from trade_quality import pair_closed_trades
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -150,7 +152,7 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
-        ("/shadow-strategy", "Исследования", "shadow"),
+        ("/shadow-strategy", "Гипотеза выхода", "shadow"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
@@ -3074,6 +3076,8 @@ def build_shadow_strategy_html() -> str:
 
 
 def load_strategy_research_workspace() -> dict[str, Any]:
+    # Keep the old fields for already installed iOS builds; the current views
+    # show only the distinct exit experiment.
     observations = load_signal_observations_from_storage(
         TRADE_DB_PATH, newest_first=True, since=AO_ROLLOUT_AT.isoformat()
     )
@@ -3088,6 +3092,14 @@ def load_strategy_research_workspace() -> dict[str, Any]:
         "ai": build_ai_research(ai_observations),
         "exit_experiment": exit_analytics.get("conditional_two_hour_experiment") or {},
     }
+
+
+def load_signal_ai_entry_workspace() -> dict[str, Any]:
+    observations = load_signal_observations_from_storage(
+        TRADE_DB_PATH, newest_first=True, since=AO_ROLLOUT_AT.isoformat()
+    )
+    closed_trades = pair_closed_trades(load_all_trade_rows())
+    return build_signal_ai_entry_analytics(observations, closed_trades)
 
 
 def load_trade_review_for_day(
@@ -5371,18 +5383,18 @@ def build_dashboard_html() -> str:
     <section class="panel" style="margin-bottom:16px;">
       <div class="section-title">
         <div>
-          <h2>Теневой ИИ-разбор</h2>
-          <p class="muted">Наблюдает за кандидатами и не влияет на реальные заявки.</p>
+          <h2>ИИ на входах AO / Чайкин</h2>
+          <p class="muted">От сигнала до закрытой сделки. ИИ пока наблюдает и не меняет входы AO.</p>
         </div>
       </div>
       <div class="grid">
-        <div><div class="muted">Разобрано</div><div class="metric" id="shadowAiCount">0</div></div>
-        <div><div class="muted">Поддержал</div><div class="metric good" id="shadowAiSupporting">0</div></div>
-        <div><div class="muted">Воздержался</div><div class="metric" id="shadowAiAbstaining">0</div></div>
-        <div><div class="muted">Проверено через 4ч</div><div class="metric" id="shadowAiEvaluated4h">0</div></div>
-        <div><div class="muted">Точность через 4ч</div><div class="metric" id="shadowAiAccuracy4h">-</div></div>
+        <div><div class="muted">Кандидатов AO</div><div class="metric" id="shadowAiCandidates">0</div></div>
+        <div><div class="muted">Ответов ИИ</div><div class="metric" id="shadowAiReviewed">0</div></div>
+        <div><div class="muted">Вход подтверждён</div><div class="metric" id="shadowAiConfirmed">0</div></div>
+        <div><div class="muted">Закрыто</div><div class="metric" id="shadowAiClosed">0</div></div>
       </div>
       <div class="trade-review-summary shadow-ai-performance" id="shadowAiPerformance"></div>
+      <p class="muted" id="shadowAiNote"></p>
       <div id="shadowAiRows" class="shadow-ai-list"></div>
     </section>
 
@@ -7054,92 +7066,41 @@ def build_dashboard_html() -> str:
         tradeCards.insertAdjacentHTML('beforeend', '<div class="muted">Журнал сделок пока пуст.</div>');
       }
 
-      const shadowAi = data.signal_ai_shadow || {};
-      document.getElementById('shadowAiCount').textContent = shadowAi.count ?? 0;
-      document.getElementById('shadowAiSupporting').textContent = shadowAi.supporting ?? 0;
-      document.getElementById('shadowAiAbstaining').textContent = shadowAi.abstaining ?? 0;
-      const shadowAiEvaluated4h = Number(shadowAi.evaluated_4h || 0);
-      const shadowAiCorrect4h = Number(shadowAi.correct_4h || 0);
-      document.getElementById('shadowAiEvaluated4h').textContent = shadowAiEvaluated4h;
-      document.getElementById('shadowAiAccuracy4h').textContent = shadowAiEvaluated4h ? `${(shadowAiCorrect4h / shadowAiEvaluated4h * 100).toFixed(1)}%` : '-';
-      const shadowAiEnterEvaluated4h = Number(shadowAi.enter_evaluated_4h || 0);
-      const shadowAiEnterCorrect4h = Number(shadowAi.enter_correct_4h || 0);
-      const shadowAiAbstainEvaluated4h = Number(shadowAi.abstain_evaluated_4h || 0);
-      const shadowAiAbstainCorrect4h = Number(shadowAi.abstain_correct_4h || 0);
-      const shadowAiReadiness = shadowAi.readiness || {};
-      const shadowAiPerformance = document.getElementById('shadowAiPerformance');
-      if (shadowAiPerformance) {
-        const enterAccuracy = shadowAiEnterEvaluated4h
-          ? `${(shadowAiEnterCorrect4h / shadowAiEnterEvaluated4h * 100).toFixed(1)}%`
-          : '-';
-        const abstainAccuracy = shadowAiAbstainEvaluated4h
-          ? `${(shadowAiAbstainCorrect4h / shadowAiAbstainEvaluated4h * 100).toFixed(1)}%`
-          : '-';
-        const overallTarget = Number(shadowAiReadiness.overall_target || 40);
-        const enterTarget = Number(shadowAiReadiness.enter_target || 20);
-        const readinessText = shadowAiReadiness.ready
-          ? 'минимальная выборка набрана: можно обсуждать мягкий фильтр риска'
-          : `до первичной оценки: ещё ${Math.max(0, overallTarget - shadowAiEvaluated4h)} проверок всего и ${Math.max(0, enterTarget - shadowAiEnterEvaluated4h)} рекомендаций «Вход»`;
-        shadowAiPerformance.innerHTML = [
-          buildTradeSummaryCard('ИИ рекомендует вход', enterAccuracy, `${shadowAiEnterCorrect4h} из ${shadowAiEnterEvaluated4h} подтверждено за 4ч`, shadowAiEnterEvaluated4h && shadowAiEnterCorrect4h / shadowAiEnterEvaluated4h >= 0.6 ? 'good' : 'bad'),
-          buildTradeSummaryCard('ИИ советует пропустить', abstainAccuracy, `${shadowAiAbstainCorrect4h} из ${shadowAiAbstainEvaluated4h} подтверждено за 4ч`, shadowAiAbstainEvaluated4h && shadowAiAbstainCorrect4h / shadowAiAbstainEvaluated4h >= 0.6 ? 'good' : 'bad'),
-          buildTradeSummaryCard('Готовность выборки', `${shadowAiEvaluated4h} / ${overallTarget}`, readinessText, shadowAiReadiness.ready ? 'good' : ''),
-        ].join('');
-      }
+      const shadowAi = data.signal_ai_entry || {};
+      const aiCounts = shadowAi.counts || {};
+      const aiGroups = shadowAi.by_action || {};
+      document.getElementById('shadowAiCandidates').textContent = aiCounts.candidates ?? 0;
+      document.getElementById('shadowAiReviewed').textContent = `${aiCounts.reviewed ?? 0} / ${aiCounts.candidates ?? 0}`;
+      document.getElementById('shadowAiConfirmed').textContent = `${aiCounts.confirmed ?? 0} / ${aiCounts.selected ?? 0}`;
+      document.getElementById('shadowAiClosed').textContent = `${aiCounts.closed ?? 0} / ${aiCounts.confirmed ?? 0}`;
+      const aiCard = (label, group) => {
+        const g = aiGroups[group] || {};
+        const closed = Number(g.closed || 0);
+        const net = closed ? formatSignedRub(g.net_pnl_rub || 0) : '—';
+        return buildTradeSummaryCard(label, net,
+          `${g.reviewed || 0} советов · ${g.executed || 0} входов · ${closed} закрыто · ${g.wins || 0} в плюс${g.average_r == null ? '' : ` · средний R ${Number(g.average_r).toFixed(2)} (${g.r_evaluated || 0})`}`,
+          closed ? (Number(g.net_pnl_rub || 0) >= 0 ? 'good' : 'bad') : '');
+      };
+      const checked = Number(aiCounts.price_checked_4h || 0);
+      document.getElementById('shadowAiPerformance').innerHTML = [
+        aiCard('ИИ: вход · NET закрытых', 'enter'),
+        aiCard('ИИ: пропустить · NET закрытых', 'abstain'),
+        buildTradeSummaryCard('Диагностика цены 4ч', checked ? `${checked} проверено` : '—',
+          `Вход: ${aiCounts.enter_favorable_4h || 0} из ${aiCounts.enter_checked_4h || 0} по цене · пропуск: ${aiCounts.abstain_unfavorable_4h || 0} из ${aiCounts.abstain_checked_4h || 0} · поздняя цена: ${aiCounts.price_check_late || 0}`),
+      ].join('');
+      document.getElementById('shadowAiNote').textContent = aiCounts.candidates
+        ? `${aiCounts.unavailable || 0} ответов ИИ не получено · ${aiCounts.unmatched_closed || 0} закрытых сделок без надёжной связи с кандидатом. NET считается только по закрытым сделкам; группы наблюдательные, эффект ИИ на результат пока не доказан. Проверка 4ч не является прибылью.`
+        : 'После перехода на AO ещё нет кандидатов для оценки ИИ. Исторические ответы относились к прежней стратегии и не входят в эту выборку.';
       const shadowAiRows = document.getElementById('shadowAiRows');
-      const shadowAiReviews = Array.isArray(shadowAi.reviews)
-        ? shadowAi.reviews.slice().sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')))
-        : [];
-      shadowAiRows.innerHTML = shadowAiReviews.length
-          ? shadowAiReviews.map((item) => {
-            const ai = item.review || {};
-            const unavailable = String(item.status || '').toLowerCase() === 'unavailable';
-            const rawAction = String(ai.action || 'ABSTAIN').toUpperCase();
-            const action = unavailable ? 'ОТВЕТ НЕ ПОЛУЧЕН' : (({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[rawAction] || rawAction);
-            const actionTone = rawAction === 'ENTER' || rawAction === 'HOLD' ? 'long' : rawAction === 'EXIT' || rawAction === 'REVERSE' ? 'short' : 'hold';
-            const confidence = unavailable ? '—' : `${(Number(ai.confidence || 0) * 100).toFixed(0)}%`;
-            const decisionTime = formatMoscowTime(item.time || '');
-            const reviewedTime = item.reviewed_at ? formatMoscowTime(item.reviewed_at) : '';
-            const candleTime = item.candle_time ? `${String(item.candle_time).slice(0, 16)}–${String(item.candle_time).slice(11, 13) ? String(Number(String(item.candle_time).slice(11, 13)) + 1).padStart(2, '0') + ':00' : ''} МСК` : '';
-            const retryText = unavailable && item.next_retry_at
-              ? ` Повторная попытка после ${formatMoscowTime(item.next_retry_at)} МСК.`
-              : unavailable && Number(item.attempt || 0) >= 3
-                ? ' Лимит повторных попыток исчерпан.'
-                : '';
-            const outcome4h = item.shadow_ai_outcomes?.['4h'];
-            let outcomeText = unavailable ? 'Проверка не применяется: рекомендации ИИ нет.' : (item.shadow_ai_4h_due ? 'Ждём первую доступную цену рынка.' : 'Горизонт ещё не наступил.');
-            if (outcome4h?.status === 'unavailable') outcomeText = 'Цена рынка недоступна.';
-            else if (typeof outcome4h?.favorable === 'boolean') {
-              const move = Number(outcome4h.move_pct || 0);
-              const source = outcome4h.price_source === 'hourly_next_session'
-                ? 'первая часовая свеча после паузы рынка'
-                : 'часовое закрытие';
-              const actionSupportsSignal = ['ENTER', 'HOLD', 'ВХОД', 'УДЕРЖИВАТЬ'].includes(rawAction);
-              const actionRejectsSignal = ['ABSTAIN', 'EXIT', 'REVERSE', 'ВОЗДЕРЖАТЬСЯ', 'ВЫЙТИ', 'ПЕРЕВОРОТ'].includes(rawAction);
-              const verdict = actionSupportsSignal ? outcome4h.favorable : actionRejectsSignal ? !outcome4h.favorable : null;
-              const signalText = String(item.signal || '').toUpperCase() === 'SHORT' ? 'шорт' : 'лонг';
-              const movementText = outcome4h.favorable
-                ? `исходный ${signalText} был бы в плюсе ${move >= 0 ? '+' : ''}${move.toFixed(2)}%`
-                : `исходный ${signalText} был бы в минусе ${move.toFixed(2)}%`;
-              const verdictText = verdict == null ? 'Нельзя оценить рекомендацию' : verdict ? 'Совет ИИ подтвердился' : 'Совет ИИ не подтвердился';
-              outcomeText = `${verdictText}: ${movementText}; ${source}.`;
-            }
-            return `<article class="shadow-ai-card">
-              <div class="shadow-ai-head">
-                <div>
-                  <div class="shadow-ai-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div>
-                  <div class="shadow-ai-meta">Сигнал: ${escapeHtml(decisionTime)} МСК${reviewedTime ? `<br>ИИ ответил: ${escapeHtml(reviewedTime)} МСК` : ''}${candleTime ? `<br>Свеча: ${escapeHtml(candleTime)}` : ''}</div>
-                </div>
-                <div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge ${actionTone}">${escapeHtml(action)}</span><span class="muted">уверенность ${escapeHtml(confidence)}</span></div>
-              </div>
-              <div class="shadow-ai-grid">
-                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Почему</div><div class="shadow-ai-field-value">${escapeHtml(unavailable ? `${item.error || 'Внешний ИИ не вернул ответ.'}${retryText}` : (ai.reason || 'Пояснение не сохранено.'))}</div></div>
-                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Риск</div><div class="shadow-ai-field-value">${escapeHtml(ai.risk_note || 'Отдельный риск не указан.')}</div></div>
-                <div class="shadow-ai-field"><div class="shadow-ai-field-label">Проверка через 4 часа</div><div class="shadow-ai-field-value">${escapeHtml(outcomeText)}</div></div>
-              </div>
-            </article>`;
+      shadowAiRows.innerHTML = (shadowAi.recent || []).length
+        ? shadowAi.recent.map(item => {
+            const ai = item.ai_action || (item.ai_status === 'unavailable' ? 'НЕТ ОТВЕТА' : 'ОЖИДАЕТ');
+            const execution = ['confirmed_open', 'recovered_open'].includes(item.execution_status)
+              ? 'ВХОД ПОДТВЕРЖДЁН' : item.decision === 'selected' ? 'ВХОД НЕ ПОДТВЕРЖДЁН' : 'ОТЛОЖЕН';
+            const net = item.closed_net_pnl_rub == null ? 'сделка ещё не закрыта или не связана' : formatSignedRub(item.closed_net_pnl_rub);
+            return `<article class="shadow-ai-card"><div class="shadow-ai-head"><div><div class="shadow-ai-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div><div class="shadow-ai-meta">${escapeHtml(formatMoscowTime(item.observed_at || ''))} МСК · ${escapeHtml(item.candidate_id || '')}</div></div><div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge hold">${escapeHtml(ai)}</span></div></div><div class="shadow-ai-grid"><div class="shadow-ai-field"><div class="shadow-ai-field-label">Решение</div><div class="shadow-ai-field-value">${escapeHtml(execution)}${item.defer_kind ? ' · '+escapeHtml(item.defer_kind) : ''}</div></div><div class="shadow-ai-field"><div class="shadow-ai-field-label">Итог NET</div><div class="shadow-ai-field-value">${escapeHtml(net)}</div></div><div class="shadow-ai-field"><div class="shadow-ai-field-label">Причина ИИ</div><div class="shadow-ai-field-value">${escapeHtml(item.ai_reason || 'Нет ответа')}<br><span class="muted">${escapeHtml(item.model || 'модель не записана')} · ${escapeHtml(item.prompt_version || 'версия промпта не записана')}</span></div></div></div></article>`;
           }).join('')
-        : '<div class="muted">Ждём следующий подтверждённый кандидат на вход. ИИ пока не участвует в торговле.</div>';
+        : '<div class="muted">Кандидатов AO пока нет.</div>';
 
       const review = data.trade_review || {};
       document.getElementById('reviewClosed').textContent = review.closed_count ?? 0;
@@ -7723,6 +7684,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "runtime": runtime,
         "news": load_news_snapshot(),
         "signal_ai_shadow": load_signal_ai_shadow_summary(),
+        "signal_ai_entry": load_signal_ai_entry_workspace(),
         "ao_chaikin_shadow": load_ao_chaikin_shadow_strategy(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),

@@ -38,7 +38,7 @@ from instrument_groups import (
 )
 from news_bias import NewsBias, calibrate_news_biases, detect_news_bias, select_active_biases
 from news_ai_analyzer import NewsAiSignal, request_news_ai_signals
-from signal_ai_reviewer import SignalAiReview, request_signal_ai_reviews
+from signal_ai_reviewer import SignalAiReview, request_signal_ai_reviews, get_signal_ai_model, SIGNAL_AI_PROMPT_VERSION
 from news_ingest import (
     CHANNEL_URLS,
     WEB_SOURCE_URLS,
@@ -346,6 +346,7 @@ class InstrumentState:
     last_shadow_ai_confidence: float = 0.0
     last_shadow_ai_reason: str = ""
     last_shadow_ai_candle_time: str = ""
+    last_shadow_ai_candidate_id: str = ""
     last_shadow_ai_status: str = ""
     last_shadow_ai_error: str = ""
     last_allocator_summary: str = ""
@@ -763,6 +764,7 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
             "reason": str(state.last_shadow_ai_reason or ""),
         } if state.last_shadow_ai_action else {},
         "shadow_ai_status": str(state.last_shadow_ai_status or ""),
+        "candidate_id": str(state.last_shadow_ai_candidate_id or ""),
         "shadow_ai_error": str(state.last_shadow_ai_error or ""),
     }
     return {key: value for key, value in context.items() if value not in ("", [], None)}
@@ -983,6 +985,9 @@ def append_signal_observation_decision(
         "correlation_quantity_cap": int(candidate.get("correlation_quantity_cap") or 0),
         "correlation_note": str(candidate.get("correlation_note") or ""),
         "candle_time": str(candidate.get("candle_time") or ""),
+        "candidate_id": str(candidate.get("candidate_id") or ""),
+        "shadow_ai_model": str(candidate.get("shadow_ai_model") or ""),
+        "shadow_ai_prompt_version": str(candidate.get("shadow_ai_prompt_version") or ""),
         "execution_status": str(candidate.get("execution_status") or ""),
         "execution_note": str(candidate.get("execution_note") or ""),
         "defer_kind": str(candidate.get("defer_kind") or ""),
@@ -4028,6 +4033,10 @@ def build_shadow_ai_key(candidate: dict[str, Any]) -> str:
     )
 
 
+def build_signal_ai_candidate_id(candidate: dict[str, Any]) -> str:
+    return ":".join([str(candidate.get("strategy_name") or ""), build_shadow_ai_key(candidate)])
+
+
 def get_signal_ai_canary_bucket(candidate: dict[str, Any]) -> int:
     digest = hashlib.sha256(build_shadow_ai_key(candidate).encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % 100
@@ -4112,6 +4121,9 @@ def signal_ai_shadow_failure_record(candidate: dict[str, Any], error_text: str, 
         "time": str(candidate.get("shadow_ai_observed_at") or now.isoformat()),
         "last_attempt_at": now.isoformat(),
         "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
+        "candidate_id": str(candidate.get("candidate_id") or build_signal_ai_candidate_id(candidate)),
+        "model": str(candidate.get("shadow_ai_model") or get_signal_ai_model()),
+        "prompt_version": str(candidate.get("shadow_ai_prompt_version") or SIGNAL_AI_PROMPT_VERSION),
         "symbol": str(candidate.get("symbol") or "").upper(),
         "signal": str(candidate.get("signal") or "").upper(),
         "strategy": str(candidate.get("strategy_name") or ""),
@@ -4125,11 +4137,30 @@ def signal_ai_shadow_failure_record(candidate: dict[str, Any], error_text: str, 
 
 def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
     """Attach AI opinions for later comparison; never change live trade decisions."""
-    if not candidates or not get_signal_ai_shadow_enabled():
+    for candidate in candidates:
+        candidate["candidate_id"] = build_signal_ai_candidate_id(candidate)
+        candidate["shadow_ai_model"] = get_signal_ai_model()
+        candidate["shadow_ai_prompt_version"] = SIGNAL_AI_PROMPT_VERSION
+    if not candidates:
+        return
+    if not get_signal_ai_shadow_enabled():
+        for candidate in candidates:
+            state = load_state(str(candidate.get("symbol") or "").upper())
+            state.last_shadow_ai_candidate_id = str(candidate["candidate_id"])
+            state.last_shadow_ai_action = ""
+            state.last_shadow_ai_status = "disabled"
+            save_state(str(candidate.get("symbol") or "").upper(), state)
         return
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         logging.warning("OIL_SIGNAL_AI_SHADOW_ENABLED включён, но OPENAI_API_KEY не задан")
+        for candidate in candidates:
+            state = load_state(str(candidate.get("symbol") or "").upper())
+            state.last_shadow_ai_candidate_id = str(candidate["candidate_id"])
+            state.last_shadow_ai_action = ""
+            state.last_shadow_ai_status = "unavailable"
+            state.last_shadow_ai_error = "OPENAI_API_KEY не задан"
+            save_state(str(candidate.get("symbol") or "").upper(), state)
         return
     previous = load_signal_ai_shadow_index()
     pending: list[dict[str, Any]] = []
@@ -4143,6 +4174,7 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
         state.last_shadow_ai_confidence = 0.0
         state.last_shadow_ai_reason = ""
         state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
+        state.last_shadow_ai_candidate_id = str(candidate.get("candidate_id") or "")
         state.last_shadow_ai_status = "pending"
         state.last_shadow_ai_error = ""
         save_state(str(candidate.get("symbol") or "").upper(), state)
@@ -4193,6 +4225,9 @@ def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
         append_signal_ai_shadow_record({
             "time": now,
             "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
+            "candidate_id": str(candidate.get("candidate_id") or build_signal_ai_candidate_id(candidate)),
+            "model": str(candidate.get("shadow_ai_model") or get_signal_ai_model()),
+            "prompt_version": str(candidate.get("shadow_ai_prompt_version") or SIGNAL_AI_PROMPT_VERSION),
             "symbol": symbol,
             "signal": str(candidate.get("signal") or "").upper(),
             "strategy": str(candidate.get("strategy_name") or ""),
@@ -4304,6 +4339,9 @@ def retry_signal_ai_shadow_reviews() -> int:
             "time": str(candidate.get("shadow_ai_observed_at") or reviewed_at),
             "reviewed_at": reviewed_at,
             "key": str(candidate.get("shadow_ai_key") or ""),
+            "candidate_id": str(candidate.get("candidate_id") or build_signal_ai_candidate_id(candidate)),
+            "model": get_signal_ai_model(),
+            "prompt_version": SIGNAL_AI_PROMPT_VERSION,
             "symbol": symbol,
             "signal": str(candidate.get("signal") or "").upper(),
             "strategy": str(candidate.get("strategy_name") or ""),
@@ -4318,6 +4356,8 @@ def retry_signal_ai_shadow_reviews() -> int:
             {
                 "shadow_ai": review_payload,
                 "shadow_ai_status": "ready",
+                "shadow_ai_model": get_signal_ai_model(),
+                "shadow_ai_prompt_version": SIGNAL_AI_PROMPT_VERSION,
                 "shadow_ai_error": "",
                 "shadow_ai_retry_attempt": int(candidate.get("retry_attempt") or 1),
                 "shadow_ai_next_retry_at": "",

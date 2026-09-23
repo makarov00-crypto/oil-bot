@@ -19,7 +19,7 @@ struct TradeQualityScreen: View {
                     } else if segment == 1 {
                         tradesContent(payload: payload, quality: quality)
                     } else {
-                        shadowAIContent(payload.signalAIShadow)
+                        shadowAIContent(payload.signalAIEntry)
                     }
                 }
                 .refreshable { await store.load(date: store.selectedDate) }
@@ -193,53 +193,73 @@ struct TradeQualityScreen: View {
     }
 
     @ViewBuilder
-    private func shadowAIContent(_ shadow: SignalAIShadowPayload?) -> some View {
-        if let shadow, shadow.enabled == true {
+    private func shadowAIContent(_ data: SignalAIEntryPayload?) -> some View {
+        if let data {
+            let c = data.counts
             GlassCard {
                 VStack(alignment: .leading, spacing: 14) {
-                    SectionHeader(title: "Теневой ИИ", subtitle: "ИИ оценивает сигналы; ограниченная часть входов проходит дополнительную проверку.")
+                    SectionHeader(title: "ИИ на входах AO / Чайкин", subtitle: "Цепочка от кандидата до закрытой сделки. ИИ пока наблюдает и не меняет входы AO.")
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        MetricGlassTile(title: "Разобрано", value: "\(shadow.count ?? 0)")
-                        MetricGlassTile(title: "Поддержал", value: "\(shadow.supporting ?? 0)", tone: .green)
-                        MetricGlassTile(title: "Воздержался", value: "\(shadow.abstaining ?? 0)", tone: .orange)
-                        MetricGlassTile(title: "Проверено 4ч", value: "\(evaluatedCount(shadow.reviews, horizon: "4h"))")
+                        MetricGlassTile(title: "Кандидатов AO", value: "\(c.candidates)")
+                        MetricGlassTile(title: "Ответов ИИ", value: "\(c.reviewed) / \(c.candidates)")
+                        MetricGlassTile(title: "Вход подтверждён", value: "\(c.confirmed) / \(c.selected)")
+                        MetricGlassTile(title: "Закрыто", value: "\(c.closed) / \(c.confirmed)")
+                    }
+                    if c.candidates == 0 {
+                        Text("После перехода на AO кандидатов пока нет. Исторические ответы прежней стратегии исключены.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("\(c.unavailable) ответов ИИ не получено; \(c.unmatchedClosed) закрытых сделок не связаны с кандидатом.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
-
-            ForEach(shadow.reviews) { item in
+            if c.candidates > 0 {
                 GlassCard {
-                    VStack(alignment: .leading, spacing: 9) {
-                        HStack {
-                            Text(item.symbol ?? "-").font(.headline)
-                            Spacer()
-                            SignalPill(text: item.review?.action ?? "НЕТ ОЦЕНКИ", raw: item.review?.direction)
-                        }
-                        InfoRow(title: "Сигнал", value: displaySignal(item.signal))
-                        if let confidence = item.review?.confidence {
-                            InfoRow(title: "Уверенность", value: formatPct(confidence * 100.0))
-                        }
-                        Text(item.review?.reason ?? "Причина не сохранена")
-                            .font(.subheadline)
-                        let outcomeText = ["1h", "2h", "4h", "8h"].compactMap { horizon -> String? in
-                            guard let outcome = item.outcomes[horizon], let move = outcome.movePct else { return nil }
-                            return "\(horizon.replacingOccurrences(of: "h", with: "ч")) \(formatPct(move))"
-                        }.joined(separator: " · ")
-                        if !outcomeText.isEmpty {
-                            Text(outcomeText)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        if let risk = item.review?.riskNote, !risk.isEmpty {
-                            Text("Риск: \(risk)")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Результат закрытых", subtitle: "NET по журналу брокера. Группы наблюдательные; эффект ИИ на торговлю не доказан.")
+                        aiOutcomeRow("ИИ: вход", data.byAction["enter"])
+                        aiOutcomeRow("ИИ: пропустить", data.byAction["abstain"])
+                        Divider().overlay(Color.white.opacity(0.08))
+                        InfoRow(title: "Диагностика цены 4ч", value: "\(c.priceChecked4h) проверено, \(c.priceCheckLate) поздних")
+                        InfoRow(title: "Вход: цена по сигналу", value: "\(c.enterFavorable4h) из \(c.enterChecked4h)")
+                        InfoRow(title: "Пропуск: цена против сигнала", value: "\(c.abstainUnfavorable4h) из \(c.abstainChecked4h)")
+                        Text("Проверка 4ч не включает комиссию, стоп и размер позиции; она не показывает прибыль.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(data.recent) { item in
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 9) {
+                            HStack {
+                                Text(item.symbol ?? "—").font(.headline)
+                                Spacer()
+                                SignalPill(text: item.aiAction?.isEmpty == false ? item.aiAction! : "НЕТ ОТВЕТА", raw: item.signal)
+                            }
+                            InfoRow(title: "Сигнал", value: displaySignal(item.signal))
+                            InfoRow(title: "Аллокатор", value: item.decision ?? "—")
+                            InfoRow(title: "Исполнение", value: item.executionStatus?.isEmpty == false ? item.executionStatus! : "не подтверждено")
+                            InfoRow(title: "NET", value: item.closedNetPnlRub.map { formatRub($0) } ?? "сделка не закрыта или не связана")
+                            Text(item.aiReason?.isEmpty == false ? item.aiReason! : "Причина не записана")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text("\(item.model?.isEmpty == false ? item.model! : "модель не записана") · \(item.promptVersion?.isEmpty == false ? item.promptVersion! : "версия не записана")")
+                                .font(.caption2).foregroundStyle(.tertiary)
                         }
                     }
                 }
             }
         } else {
-            EmptyGlassState(title: "Теневой ИИ выключен", subtitle: "Рекомендации пока не собираются.", systemImage: "brain.head.profile")
+            EmptyGlassState(title: "Нет данных ИИ", subtitle: "Данные о кандидатах AO ещё не загружены.", systemImage: "brain.head.profile")
+        }
+    }
+
+    @ViewBuilder
+    private func aiOutcomeRow(_ title: String, _ group: SignalAIEntryGroup?) -> some View {
+        if let group {
+            InfoRow(title: title, value: "\(group.closed > 0 ? formatRub(group.netPnlRub) : "—") · \(group.closed) закрыто / \(group.executed) входов")
+            if let averageR = group.averageR {
+                InfoRow(title: "Средний R", value: String(format: "%.2f (%d сделок)", averageR, group.rEvaluated ?? 0))
+            }
         }
     }
 
@@ -249,10 +269,6 @@ struct TradeQualityScreen: View {
             value: value == nil ? "ждём данные" : "\(formatRub(value)) · к факту \(formatRub(delta))",
             accent: statusTone(for: delta)
         )
-    }
-
-    private func evaluatedCount(_ reviews: [SignalAIShadowReview], horizon: String) -> Int {
-        reviews.filter { $0.outcomes[horizon] != nil }.count
     }
 
     private func aiAction(_ raw: String) -> String {

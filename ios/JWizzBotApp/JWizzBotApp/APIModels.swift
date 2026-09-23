@@ -37,6 +37,7 @@ struct DashboardPayload: Decodable {
     let signalObservations: SignalObservationSummary?
     let tradeQuality: TradeQualityPayload?
     let signalAIShadow: SignalAIShadowPayload?
+    let signalAIEntry: SignalAIEntryPayload?
     let aoChaikinShadow: AOChaikinShadowPayload?
 
     enum CodingKeys: String, CodingKey {
@@ -58,6 +59,7 @@ struct DashboardPayload: Decodable {
         case signalObservations = "signal_observations"
         case tradeQuality = "trade_quality"
         case signalAIShadow = "signal_ai_shadow"
+        case signalAIEntry = "signal_ai_entry"
         case aoChaikinShadow = "ao_chaikin_shadow"
     }
 }
@@ -189,13 +191,10 @@ struct AOChaikinShadowEvent: Decodable, Identifiable {
 
 struct StrategyResearchWorkspace: Decodable {
     let generatedAt: String?
-    let execution: StrategyExecutionResearch
-    let ai: StrategyAIResearch
     let exitExperiment: StrategyExitExperiment
 
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
-        case execution, ai
         case exitExperiment = "exit_experiment"
     }
 }
@@ -640,6 +639,90 @@ struct SignalAIShadowPayload: Decodable {
     let supporting: Int?
     let abstaining: Int?
     let reviews: [SignalAIShadowReview]
+}
+
+struct SignalAIEntryPayload: Decodable {
+    let counts: SignalAIEntryCounts
+    let byAction: [String: SignalAIEntryGroup]
+    let recent: [SignalAIEntryCandidate]
+
+    enum CodingKeys: String, CodingKey {
+        case counts, recent
+        case byAction = "by_action"
+    }
+}
+
+struct SignalAIEntryCounts: Decodable {
+    let candidates: Int
+    let reviewed: Int
+    let enter: Int
+    let abstain: Int
+    let unavailable: Int
+    let selected: Int
+    let confirmed: Int
+    let closed: Int
+    let unmatchedClosed: Int
+    let priceChecked4h: Int
+    let priceCheckLate: Int
+    let enterFavorable4h: Int
+    let enterChecked4h: Int
+    let abstainUnfavorable4h: Int
+    let abstainChecked4h: Int
+
+    enum CodingKeys: String, CodingKey {
+        case candidates, reviewed, enter, abstain, unavailable, selected, confirmed, closed
+        case unmatchedClosed = "unmatched_closed"
+        case priceChecked4h = "price_checked_4h"
+        case priceCheckLate = "price_check_late"
+        case enterFavorable4h = "enter_favorable_4h"
+        case enterChecked4h = "enter_checked_4h"
+        case abstainUnfavorable4h = "abstain_unfavorable_4h"
+        case abstainChecked4h = "abstain_checked_4h"
+    }
+}
+
+struct SignalAIEntryGroup: Decodable {
+    let reviewed: Int
+    let executed: Int
+    let closed: Int
+    let netPnlRub: Double
+    let wins: Int
+    let averageR: Double?
+    let rEvaluated: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case reviewed, executed, closed, wins
+        case netPnlRub = "net_pnl_rub"
+        case averageR = "average_r"
+        case rEvaluated = "r_evaluated"
+    }
+}
+
+struct SignalAIEntryCandidate: Decodable, Identifiable {
+    let candidateID: String
+    let symbol: String?
+    let signal: String?
+    let observedAt: String?
+    let decision: String?
+    let executionStatus: String?
+    let aiAction: String?
+    let aiReason: String?
+    let model: String?
+    let promptVersion: String?
+    let closedNetPnlRub: Double?
+
+    var id: String { candidateID.isEmpty ? "\(symbol ?? ""): \(observedAt ?? "")" : candidateID }
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, signal, decision, model
+        case candidateID = "candidate_id"
+        case observedAt = "observed_at"
+        case executionStatus = "execution_status"
+        case aiAction = "ai_action"
+        case aiReason = "ai_reason"
+        case promptVersion = "prompt_version"
+        case closedNetPnlRub = "closed_net_pnl_rub"
+    }
 }
 
 struct SignalAIShadowReview: Decodable, Identifiable {

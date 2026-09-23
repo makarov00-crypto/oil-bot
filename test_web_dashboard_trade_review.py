@@ -67,8 +67,10 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertIn('href="/shadow-strategy"', dashboard_html)
         self.assertIn('class="site-nav__link is-active"', shadow_html)
-        self.assertIn('id="executionCards"', shadow_html)
-        self.assertIn('id="aiSections"', shadow_html)
+        self.assertIn('id="shadowAiCandidates"', dashboard_html)
+        self.assertIn('id="shadowAiPerformance"', dashboard_html)
+        self.assertNotIn('id="executionCards"', shadow_html)
+        self.assertNotIn('id="aiSections"', shadow_html)
         self.assertIn('id="exitExperiment"', shadow_html)
         self.assertNotIn('id="strategyComparison"', shadow_html)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
@@ -53,6 +54,12 @@ SIGNAL_AI_SCHEMA: dict[str, Any] = {
     },
     "required": ["reviews"],
 }
+
+# Changes when the actual instructions or response contract change.
+SIGNAL_AI_CONTEXT_VERSION = "ao-entry-context-v1"
+SIGNAL_AI_PROMPT_VERSION = hashlib.sha256(
+    (SYSTEM_INSTRUCTIONS + SIGNAL_AI_CONTEXT_VERSION + json.dumps(SIGNAL_AI_SCHEMA, sort_keys=True, ensure_ascii=False)).encode("utf-8")
+).hexdigest()[:12]
 
 
 @dataclass(frozen=True)
