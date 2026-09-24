@@ -19,6 +19,18 @@ else:
 
 class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_portfolio_free_rubles_exclude_fund_value(self) -> None:
+        portfolio = {
+            "total_portfolio_rub": 558_157.34,
+            "blocked_guarantee_rub": 87_465.89,
+            "free_rub": 279_052.38,
+            "cash_manager": {"value_rub": 279_104.96},
+        }
+        with patch.object(dashboard, "load_all_trade_rows", return_value=[]):
+            view = dashboard.build_portfolio_view_for_day(portfolio, date.today(), {})
+        self.assertEqual(view["free_cash_rub"], 279_052.38)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_dashboard_does_not_render_legacy_15m_badge_for_hourly_reversal(self) -> None:
         html = dashboard.build_dashboard_html()
 

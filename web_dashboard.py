@@ -3376,12 +3376,9 @@ def build_portfolio_view_for_day(
     view["report_date"] = day_key
     view["selected_date_moscow"] = target_day.strftime("%d.%m.%Y")
     view["selected_is_today"] = selected_is_today
-    try:
-        total_portfolio = float(view.get("total_portfolio_rub") or 0.0)
-        blocked_guarantee = float(view.get("blocked_guarantee_rub") or 0.0)
-        view["free_cash_rub"] = round(max(0.0, total_portfolio - blocked_guarantee), 2)
-    except Exception:
-        view["free_cash_rub"] = view.get("free_rub")
+    # The fund is part of total portfolio value; subtracting only futures GO
+    # would wrongly count invested LQDT as idle rubles.
+    view["free_cash_rub"] = round(max(0.0, float(view.get("free_rub") or 0.0)), 2)
     view["bot_realized_gross_pnl_rub"] = round(closed_totals["gross_pnl_rub"], 2)
     view["bot_realized_commission_rub"] = round(closed_totals["commission_rub"], 2)
     view["bot_realized_pnl_rub"] = round(closed_totals["net_pnl_rub"], 2)
@@ -5366,12 +5363,12 @@ def build_dashboard_html() -> str:
       <div class="portfolio-layout">
         <div class="portfolio-group">
           <h3>Счёт брокера</h3>
-          <p>Оценка всего счёта и доступные для новых сделок деньги.</p>
+          <p>Оценка счёта и рубли на нём; запас ГО для фьючерсов проверяется отдельно.</p>
           <div class="portfolio-metrics">
             <div class="portfolio-metric" data-help="Оценка всего счёта у брокера по портфельному срезу T-Invest. Формула у брокера: деньги + текущая оценка позиций и активов счёта." tabindex="0">
               <div class="portfolio-label">Счёт <span class="portfolio-help-icon">?</span></div>
               <div class="metric" id="portfolioTotal">-</div>
-              <div class="portfolio-secondary-value">Доступно: <strong id="portfolioFree">-</strong></div>
+              <div class="portfolio-secondary-value">Рубли: <strong id="portfolioFree">-</strong></div>
             </div>
             <div class="portfolio-metric" data-help="Средства в LQDT. Резерв рассчитывается из денег на операции, стресса открытых фьючерсов и ГО одного возможного входа. Покупка фонда ограничена доступными рублями и маржинальным запасом брокера. Цель фонда — расчётная стоимость после следующей покупки." tabindex="0">
               <div class="portfolio-label">Фонд ликвидности <span class="portfolio-help-icon">?</span></div>
@@ -6737,10 +6734,9 @@ def build_dashboard_html() -> str:
 
       const portfolio = data.portfolio || {};
       const selectedDateLabel = portfolio.selected_date_moscow ? ` | Дата отчёта: ${portfolio.selected_date_moscow}` : '';
-      const calculatedFreeCash = Math.max(0, Number(portfolio.total_portfolio_rub || 0) - Number(portfolio.blocked_guarantee_rub || 0));
       document.getElementById('portfolioGeneratedAt').textContent = `Срез портфеля: ${portfolio.generated_at_moscow || '-'}${selectedDateLabel}`;
       document.getElementById('portfolioTotal').textContent = formatRub(portfolio.total_portfolio_rub);
-      document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_cash_rub ?? calculatedFreeCash);
+      document.getElementById('portfolioFree').textContent = formatRub(portfolio.free_cash_rub ?? portfolio.free_rub);
       const cashManager = portfolio.cash_manager || {};
       const cashFundValue = Number(cashManager.value_rub || 0);
       document.getElementById('portfolioCashFund').textContent = cashManager.enabled ? formatRub(cashFundValue) : 'Выключен';
