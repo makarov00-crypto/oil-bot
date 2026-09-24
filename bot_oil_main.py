@@ -12,6 +12,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -93,6 +94,8 @@ from tinkoff.invest import (
     OrderDirection,
     OrderExecutionReportStatus,
     OrderType,
+    Quotation,
+    TimeInForceType,
     OperationState,
     OperationType,
     RequestError,
@@ -233,6 +236,8 @@ class BotConfig:
     cash_manager_fund_symbol: str
     cash_manager_max_portfolio_pct: float
     cash_manager_reserve_pct: float
+    cash_manager_min_cash_rub: float
+    cash_manager_stress_notional_pct: float
     cash_manager_idle_minutes: int
     cash_manager_min_order_rub: float
     cash_manager_release_buffer_pct: float
@@ -256,6 +261,7 @@ class CashFundConfig:
     figi: str
     display_name: str
     lot: int = 1
+    min_price_increment: float = 0.0001
 
 
 @dataclass
@@ -263,13 +269,20 @@ class CashManagerState:
     fund_symbol: str = ""
     fund_figi: str = ""
     pending_order_id: str = ""
+    pending_request_id: str = ""
     pending_action: str = ""
     pending_qty: int = 0
     pending_submitted_at: str = ""
+    pending_baseline_qty: int = -1
     last_action: str = ""
     last_completed_at: str = ""
+    last_attempt_at: str = ""
     last_error: str = ""
     flat_since: str = ""
+    last_cash_rub: float = 0.0
+    last_reserve_rub: float = 0.0
+    last_target_fund_rub: float = 0.0
+    last_margin_headroom_rub: float = 0.0
 
 
 @dataclass
@@ -3602,10 +3615,14 @@ def load_config() -> BotConfig:
         ),
         cash_manager_reserve_pct=max(
             0.0,
-            min(0.95, parse_float_env("OIL_CASH_MANAGER_RESERVE_PCT", 0.20)),
+            min(0.95, parse_float_env("OIL_CASH_MANAGER_RESERVE_PCT", 0.05)),
+        ),
+        cash_manager_min_cash_rub=max(0.0, parse_float_env("OIL_CASH_MANAGER_MIN_CASH_RUB", 30000.0)),
+        cash_manager_stress_notional_pct=max(
+            0.0, min(0.25, parse_float_env("OIL_CASH_MANAGER_STRESS_NOTIONAL_PCT", 0.05))
         ),
         cash_manager_idle_minutes=max(0, parse_int_env("OIL_CASH_MANAGER_IDLE_MINUTES", 30)),
-        cash_manager_min_order_rub=max(0.0, parse_float_env("OIL_CASH_MANAGER_MIN_ORDER_RUB", 10000.0)),
+        cash_manager_min_order_rub=max(0.0, parse_float_env("OIL_CASH_MANAGER_MIN_ORDER_RUB", 20000.0)),
         cash_manager_release_buffer_pct=max(
             0.0,
             min(1.0, parse_float_env("OIL_CASH_MANAGER_RELEASE_BUFFER_PCT", 0.15)),
@@ -4883,6 +4900,7 @@ def resolve_cash_manager_fund(client: Client, config: BotConfig) -> CashFundConf
         figi=str(item.figi),
         display_name=str(item.name or symbol),
         lot=max(1, int(getattr(item, "lot", 1) or 1)),
+        min_price_increment=max(0.000001, quotation_to_float(getattr(item, "min_price_increment", None))),
     )
 
 
@@ -4933,7 +4951,7 @@ def get_cash_manager_status(
     holding = get_cash_fund_holding(client, config, resolved_fund)
     return {
         "enabled": True,
-        "status": "pending" if state.pending_order_id else "ready",
+        "status": "pending" if cash_manager_has_pending_order(state) else "ready",
         "fund_symbol": resolved_fund.symbol,
         "fund_name": resolved_fund.display_name,
         "figi": resolved_fund.figi,
@@ -4946,14 +4964,111 @@ def get_cash_manager_status(
         "last_action": state.last_action,
         "last_completed_at": state.last_completed_at,
         "last_error": state.last_error,
+        "cash_rub": round(state.last_cash_rub, 2),
+        "reserve_rub": round(state.last_reserve_rub, 2),
+        "target_fund_rub": round(state.last_target_fund_rub, 2),
+        "margin_headroom_rub": round(state.last_margin_headroom_rub, 2),
     }
 
 
-def cash_manager_target_value_rub(snapshot: AccountSnapshot, config: BotConfig) -> float:
+def cash_manager_target_value_rub(
+    snapshot: AccountSnapshot,
+    config: BotConfig,
+    current_fund_value_rub: float = 0.0,
+    reserve_rub: float | None = None,
+    margin_headroom_rub: float | None = None,
+) -> float:
     equity = max(0.0, snapshot.total_portfolio)
-    reserve_rub = equity * config.cash_manager_reserve_pct
-    available_after_reserve = max(0.0, snapshot.free_rub - reserve_rub)
-    return max(0.0, min(equity * config.cash_manager_max_portfolio_pct, available_after_reserve))
+    if reserve_rub is None:
+        reserve_rub = equity * config.cash_manager_reserve_pct
+    available_purchase = max(0.0, snapshot.free_rub - reserve_rub)
+    if margin_headroom_rub is not None:
+        # Assume the ETF gives no margin collateral until measured otherwise.
+        available_purchase = min(available_purchase, max(0.0, margin_headroom_rub - reserve_rub))
+    return max(0.0, min(equity * config.cash_manager_max_portfolio_pct, current_fund_value_rub + available_purchase))
+
+
+def cash_manager_dynamic_reserve_rub(
+    snapshot: AccountSnapshot,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+    live_positions: dict[str, dict[str, float | int | str | None]],
+) -> float:
+    operating_cash = max(
+        float(getattr(config, "cash_manager_min_cash_rub", 30000.0)),
+        snapshot.total_portfolio * config.cash_manager_reserve_pct,
+    )
+    notional = sum(max(0.0, float(item.get("notional_rub") or 0.0)) for item in live_positions.values())
+    stored_risk = 0.0
+    for symbol in live_positions:
+        state = load_state(symbol)
+        stored_risk += max(0.0, float(state.entry_risk_rub or 0.0))
+    stress_cash = max(
+        2.0 * stored_risk,
+        notional * float(getattr(config, "cash_manager_stress_notional_pct", 0.05)),
+    )
+    # Keep one possible entry ready. Every additional entry rechecks cash and
+    # broker margin before an order can be sent.
+    entry_margin = max(
+        (
+            max(get_margin_per_lot(item, "LONG"), get_margin_per_lot(item, "SHORT"))
+            for item in watchlist if item.symbol not in live_positions
+        ),
+        default=0.0,
+    ) * (1.0 + config.cash_manager_release_buffer_pct)
+    return operating_cash + stress_cash + entry_margin
+
+
+def cash_fund_limit_order_available(client: Client, fund: CashFundConfig) -> bool:
+    try:
+        status = client.market_data.get_trading_status(figi=fund.figi)
+        return bool(getattr(status, "limit_order_available_flag", False))
+    except RequestError as error:
+        logging.warning("Cash manager: статус торгов %s недоступен: %s", fund.symbol, error)
+        return False
+
+
+def cash_fund_protected_limit_price(
+    client: Client,
+    fund: CashFundConfig,
+    direction: OrderDirection,
+    quantity: int,
+) -> Quotation | None:
+    try:
+        book = client.market_data.get_order_book(figi=fund.figi, depth=10)
+    except RequestError as error:
+        logging.warning("Cash manager: стакан %s недоступен: %s", fund.symbol, error)
+        return None
+    bids = list(getattr(book, "bids", []) or [])
+    asks = list(getattr(book, "asks", []) or [])
+    if not bids or not asks:
+        return None
+    best_bid = quotation_to_float(bids[0].price)
+    best_ask = quotation_to_float(asks[0].price)
+    if best_bid <= 0 or best_ask <= 0 or best_bid >= best_ask:
+        return None
+    if (best_ask - best_bid) / ((best_ask + best_bid) / 2.0) > 0.003:
+        return None
+    tick = fund.min_price_increment
+    if direction == OrderDirection.ORDER_DIRECTION_BUY:
+        limit = math.ceil(best_ask * 1.001 / tick) * tick
+        depth = sum(int(level.quantity) for level in asks if quotation_to_float(level.price) <= limit)
+    else:
+        limit = math.floor(best_bid * 0.999 / tick) * tick
+        depth = sum(int(level.quantity) for level in bids if quotation_to_float(level.price) >= limit)
+    if limit <= 0 or depth < quantity:
+        return None
+    nano_value = int(round(limit * 1_000_000_000))
+    return Quotation(units=nano_value // 1_000_000_000, nano=nano_value % 1_000_000_000)
+
+
+def cash_manager_strict_margin_headroom_rub(client: Client, config: BotConfig) -> float | None:
+    try:
+        margin = client.users.get_margin_attributes(account_id=config.account_id)
+        return max(0.0, -quotation_to_float(margin.amount_of_missing_funds))
+    except RequestError as error:
+        logging.warning("Cash manager: не удалось проверить ГО у брокера: %s", error)
+        return None
 
 
 def cash_manager_quantity_for_value(value_rub: float, price_rub: float, lot: int) -> int:
@@ -4961,6 +5076,21 @@ def cash_manager_quantity_for_value(value_rub: float, price_rub: float, lot: int
     if unit_cost <= 0:
         return 0
     return max(0, int(math.floor(max(0.0, value_rub) / unit_cost)))
+
+
+def cash_manager_quantity_to_release(value_rub: float, price_rub: float, lot: int) -> int:
+    unit_value = max(0.0, price_rub) * max(1, lot)
+    return int(math.ceil(max(0.0, value_rub) / unit_value)) if unit_value > 0 else 0
+
+
+def get_cash_manager_available_rub(client: Client, config: BotConfig, snapshot: AccountSnapshot) -> float:
+    positions = client.operations.get_positions(account_id=config.account_id)
+    actual_rub = sum(
+        quotation_to_float(item)
+        for item in positions.money
+        if str(getattr(item, "currency", "")).upper() == "RUB"
+    )
+    return max(0.0, min(snapshot.free_rub, actual_rub))
 
 
 def cash_manager_has_pending_futures(watchlist: list[InstrumentConfig]) -> bool:
@@ -4982,32 +5112,63 @@ def submit_cash_fund_order(
         state.last_error = "Cash manager: заявка не отправлена, торговый режим выключен."
         save_cash_manager_state(state)
         return False
-    order_id = str(uuid4())
+    last_attempt_at = parse_state_datetime(state.last_attempt_at)
+    if last_attempt_at and datetime.now(UTC) - last_attempt_at < timedelta(seconds=30):
+        return False
+    if not cash_fund_limit_order_available(client, fund):
+        state.last_error = f"Cash manager: торги {fund.symbol} сейчас недоступны."
+        save_cash_manager_state(state)
+        return False
+    limit_price = cash_fund_protected_limit_price(client, fund, direction, quantity)
+    if limit_price is None:
+        state.last_error = f"Cash manager: недостаточная глубина стакана или широкий спред {fund.symbol}."
+        save_cash_manager_state(state)
+        return False
+    request_id = str(uuid4())
+    # Persist the intent before the network call. If the reply is lost, never
+    # issue another order until the broker position/order has been reconciled.
+    holding = get_cash_fund_holding(client, config, fund)
+    state.fund_symbol = fund.symbol
+    state.fund_figi = fund.figi
+    state.pending_request_id = request_id
+    state.pending_order_id = ""
+    state.pending_action = action
+    state.pending_qty = quantity
+    state.pending_baseline_qty = int(holding["qty"])
+    state.pending_submitted_at = datetime.now(UTC).isoformat()
+    state.last_attempt_at = state.pending_submitted_at
+    state.last_error = ""
+    save_cash_manager_state(state)
     try:
-        client.orders.post_order(
+        response = client.orders.post_order(
             figi=fund.figi,
             quantity=quantity,
-            price=None,
+            price=limit_price,
             direction=direction,
             account_id=config.account_id,
-            order_type=OrderType.ORDER_TYPE_MARKET,
-            order_id=order_id,
+            order_type=OrderType.ORDER_TYPE_LIMIT,
+            order_id=request_id,
+            time_in_force=TimeInForceType.TIME_IN_FORCE_FILL_AND_KILL,
         )
     except RequestError as error:
-        state.last_error = f"Cash manager: заявка {action} {fund.symbol} отклонена: {error}"
+        state.last_error = f"Cash manager: ответ на заявку {action} {fund.symbol} не подтверждён: {error}"
         save_cash_manager_state(state)
         logging.warning(state.last_error)
         return False
-    state.fund_symbol = fund.symbol
-    state.fund_figi = fund.figi
-    state.pending_order_id = order_id
-    state.pending_action = action
-    state.pending_qty = quantity
-    state.pending_submitted_at = datetime.now(UTC).isoformat()
-    state.last_error = ""
+    state.pending_order_id = str(getattr(response, "order_id", "") or "")
+    if not state.pending_order_id:
+        state.last_error = "Cash manager: брокер не вернул биржевой ID заявки; требуется сверка."
     save_cash_manager_state(state)
-    logging.info("cash_manager action=%s fund=%s qty=%s order_id=%s", action, fund.symbol, quantity, order_id)
-    return True
+    logging.info("cash_manager action=%s fund=%s qty=%s order_id=%s", action, fund.symbol, quantity, state.pending_order_id)
+    response_status = getattr(response, "execution_report_status", None)
+    if (
+        state.pending_order_id
+        and cash_manager_order_is_terminal(response_status)
+        and not (response_status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL and int(getattr(response, "lots_executed", 0) or 0) <= 0)
+    ):
+        complete_cash_manager_pending_order(config, fund, state, response)
+        return int(getattr(response, "lots_executed", 0) or 0) > 0
+    return bool(state.pending_order_id)
 
 
 def cash_manager_missing_order_is_stale(state: CashManagerState, error: RequestError) -> bool:
@@ -5017,49 +5178,67 @@ def cash_manager_missing_order_is_stale(state: CashManagerState, error: RequestE
     return (datetime.now(UTC) - submitted_at).total_seconds() >= 5 * 60
 
 
-def refresh_cash_manager_pending_order(
-    client: Client,
-    config: BotConfig,
-    fund: CashFundConfig | None,
-) -> None:
-    state = load_cash_manager_state()
-    if not state.pending_order_id or fund is None:
-        return
-    try:
-        order = client.orders.get_order_state(account_id=config.account_id, order_id=state.pending_order_id)
-    except RequestError as error:
-        if cash_manager_missing_order_is_stale(state, error):
-            order_id = state.pending_order_id
-            state.last_error = (
-                f"Cash manager: заявка {state.pending_action} {fund.symbol} {order_id} не найдена у брокера "
-                "через 5 минут; ожидание снято без подтверждения исполнения."
-            )
-            state.pending_order_id = ""
-            state.pending_action = ""
-            state.pending_qty = 0
-            state.pending_submitted_at = ""
-            save_cash_manager_state(state)
-            logging.warning(state.last_error)
-            return
-        logging.warning("Cash manager: не удалось получить статус заявки %s: %s", state.pending_order_id, error)
-        return
-    status = order.execution_report_status
-    if status not in {
+def cash_manager_has_pending_order(state: CashManagerState) -> bool:
+    return bool(state.pending_order_id or state.pending_request_id)
+
+
+def cash_manager_order_is_terminal(status: OrderExecutionReportStatus | None) -> bool:
+    return status in {
         OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL,
         OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_CANCELLED,
         OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED,
-    }:
-        return
+    }
+
+
+def clear_cash_manager_pending_order(state: CashManagerState) -> None:
+    state.pending_order_id = ""
+    state.pending_request_id = ""
+    state.pending_action = ""
+    state.pending_qty = 0
+    state.pending_baseline_qty = -1
+    state.pending_submitted_at = ""
+
+
+def cash_manager_confirm_fill_from_position(
+    client: Client,
+    config: BotConfig,
+    fund: CashFundConfig,
+    state: CashManagerState,
+) -> bool:
+    if state.pending_baseline_qty < 0 or state.pending_qty <= 0:
+        return False
+    held_qty = int(get_cash_fund_holding(client, config, fund)["qty"])
+    filled = (
+        held_qty - state.pending_baseline_qty
+        if state.pending_action == "BUY"
+        else state.pending_baseline_qty - held_qty
+    )
+    if filled < state.pending_qty:
+        return False
+    state.last_action = f"{state.pending_action} {fund.symbol}: {filled} шт. (сверено по остатку)"
+    state.last_completed_at = datetime.now(UTC).isoformat()
+    state.last_error = ""
+    clear_cash_manager_pending_order(state)
+    save_cash_manager_state(state)
+    return True
+
+
+def complete_cash_manager_pending_order(
+    config: BotConfig,
+    fund: CashFundConfig,
+    state: CashManagerState,
+    order: Any,
+) -> None:
+    status = order.execution_report_status
     action = state.pending_action
-    qty = int(getattr(order, "lots_executed", 0) or state.pending_qty)
+    qty = int(getattr(order, "lots_executed", 0) or 0)
     price = quotation_to_float(getattr(order, "executed_order_price", None))
     if price <= 0:
         price = quotation_to_float(getattr(order, "average_position_price", None))
-    completed_at = datetime.now(UTC).isoformat()
-    if status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL:
+    if qty > 0:
         state.last_action = f"{action} {fund.symbol}: {qty} шт. по {price:.6f} RUB"
-        state.last_completed_at = completed_at
-        state.last_error = ""
+        state.last_completed_at = datetime.now(UTC).isoformat()
+        state.last_error = "" if status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL else f"Cash manager: частичное исполнение {qty} шт., статус {status}."
         send_msg(
             config,
             build_telegram_card(
@@ -5070,11 +5249,66 @@ def refresh_cash_manager_pending_order(
     else:
         state.last_error = f"Cash manager: {action} {fund.symbol} не исполнено, статус брокера {status}."
         logging.warning(state.last_error)
-    state.pending_order_id = ""
-    state.pending_action = ""
-    state.pending_qty = 0
-    state.pending_submitted_at = ""
+    clear_cash_manager_pending_order(state)
     save_cash_manager_state(state)
+
+
+def refresh_cash_manager_pending_order(
+    client: Client,
+    config: BotConfig,
+    fund: CashFundConfig | None,
+) -> None:
+    state = load_cash_manager_state()
+    if not cash_manager_has_pending_order(state) or fund is None:
+        return
+    if not state.pending_order_id:
+        try:
+            active_orders = client.orders.get_orders(account_id=config.account_id).orders
+            match = next(
+                (order for order in active_orders if str(getattr(order, "order_request_id", "")) == state.pending_request_id),
+                None,
+            )
+            if match is not None:
+                state.pending_order_id = str(getattr(match, "order_id", "") or "")
+                save_cash_manager_state(state)
+        except RequestError as error:
+            logging.warning("Cash manager: не удалось сверить активные заявки: %s", error)
+        if not state.pending_order_id:
+            if cash_manager_confirm_fill_from_position(client, config, fund, state):
+                return
+            state.last_error = "Cash manager: биржевой ID не получен; заявка требует сверки, новые заявки заблокированы."
+            save_cash_manager_state(state)
+            return
+    try:
+        order = client.orders.get_order_state(account_id=config.account_id, order_id=state.pending_order_id)
+    except RequestError as error:
+        if is_order_not_found_error(error) and cash_manager_confirm_fill_from_position(client, config, fund, state):
+            return
+        if cash_manager_missing_order_is_stale(state, error):
+            state.last_error = (
+                f"Cash manager: заявка {state.pending_action} {fund.symbol} {state.pending_order_id} не найдена у брокера; "
+                "новые заявки заблокированы до сверки."
+            )
+            save_cash_manager_state(state)
+            logging.warning(state.last_error)
+            return
+        logging.warning("Cash manager: не удалось получить статус заявки %s: %s", state.pending_order_id, error)
+        return
+    status = order.execution_report_status
+    if not cash_manager_order_is_terminal(status):
+        return
+    if status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL and int(getattr(order, "lots_executed", 0) or 0) <= 0 and state.pending_baseline_qty >= 0:
+        held_qty = int(get_cash_fund_holding(client, config, fund)["qty"])
+        observed_qty = held_qty - state.pending_baseline_qty if state.pending_action == "BUY" else state.pending_baseline_qty - held_qty
+        if observed_qty <= 0:
+            return
+        order = SimpleNamespace(
+            execution_report_status=status,
+            lots_executed=observed_qty,
+            executed_order_price=getattr(order, "executed_order_price", None),
+            average_position_price=getattr(order, "average_position_price", None),
+        )
+    complete_cash_manager_pending_order(config, fund, state, order)
 
 
 def maybe_park_free_cash_in_fund(
@@ -5087,29 +5321,56 @@ def maybe_park_free_cash_in_fund(
     if not bool(getattr(config, "cash_manager_enabled", False)) or fund is None:
         return
     state = load_cash_manager_state()
-    if state.pending_order_id:
+    if cash_manager_has_pending_order(state):
         return
-    if get_market_session() in {"CLOSED", "CLEARING", "WEEKEND"}:
+    last_completed_at = parse_state_datetime(state.last_completed_at)
+    if last_completed_at and datetime.now(UTC) - last_completed_at < timedelta(seconds=30):
         return
-    live_positions = get_live_portfolio_positions(client, config, watchlist)
-    if live_positions or cash_manager_has_pending_futures(watchlist) or cycle_candidates:
+    if cash_manager_has_pending_futures(watchlist) or cycle_candidates:
         state.flat_since = ""
         save_cash_manager_state(state)
         return
+    if not cash_fund_limit_order_available(client, fund):
+        return
+    live_positions = get_live_portfolio_positions(client, config, watchlist)
     now = datetime.now(UTC)
     if not state.flat_since:
         state.flat_since = now.isoformat()
         save_cash_manager_state(state)
-        return
     try:
         flat_since = datetime.fromisoformat(state.flat_since)
     except ValueError:
         flat_since = now
-    if now - flat_since < timedelta(minutes=config.cash_manager_idle_minutes):
-        return
     snapshot = get_account_snapshot(client, config)
-    target_value = cash_manager_target_value_rub(snapshot, config)
+    snapshot.free_rub = get_cash_manager_available_rub(client, config, snapshot)
     holding = get_cash_fund_holding(client, config, fund)
+    reserve_rub = cash_manager_dynamic_reserve_rub(snapshot, config, watchlist, live_positions)
+    margin_headroom = cash_manager_strict_margin_headroom_rub(client, config)
+    if margin_headroom is None:
+        return
+    state.last_cash_rub = snapshot.free_rub
+    state.last_reserve_rub = reserve_rub
+    state.last_margin_headroom_rub = margin_headroom
+    reserve_rebalance_gap = max(5000.0, snapshot.total_portfolio * 0.01)
+    if snapshot.free_rub + reserve_rebalance_gap < reserve_rub and int(holding["qty"]) > 0:
+        release_value = (reserve_rub - snapshot.free_rub) * (1.0 + config.cash_manager_release_buffer_pct)
+        quantity = min(
+            int(holding["qty"]),
+            cash_manager_quantity_to_release(release_value, float(holding["price_rub"]), fund.lot),
+        )
+        if quantity > 0:
+            submit_cash_fund_order(
+                client, config, fund, quantity, OrderDirection.ORDER_DIRECTION_SELL, "SELL", state,
+            )
+        return
+    if now - flat_since < timedelta(minutes=config.cash_manager_idle_minutes):
+        save_cash_manager_state(state)
+        return
+    target_value = cash_manager_target_value_rub(
+        snapshot, config, float(holding["value_rub"]), reserve_rub, margin_headroom,
+    )
+    state.last_target_fund_rub = target_value
+    save_cash_manager_state(state)
     purchase_value = max(0.0, target_value - float(holding["value_rub"]))
     if purchase_value < config.cash_manager_min_order_rub:
         return
@@ -5139,47 +5400,61 @@ def maybe_release_cash_fund_for_entry(
     fund: CashFundConfig | None,
     instrument: InstrumentConfig,
     signal: str,
+    desired_lots: int = 1,
+    watchlist: list[InstrumentConfig] | None = None,
 ) -> str:
     if not bool(getattr(config, "cash_manager_enabled", False)) or fund is None:
         return ""
     state = load_cash_manager_state()
-    if state.pending_order_id:
+    if cash_manager_has_pending_order(state):
         if state.pending_action == "BUY":
             order_id = state.pending_order_id
+            if not order_id:
+                return "Cash manager: покупка LQDT требует сверки с брокером; вход отложен."
             try:
                 client.orders.cancel_order(account_id=config.account_id, order_id=order_id)
             except RequestError as error:
                 return f"Cash manager: не удалось отменить покупку {fund.symbol} {order_id}: {error}"
-            state.pending_order_id = ""
-            state.pending_action = ""
-            state.pending_qty = 0
-            state.pending_submitted_at = ""
-            state.last_error = ""
-            save_cash_manager_state(state)
             logging.info(
                 "cash_manager_cancelled_pending_buy_for_entry symbol=%s order_id=%s",
                 fund.symbol,
                 order_id,
             )
+            return f"Cash manager: покупка {fund.symbol} отменяется; вход после подтверждения брокера."
         else:
             return f"Cash manager: ожидается {state.pending_action} {fund.symbol}; вход отложен до исполнения заявки."
+    snapshot = get_account_snapshot(client, config)
+    snapshot.free_rub = get_cash_manager_available_rub(client, config, snapshot)
+    margin_per_lot = get_margin_per_lot(instrument, signal)
+    if margin_per_lot <= 0:
+        return "Cash manager: ГО инструмента неизвестно; вход отложен."
+    current_watchlist = watchlist or [instrument]
+    live_positions = get_live_portfolio_positions(client, config, current_watchlist)
+    reserve = cash_manager_dynamic_reserve_rub(snapshot, config, current_watchlist, live_positions)
+    required_margin = margin_per_lot * max(1, desired_lots)
+    operating_and_stress = reserve - max(
+        (max(get_margin_per_lot(item, "LONG"), get_margin_per_lot(item, "SHORT"))
+         for item in current_watchlist if item.symbol not in live_positions),
+        default=0.0,
+    ) * (1.0 + config.cash_manager_release_buffer_pct)
+    required_cash = max(reserve, operating_and_stress + required_margin * (1.0 + config.cash_manager_release_buffer_pct))
+    margin_headroom = cash_manager_strict_margin_headroom_rub(client, config)
+    if margin_headroom is None:
+        return "Cash manager: ГО брокера недоступно; вход отложен."
+    deficit = max(0.0, required_cash - snapshot.free_rub, required_margin - margin_headroom)
+    if deficit <= 0:
+        return ""
     holding = get_cash_fund_holding(client, config, fund)
     held_qty = int(holding["qty"])
     if held_qty <= 0:
-        return ""
-    snapshot = get_account_snapshot(client, config)
-    margin_per_lot = get_margin_per_lot(instrument, signal)
-    if margin_per_lot <= 0:
-        return ""
-    margin_headroom = get_margin_headroom_rub(client, config, snapshot)
-    target_lots = max(1, min(config.order_quantity, config.max_order_quantity))
-    required_margin = margin_per_lot * target_lots
-    deficit = max(0.0, required_margin - margin_headroom)
-    if deficit <= 0:
-        return ""
+        return "Cash manager: резерв на вход ниже расчётного, а фонда для продажи нет."
+    if not cash_fund_limit_order_available(client, fund):
+        return "Cash manager: резерв на вход ниже расчётного, торги фондом сейчас недоступны."
     release_value = deficit * (1.0 + config.cash_manager_release_buffer_pct)
     price = float(holding["price_rub"])
-    quantity = min(held_qty, max(1, cash_manager_quantity_for_value(release_value, price, fund.lot)))
+    quantity = min(held_qty, cash_manager_quantity_to_release(release_value, price, fund.lot))
+    if quantity <= 0:
+        return "Cash manager: цена фонда недоступна; вход отложен."
     if submit_cash_fund_order(
         client,
         config,
@@ -5190,7 +5465,7 @@ def maybe_release_cash_fund_for_entry(
         state,
     ):
         return (
-            f"Cash manager: продано {quantity} шт. {fund.symbol} для высвобождения ГО; "
+            f"Cash manager: заявка на продажу {quantity} шт. {fund.symbol} для высвобождения резерва; "
             "вход будет повторно оценён после исполнения заявки."
         )
     return state.last_error or "Cash manager: не удалось высвободить средства из фонда."
@@ -9125,10 +9400,9 @@ def sizing_requires_margin_release(sizing: dict[str, Any]) -> bool:
     """True only when an otherwise admissible entry lacks broker margin.
 
     The cash manager must not liquidate LQDT for a signal already rejected by
-    the stop-risk budget, the aggregate risk budget, or the broker lot limit.
+    the stop-risk or aggregate risk budget. A zero broker lot limit can itself
+    be caused by insufficient margin and is rechecked after the fund sale.
     """
-    if int(sizing.get("broker_limit") or 0) <= 0:
-        return False
     if float(sizing.get("margin_per_lot_rub") or 0.0) <= 0.0:
         return False
     if float(sizing.get("risk_budget_rub") or 0.0) > 0.0 and int(sizing.get("qty_by_risk") or 0) < 1:
@@ -9136,6 +9410,18 @@ def sizing_requires_margin_release(sizing: dict[str, Any]) -> bool:
     if float(sizing.get("max_open_risk_budget_rub") or 0.0) > 0.0 and int(sizing.get("qty_by_open_risk") or 0) < 1:
         return False
     return int(sizing.get("qty_by_working") or 0) < 1
+
+
+def cash_manager_rankable_quantity(
+    client: Client,
+    config: BotConfig,
+    fund: CashFundConfig | None,
+    sizing: dict[str, Any],
+) -> int:
+    quantity = int(sizing.get("quantity") or 0)
+    if quantity > 0 or fund is None or not sizing_requires_margin_release(sizing):
+        return quantity
+    return 1 if int(get_cash_fund_holding(client, config, fund)["qty"]) > 0 else 0
 
 
 def build_position_sizing_lines(
@@ -10531,6 +10817,7 @@ def open_position(
     cash_fund: CashFundConfig | None = None,
     quantity_cap: int | None = None,
     entry_df: pd.DataFrame | None = None,
+    watchlist: list[InstrumentConfig] | None = None,
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
@@ -10613,6 +10900,8 @@ def open_position(
                 cash_fund,
                 instrument,
                 signal,
+                1,
+                watchlist,
             )
         if release_reason:
             state.last_error = release_reason
@@ -10630,6 +10919,17 @@ def open_position(
         save_state(instrument.symbol, state)
         logging.info("symbol=%s status=entry_blocked reason=%s", instrument.symbol, block_reason)
         return
+    if config.cash_manager_enabled and cash_fund is not None:
+        release_reason = maybe_release_cash_fund_for_entry(
+            client, config, cash_fund, instrument, signal, quantity, watchlist,
+        )
+        if release_reason:
+            state.last_error = release_reason
+            state.last_signal_summary = [release_reason, *state.last_signal_summary[:2]]
+            state.last_allocator_summary = f"Аллокатор: {release_reason}"
+            save_state(instrument.symbol, state)
+            logging.info("symbol=%s status=entry_waiting_cash_manager reason=%s", instrument.symbol, release_reason)
+            return
     sizing_lines = build_position_sizing_lines(
         client, config, instrument, state, price, signal, quantity, strategy_name,
         stop_distance_price=float(stop_plan.get("distance") or 0.0),
@@ -11388,8 +11688,14 @@ def process_instrument(
                                             lower_df, current_price, signal, config, primary_strategy_name,
                                         ).get("distance") or 0.0) if is_ao_chaikin_strategy(primary_strategy_name) else None,
                                     )
-                                    state.last_allocator_quantity = int(allocator_sizing.get("quantity") or 0)
+                                    state.last_allocator_quantity = cash_manager_rankable_quantity(
+                                        client, config, cash_fund, allocator_sizing,
+                                    )
                                     state.last_allocator_summary = build_allocator_summary_text(allocator_sizing)
+                                    if state.last_allocator_quantity > int(allocator_sizing.get("quantity") or 0):
+                                        # Let the normal cycle ranking select the signal.
+                                        # open_position will sell LQDT and recheck next cycle.
+                                        state.last_allocator_summary += " Требуется продажа LQDT до входа."
                                     state.last_allocator_open_risk_budget_rub = float(allocator_sizing.get("max_open_risk_budget_rub") or 0.0)
                                     state.last_allocator_reserved_open_risk_rub = float(allocator_sizing.get("reserved_open_risk_rub") or 0.0)
                                     state.last_allocator_available_open_risk_rub = float(allocator_sizing.get("available_open_risk_rub") or 0.0)
@@ -11596,6 +11902,7 @@ def process_instrument(
                                                 cash_fund,
                                                 entry_quantity_cap,
                                                 lower_df,
+                                                watchlist,
                                             )
                         else:
                             logging.info("symbol=%s status=reentry_cooldown reason=%s", instrument.symbol, reentry_reason)
