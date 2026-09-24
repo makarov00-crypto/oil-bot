@@ -5363,14 +5363,13 @@ def maybe_park_free_cash_in_fund(
                 client, config, fund, quantity, OrderDirection.ORDER_DIRECTION_SELL, "SELL", state,
             )
         return
-    if now - flat_since < timedelta(minutes=config.cash_manager_idle_minutes):
-        save_cash_manager_state(state)
-        return
     target_value = cash_manager_target_value_rub(
         snapshot, config, float(holding["value_rub"]), reserve_rub, margin_headroom,
     )
     state.last_target_fund_rub = target_value
     save_cash_manager_state(state)
+    if now - flat_since < timedelta(minutes=config.cash_manager_idle_minutes):
+        return
     purchase_value = max(0.0, target_value - float(holding["value_rub"]))
     if purchase_value < config.cash_manager_min_order_rub:
         return

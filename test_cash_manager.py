@@ -55,6 +55,25 @@ class CashManagerTests(unittest.TestCase):
         self.assertEqual(submit.call_args.args[3], 15_000)
         self.assertEqual(submit.call_args.args[5], "BUY")
 
+    def test_target_is_visible_during_idle_wait(self) -> None:
+        state = mod.CashManagerState()
+        snapshot = mod.AccountSnapshot(total_portfolio=100_000.0, free_rub=100_000.0, blocked_guarantee_rub=0.0)
+        with (
+            patch.object(mod, "load_cash_manager_state", return_value=state),
+            patch.object(mod, "cash_fund_limit_order_available", return_value=True),
+            patch.object(mod, "cash_manager_has_pending_futures", return_value=False),
+            patch.object(mod, "get_live_portfolio_positions", return_value={}),
+            patch.object(mod, "get_account_snapshot", return_value=snapshot),
+            patch.object(mod, "get_cash_manager_available_rub", return_value=100_000.0),
+            patch.object(mod, "cash_manager_strict_margin_headroom_rub", return_value=100_000.0),
+            patch.object(mod, "get_cash_fund_holding", return_value={"qty": 0, "price_rub": 2.0, "value_rub": 0.0}),
+            patch.object(mod, "submit_cash_fund_order") as submit,
+            patch.object(mod, "save_cash_manager_state"),
+        ):
+            mod.maybe_park_free_cash_in_fund(None, self.config, [], self.fund, [])
+        self.assertEqual(state.last_target_fund_rub, 30_000.0)
+        submit.assert_not_called()
+
     def test_entry_releases_only_margin_deficit_from_fund(self) -> None:
         instrument = mod.InstrumentConfig(
             symbol="BRU6",
