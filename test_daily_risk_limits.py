@@ -180,15 +180,15 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertFalse(mod.session_allows_new_entries("WEEKEND", "CNYRUBF"))
 
     def test_weekend_session_closes_after_1900_moscow(self) -> None:
+        saturday_before_open = mod.datetime(2026, 4, 18, 9, 49, tzinfo=mod.MOSCOW_TZ)
+        saturday_at_open = mod.datetime(2026, 4, 18, 9, 50, tzinfo=mod.MOSCOW_TZ)
         saturday_before_cutoff = mod.datetime(2026, 4, 18, 18, 59, tzinfo=mod.MOSCOW_TZ)
         saturday_at_cutoff = mod.datetime(2026, 4, 18, 19, 0, tzinfo=mod.MOSCOW_TZ)
-        sunday_before_cutoff = mod.datetime(2026, 4, 19, 18, 59, tzinfo=mod.MOSCOW_TZ)
-        sunday_after_cutoff = mod.datetime(2026, 4, 19, 19, 1, tzinfo=mod.MOSCOW_TZ)
 
+        self.assertEqual(mod.get_market_session(saturday_before_open), "CLOSED")
+        self.assertEqual(mod.get_market_session(saturday_at_open), "WEEKEND")
         self.assertEqual(mod.get_market_session(saturday_before_cutoff), "WEEKEND")
         self.assertEqual(mod.get_market_session(saturday_at_cutoff), "CLOSED")
-        self.assertEqual(mod.get_market_session(sunday_before_cutoff), "WEEKEND")
-        self.assertEqual(mod.get_market_session(sunday_after_cutoff), "CLOSED")
 
     def test_weekday_session_schedule_matches_moex_futures_hours(self) -> None:
         day = (2026, 7, 22)
@@ -196,16 +196,16 @@ class DailyRiskLimitTests(unittest.TestCase):
         def at(hour: int, minute: int) -> str:
             return mod.get_market_session(mod.datetime(*day, hour, minute, tzinfo=mod.MOSCOW_TZ))
 
-        self.assertEqual(at(0, 15), "CLEARING")
-        self.assertEqual(at(0, 16), "CLOSED")
+        self.assertEqual(at(0, 30), "CLEARING")
+        self.assertEqual(at(0, 31), "CLOSED")
         self.assertEqual(at(6, 59), "CLOSED")
         self.assertEqual(at(7, 0), "PREMARKET")
-        self.assertEqual(at(9, 59), "PREMARKET")
-        self.assertEqual(at(10, 0), "MAIN")
+        self.assertEqual(at(8, 59), "PREMARKET")
+        self.assertEqual(at(9, 0), "MAIN")
         self.assertEqual(at(18, 59), "MAIN")
         self.assertEqual(at(19, 0), "EVENING")
-        self.assertEqual(at(23, 54), "EVENING")
-        self.assertEqual(at(23, 55), "CLEARING")
+        self.assertEqual(at(23, 49), "EVENING")
+        self.assertEqual(at(23, 50), "CLEARING")
         self.assertEqual(mod.get_session_position_multiplier("PREMARKET"), 0.5)
         self.assertEqual(mod.get_session_position_multiplier("EVENING"), 0.5)
         self.assertFalse(mod.session_allows_new_entries("CLEARING", "BMQ6"))

@@ -5830,19 +5830,20 @@ def get_day_bounds_utc_for_date(target_day: date) -> tuple[datetime, datetime]:
 def get_market_session(now: datetime | None = None) -> str:
     now = now or current_moscow_time()
     current_minutes = now.hour * 60 + now.minute
-    if current_minutes <= 15:
+    # На срочном рынке Мосбиржи вечерний клиринг продолжается до 00:30 МСК.
+    if current_minutes <= 30:
         return "CLEARING"
     if now.weekday() >= 5:
-        if current_minutes < 19 * 60:
+        if 9 * 60 + 50 <= current_minutes < 19 * 60:
             return "WEEKEND"
         return "CLOSED"
     if current_minutes < 7 * 60:
         return "CLOSED"
-    if current_minutes < 10 * 60:
+    if current_minutes < 9 * 60:
         return "PREMARKET"
     if current_minutes < 19 * 60:
         return "MAIN"
-    if current_minutes < 23 * 60 + 55:
+    if current_minutes < 23 * 60 + 50:
         return "EVENING"
     return "CLEARING"
 
