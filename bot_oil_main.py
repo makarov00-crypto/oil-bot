@@ -104,6 +104,7 @@ from strategies.base import StrategyProfile
 
 
 APP_NAME = "oil-bot-main"
+SELECTED_SIGNAL_EXECUTION_ALERT_KEYS: set[str] = set()
 LOCAL_LIVE_CONFIRMATION_ENV = "OIL_LOCAL_LIVE_CONFIRM"
 LOCAL_LIVE_CONFIRMATION_VALUE = "I_UNDERSTAND_LIVE_TRADING"
 T_INVEST_REST_PORTFOLIO_URL = (
@@ -1167,6 +1168,54 @@ def selected_signal_execution_status(state: InstrumentState) -> tuple[str, str]:
     if state.execution_status == "rejected":
         return "rejected", compact_reason(state.last_error or "заявка отклонена")
     return "selection_not_executed", compact_reason(state.last_error or "сигнал не дошёл до открытия позиции")
+
+
+def notify_selected_signal_execution_failure(
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    candidate: dict[str, Any],
+    execution_status: str,
+    execution_note: str,
+) -> None:
+    if execution_status in {"submitted_open", "confirmed_open", "recovered_open"}:
+        return
+    alert_key = ":".join(
+        [
+            str(candidate.get("strategy_name") or ""),
+            instrument.symbol,
+            str(candidate.get("signal") or ""),
+            str(candidate.get("candle_time") or ""),
+            execution_status,
+        ]
+    )
+    if alert_key in SELECTED_SIGNAL_EXECUTION_ALERT_KEYS:
+        return
+    SELECTED_SIGNAL_EXECUTION_ALERT_KEYS.add(alert_key)
+    logging.error(
+        "symbol=%s status=selected_signal_not_executed signal=%s strategy=%s candle=%s "
+        "execution_status=%s reason=%s",
+        instrument.symbol,
+        candidate.get("signal") or "-",
+        candidate.get("strategy_name") or "-",
+        candidate.get("candle_time") or "-",
+        execution_status,
+        execution_note,
+    )
+    send_msg(
+        config,
+        build_telegram_card(
+            "Подтверждённый сигнал не исполнен",
+            "🚨",
+            [
+                f"Инструмент: {format_instrument_title(instrument)}",
+                f"Сигнал: {candidate.get('signal') or '-'}",
+                f"Стратегия: {candidate.get('strategy_name') or '-'}",
+                f"Свеча: {candidate.get('candle_time') or '-'}",
+                f"Состояние: {execution_status}",
+                f"Причина: {execution_note or 'причина не зафиксирована'}",
+            ],
+        ),
+    )
 
 
 def update_pending_signal_observation_execution(
@@ -4723,6 +4772,26 @@ def apply_news_bias_to_signal(signal: str, reason: str, news_bias: NewsBias | No
             return signal, f"{reason}. Новости подтверждают сигнал: {news_bias.reason}."
         return signal, f"{reason}. Новости поддерживают сигнал как фон: {news_bias.reason}."
     return signal, reason
+
+
+def resolve_cycle_entry_signal(
+    signal: str,
+    reason: str,
+    strategy_name: str,
+    news_bias: NewsBias | None,
+    selected_entry_candidate: dict[str, Any] | None,
+) -> tuple[str, str, str]:
+    if selected_entry_candidate is None:
+        adjusted_signal, adjusted_reason = apply_news_bias_to_signal(signal, reason, news_bias)
+        return adjusted_signal, adjusted_reason, strategy_name
+    # Исполняем неизменный снимок, уже прошедший правила стратегии, новости
+    # и ранжирование в первой фазе цикла. Повторный расчёт мог потерять
+    # подтверждённый сигнал на границе новой часовой свечи.
+    return (
+        str(selected_entry_candidate.get("signal") or "HOLD").upper(),
+        str(selected_entry_candidate.get("reason") or reason),
+        str(selected_entry_candidate.get("strategy_name") or strategy_name),
+    )
 
 
 def get_strategy_profile(config: BotConfig, instrument: InstrumentConfig) -> StrategyProfile:
@@ -11394,6 +11463,8 @@ def process_instrument(
     collect_entry_candidate_only: bool = False,
     cash_fund: CashFundConfig | None = None,
     entry_quantity_cap: int | None = None,
+    selected_entry_candidate: dict[str, Any] | None = None,
+    watchlist: list[InstrumentConfig] | None = None,
 ) -> dict[str, Any] | None:
     state = load_state(instrument.symbol)
     reconcile_state_accounting(instrument.symbol, state)
@@ -11502,10 +11573,16 @@ def process_instrument(
 
     higher_tf_bias = "" if uses_unified_reversal(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_position_owned_signal(lower_df, config, instrument, higher_tf_bias, state)
+    news_bias = get_active_news_biases().get(instrument.symbol)
+    signal, reason, primary_strategy_name = resolve_cycle_entry_signal(
+        signal,
+        reason,
+        primary_strategy_name,
+        news_bias,
+        selected_entry_candidate,
+    )
     context_higher_tf_bias = "" if is_local_hourly_strategy(primary_strategy_name) else higher_tf_bias
     display_higher_tf_bias = get_unified_reversal_timeframe_label(primary_strategy_name) or higher_tf_bias
-    news_bias = get_active_news_biases().get(instrument.symbol)
-    signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
     signal_summary = summarize_signal_reason(signal, reason)
     compare_lines: list[str] = []
     compare_lines.append(f"Основная: {signal_emoji(signal)} {signal} ({primary_strategy_name})")
@@ -11919,6 +11996,26 @@ def process_instrument(
     return candidate_payload
 
 
+def execute_selected_cycle_candidate(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    candidate: dict[str, Any],
+    *,
+    cash_fund: CashFundConfig | None,
+    watchlist: list[InstrumentConfig],
+) -> dict[str, Any] | None:
+    return process_instrument(
+        client,
+        config,
+        instrument,
+        cash_fund=cash_fund,
+        entry_quantity_cap=int(candidate.get("correlation_quantity_cap") or 0) or None,
+        selected_entry_candidate=candidate,
+        watchlist=watchlist,
+    )
+
+
 def run_bot() -> int:
     setup_logging()
     config = load_config()
@@ -12003,14 +12100,13 @@ def run_bot() -> int:
                             instrument = watchlist_by_symbol.get(symbol)
                             if instrument is None:
                                 continue
-                            process_instrument(
+                            execute_selected_cycle_candidate(
                                 client,
                                 config,
                                 instrument,
+                                item,
                                 cash_fund=cash_fund,
-                                entry_quantity_cap=(
-                                    int(item.get("correlation_quantity_cap") or 0) or None
-                                ),
+                                watchlist=watchlist,
                             )
                             state = load_state(symbol)
                             execution_status, execution_note = selected_signal_execution_status(state)
@@ -12046,6 +12142,13 @@ def run_bot() -> int:
                             if execution_status == "submitted_open":
                                 state.pending_observation_uid = observation_uid
                                 save_state(symbol, state)
+                            notify_selected_signal_execution_failure(
+                                config,
+                                instrument,
+                                item,
+                                execution_status,
+                                execution_note,
+                            )
                             selected_symbols.add(symbol)
                         for item in deferred_candidates:
                             symbol = str(item.get("symbol") or "").upper()

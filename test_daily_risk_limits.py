@@ -41,6 +41,79 @@ class DailyRiskLimitTests(unittest.TestCase):
 
         self.assertEqual(result[:2], ("broker_rejected", "Неисполненная заявка"))
 
+    def test_selected_candidate_snapshot_survives_second_phase_recalculation(self) -> None:
+        signal, reason, strategy = mod.resolve_cycle_entry_signal(
+            "HOLD",
+            "новая свеча уже не содержит вход",
+            "ao_chaikin_1h",
+            None,
+            {
+                "signal": "SHORT",
+                "reason": "подтверждённый снимок шорт-сигнала",
+                "strategy_name": "ao_chaikin_1h",
+            },
+        )
+
+        self.assertEqual(signal, "SHORT")
+        self.assertEqual(reason, "подтверждённый снимок шорт-сигнала")
+        self.assertEqual(strategy, "ao_chaikin_1h")
+
+    def test_selected_candidate_execution_receives_watchlist_and_snapshot(self) -> None:
+        candidate = {
+            "signal": "SHORT",
+            "strategy_name": "ao_chaikin_1h",
+            "correlation_quantity_cap": 7,
+        }
+        watchlist = [self.instrument]
+
+        with patch.object(mod, "process_instrument", return_value=None) as process:
+            mod.execute_selected_cycle_candidate(
+                None,
+                self.config,
+                self.instrument,
+                candidate,
+                cash_fund=None,
+                watchlist=watchlist,
+            )
+
+        process.assert_called_once_with(
+            None,
+            self.config,
+            self.instrument,
+            cash_fund=None,
+            entry_quantity_cap=7,
+            selected_entry_candidate=candidate,
+            watchlist=watchlist,
+        )
+
+    def test_unexecuted_selected_signal_sends_one_critical_alert(self) -> None:
+        candidate = {
+            "signal": "SHORT",
+            "strategy_name": "ao_chaikin_1h",
+            "candle_time": "2026-09-25 12:00",
+        }
+        mod.SELECTED_SIGNAL_EXECUTION_ALERT_KEYS.clear()
+
+        with patch.object(mod, "send_msg") as send_msg, patch.object(mod.logging, "error") as log_error:
+            mod.notify_selected_signal_execution_failure(
+                self.config,
+                self.instrument,
+                candidate,
+                "selection_not_executed",
+                "сигнал не дошёл до открытия позиции",
+            )
+            mod.notify_selected_signal_execution_failure(
+                self.config,
+                self.instrument,
+                candidate,
+                "selection_not_executed",
+                "сигнал не дошёл до открытия позиции",
+            )
+
+        send_msg.assert_called_once()
+        log_error.assert_called_once()
+        self.assertIn("Подтверждённый сигнал не исполнен", send_msg.call_args.args[1])
+
     def test_daily_loss_limit_uses_global_closed_net_pnl(self) -> None:
         rows = [
             {"event": "CLOSE", "symbol": "BRK6", "net_pnl_rub": -1800.0},
