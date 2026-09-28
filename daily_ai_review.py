@@ -1139,7 +1139,7 @@ def request_openai_text(api_key: str, model: str, instructions: str, prompt: str
     return text
 
 
-def save_review(output_path: Path, target_day: date, model: str, review_text: str) -> None:
+def save_review(output_path: Path, target_day: date, model: str, review_text: str) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     dated_path = output_path.parent / f"{target_day.isoformat()}_review.md"
     content = (
@@ -1148,8 +1148,12 @@ def save_review(output_path: Path, target_day: date, model: str, review_text: st
         f"- Сформировано: `{datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M:%S МСК')}`\n\n"
         f"{review_text.strip()}\n"
     )
-    output_path.write_text(content, encoding="utf-8")
     dated_path.write_text(content, encoding="utf-8")
+    is_latest_pointer = output_path.name == "latest_review.md"
+    is_current_day = target_day == datetime.now(MOSCOW_TZ).date()
+    if not is_latest_pointer or is_current_day:
+        output_path.write_text(content, encoding="utf-8")
+    return dated_path
 
 
 def build_review_prompt(base_dir: Path, target_day: date) -> str:
@@ -1204,9 +1208,9 @@ def main() -> int:
 
     review_text = request_openai_review(api_key, args.model, prompt)
     output_path = Path(args.output)
-    save_review(output_path, target_day, args.model, review_text)
+    saved_path = save_review(output_path, target_day, args.model, review_text)
     print(review_text)
-    print(f"\nСохранено в: {output_path}")
+    print(f"\nСохранено в: {saved_path}")
     return 0
 
 

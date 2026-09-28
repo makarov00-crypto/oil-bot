@@ -69,11 +69,19 @@ def sync_remote_runtime(ssh_target: str, remote_dir: str, destination: Path) -> 
         raise RuntimeError("Не удалось распаковать runtime с сервера")
 
 
-def publish_review(ssh_target: str, remote_dir: str, local_review: Path, target_day: str) -> None:
+def publish_review(
+    ssh_target: str,
+    remote_dir: str,
+    local_review: Path,
+    target_day: str,
+    *,
+    publish_latest: bool,
+) -> None:
     remote_latest = f"{ssh_target}:{remote_dir}/logs/ai_reviews/latest_review.md"
     remote_dated = f"{ssh_target}:{remote_dir}/logs/ai_reviews/{target_day}_review.md"
     subprocess.run(["ssh", ssh_target, f"mkdir -p {remote_dir}/logs/ai_reviews"], check=True)
-    subprocess.run(["scp", str(local_review), remote_latest], check=True)
+    if publish_latest:
+        subprocess.run(["scp", str(local_review), remote_latest], check=True)
     subprocess.run(["scp", str(local_review), remote_dated], check=True)
 
 
@@ -104,13 +112,19 @@ def main() -> int:
 
     review_text = request_openai_review(api_key, model, prompt)
     output_path = Path(args.output).expanduser().resolve()
-    save_review(output_path, target_day, model, review_text)
+    saved_path = save_review(output_path, target_day, model, review_text)
 
     if args.publish_to_server:
-        publish_review(args.ssh, args.remote_dir, output_path, target_day.isoformat())
+        publish_review(
+            args.ssh,
+            args.remote_dir,
+            saved_path,
+            target_day.isoformat(),
+            publish_latest=target_day == datetime.now(MOSCOW_TZ).date(),
+        )
 
     print(review_text)
-    print(f"\nСохранено локально: {output_path}")
+    print(f"\nСохранено локально: {saved_path}")
     if args.publish_to_server:
         print(f"Опубликовано на сервер: {args.remote_dir}/logs/ai_reviews/")
     return 0

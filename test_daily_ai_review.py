@@ -7,6 +7,37 @@ import daily_ai_review as review
 
 
 class DailyAiReviewTests(unittest.TestCase):
+    def test_save_review_for_historical_day_does_not_replace_latest(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "latest_review.md"
+            output_path.write_text("# AI Review current\n", encoding="utf-8")
+
+            saved_path = review.save_review(
+                output_path,
+                date(2020, 1, 2),
+                "test-model",
+                "Исторический разбор",
+            )
+
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "# AI Review current\n")
+            self.assertEqual(saved_path.name, "2020-01-02_review.md")
+            self.assertIn("# AI Review 2020-01-02", saved_path.read_text(encoding="utf-8"))
+
+    def test_save_review_for_current_day_updates_latest(self) -> None:
+        target_day = review.datetime.now(review.MOSCOW_TZ).date()
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "latest_review.md"
+
+            saved_path = review.save_review(
+                output_path,
+                target_day,
+                "test-model",
+                "Текущий разбор",
+            )
+
+            self.assertEqual(output_path.read_text(encoding="utf-8"), saved_path.read_text(encoding="utf-8"))
+            self.assertIn(f"# AI Review {target_day.isoformat()}", output_path.read_text(encoding="utf-8"))
+
     def test_get_ai_api_url_supports_openai_compatible_provider(self) -> None:
         self.assertEqual(
             review.get_ai_api_url("https://neuroapi.host/v1/", "responses"),

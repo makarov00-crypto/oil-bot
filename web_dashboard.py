@@ -3473,10 +3473,17 @@ def load_ai_review(target_day: date) -> dict:
     dated_path = AI_REVIEW_DIR / f"{target_day.isoformat()}_review.md"
     latest_path = AI_REVIEW_DIR / "latest_review.md"
     today = datetime.now(MOSCOW_TZ).date()
-    if target_day == today:
-        source_path = dated_path if dated_path.exists() else latest_path
-    else:
-        source_path = dated_path
+    source_path = dated_path
+    prefetched_content: str | None = None
+    if target_day == today and not dated_path.exists() and latest_path.exists():
+        try:
+            latest_content = latest_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            latest_content = ""
+        expected_header = f"# AI Review {target_day.isoformat()}"
+        if latest_content.splitlines()[:1] == [expected_header]:
+            source_path = latest_path
+            prefetched_content = latest_content
     if not source_path.exists():
         return {
             "available": False,
@@ -3487,7 +3494,9 @@ def load_ai_review(target_day: date) -> dict:
             "followups": [],
         }
     try:
-        content = source_path.read_text(encoding="utf-8").strip()
+        content = prefetched_content
+        if content is None:
+            content = source_path.read_text(encoding="utf-8").strip()
     except Exception:
         return {
             "available": False,

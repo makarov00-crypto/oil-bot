@@ -834,7 +834,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_load_ai_review_uses_latest_for_today_when_dated_missing(self) -> None:
         with TemporaryDirectory() as temp_dir:
             review_dir = dashboard.Path(temp_dir)
-            (review_dir / "latest_review.md").write_text("# latest", encoding="utf-8")
+            (review_dir / "latest_review.md").write_text("# AI Review 2026-04-24", encoding="utf-8")
 
             with patch.object(dashboard, "AI_REVIEW_DIR", review_dir), patch.object(
                 dashboard, "datetime"
@@ -845,6 +845,22 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertTrue(payload["available"])
         self.assertEqual(payload["source"], "latest_review.md")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_load_ai_review_rejects_latest_from_another_day(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            review_dir = dashboard.Path(temp_dir)
+            (review_dir / "latest_review.md").write_text("# AI Review 2026-04-22", encoding="utf-8")
+
+            with patch.object(dashboard, "AI_REVIEW_DIR", review_dir), patch.object(
+                dashboard, "datetime"
+            ) as fake_datetime:
+                fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+                fake_datetime.fromtimestamp.side_effect = datetime.fromtimestamp
+                payload = dashboard.load_ai_review(date(2026, 4, 24))
+
+        self.assertFalse(payload["available"])
+        self.assertEqual(payload["status"], "missing")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_api_dashboard_loads_full_day_trades_before_annotation(self) -> None:
