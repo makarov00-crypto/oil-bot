@@ -5675,7 +5675,7 @@ def build_dashboard_html() -> str:
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
           <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория <span class="quality-tab-count" id="qualityTradesCount">0</span></button>
           <button class="quality-tab" type="button" data-quality-tab="exits">Выходы</button>
-          <button class="quality-tab" type="button" data-quality-tab="hypotheses">Гипотезы <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="hypotheses">Пропущенные возможности <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
           <div class="review-block" id="qualityEntryPathBlock" style="margin-bottom:16px;">
@@ -5709,7 +5709,9 @@ def build_dashboard_html() -> str:
           <div id="qualityExitsBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelHypotheses" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">Уникальные движения, где стратегия не вошла, а затем цена прошла в предполагаемую сторону больше обычного шума. Повторные наблюдения одного движения объединены.</div>
+          <div class="muted" id="strategyHypothesesIntro" style="margin-bottom:10px;">Почти-входы текущей стратегии AO: фильтр остановил вход, после чего движение проверяется через 1, 2, 4 и 8 часов. Это условная проверка цены, а не фактическая сделка или доход.</div>
+          <div id="strategyHypothesesOverview" class="trade-review-summary" style="margin-bottom:12px;"></div>
+          <div id="strategyHypothesesReasons" class="quality-card-list" style="margin-bottom:12px;"></div>
           <div id="strategyHypothesesBody" class="quality-card-list"></div>
         </div>
       </div>
@@ -7324,6 +7326,9 @@ def build_dashboard_html() -> str:
       const tradeQualityMeta = document.getElementById('tradeQualityMeta');
       const tradeQualityBody = document.getElementById('tradeQualityBody');
       const strategyHypothesesBody = document.getElementById('strategyHypothesesBody');
+      const strategyHypothesesIntro = document.getElementById('strategyHypothesesIntro');
+      const strategyHypothesesOverview = document.getElementById('strategyHypothesesOverview');
+      const strategyHypothesesReasons = document.getElementById('strategyHypothesesReasons');
       const tradeQualityOverview = document.getElementById('tradeQualityOverview');
       const qualityExitsBody = document.getElementById('qualityExitsBody');
       const qualityTradesBody = document.getElementById('qualityTradesBody');
@@ -7340,7 +7345,16 @@ def build_dashboard_html() -> str:
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const entryPathAnalysis = tradeQuality.entry_path_analysis || {};
-      const strategyHypotheses = Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : [];
+      const aoEntryHypotheses = data.ao_chaikin_shadow?.entry_hypotheses || {};
+      const strategyHypotheses = selectedQualityStrategy === 'current'
+        ? (Array.isArray(aoEntryHypotheses.items) ? aoEntryHypotheses.items : [])
+        : (Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : []);
+      const strategyHypothesesSummary = selectedQualityStrategy === 'current'
+        ? (aoEntryHypotheses.summary || {})
+        : {};
+      const strategyHypothesesByReason = selectedQualityStrategy === 'current' && Array.isArray(aoEntryHypotheses.by_reason)
+        ? aoEntryHypotheses.by_reason
+        : [];
       const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const materialQualityExits = qualityExits
         .filter((item) => item.is_material_early_exit)
@@ -7368,11 +7382,15 @@ def build_dashboard_html() -> str:
         buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
         buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
         buildTradeSummaryCard(
-          'Проверка удержаний',
-          `${qualityOverview.strategy_hypotheses_positive_count || 0} из ${qualityOverview.strategy_hypotheses_evaluated_count || 0}`,
-          qualityOverview.strategy_hypotheses_evaluated_count
-            ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_observations_count || 0} существенных`
-            : 'часовые окна после HOLD ещё копятся'
+          selectedQualityStrategy === 'current' ? 'Почти-входы AO' : 'Проверка удержаний',
+          selectedQualityStrategy === 'current'
+            ? `${strategyHypothesesSummary.confirmed || 0} из ${strategyHypothesesSummary.evaluated || 0}`
+            : `${qualityOverview.strategy_hypotheses_positive_count || 0} из ${qualityOverview.strategy_hypotheses_evaluated_count || 0}`,
+          selectedQualityStrategy === 'current'
+            ? `${strategyHypothesesSummary.waiting || 0} ожидают оценки через 4 часа`
+            : qualityOverview.strategy_hypotheses_evaluated_count
+              ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_observations_count || 0} существенных`
+              : 'часовые окна после HOLD ещё копятся'
         ),
       ].join('') : '';
       qualityEntryPathBlock.hidden = selectedQualityStrategy !== 'current';
@@ -7538,30 +7556,76 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
-      strategyHypothesesBody.innerHTML = sortedStrategyHypotheses.length
-        ? sortedStrategyHypotheses.slice(0, 12).map((item) => {
-            const bestMove = Number(item.best_move_4h_pct ?? item.move_4h_pct ?? 0);
-            const firstMove = Number(item.move_4h_pct ?? 0);
-            const firstAt = item.first_observed_at || item.observed_at || '';
-            const lastAt = item.last_observed_at || item.observed_at || '';
-            const observations = Number(item.observation_count || 1);
-            return `<article class="quality-card">
-              <div class="quality-card-head">
-                <div>
-                  <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${signalBadge(item.signal || '-')}</div>
-                  <div class="quality-card-meta">${escapeHtml(formatMoscowTime(firstAt))} — ${escapeHtml(formatMoscowTime(lastAt))} · ${observations} ${observations === 1 ? 'наблюдение' : 'наблюдения'}</div>
+      if (selectedQualityStrategy === 'current') {
+        const confirmedRate = strategyHypothesesSummary.confirmed_rate_pct == null
+          ? 'ещё нет оценки'
+          : `${Number(strategyHypothesesSummary.confirmed_rate_pct).toFixed(0)}%`;
+        strategyHypothesesIntro.textContent = 'Почти-входы текущей стратегии AO: фильтр остановил вход, после чего движение проверяется через 1, 2, 4 и 8 часов. Это условная проверка цены, а не фактическая сделка или доход.';
+        strategyHypothesesOverview.innerHTML = [
+          buildTradeSummaryCard('Почти-входы', String(strategyHypothesesSummary.eligible || 0), `${strategyHypothesesSummary.eligible_observations || 0} отдельных наблюдений`),
+          buildTradeSummaryCard('Оценено через 4 часа', String(strategyHypothesesSummary.evaluated || 0), `${strategyHypothesesSummary.waiting || 0} ещё накапливаются`),
+          buildTradeSummaryCard('Движение подтвердилось', String(strategyHypothesesSummary.confirmed || 0), confirmedRate, Number(strategyHypothesesSummary.confirmed || 0) ? 'good' : ''),
+          buildTradeSummaryCard('Не подтвердилось', String(strategyHypothesesSummary.not_confirmed || 0), 'не прошло порог обычного шума', Number(strategyHypothesesSummary.not_confirmed || 0) ? 'bad' : ''),
+        ].join('');
+        strategyHypothesesReasons.innerHTML = strategyHypothesesByReason.length
+          ? `<article class="quality-card"><div class="quality-card-title">Что остановило вход</div><div class="quality-metric-grid">${strategyHypothesesByReason.map((row) => `<div class="quality-metric"><div class="quality-metric-label">${escapeHtml(row.label || '-')}</div><div class="quality-metric-value">${escapeHtml(String(row.total || 0))}</div><div class="quality-metric-note">оценено ${escapeHtml(String(row.evaluated || 0))} · подтвердилось ${escapeHtml(String(row.confirmed || 0))} · ждут ${escapeHtml(String(row.waiting || 0))}</div></div>`).join('')}</div></article>`
+          : '';
+        const statusLabels = {
+          confirmed: 'Подтверждено',
+          not_confirmed: 'Не подтвердилось',
+          waiting: 'Ожидает оценки',
+          unavailable: 'Цена недоступна',
+        };
+        const renderHorizon = (item, hours) => {
+          const horizon = item.horizons?.[String(hours)] || {status: 'waiting'};
+          if (horizon.status === 'evaluated') {
+            const move = Number(horizon.move_pct || 0);
+            return `<div class="quality-metric"><div class="quality-metric-label">Через ${hours} ч</div><div class="quality-metric-value ${horizon.confirmed ? 'good' : move < 0 ? 'bad' : ''}">${escapeHtml(`${move >= 0 ? '+' : ''}${move.toFixed(2)}%`)}</div><div class="quality-metric-note">${horizon.confirmed ? 'выше порога' : 'ниже порога'}</div></div>`;
+          }
+          if (horizon.status === 'unavailable') {
+            return `<div class="quality-metric"><div class="quality-metric-label">Через ${hours} ч</div><div class="quality-metric-value">Цена недоступна</div><div class="quality-metric-note">нет подходящей свечи</div></div>`;
+          }
+          return `<div class="quality-metric"><div class="quality-metric-label">Через ${hours} ч</div><div class="quality-metric-value">Ожидает оценки</div><div class="quality-metric-note">окно ещё не закрыто</div></div>`;
+        };
+        strategyHypothesesBody.innerHTML = sortedStrategyHypotheses.length
+          ? sortedStrategyHypotheses.slice(0, 12).map((item) => {
+              const firstAt = item.first_observed_at || '';
+              const lastAt = item.last_observed_at || firstAt;
+              const observations = Number(item.observation_count || 1);
+              const status = statusLabels[item.status] || 'Ожидает оценки';
+              const statusClass = item.status === 'confirmed' ? 'good' : item.status === 'not_confirmed' ? 'bad' : '';
+              return `<article class="quality-card">
+                <div class="quality-card-head">
+                  <div>
+                    <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${signalBadge(item.signal || '-')}</div>
+                    <div class="quality-card-meta">${escapeHtml(formatMoscowTime(firstAt))} — ${escapeHtml(formatMoscowTime(lastAt))} · ${observations} ${observations === 1 ? 'наблюдение' : 'наблюдения'}</div>
+                  </div>
+                  <div class="quality-card-result ${statusClass}">${escapeHtml(status)}</div>
                 </div>
-                <div class="quality-card-result good">+${escapeHtml(bestMove.toFixed(2))}%</div>
-              </div>
-              <div class="quality-metric-grid">
-                <div class="quality-metric"><div class="quality-metric-label">Первый сигнал через 4ч</div><div class="quality-metric-value good">+${escapeHtml(firstMove.toFixed(2))}%</div></div>
-                <div class="quality-metric"><div class="quality-metric-label">Лучший срез через 4ч</div><div class="quality-metric-value good">+${escapeHtml(bestMove.toFixed(2))}%</div></div>
-                <div class="quality-metric"><div class="quality-metric-label">Порог движения</div><div class="quality-metric-value">+${escapeHtml(Number(item.threshold_pct || 0).toFixed(2))}%</div></div>
-              </div>
-              <div class="quality-card-note"><strong>Почему не вошли:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 260))}</div>
-            </article>`;
-          }).join('')
-        : '<div class="muted">Нет HOLD-гипотез с подтверждённым движением.</div>';
+                <div class="quality-horizon-grid">${[1, 2, 4, 8].map((hours) => renderHorizon(item, hours)).join('')}</div>
+                <div class="quality-card-note"><strong>Почему не вошли:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 260))}<br><strong>Порог значимого движения:</strong> +${escapeHtml(Number(item.threshold_pct || 0).toFixed(2))}%.</div>
+              </article>`;
+            }).join('')
+          : '<div class="muted">Почти-входов пока нет. Обычные часы без сформированного сигнала сюда не попадают.</div>';
+      } else {
+        strategyHypothesesIntro.textContent = 'Архив прежней стратегии: уникальные движения после решения «воздержаться». Повторные наблюдения одного движения объединены.';
+        strategyHypothesesOverview.innerHTML = '';
+        strategyHypothesesReasons.innerHTML = '';
+        strategyHypothesesBody.innerHTML = sortedStrategyHypotheses.length
+          ? sortedStrategyHypotheses.slice(0, 12).map((item) => {
+              const bestMove = Number(item.best_move_4h_pct ?? item.move_4h_pct ?? 0);
+              const firstMove = Number(item.move_4h_pct ?? 0);
+              const firstAt = item.first_observed_at || item.observed_at || '';
+              const lastAt = item.last_observed_at || item.observed_at || '';
+              const observations = Number(item.observation_count || 1);
+              return `<article class="quality-card">
+                <div class="quality-card-head"><div><div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${signalBadge(item.signal || '-')}</div><div class="quality-card-meta">${escapeHtml(formatMoscowTime(firstAt))} — ${escapeHtml(formatMoscowTime(lastAt))} · ${observations} наблюдений</div></div><div class="quality-card-result good">+${escapeHtml(bestMove.toFixed(2))}%</div></div>
+                <div class="quality-metric-grid"><div class="quality-metric"><div class="quality-metric-label">Первый сигнал через 4ч</div><div class="quality-metric-value good">+${escapeHtml(firstMove.toFixed(2))}%</div></div><div class="quality-metric"><div class="quality-metric-label">Лучший срез через 4ч</div><div class="quality-metric-value good">+${escapeHtml(bestMove.toFixed(2))}%</div></div><div class="quality-metric"><div class="quality-metric-label">Порог движения</div><div class="quality-metric-value">+${escapeHtml(Number(item.threshold_pct || 0).toFixed(2))}%</div></div></div>
+                <div class="quality-card-note"><strong>Почему не вошли:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 260))}</div>
+              </article>`;
+            }).join('')
+          : '<div class="muted">В архиве нет подтверждённых пропущенных движений.</div>';
+      }
 
 const aiReview = data.ai_review || {};
       document.getElementById('aiReviewMeta').textContent = aiReview.available
@@ -7775,6 +7839,11 @@ const aiReview = data.ai_review || {};
       if (window.location.hash === '#trade-review-quality-exits') {
         document.querySelector('[data-review-tab="quality"]')?.click();
         document.querySelector('[data-quality-tab="exits"]')?.click();
+        document.getElementById('trade-review')?.scrollIntoView({block: 'start'});
+      }
+      if (window.location.hash === '#trade-review-quality-hypotheses') {
+        document.querySelector('[data-review-tab="quality"]')?.click();
+        document.querySelector('[data-quality-tab="hypotheses"]')?.click();
         document.getElementById('trade-review')?.scrollIntoView({block: 'start'});
       }
       document.addEventListener('click', (event) => {

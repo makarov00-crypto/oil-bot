@@ -12,11 +12,13 @@ from ao_chaikin_shadow import (
     CHAIKIN_CONFIRMS,
     DECISION_ENTRY,
     DECISION_EXIT,
+    DECISION_HOLD,
     DECISION_NO_ENTRY,
     DIRECTION_LONG,
     DIRECTION_SHORT,
     POSITION_FLAT,
     STRATEGY_VERSION,
+    build_ao_entry_rejection_hypotheses,
     build_shadow_exit_analytics,
     build_shadow_strategy_comparison,
     build_shadow_strategy_payload,
@@ -50,6 +52,79 @@ def prepared_frame(
 
 
 class AoChaikinShadowTests(unittest.TestCase):
+    def test_builds_ao_rejection_hypotheses_without_generic_no_signal_noise(self) -> None:
+        def row(
+            symbol: str,
+            hour: int,
+            price: float,
+            *,
+            direction: str = DIRECTION_LONG,
+            decision: str = DECISION_NO_ENTRY,
+            reason: str = "обычное наблюдение",
+            atr: float = 1.0,
+        ) -> dict:
+            return {
+                "version": STRATEGY_VERSION,
+                "symbol": symbol,
+                "candle_closed_at": f"2026-09-28T{hour:02d}:00:00+03:00",
+                "decision": decision,
+                "direction": direction,
+                "position_before": POSITION_FLAT,
+                "price": price,
+                "atr": atr,
+                "reason": reason,
+            }
+
+        rows = [
+            row("SRZ6", 8, 100.0, reason="AO недавно пересёк ноль, но сила 0.50 ATR ниже порога 0.60 ATR."),
+            row("SRZ6", 9, 101.0, reason="AO недавно пересёк ноль, но сила 0.55 ATR ниже порога 0.60 ATR."),
+            row("SRZ6", 10, 102.0, decision=DECISION_HOLD),
+            row("SRZ6", 12, 104.0, decision=DECISION_HOLD),
+            row("SRZ6", 16, 106.0, decision=DECISION_HOLD),
+            row(
+                "GDZ6",
+                8,
+                100.0,
+                direction=DIRECTION_SHORT,
+                reason="Позднее подтверждение AO отклонено: цена ушла от точки пересечения на 2.20 ATR при лимите 1.50 ATR.",
+            ),
+            row("GDZ6", 12, 102.0, direction=DIRECTION_SHORT, decision=DECISION_HOLD),
+            row(
+                "RNZ6",
+                15,
+                100.0,
+                reason="Позднее подтверждение AO отклонено: поток объёма Чайкина не подтверждает направление лонг (противоречит).",
+            ),
+            row(
+                "BRV6",
+                8,
+                100.0,
+                reason="AO выше нуля, но нет непрерывного усиления в допустимые четыре закрытые свечи после пересечения.",
+            ),
+        ]
+
+        result = build_ao_entry_rejection_hypotheses(
+            rows,
+            now=datetime(2026, 9, 28, 16, 30, tzinfo=MOSCOW_TZ),
+        )
+
+        self.assertEqual(result["summary"]["eligible"], 3)
+        self.assertEqual(result["summary"]["evaluated"], 2)
+        self.assertEqual(result["summary"]["confirmed"], 1)
+        self.assertEqual(result["summary"]["not_confirmed"], 1)
+        self.assertEqual(result["summary"]["waiting"], 1)
+        self.assertEqual(result["summary"]["excluded_generic"], 1)
+        sr = next(item for item in result["items"] if item["symbol"] == "SRZ6")
+        self.assertEqual(sr["observation_count"], 2)
+        self.assertEqual(sr["status"], "confirmed")
+        self.assertEqual(sr["horizons"]["1"]["move_pct"], 1.0)
+        self.assertEqual(sr["horizons"]["4"]["move_pct"], 4.0)
+        gd = next(item for item in result["items"] if item["symbol"] == "GDZ6")
+        self.assertEqual(gd["status"], "not_confirmed")
+        self.assertEqual(gd["horizons"]["4"]["move_pct"], -2.0)
+        rn = next(item for item in result["items"] if item["symbol"] == "RNZ6")
+        self.assertEqual(rn["status"], "waiting")
+
     def test_enters_on_second_closed_ao_bar_after_zero_cross(self) -> None:
         frame = prepared_frame([-0.1, 0.4, 0.8])
 
@@ -625,6 +700,7 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["net_result_rub_1lot"], 25.0)
         self.assertEqual(payload["decisions"][0]["symbol"], "VBZ6")
         self.assertTrue(payload["decisions"][0]["key"].startswith("VBZ6:"))
+        self.assertIn("entry_hypotheses", payload)
 
     def test_dashboard_payload_does_not_mix_previous_strategy_version(self) -> None:
         rows = [

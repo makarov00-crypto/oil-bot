@@ -509,6 +509,198 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=MOSCOW_TZ)
 
 
+def _ao_entry_rejection_category(row: dict[str, Any]) -> tuple[str, str] | None:
+    reason = str(row.get("reason") or "").lower()
+    if "ниже порога" in reason:
+        return "strength", "Недостаточная сила AO"
+    if "чайкина не подтверждает" in reason:
+        return "chaikin", "Нет подтверждения потоком Чайкина"
+    if "цена ушла" in reason:
+        return "distance", "Цена слишком далеко от пересечения"
+    if "подтверждения ценой" in reason:
+        return "price", "Нет подтверждения ценой"
+    return None
+
+
+def build_ao_entry_rejection_hypotheses(
+    shadow_records: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    horizons: tuple[int, ...] = (1, 2, 4, 8),
+    grouping_gap: timedelta = timedelta(hours=2),
+) -> dict[str, Any]:
+    """Evaluate material AO entry rejections without changing trading decisions."""
+    current_time = now or datetime.now(timezone.utc).astimezone(MOSCOW_TZ)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=MOSCOW_TZ)
+    current_time = current_time.astimezone(MOSCOW_TZ)
+
+    timed_records: list[tuple[dict[str, Any], datetime]] = []
+    for row in shadow_records:
+        if int(_number(row.get("version"))) != STRATEGY_VERSION:
+            continue
+        candle_time = _parse_iso_datetime(row.get("candle_closed_at"))
+        if candle_time is not None:
+            timed_records.append((row, candle_time.astimezone(MOSCOW_TZ)))
+    timed_records.sort(key=lambda item: item[1])
+
+    by_symbol: dict[str, list[tuple[dict[str, Any], datetime]]] = {}
+    for row, candle_time in timed_records:
+        by_symbol.setdefault(str(row.get("symbol") or "").upper(), []).append((row, candle_time))
+
+    eligible_rows: list[tuple[dict[str, Any], datetime, str, str]] = []
+    excluded_generic = 0
+    for row, candle_time in timed_records:
+        if (
+            row.get("decision") != DECISION_NO_ENTRY
+            or row.get("position_before") != POSITION_FLAT
+            or str(row.get("direction") or "").upper() not in {DIRECTION_LONG, DIRECTION_SHORT}
+        ):
+            continue
+        category = _ao_entry_rejection_category(row)
+        if category is None:
+            excluded_generic += 1
+            continue
+        eligible_rows.append((row, candle_time, category[0], category[1]))
+
+    groups: list[dict[str, Any]] = []
+    latest_group: dict[tuple[str, str], dict[str, Any]] = {}
+    for row, candle_time, reason_key, reason_label in eligible_rows:
+        raw_symbol = str(row.get("symbol") or "").upper()
+        direction = str(row.get("direction") or "").upper()
+        group_key = (raw_symbol, direction)
+        group = latest_group.get(group_key)
+        if group is None or candle_time - group["last_time"] > grouping_gap:
+            group = {
+                "raw_symbol": raw_symbol,
+                "direction": direction,
+                "first_row": row,
+                "first_time": candle_time,
+                "last_time": candle_time,
+                "rows": [row],
+                "reason_keys": [reason_key],
+                "reason_labels": [reason_label],
+            }
+            groups.append(group)
+            latest_group[group_key] = group
+            continue
+        group["last_time"] = candle_time
+        group["rows"].append(row)
+        if reason_key not in group["reason_keys"]:
+            group["reason_keys"].append(reason_key)
+            group["reason_labels"].append(reason_label)
+
+    items: list[dict[str, Any]] = []
+    horizon_hours = tuple(sorted({int(value) for value in horizons if int(value) > 0}))
+    for group in groups:
+        first_row = group["first_row"]
+        first_time = group["first_time"]
+        raw_symbol = group["raw_symbol"]
+        direction = group["direction"]
+        observed_price = _number(first_row.get("price"))
+        atr = _number(first_row.get("atr"))
+        threshold_pct = max(0.35, atr / observed_price * 100.0) if observed_price > 0.0 else 0.35
+        direction_sign = 1.0 if direction == DIRECTION_LONG else -1.0
+        horizon_values: dict[str, dict[str, Any]] = {}
+
+        for hours in horizon_hours:
+            target_time = first_time + timedelta(hours=hours)
+            latest_allowed = target_time + timedelta(days=3)
+            future = next(
+                (
+                    (future_row, future_time)
+                    for future_row, future_time in by_symbol.get(raw_symbol, [])
+                    if target_time <= future_time <= latest_allowed and future_row.get("price") is not None
+                ),
+                None,
+            )
+            if future is not None and observed_price > 0.0:
+                future_row, future_time = future
+                future_price = _number(future_row.get("price"))
+                move_pct = (future_price - observed_price) / observed_price * 100.0 * direction_sign
+                horizon_values[str(hours)] = {
+                    "status": "evaluated",
+                    "observed_at": future_time.isoformat(),
+                    "price": round(future_price, 6),
+                    "move_pct": round(move_pct, 2),
+                    "confirmed": move_pct >= threshold_pct,
+                }
+            elif current_time < target_time or current_time < latest_allowed:
+                horizon_values[str(hours)] = {"status": "waiting", "target_at": target_time.isoformat()}
+            else:
+                horizon_values[str(hours)] = {"status": "unavailable", "target_at": target_time.isoformat()}
+
+        primary_horizon = horizon_values.get("4", {"status": "waiting"})
+        if primary_horizon.get("status") == "evaluated":
+            status = "confirmed" if primary_horizon.get("confirmed") else "not_confirmed"
+        elif primary_horizon.get("status") == "unavailable":
+            status = "unavailable"
+        else:
+            status = "waiting"
+        move_4h = primary_horizon.get("move_pct")
+        items.append(
+            {
+                "key": f"{get_instrument_history_symbol(raw_symbol)}:{first_time.isoformat()}:ao-rejection",
+                "symbol": get_instrument_history_symbol(raw_symbol),
+                "signal": "LONG" if direction == DIRECTION_LONG else "SHORT",
+                "direction": direction,
+                "first_observed_at": first_time.isoformat(),
+                "last_observed_at": group["last_time"].isoformat(),
+                "observation_count": len(group["rows"]),
+                "reason": " · ".join(group["reason_labels"]),
+                "reason_keys": group["reason_keys"],
+                "reason_labels": group["reason_labels"],
+                "observed_price": round(observed_price, 6) if observed_price > 0.0 else None,
+                "threshold_pct": round(threshold_pct, 2),
+                "status": status,
+                "move_4h_pct": move_4h,
+                "best_move_4h_pct": move_4h,
+                "horizons": horizon_values,
+            }
+        )
+
+    items.sort(key=lambda item: str(item.get("first_observed_at") or ""), reverse=True)
+    evaluated = [item for item in items if item["status"] in {"confirmed", "not_confirmed"}]
+    confirmed = [item for item in evaluated if item["status"] == "confirmed"]
+    reason_rows: list[dict[str, Any]] = []
+    reason_labels = {
+        "strength": "Недостаточная сила AO",
+        "chaikin": "Нет подтверждения потоком Чайкина",
+        "price": "Нет подтверждения ценой",
+        "distance": "Цена слишком далеко от пересечения",
+    }
+    for reason_key, label in reason_labels.items():
+        matching = [item for item in items if reason_key in item["reason_keys"]]
+        if not matching:
+            continue
+        reason_rows.append(
+            {
+                "key": reason_key,
+                "label": label,
+                "total": len(matching),
+                "evaluated": sum(item["status"] in {"confirmed", "not_confirmed"} for item in matching),
+                "confirmed": sum(item["status"] == "confirmed" for item in matching),
+                "waiting": sum(item["status"] == "waiting" for item in matching),
+            }
+        )
+
+    return {
+        "summary": {
+            "eligible": len(items),
+            "eligible_observations": len(eligible_rows),
+            "evaluated": len(evaluated),
+            "confirmed": len(confirmed),
+            "not_confirmed": sum(item["status"] == "not_confirmed" for item in items),
+            "waiting": sum(item["status"] == "waiting" for item in items),
+            "unavailable": sum(item["status"] == "unavailable" for item in items),
+            "excluded_generic": excluded_generic,
+            "confirmed_rate_pct": round(len(confirmed) / len(evaluated) * 100.0, 1) if evaluated else None,
+        },
+        "by_reason": reason_rows,
+        "items": items,
+    }
+
+
 def _average_capture_pct(rows: list[dict[str, Any]], *, shadow: bool) -> float | None:
     captures: list[float] = []
     for row in rows:
@@ -1027,8 +1219,8 @@ def build_shadow_strategy_payload(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=MOSCOW_TZ)
     cutoff = current_time.astimezone(MOSCOW_TZ) - timedelta(days=max(1, period_days))
-    all_records = [
-        normalize_shadow_record_for_display(row)
+    raw_all_records = [
+        row
         for row in read_shadow_records(path)
         if int(_number(row.get("version"))) == STRATEGY_VERSION
     ]
@@ -1040,7 +1232,9 @@ def build_shadow_strategy_payload(
             return datetime.min.replace(tzinfo=MOSCOW_TZ)
         return value if value.tzinfo else value.replace(tzinfo=MOSCOW_TZ)
 
-    records = [row for row in all_records if parsed_time(row).astimezone(MOSCOW_TZ) >= cutoff]
+    raw_records = [row for row in raw_all_records if parsed_time(row).astimezone(MOSCOW_TZ) >= cutoff]
+    entry_hypotheses = build_ao_entry_rejection_hypotheses(raw_records, now=current_time)
+    records = [normalize_shadow_record_for_display(row) for row in raw_records]
     records.sort(key=lambda item: (str(item.get("candle_closed_at") or ""), str(item.get("recorded_at") or "")), reverse=True)
     closed = [row for row in records if row.get("decision") == DECISION_EXIT]
     entries = [row for row in records if row.get("decision") == DECISION_ENTRY]
@@ -1111,5 +1305,6 @@ def build_shadow_strategy_payload(
         },
         "open_positions": open_positions[:30],
         "closed_trades": closed[:50],
+        "entry_hypotheses": entry_hypotheses,
         "decisions": records[:100],
     }
