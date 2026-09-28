@@ -31,9 +31,11 @@ CHAIKIN_NEUTRAL = "НЕЙТРАЛЕН"
 EXIT_KIND_PROTECTIVE = "ЗАЩИТНЫЙ ВЫХОД"
 EXIT_KIND_MOMENTUM_EXHAUSTION = "ИСТОЩЕНИЕ ИМПУЛЬСА"
 CONDITIONAL_EXIT_MIN_RETENTION_RATIO = 0.5
-STRATEGY_VERSION = 3
+STRATEGY_VERSION = 4
 DEFAULT_MINIMUM_STRENGTH_ATR_RATIO = 0.60
 DEFAULT_EXIT_AO_RETENTION_RATIO = 0.70
+DEFAULT_MAX_ENTRY_CONFIRMATION_BARS = 4
+DEFAULT_MAX_ENTRY_PRICE_DISTANCE_ATR_RATIO = 1.50
 
 
 def prepare_shadow_indicators(candles: pd.DataFrame) -> pd.DataFrame:
@@ -114,18 +116,39 @@ def _opposite_ao_bars(frame: pd.DataFrame, index: int, position: str) -> int:
     return count
 
 
-def _confirmed_ao_zero_cross(frame: pd.DataFrame, index: int, direction: str) -> bool:
-    """Require the crossover bar and a second closed strengthening bar."""
+def _ao_zero_cross_context(
+    frame: pd.DataFrame,
+    index: int,
+    direction: str,
+    *,
+    max_confirmation_bars: int = DEFAULT_MAX_ENTRY_CONFIRMATION_BARS,
+) -> tuple[int, int] | None:
+    """Return candles since a recent cross when AO strengthened on every closed bar."""
     if index < 2:
-        return False
-    before_cross = _number(frame.iloc[index - 2]["shadow_ao"])
-    first = _number(frame.iloc[index - 1]["shadow_ao"])
-    second = _number(frame.iloc[index]["shadow_ao"])
-    if direction == DIRECTION_LONG:
-        return before_cross <= 0.0 < first < second
-    if direction == DIRECTION_SHORT:
-        return before_cross >= 0.0 > first > second
-    return False
+        return None
+    first_cross_index = max(1, index - max(1, int(max_confirmation_bars)))
+    for cross_index in range(index - 1, first_cross_index - 1, -1):
+        before_cross = _number(frame.iloc[cross_index - 1]["shadow_ao"])
+        cross_value = _number(frame.iloc[cross_index]["shadow_ao"])
+        crossed = (
+            before_cross <= 0.0 < cross_value
+            if direction == DIRECTION_LONG
+            else before_cross >= 0.0 > cross_value
+        )
+        if not crossed:
+            continue
+        values = [
+            _number(frame.iloc[candle_index]["shadow_ao"])
+            for candle_index in range(cross_index, index + 1)
+        ]
+        strengthening = (
+            all(0.0 < previous < current for previous, current in zip(values, values[1:]))
+            if direction == DIRECTION_LONG
+            else all(0.0 > previous > current for previous, current in zip(values, values[1:]))
+        )
+        if strengthening:
+            return index - cross_index, cross_index
+    return None
 
 
 def _pnl_rub(
@@ -173,15 +196,11 @@ def evaluate_shadow_candle(
     strength_pct = abs(ao_value) / close_price * 100.0 if close_price > 0.0 else 0.0
     atr = _number(row["shadow_atr"])
     strength_atr_ratio = abs(ao_value) / atr if atr > 0.0 else 0.0
-    long_pattern = (
-        ao_value > 0.0
-        and ao_value > previous_ao
-        and _confirmed_ao_zero_cross(frame, index, DIRECTION_LONG)
-    )
-    short_pattern = (
-        ao_value < 0.0
-        and ao_value < previous_ao
-        and _confirmed_ao_zero_cross(frame, index, DIRECTION_SHORT)
+    long_context = _ao_zero_cross_context(frame, index, DIRECTION_LONG)
+    short_context = _ao_zero_cross_context(frame, index, DIRECTION_SHORT)
+    current_zero_cross = (
+        previous_ao <= 0.0 < ao_value
+        or previous_ao >= 0.0 > ao_value
     )
 
     position_before = str((previous or {}).get("position_after") or POSITION_FLAT)
@@ -205,16 +224,47 @@ def evaluate_shadow_candle(
     entry_chaikin = (previous or {}).get("entry_chaikin")
     entry_chaikin_status = str((previous or {}).get("entry_chaikin_status") or "")
     ao_peak_retention_ratio = None
+    ao_confirmation_bars = 0
+    entry_path = ""
+    price_confirms_entry = False
+    entry_price_distance_atr_ratio = None
     price_confirms_exit = False
     exit_kind = ""
 
     if position_before == POSITION_FLAT:
-        if long_pattern and strength_atr_ratio >= minimum_strength_atr_ratio:
+        entry_context = long_context if direction == DIRECTION_LONG else short_context
+        cross_index = entry_context[1] if entry_context is not None else None
+        if entry_context is not None:
+            ao_confirmation_bars = entry_context[0]
+        fast_pattern = ao_confirmation_bars == 1
+        delayed_pattern = 2 <= ao_confirmation_bars <= DEFAULT_MAX_ENTRY_CONFIRMATION_BARS
+
+        if delayed_pattern and cross_index is not None:
+            cross_close = _number(frame.iloc[cross_index]["close"], close_price)
+            previous_close = _number(previous_row["close"], close_price)
+            price_confirms_entry = (
+                close_price > previous_close and close_price > cross_close
+                if direction == DIRECTION_LONG
+                else close_price < previous_close and close_price < cross_close
+            )
+            entry_price_distance_atr_ratio = (
+                abs(close_price - cross_close) / atr if atr > 0.0 else float("inf")
+            )
+
+        delayed_entry_allowed = (
+            delayed_pattern
+            and strength_atr_ratio >= minimum_strength_atr_ratio
+            and chaikin_status == CHAIKIN_CONFIRMS
+            and price_confirms_entry
+            and entry_price_distance_atr_ratio is not None
+            and entry_price_distance_atr_ratio <= DEFAULT_MAX_ENTRY_PRICE_DISTANCE_ATR_RATIO
+        )
+        if fast_pattern and strength_atr_ratio >= minimum_strength_atr_ratio:
             decision = DECISION_ENTRY
-            direction = DIRECTION_LONG
-        elif short_pattern and strength_atr_ratio >= minimum_strength_atr_ratio:
+            entry_path = "БЫСТРОЕ ПОДТВЕРЖДЕНИЕ AO"
+        elif delayed_entry_allowed:
             decision = DECISION_ENTRY
-            direction = DIRECTION_SHORT
+            entry_path = "ПОЗДНЕЕ ПОДТВЕРЖДЕНИЕ AO"
 
         if decision == DECISION_ENTRY:
             position_after = direction
@@ -230,20 +280,61 @@ def evaluate_shadow_candle(
             entry_ao_strength_atr_ratio = round(strength_atr_ratio, 4)
             entry_chaikin = round(chaikin_value, 6)
             entry_chaikin_status = chaikin_status
-            reason = (
-                f"Две закрытые свечи AO подтвердили пересечение нуля в сторону {direction.lower()}; "
-                f"сила {strength_atr_ratio:.2f} ATR при пороге {minimum_strength_atr_ratio:.2f} ATR. "
-                f"Поток объёма Чайкина используется как дополнительная оценка: {chaikin_status.lower()}."
-            )
-        elif (long_pattern or short_pattern) and strength_atr_ratio < minimum_strength_atr_ratio:
+            if fast_pattern:
+                reason = (
+                    f"Две закрытые свечи AO подтвердили пересечение нуля в сторону {direction.lower()}; "
+                    f"сила {strength_atr_ratio:.2f} ATR при пороге {minimum_strength_atr_ratio:.2f} ATR. "
+                    f"Поток объёма Чайкина используется как дополнительная оценка: {chaikin_status.lower()}."
+                )
+            else:
+                reason = (
+                    f"Позднее подтверждение AO после пересечения нуля в сторону {direction.lower()}: "
+                    f"свечей после пересечения {ao_confirmation_bars} из "
+                    f"{DEFAULT_MAX_ENTRY_CONFIRMATION_BARS}; сила {strength_atr_ratio:.2f} ATR при пороге "
+                    f"{minimum_strength_atr_ratio:.2f} ATR. Цена и поток объёма Чайкина подтверждают "
+                    f"движение; расстояние от пересечения {entry_price_distance_atr_ratio:.2f} ATR "
+                    f"при лимите {DEFAULT_MAX_ENTRY_PRICE_DISTANCE_ATR_RATIO:.2f} ATR."
+                )
+        elif entry_context is not None and strength_atr_ratio < minimum_strength_atr_ratio:
             reason = (
                 f"AO недавно пересёк ноль, но сила {strength_atr_ratio:.2f} ATR ниже "
                 f"порога {minimum_strength_atr_ratio:.2f} ATR."
             )
+        elif delayed_pattern and chaikin_status != CHAIKIN_CONFIRMS:
+            reason = (
+                "Позднее подтверждение AO отклонено: поток объёма Чайкина не подтверждает "
+                f"направление {direction.lower()} ({chaikin_status.lower()})."
+            )
+        elif delayed_pattern and not price_confirms_entry:
+            reason = (
+                "Позднее подтверждение AO ожидает подтверждения ценой: последняя закрытая свеча "
+                f"не продолжила движение в сторону {direction.lower()}."
+            )
+        elif (
+            delayed_pattern
+            and entry_price_distance_atr_ratio is not None
+            and entry_price_distance_atr_ratio > DEFAULT_MAX_ENTRY_PRICE_DISTANCE_ATR_RATIO
+        ):
+            reason = (
+                f"Позднее подтверждение AO отклонено: цена ушла от точки пересечения на "
+                f"{entry_price_distance_atr_ratio:.2f} ATR при лимите "
+                f"{DEFAULT_MAX_ENTRY_PRICE_DISTANCE_ATR_RATIO:.2f} ATR."
+            )
+        elif current_zero_cross:
+            reason = (
+                "AO пересёк ноль, но вход возможен только после второй закрытой "
+                "усиливающейся свечи."
+            )
         elif ao_value > 0.0:
-            reason = "AO выше нуля, но нет второй закрытой усиливающейся свечи сразу после пересечения."
+            reason = (
+                "AO выше нуля, но нет непрерывного усиления в допустимые четыре закрытые свечи "
+                "после пересечения."
+            )
         elif ao_value < 0.0:
-            reason = "AO ниже нуля, но нет второй закрытой усиливающейся свечи сразу после пересечения."
+            reason = (
+                "AO ниже нуля, но нет непрерывного усиления в допустимые четыре закрытые свечи "
+                "после пересечения."
+            )
         else:
             reason = "AO находится около нуля, направленного входа нет."
     else:
@@ -344,6 +435,16 @@ def evaluate_shadow_candle(
         "atr": round(atr, 6),
         "ao_strength_atr_ratio": round(strength_atr_ratio, 4),
         "minimum_strength_atr_ratio": round(minimum_strength_atr_ratio, 4),
+        "ao_confirmation_bars": ao_confirmation_bars,
+        "entry_path": entry_path,
+        "price_confirms_entry": price_confirms_entry,
+        "entry_price_distance_atr_ratio": (
+            round(entry_price_distance_atr_ratio, 4)
+            if entry_price_distance_atr_ratio is not None
+            else None
+        ),
+        "max_entry_confirmation_bars": DEFAULT_MAX_ENTRY_CONFIRMATION_BARS,
+        "max_entry_price_distance_atr_ratio": DEFAULT_MAX_ENTRY_PRICE_DISTANCE_ATR_RATIO,
         "peak_ao_magnitude": round(peak_ao_magnitude, 6),
         "ao_peak_retention_ratio": round(ao_peak_retention_ratio, 4) if ao_peak_retention_ratio is not None else None,
         "exit_ao_retention_ratio": round(exit_ao_retention_ratio, 4),

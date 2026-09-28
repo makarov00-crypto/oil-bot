@@ -14,6 +14,7 @@ from ao_chaikin_shadow import (
     DECISION_EXIT,
     DECISION_NO_ENTRY,
     DIRECTION_LONG,
+    DIRECTION_SHORT,
     POSITION_FLAT,
     STRATEGY_VERSION,
     build_shadow_exit_analytics,
@@ -133,7 +134,136 @@ class AoChaikinShadowTests(unittest.TestCase):
         )
 
         self.assertEqual(result["decision"], DECISION_NO_ENTRY)
-        self.assertIn("сразу после пересечения", result["reason"])
+        self.assertIn("нет непрерывного усиления", result["reason"])
+
+    def test_delayed_confirmation_enters_long_and_short_symmetrically(self) -> None:
+        long_result = evaluate_shadow_candle(
+            prepared_frame(
+                [-0.2, 0.1, 0.3, 0.7],
+                [100.0, 100.0, 100.2, 100.5],
+                [10.0, 11.0, 12.0, 14.0],
+            ),
+            3,
+            None,
+            symbol="SRZ6",
+            point_value=1.0,
+        )
+        short_result = evaluate_shadow_candle(
+            prepared_frame(
+                [0.2, -0.1, -0.3, -0.7],
+                [100.0, 100.0, 99.8, 99.5],
+                [14.0, 13.0, 12.0, 10.0],
+            ),
+            3,
+            None,
+            symbol="RNZ6",
+            point_value=1.0,
+        )
+
+        for result, direction in (
+            (long_result, DIRECTION_LONG),
+            (short_result, DIRECTION_SHORT),
+        ):
+            self.assertEqual(result["decision"], DECISION_ENTRY)
+            self.assertEqual(result["direction"], direction)
+            self.assertEqual(result["ao_confirmation_bars"], 2)
+            self.assertEqual(result["entry_path"], "ПОЗДНЕЕ ПОДТВЕРЖДЕНИЕ AO")
+            self.assertTrue(result["price_confirms_entry"])
+            self.assertIn("Позднее подтверждение AO", result["reason"])
+
+    def test_delayed_confirmation_accepts_fourth_bar_boundary(self) -> None:
+        result = evaluate_shadow_candle(
+            prepared_frame(
+                [-0.2, 0.1, 0.2, 0.3, 0.4, 0.7],
+                [100.0, 100.0, 100.1, 100.2, 100.3, 100.8],
+                [10.0, 11.0, 12.0, 13.0, 14.0, 16.0],
+            ),
+            5,
+            None,
+            symbol="GDZ6",
+            point_value=1.0,
+        )
+
+        self.assertEqual(result["decision"], DECISION_ENTRY)
+        self.assertEqual(result["ao_confirmation_bars"], 4)
+
+    def test_delayed_confirmation_rejects_fifth_bar(self) -> None:
+        result = evaluate_shadow_candle(
+            prepared_frame(
+                [-0.2, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7],
+                [100.0, 100.0, 100.1, 100.2, 100.3, 100.4, 100.8],
+            ),
+            6,
+            None,
+            symbol="GDZ6",
+            point_value=1.0,
+        )
+
+        self.assertEqual(result["decision"], DECISION_NO_ENTRY)
+        self.assertEqual(result["ao_confirmation_bars"], 0)
+
+    def test_delayed_confirmation_requires_chaikin_and_price(self) -> None:
+        chaikin_rejected = evaluate_shadow_candle(
+            prepared_frame(
+                [-0.2, 0.1, 0.3, 0.7],
+                [100.0, 100.0, 100.2, 100.5],
+                [10.0, 11.0, 12.0, 11.0],
+            ),
+            3,
+            None,
+            symbol="SRZ6",
+            point_value=1.0,
+        )
+        price_rejected = evaluate_shadow_candle(
+            prepared_frame(
+                [-0.2, 0.1, 0.3, 0.7],
+                [100.0, 100.0, 100.4, 100.3],
+                [10.0, 11.0, 12.0, 14.0],
+            ),
+            3,
+            None,
+            symbol="SRZ6",
+            point_value=1.0,
+        )
+
+        self.assertEqual(chaikin_rejected["decision"], DECISION_NO_ENTRY)
+        self.assertIn("Чайкина не подтверждает", chaikin_rejected["reason"])
+        self.assertEqual(price_rejected["decision"], DECISION_NO_ENTRY)
+        self.assertIn("подтверждения ценой", price_rejected["reason"])
+
+    def test_delayed_confirmation_rejects_price_too_far_from_cross(self) -> None:
+        result = evaluate_shadow_candle(
+            prepared_frame(
+                [-0.2, 0.1, 0.3, 0.7],
+                [100.0, 100.0, 101.0, 102.0],
+                [10.0, 11.0, 12.0, 14.0],
+            ),
+            3,
+            None,
+            symbol="SRZ6",
+            point_value=1.0,
+        )
+
+        self.assertEqual(result["decision"], DECISION_NO_ENTRY)
+        self.assertGreater(result["entry_price_distance_atr_ratio"], 1.5)
+        self.assertIn("цена ушла", result["reason"])
+
+    def test_fast_confirmation_keeps_chaikin_as_non_blocking_context(self) -> None:
+        result = evaluate_shadow_candle(
+            prepared_frame(
+                [-0.1, 0.4, 0.8],
+                [100.0, 100.0, 100.0],
+                [10.0, 12.0, 11.0],
+            ),
+            2,
+            None,
+            symbol="GDZ6",
+            point_value=1.0,
+        )
+
+        self.assertEqual(result["decision"], DECISION_ENTRY)
+        self.assertEqual(result["entry_path"], "БЫСТРОЕ ПОДТВЕРЖДЕНИЕ AO")
+        self.assertIn("Две закрытые свечи AO", result["reason"])
 
     def test_exits_after_three_opposite_ao_bars_and_calculates_one_lot_result(self) -> None:
         frame = prepared_frame([10.0, 9.0, 8.0, 6.0], [100.0, 105.0, 104.0, 103.0])

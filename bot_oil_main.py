@@ -11634,7 +11634,11 @@ def process_instrument(
     state.last_entry_path = (
         "early_momentum"
         if signal in {"LONG", "SHORT"} and "ранний импульс ao" in reason.lower()
-        else "standard" if signal in {"LONG", "SHORT"} else ""
+        else "delayed_ao_confirmation"
+        if signal in {"LONG", "SHORT"} and "позднее подтверждение ao" in reason.lower()
+        else "standard"
+        if signal in {"LONG", "SHORT"}
+        else ""
     )
     entry_edge_score, entry_edge_label, entry_edge_reason = get_entry_edge_profile(
         state,

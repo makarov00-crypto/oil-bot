@@ -1,4 +1,4 @@
-"""Live adapter for the AO/Chaikin shadow v3 rules, without broker side effects."""
+"""Live adapter for the AO/Chaikin shadow v4 rules, without broker side effects."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def _closed_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, str]:
-    """Use v3 entry rules; Chaikin and higher timeframe bias do not veto entries."""
+    """Use v4 entries; Chaikin confirms delayed entries but does not veto fast ones."""
     frame = _closed_indicators(df)
     if len(frame) < 3 or float(frame.iloc[-1]["shadow_atr"]) <= 0:
         return "HOLD", "AO/Чайкин: недостаточно корректных закрытых часовых свечей."
