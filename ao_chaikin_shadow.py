@@ -1076,7 +1076,11 @@ def build_shadow_strategy_payload(
             "timeframe": "1 час",
             "ao_periods": "5 и 34",
             "chaikin_periods": "5 и 20",
-            "entry_rule": "две закрытые усиливающиеся свечи AO сразу после пересечения нуля",
+            "entry_rule": (
+                "быстрый вход на второй усиливающейся свече AO; позднее подтверждение "
+                "со 2-й по 4-ю свечу только при подтверждении ценой и потоком Чайкина "
+                "и удалении не более 1,50 ATR"
+            ),
             "minimum_strength_atr_ratio": configured_strength_atr_ratio,
             "exit_ao_retention_ratio": configured_exit_ao_retention_ratio,
             "exit_rule": "три ослабления AO, остаток не более 70% от пика и подтверждение ценой; защитный выход при пересечении нуля",

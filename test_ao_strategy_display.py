@@ -13,6 +13,9 @@ class AoStrategyDisplayTests(unittest.TestCase):
         self.assertIn('один лот сверх половинного бюджета', html)
         self.assertIn('трёх последовательных ослаблений AO', html)
         self.assertIn('70% пика', html)
+        self.assertIn('работает по версии 4', html)
+        self.assertIn('позднее подтверждение со второй по четвёртую свечу', html)
+        self.assertIn('чем на `1,50 ATR`', html)
         self.assertNotIn('Главный триггер — новое значимое пересечение `MACD`', html)
 
     def test_strategy_map_uses_primary_registry_for_ao_mode(self):
