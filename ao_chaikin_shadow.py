@@ -231,6 +231,15 @@ def evaluate_shadow_candle(
     price_confirms_exit = False
     exit_kind = ""
 
+    if position_before in {DIRECTION_LONG, DIRECTION_SHORT}:
+        ao_confirmation_bars = int(_number((previous or {}).get("ao_confirmation_bars")))
+        entry_path = str((previous or {}).get("entry_path") or "")
+        price_confirms_entry = bool((previous or {}).get("price_confirms_entry"))
+        previous_distance = (previous or {}).get("entry_price_distance_atr_ratio")
+        entry_price_distance_atr_ratio = (
+            _number(previous_distance) if previous_distance is not None else None
+        )
+
     if position_before == POSITION_FLAT:
         entry_context = long_context if direction == DIRECTION_LONG else short_context
         cross_index = entry_context[1] if entry_context is not None else None

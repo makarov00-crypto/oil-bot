@@ -71,6 +71,10 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn('id="shadowStrategyDecisions"', html)
         self.assertIn('class="quality-ai"', quality_render)
         self.assertNotIn("buildReviewRowRich(", quality_render)
+        self.assertIn('id="qualityEntryPathBlock"', html)
+        self.assertIn('id="qualityEntryPathOverview"', html)
+        self.assertIn('id="qualityEntryPathBody"', html)
+        self.assertIn("Быстрые и поздние входы AO", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_exit_experiment_is_in_quality_and_research_page_redirects(self) -> None:

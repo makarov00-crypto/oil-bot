@@ -150,7 +150,7 @@ NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 AO_CHAIKIN_SHADOW_JOURNAL: AoChaikinShadowJournal | None = None
 TRADE_QUALITY_REFRESH_SECONDS = 3600
-TRADE_QUALITY_ANALYTICS_VERSION = 9
+TRADE_QUALITY_ANALYTICS_VERSION = 10
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-5.6-luna"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
@@ -769,6 +769,7 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "allocator_summary": str(state.last_allocator_summary or ""),
         "entry_allocator_quantity": int(state.last_entry_allocator_quantity or 0),
         "entry_allocator_summary": str(state.last_entry_allocator_summary or ""),
+        "entry_path": str(state.last_entry_path or ""),
         "signal_summary": signal_summary,
         "execution_status": str(state.execution_status or ""),
         "shadow_ai": {
@@ -11632,10 +11633,12 @@ def process_instrument(
     state.last_setup_quality_score = setup_quality_score
     state.last_setup_quality_label = setup_quality_label
     state.last_entry_path = (
-        "early_momentum"
-        if signal in {"LONG", "SHORT"} and "ранний импульс ao" in reason.lower()
-        else "delayed_ao_confirmation"
+        "delayed_ao_confirmation"
         if signal in {"LONG", "SHORT"} and "позднее подтверждение ao" in reason.lower()
+        else "fast_ao_confirmation"
+        if signal in {"LONG", "SHORT"} and primary_strategy_name == "ao_chaikin_1h"
+        else "early_momentum"
+        if signal in {"LONG", "SHORT"} and "ранний импульс ao" in reason.lower()
         else "standard"
         if signal in {"LONG", "SHORT"}
         else ""

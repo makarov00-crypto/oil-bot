@@ -56,6 +56,7 @@ from signal_ai_entry_analytics import build_signal_ai_entry_analytics
 from trade_quality import (
     build_trade_quality_overview,
     pair_closed_trades,
+    summarize_ao_entry_paths,
     summarize_trade_dimension,
     summarize_trade_quality,
 )
@@ -139,7 +140,7 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
 STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "ao_chaikin_1h": {
         "title": "AO / Чайкин 1ч",
-        "summary": "Основная стратегия: AO(5,34), Чайкин(5,20), закрытые часовые свечи; логика теневой версии 3. Новые сделки используют 50% базового риска.",
+        "summary": "Основная стратегия: AO(5,34), Чайкин(5,20), закрытые часовые свечи; логика версии 4. Новые сделки используют 50% базового риска.",
         "when": "Все новые входы текущих активных инструментов. Старые позиции reversal_1h сопровождаются прежней логикой до закрытия.",
     },
     "reversal_15m": {
@@ -2978,6 +2979,7 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "overview": {},
             "by_regime": [],
             "by_entry_quality": [],
+            "entry_path_analysis": {},
             "exit_diagnostics": [],
         }
     try:
@@ -2993,6 +2995,7 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "overview": {},
             "by_regime": [],
             "by_entry_quality": [],
+            "entry_path_analysis": {},
             "exit_diagnostics": [],
         }
     if not isinstance(payload, dict):
@@ -3006,6 +3009,7 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "overview": {},
             "by_regime": [],
             "by_entry_quality": [],
+            "entry_path_analysis": {},
             "exit_diagnostics": [],
         }
     def newest_first(key: str, time_field: str) -> list[dict[str, Any]]:
@@ -3052,6 +3056,8 @@ def load_trade_quality_analytics() -> dict[str, Any]:
     def strategy_of(row: dict[str, Any]) -> str:
         return str(row.get("strategy") or provenance.get(str(row.get("observation_uid") or "")) or "")
 
+    actual_trade_rows = load_all_trade_rows()
+
     def cohort(strategy: str) -> dict[str, Any]:
         trades = [row for row in result["trades"] if strategy_of(row) == strategy]
         missed = [row for row in result["missed_entries"] if strategy_of(row) == strategy]
@@ -3082,6 +3088,11 @@ def load_trade_quality_analytics() -> dict[str, Any]:
             "overview": overview,
             "by_regime": summarize_trade_dimension(trades, "market_regime"),
             "by_entry_quality": summarize_trade_dimension(trades, "entry_edge_label"),
+            "entry_path_analysis": (
+                summarize_ao_entry_paths(trades, actual_trade_rows)
+                if strategy == "ao_chaikin_1h"
+                else {}
+            ),
             "exit_diagnostics": sorted(exits, key=lambda row: str(row.get("exit_time") or ""), reverse=True),
         }
 
@@ -5667,6 +5678,12 @@ def build_dashboard_html() -> str:
           <button class="quality-tab" type="button" data-quality-tab="hypotheses">Гипотезы <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
+          <div class="review-block" id="qualityEntryPathBlock" style="margin-bottom:16px;">
+            <h3>Быстрые и поздние входы AO</h3>
+            <div class="muted" id="qualityEntryPathMeta">Фактические сделки после включения нового правила.</div>
+            <div class="trade-review-summary" id="qualityEntryPathOverview"></div>
+            <div class="quality-card-list" id="qualityEntryPathBody" style="margin-top:12px;"></div>
+          </div>
           <div class="table-scroll desktop-table">
             <table>
             <thead>
@@ -7312,12 +7329,17 @@ def build_dashboard_html() -> str:
       const qualityTradesBody = document.getElementById('qualityTradesBody');
       const qualityRegimeBody = document.getElementById('qualityRegimeBody');
       const qualityEdgeBody = document.getElementById('qualityEdgeBody');
+      const qualityEntryPathBlock = document.getElementById('qualityEntryPathBlock');
+      const qualityEntryPathMeta = document.getElementById('qualityEntryPathMeta');
+      const qualityEntryPathOverview = document.getElementById('qualityEntryPathOverview');
+      const qualityEntryPathBody = document.getElementById('qualityEntryPathBody');
       const qualityRows = Array.isArray(tradeQuality.by_symbol) ? tradeQuality.by_symbol : [];
       const qualityOverview = tradeQuality.overview || {};
       const qualityExits = Array.isArray(tradeQuality.exit_diagnostics) ? tradeQuality.exit_diagnostics : [];
       const qualityTrades = Array.isArray(tradeQuality.trades) ? tradeQuality.trades : [];
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
+      const entryPathAnalysis = tradeQuality.entry_path_analysis || {};
       const strategyHypotheses = Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : [];
       const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const materialQualityExits = qualityExits
@@ -7353,6 +7375,50 @@ def build_dashboard_html() -> str:
             : 'часовые окна после HOLD ещё копятся'
         ),
       ].join('') : '';
+      qualityEntryPathBlock.hidden = selectedQualityStrategy !== 'current';
+      if (selectedQualityStrategy === 'current') {
+        const entryPathRows = Array.isArray(entryPathAnalysis.paths) ? entryPathAnalysis.paths : [];
+        const statusLabels = {
+          no_entries: 'Ждём первые входы',
+          collecting: 'Данные накапливаются',
+          concentrated: 'Нужна проверка устойчивости',
+          ready: 'Можно сравнивать',
+        };
+        qualityEntryPathMeta.textContent = entryPathAnalysis.rollout_at
+          ? `Только фактические входы после ${formatMoscowTime(entryPathAnalysis.rollout_at)}. Денежный результат указан после комиссии.`
+          : 'Фактические сделки после включения нового правила.';
+        qualityEntryPathOverview.innerHTML = [
+          buildTradeSummaryCard('Добавило позднее правило', String(entryPathAnalysis.added_delayed_entries || 0), 'фактических входов'),
+          buildTradeSummaryCard('Накоплено', `${entryPathAnalysis.closed_trades || 0} / ${entryPathAnalysis.target_closed_trades || 10}`, `${entryPathAnalysis.entries || 0} входов · закрытые сделки`),
+          buildTradeSummaryCard('Статус', statusLabels[entryPathAnalysis.status] || 'Данные накапливаются', entryPathAnalysis.status_text || 'Выборка ещё не собрана'),
+        ].join('');
+        qualityEntryPathBody.innerHTML = entryPathRows.length
+          ? entryPathRows.map((row) => {
+              const net = Number(row.net_pnl_rub || 0);
+              const netClass = net >= 0 ? 'good' : 'bad';
+              const average = row.average_net_pnl_rub == null ? 'ждём закрытия' : formatSignedRub(row.average_net_pnl_rub);
+              const winRate = row.win_rate_pct == null ? 'ждём закрытия' : `${Number(row.win_rate_pct).toFixed(1)}%`;
+              const concentration = row.dominant_symbol
+                ? `${instrumentText(row.dominant_symbol)} · ${Number(row.dominant_symbol_share_pct || 0).toFixed(0)}% влияния на результат`
+                : 'пока нет закрытых сделок';
+              return `<article class="quality-card">
+                <div class="quality-card-head">
+                  <div><div class="quality-card-title">${escapeHtml(row.label || '-')}</div><div class="quality-card-meta">входов ${escapeHtml(String(row.entries || 0))} · открыто ${escapeHtml(String(row.open_trades || 0))} · закрыто ${escapeHtml(String(row.closed_trades || 0))}</div></div>
+                  <div class="quality-card-result ${netClass}">${row.closed_trades ? escapeHtml(formatSignedRub(net)) : '—'}</div>
+                </div>
+                <div class="quality-metric-grid">
+                  <div class="quality-metric"><div class="quality-metric-label">Итог после комиссии</div><div class="quality-metric-value ${netClass}">${row.closed_trades ? escapeHtml(formatSignedRub(net)) : 'ждём закрытия'}</div><div class="quality-metric-note">комиссии ${escapeHtml(formatRub(row.commission_rub || 0))}</div></div>
+                  <div class="quality-metric"><div class="quality-metric-label">Средняя закрытая сделка</div><div class="quality-metric-value">${escapeHtml(average)}</div><div class="quality-metric-note">на ${escapeHtml(String(row.closed_trades || 0))} закрытых</div></div>
+                  <div class="quality-metric"><div class="quality-metric-label">Доля прибыльных</div><div class="quality-metric-value">${escapeHtml(winRate)}</div><div class="quality-metric-note">прибыльных ${escapeHtml(String(row.wins || 0))}</div></div>
+                  <div class="quality-metric"><div class="quality-metric-label">Зависимость от инструмента</div><div class="quality-metric-value">${escapeHtml(concentration)}</div><div class="quality-metric-note">считается по абсолютному влиянию на итог</div></div>
+                </div>
+              </article>`;
+            }).join('')
+          : '<div class="muted">Данные по типам входа ещё не накоплены.</div>';
+        if (Number(entryPathAnalysis.unclassified_entries || 0) > 0) {
+          qualityEntryPathBody.insertAdjacentHTML('beforeend', `<div class="quality-card-note"><strong>Требует внимания:</strong> ${escapeHtml(String(entryPathAnalysis.unclassified_entries))} входов не удалось отнести к быстрому или позднему пути.</div>`);
+        }
+      }
       tradeQualityBody.innerHTML = qualityRows.length
         ? qualityRows.map((row) => {
             const pnl = Number(row.net_pnl_rub || 0);

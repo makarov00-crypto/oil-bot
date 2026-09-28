@@ -2,6 +2,8 @@ import unittest
 from datetime import datetime, timezone
 
 from trade_quality import (
+    AO_ENTRY_PATH_DELAYED,
+    AO_ENTRY_PATH_FAST,
     add_trade_counterfactuals,
     build_trade_quality_overview,
     calculate_post_exit_move,
@@ -10,6 +12,7 @@ from trade_quality import (
     group_strategy_hypotheses,
     pair_closed_trades,
     restore_shadow_ai_from_signal_observations,
+    summarize_ao_entry_paths,
     summarize_trade_dimension,
     summarize_trade_quality,
 )
@@ -54,6 +57,36 @@ class TradeQualityTests(unittest.TestCase):
         self.assertEqual(trade["shadow_ai_confidence"], 0.81)
         self.assertEqual(trade["shadow_ai_risk_note"], "тонкий рынок")
         self.assertEqual(trade["shadow_ai_source"], "trade_entry")
+
+    def test_pair_restores_ao_entry_path_from_saved_reason(self) -> None:
+        rows = [
+            {
+                "_dt": self.entry,
+                "symbol": "SRZ6",
+                "side": "SHORT",
+                "event": "OPEN",
+                "strategy": "ao_chaikin_1h",
+                "qty_lots": 1,
+                "price": 100.0,
+                "reason": "Позднее подтверждение AO после пересечения нуля в сторону шорт",
+            },
+            {
+                "_dt": self.exit,
+                "symbol": "SRZ6",
+                "side": "SHORT",
+                "event": "CLOSE",
+                "strategy": "ao_chaikin_1h",
+                "qty_lots": 1,
+                "price": 99.0,
+                "pnl_rub": 90.0,
+                "commission_rub": 10.0,
+            },
+        ]
+
+        trade = pair_closed_trades(rows)[0]
+
+        self.assertEqual(trade["entry_path"], AO_ENTRY_PATH_DELAYED)
+        self.assertIn("Позднее подтверждение", trade["entry_reason"])
 
     def test_restores_ai_decision_from_matching_executed_signal(self) -> None:
         trade = {
@@ -259,6 +292,55 @@ class TradeQualityTests(unittest.TestCase):
         self.assertEqual(result[0]["label"], "trend")
         self.assertEqual(result[0]["net_pnl_rub"], 40.0)
         self.assertEqual(result[0]["win_rate_pct"], 50.0)
+
+    def test_summarizes_actual_fast_and_delayed_ao_entries_after_rollout(self) -> None:
+        entries = [
+            {
+                "_dt": datetime.fromisoformat("2026-09-28T15:00:00+03:00"),
+                "event": "OPEN",
+                "strategy": "ao_chaikin_1h",
+                "symbol": "SRZ6",
+                "reason": "Позднее подтверждение AO после пересечения нуля",
+            },
+            {
+                "_dt": datetime.fromisoformat("2026-09-28T16:00:00+03:00"),
+                "event": "OPEN",
+                "strategy": "ao_chaikin_1h",
+                "symbol": "GDZ6",
+                "reason": "Две закрытые свечи AO подтвердили пересечение нуля",
+            },
+        ]
+        trades = [
+            {
+                "strategy": "ao_chaikin_1h",
+                "symbol": "SRZ6",
+                "entry_time": "2026-09-28T15:00:00+03:00",
+                "entry_path": AO_ENTRY_PATH_DELAYED,
+                "pnl_rub": 120.0,
+                "commission_rub": 20.0,
+            },
+            {
+                "strategy": "ao_chaikin_1h",
+                "symbol": "GDZ6",
+                "entry_time": "2026-09-28T16:00:00+03:00",
+                "entry_path": AO_ENTRY_PATH_FAST,
+                "pnl_rub": -50.0,
+                "commission_rub": 15.0,
+            },
+        ]
+
+        summary = summarize_ao_entry_paths(trades, entries)
+        delayed = next(row for row in summary["paths"] if row["path"] == AO_ENTRY_PATH_DELAYED)
+        fast = next(row for row in summary["paths"] if row["path"] == AO_ENTRY_PATH_FAST)
+
+        self.assertEqual(summary["added_delayed_entries"], 1)
+        self.assertEqual(summary["closed_trades"], 2)
+        self.assertEqual(summary["status"], "collecting")
+        self.assertEqual(delayed["net_pnl_rub"], 120.0)
+        self.assertEqual(delayed["average_net_pnl_rub"], 120.0)
+        self.assertEqual(delayed["win_rate_pct"], 100.0)
+        self.assertEqual(delayed["dominant_symbol"], "SRZ6")
+        self.assertEqual(fast["win_rate_pct"], 0.0)
 
 
 if __name__ == "__main__":

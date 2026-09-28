@@ -274,6 +274,10 @@ class AoChaikinShadowTests(unittest.TestCase):
             "best_price": 105.0,
             "worst_price": 99.0,
             "peak_ao_magnitude": 10.0,
+            "ao_confirmation_bars": 3,
+            "entry_path": "ПОЗДНЕЕ ПОДТВЕРЖДЕНИЕ AO",
+            "price_confirms_entry": True,
+            "entry_price_distance_atr_ratio": 0.8,
         }
 
         result = evaluate_shadow_candle(
@@ -294,6 +298,10 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertEqual(result["ao_peak_retention_ratio"], 0.6)
         self.assertTrue(result["price_confirms_exit"])
         self.assertEqual(result["exit_kind"], "ИСТОЩЕНИЕ ИМПУЛЬСА")
+        self.assertEqual(result["entry_path"], "ПОЗДНЕЕ ПОДТВЕРЖДЕНИЕ AO")
+        self.assertEqual(result["ao_confirmation_bars"], 3)
+        self.assertTrue(result["price_confirms_entry"])
+        self.assertEqual(result["entry_price_distance_atr_ratio"], 0.8)
 
     def test_chaikin_does_not_force_exit_after_two_opposite_ao_bars(self) -> None:
         frame = prepared_frame([10.0, 9.0, 8.0], [100.0, 102.0, 101.0], [20.0, 16.0, 12.0])

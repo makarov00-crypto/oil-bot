@@ -6,6 +6,38 @@ from typing import Any, Iterable
 from active_contracts import get_instrument_history_symbol
 
 
+AO_DELAYED_ENTRY_ROLLOUT_AT = datetime.fromisoformat("2026-09-28T14:45:17+03:00")
+AO_ENTRY_PATH_FAST = "fast_ao_confirmation"
+AO_ENTRY_PATH_DELAYED = "delayed_ao_confirmation"
+
+
+def classify_ao_entry_path(row: dict[str, Any]) -> str:
+    """Resolve the AO entry path from explicit context or the saved entry reason."""
+    context = row.get("context") if isinstance(row.get("context"), dict) else {}
+    explicit = str(row.get("entry_path") or context.get("entry_path") or "").strip().lower()
+    if explicit in {
+        AO_ENTRY_PATH_DELAYED,
+        "позднее подтверждение ao",
+    }:
+        return AO_ENTRY_PATH_DELAYED
+    if explicit in {
+        AO_ENTRY_PATH_FAST,
+        "early_momentum",
+        "быстрое подтверждение ao",
+    }:
+        return AO_ENTRY_PATH_FAST
+
+    strategy = str(row.get("strategy") or "").strip().lower()
+    reason = str(row.get("entry_reason") or row.get("reason") or "").strip().lower()
+    if strategy != "ao_chaikin_1h":
+        return ""
+    if "позднее подтверждение ao" in reason:
+        return AO_ENTRY_PATH_DELAYED
+    if "две закрытые свечи ao" in reason or "быстрое подтверждение ao" in reason:
+        return AO_ENTRY_PATH_FAST
+    return ""
+
+
 def build_trade_key(trade: dict[str, Any]) -> str:
     return "|".join(
         [
@@ -81,6 +113,8 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "net_pnl_rub": _as_float(row.get("net_pnl_rub")) if row.get("net_pnl_rub") is not None else None,
                 "commission_rub": commission_rub,
                 "candidate_id": str(entry_context.get("candidate_id") or ""),
+                "entry_reason": str(entry.get("reason") or ""),
+                "entry_path": classify_ao_entry_path(entry),
                 "exit_reason": str(row.get("reason") or ""),
                 "market_regime": str(entry_context.get("market_regime") or ""),
                 "entry_edge_label": str(entry_context.get("entry_edge_label") or ""),
@@ -412,6 +446,154 @@ def summarize_trade_dimension(trades: Iterable[dict[str, Any]], field: str) -> l
             }
         )
     return sorted(result, key=lambda item: (item["net_pnl_rub"], item["label"]))
+
+
+def summarize_ao_entry_paths(
+    trades: Iterable[dict[str, Any]],
+    entry_rows: Iterable[dict[str, Any]],
+    *,
+    rollout_at: datetime = AO_DELAYED_ENTRY_ROLLOUT_AT,
+) -> dict[str, Any]:
+    """Compare actual fast and delayed AO entries after the delayed rule went live."""
+
+    def timestamp(row: dict[str, Any], *fields: str) -> datetime | None:
+        for field in fields:
+            value = row.get(field)
+            if isinstance(value, datetime):
+                return value if value.tzinfo else None
+            try:
+                parsed = datetime.fromisoformat(str(value or ""))
+            except (TypeError, ValueError):
+                continue
+            if parsed.tzinfo:
+                return parsed
+        return None
+
+    paths = {
+        AO_ENTRY_PATH_FAST: {
+            "path": AO_ENTRY_PATH_FAST,
+            "label": "Быстрое подтверждение",
+            "entries": 0,
+            "closed_trades": 0,
+            "net_pnl_rub": 0.0,
+            "commission_rub": 0.0,
+            "wins": 0,
+            "symbols": {},
+        },
+        AO_ENTRY_PATH_DELAYED: {
+            "path": AO_ENTRY_PATH_DELAYED,
+            "label": "Позднее подтверждение",
+            "entries": 0,
+            "closed_trades": 0,
+            "net_pnl_rub": 0.0,
+            "commission_rub": 0.0,
+            "wins": 0,
+            "symbols": {},
+        },
+    }
+    unclassified_entries = 0
+    for row in entry_rows:
+        if str(row.get("event") or "").upper() != "OPEN":
+            continue
+        if str(row.get("strategy") or "") != "ao_chaikin_1h":
+            continue
+        opened_at = timestamp(row, "_dt", "time", "entry_time")
+        if opened_at is None or opened_at < rollout_at:
+            continue
+        path = classify_ao_entry_path(row)
+        if path not in paths:
+            unclassified_entries += 1
+            continue
+        paths[path]["entries"] += 1
+
+    for trade in trades:
+        if str(trade.get("strategy") or "") != "ao_chaikin_1h":
+            continue
+        opened_at = timestamp(trade, "entry_time")
+        if opened_at is None or opened_at < rollout_at:
+            continue
+        path = classify_ao_entry_path(trade)
+        if path not in paths:
+            continue
+        net = _as_float(trade.get("pnl_rub"))
+        commission = abs(_as_float(trade.get("commission_rub")))
+        symbol = get_instrument_history_symbol(str(trade.get("symbol") or ""))
+        row = paths[path]
+        row["closed_trades"] += 1
+        row["net_pnl_rub"] += net
+        row["commission_rub"] += commission
+        row["wins"] += int(net > 0.0)
+        if symbol:
+            symbol_row = row["symbols"].setdefault(symbol, {"trades": 0, "net_pnl_rub": 0.0})
+            symbol_row["trades"] += 1
+            symbol_row["net_pnl_rub"] += net
+
+    rows: list[dict[str, Any]] = []
+    for path in (AO_ENTRY_PATH_FAST, AO_ENTRY_PATH_DELAYED):
+        row = paths[path]
+        closed = int(row["closed_trades"])
+        symbol_rows = row.pop("symbols")
+        absolute_result = sum(abs(float(item["net_pnl_rub"])) for item in symbol_rows.values())
+        dominant_symbol = max(
+            symbol_rows.items(),
+            key=lambda item: abs(float(item[1]["net_pnl_rub"])),
+            default=None,
+        )
+        dominant_share = (
+            abs(float(dominant_symbol[1]["net_pnl_rub"])) / absolute_result * 100.0
+            if dominant_symbol and absolute_result > 0.0
+            else None
+        )
+        rows.append(
+            {
+                **row,
+                "open_trades": max(0, int(row["entries"]) - closed),
+                "net_pnl_rub": round(float(row["net_pnl_rub"]), 2),
+                "commission_rub": round(float(row["commission_rub"]), 2),
+                "average_net_pnl_rub": round(float(row["net_pnl_rub"]) / closed, 2) if closed else None,
+                "win_rate_pct": round(int(row["wins"]) / closed * 100.0, 1) if closed else None,
+                "dominant_symbol": dominant_symbol[0] if dominant_symbol else "",
+                "dominant_symbol_net_rub": round(float(dominant_symbol[1]["net_pnl_rub"]), 2) if dominant_symbol else None,
+                "dominant_symbol_share_pct": round(dominant_share, 1) if dominant_share is not None else None,
+            }
+        )
+
+    total_entries = sum(int(row["entries"]) for row in rows)
+    total_closed = sum(int(row["closed_trades"]) for row in rows)
+    delayed = next(row for row in rows if row["path"] == AO_ENTRY_PATH_DELAYED)
+    fast = next(row for row in rows if row["path"] == AO_ENTRY_PATH_FAST)
+    if total_entries == 0:
+        status = "no_entries"
+        status_text = "После включения правила новых фактических входов пока нет."
+    elif total_closed < 10 or min(int(fast["closed_trades"]), int(delayed["closed_trades"])) < 3:
+        status = "collecting"
+        status_text = (
+            f"Выборка накапливается: закрыто {total_closed} из 10 сделок; "
+            "для сравнения нужно минимум по 3 закрытых входа каждого типа."
+        )
+    elif any(
+        row["dominant_symbol_share_pct"] is not None
+        and float(row["dominant_symbol_share_pct"]) > 60.0
+        for row in rows
+    ):
+        status = "concentrated"
+        status_text = "Выборка достаточна, но результат заметно зависит от одного инструмента."
+    else:
+        status = "ready"
+        status_text = "Минимальная выборка собрана: быстрые и поздние входы можно сравнивать."
+
+    return {
+        "rollout_at": rollout_at.isoformat(),
+        "entries": total_entries,
+        "closed_trades": total_closed,
+        "added_delayed_entries": int(delayed["entries"]),
+        "unclassified_entries": unclassified_entries,
+        "status": status,
+        "status_text": status_text,
+        "target_closed_trades": 10,
+        "minimum_closed_per_path": 3,
+        "paths": rows,
+    }
 
 
 def build_trade_quality_overview(trades: Iterable[dict[str, Any]], missed_entries: Iterable[dict[str, Any]]) -> dict[str, Any]:
