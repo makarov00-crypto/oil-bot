@@ -11228,7 +11228,7 @@ def check_ao_chaikin_exit(
     state: InstrumentState,
     df: pd.DataFrame,
 ) -> None:
-    """Manage only positions explicitly opened by AO/Chaikin v3."""
+    """Manage only positions explicitly opened by AO/Chaikin v4."""
     price = get_last_price(client, instrument)
     state.max_price = max(state.max_price or price, price)
     state.min_price = min(state.min_price or price, price)
