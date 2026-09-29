@@ -88,6 +88,19 @@ class ActiveContractsTest(unittest.TestCase):
         self.assertEqual(contracts["BMM6"], "BRU6")
         self.assertEqual(contracts["BMQ6"], "BRU6")
 
+    def test_gas_rollover_moves_every_historical_alias_and_keeps_strategy(self) -> None:
+        for template_symbol in ("NGJ6", "NGK6", "NGM6", "NGN6", "NGQ6"):
+            upsert_active_contract(template_symbol, "NGU6")
+
+        upsert_active_contract("NGK6", "NGZ6")
+
+        for symbol in ("NGJ6", "NGK6", "NGM6", "NGN6", "NGQ6", "NGU6"):
+            self.assertEqual(get_active_contract_symbol(symbol), "NGZ6")
+            self.assertEqual(get_instrument_history_symbol(symbol), "NGZ6")
+        self.assertEqual(get_active_contract_template("NGZ6"), "NGK6")
+        self.assertEqual(get_primary_strategies("NGZ6"), get_primary_strategies("NGK6"))
+        self.assertTrue(uses_unified_reversal_1h("NGZ6"))
+
     def test_retired_alias_keeps_the_canonical_template_after_rollover(self) -> None:
         upsert_active_contract("SRM6", "SRU6")
         upsert_active_contract("SRM6", "SRZ6")

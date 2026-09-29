@@ -702,6 +702,32 @@ class AoChaikinShadowTests(unittest.TestCase):
         self.assertTrue(payload["decisions"][0]["key"].startswith("VBZ6:"))
         self.assertIn("entry_hypotheses", payload)
 
+    def test_dashboard_payload_moves_retired_gas_history_to_active_contract(self) -> None:
+        row = {
+            "version": STRATEGY_VERSION,
+            "symbol": "NGU6",
+            "key": "NGU6:2026-09-28T14:00:00+03:00",
+            "candle_closed_at": "2026-09-28T14:00:00+03:00",
+            "recorded_at": "2026-09-28T14:00:01+03:00",
+            "decision": DECISION_NO_ENTRY,
+            "direction": DIRECTION_LONG,
+            "position_before": POSITION_FLAT,
+            "position_after": POSITION_FLAT,
+            "price": 3.196,
+            "reason": "AO выше нуля, но нет непрерывного усиления.",
+        }
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "shadow.jsonl"
+            path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+            payload = build_shadow_strategy_payload(
+                path,
+                enabled=True,
+                now=datetime(2026, 9, 29, 12, 0, tzinfo=MOSCOW_TZ),
+            )
+
+        self.assertEqual(payload["decisions"][0]["symbol"], "NGZ6")
+        self.assertTrue(payload["decisions"][0]["key"].startswith("NGZ6:"))
+
     def test_dashboard_payload_does_not_mix_previous_strategy_version(self) -> None:
         rows = [
             {

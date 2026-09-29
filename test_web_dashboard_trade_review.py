@@ -37,17 +37,24 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn("15М РАЗВОРОТ", html)
         self.assertIn("ЧАСОВОЙ РАЗВОРОТ", html)
         self.assertIn("АРХИВ 15М", html)
+        self.assertEqual(dashboard.INSTRUMENT_DISPLAY_NAMES["NGZ6"], "NG-12.26 Природный газ")
+        self.assertIn("NGZ6: 'NG-12.26 Природный газ'", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_news_coverage_payload_includes_human_keywords(self) -> None:
         payload = dashboard.build_news_coverage_payload()
         ozon_symbol = get_active_contract_symbol("ONU6")
+        gas_symbol = get_active_contract_symbol("NGK6")
 
         self.assertFalse(payload["missing_symbols"])
         self.assertIn("BRV6", payload["news_symbols"])
         self.assertIn(ozon_symbol, payload["news_symbols"])
+        self.assertEqual(gas_symbol, "NGZ6")
+        self.assertIn(gas_symbol, payload["news_symbols"])
+        self.assertNotIn("NGU6", payload["news_symbols"])
         self.assertIn("баррель", payload["keyword_samples"]["BRV6"])
         self.assertIn("озон", payload["keyword_samples"][ozon_symbol])
+        self.assertIn("природный газ", payload["keyword_samples"][gas_symbol])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_dashboard_hides_internal_news_keyword_dictionary(self) -> None:
