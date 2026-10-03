@@ -30,6 +30,7 @@ STRATEGY_VERSION = "ao-candle-mtf-replay-v2"
 COMMISSION_RATE = 0.00025
 INITIAL_STOP_ATR = 0.80
 BREAKEVEN_TRIGGER_ATR = 0.20
+AI_REQUEST_TIMEOUT_SECONDS = 240
 
 
 @dataclass
@@ -333,9 +334,9 @@ def ai_contexts(candidate: Candidate, frames: dict[int, pd.DataFrame]) -> tuple[
         "as_of": candidate.signal_time,
         "closed_bars_only": True,
         "timeframes": {
-            "1h": compact_bars(frames[60], at, 60),
-            "4h": compact_bars(four_hour, at, 18),
-            "30m": compact_bars(frames[30], at, 48),
+            "1h": compact_bars(frames[60], at, 36),
+            "4h": compact_bars(four_hour, at, 12),
+            "30m": compact_bars(frames[30], at, 24),
         },
         "derived_features": {
             "1h": market_structure_features(frames[60], at, 60),
@@ -367,9 +368,9 @@ def ai_contexts(candidate: Candidate, frames: dict[int, pd.DataFrame]) -> tuple[
             },
         },
         "timeframes": {
-            "1h": compact_bars(frames[60], at, 16),
-            "30m": compact_bars(frames[30], at, 24),
-            "15m": compact_bars(frames[15], at, 32),
+            "1h": compact_bars(frames[60], at, 12),
+            "30m": compact_bars(frames[30], at, 16),
+            "15m": compact_bars(frames[15], at, 20),
         },
         "derived_features": {
             "1h": market_structure_features(frames[60], at, 16),
@@ -400,8 +401,8 @@ def review_candidates(
         else:
             print(f"AI {number}/{len(candidates)} {candidate.symbol} {candidate.direction} {candidate.signal_time}", flush=True)
             prior = prior_regimes.get((candidate.symbol, candidate.direction, candidate.signal_time))
-            regime = RegimeReview(**prior) if prior else request_regime_review(api_key, regime_context)
-            entry = request_entry_review(api_key, entry_context, regime)
+            regime = RegimeReview(**prior) if prior else request_regime_review(api_key, regime_context, timeout=AI_REQUEST_TIMEOUT_SECONDS)
+            entry = request_entry_review(api_key, entry_context, regime, timeout=AI_REQUEST_TIMEOUT_SECONDS)
             candidate.regime_review = regime.as_dict()
             candidate.entry_review = entry.as_dict()
             cache[key] = {"prompt_version": PROMPT_VERSION, "model": ai_model, "regime": candidate.regime_review, "entry": candidate.entry_review}
