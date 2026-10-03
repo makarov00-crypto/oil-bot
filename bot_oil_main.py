@@ -7704,6 +7704,12 @@ def calculate_ao_canary_closed_net(
             continue
         if not is_ao_chaikin_strategy(row.get("strategy")):
             continue
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        strategy_version = str(
+            row.get("strategy_version") or context.get("strategy_version") or ""
+        )
+        if strategy_version != AO_CANARY_STRATEGY_VERSION:
+            continue
         row_dt = parse_state_datetime(str(row.get("time") or ""))
         if row_dt is None:
             continue
@@ -7731,11 +7737,14 @@ def count_open_ao_positions(config: BotConfig | Any) -> int:
             state.position_side in {"LONG", "SHORT"}
             and state.position_qty > 0
             and is_ao_chaikin_strategy(state.entry_strategy)
+            and state.entry_strategy_version == AO_CANARY_STRATEGY_VERSION
         )
         pending = (
             state.pending_order_action == "OPEN"
             and state.pending_order_qty > 0
             and is_ao_chaikin_strategy(state.entry_strategy or state.last_strategy_name)
+            and (state.pending_strategy_version or state.entry_strategy_version)
+            == AO_CANARY_STRATEGY_VERSION
         )
         if confirmed or pending:
             count += 1
@@ -7755,7 +7764,7 @@ def get_ao_canary_entry_block(
     if open_positions >= max_open:
         return (
             "ao_canary_open_position_limit",
-            f"AO canary: уже открыто или отправлено {open_positions} AO-позиций, лимит {max_open}.",
+            f"AO canary: уже открыто или отправлено {open_positions} canary-позиций, лимит {max_open}.",
         )
     snapshot = get_account_snapshot(client, config)
     equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub

@@ -45,7 +45,12 @@ class AoCanaryControlsTests(unittest.TestCase):
 
         def load_state(symbol):
             if symbol == "CNYRUBF":
-                return mod.InstrumentState(position_side="LONG", position_qty=9, entry_strategy=AO)
+                return mod.InstrumentState(
+                    position_side="LONG",
+                    position_qty=1,
+                    entry_strategy=AO,
+                    entry_strategy_version=mod.AO_CANARY_STRATEGY_VERSION,
+                )
             return mod.InstrumentState()
 
         with patch.object(mod, "load_trade_journal", return_value=[]), patch.object(
@@ -55,12 +60,33 @@ class AoCanaryControlsTests(unittest.TestCase):
         self.assertEqual(eligible, [])
         self.assertEqual(deferred[0]["defer_kind"], "ao_canary_open_position_limit")
 
+    def test_legacy_ao_positions_do_not_consume_canary_slot(self):
+        candidate = {"symbol": "GDZ6", "strategy_name": AO, "allocator_quantity": 1}
+
+        def load_state(symbol):
+            if symbol in {"CNYRUBF", "IMOEXF"}:
+                return mod.InstrumentState(
+                    position_side="LONG",
+                    position_qty=9 if symbol == "CNYRUBF" else 1,
+                    entry_strategy=AO,
+                    entry_strategy_version="4",
+                )
+            return mod.InstrumentState()
+
+        with patch.object(mod, "load_trade_journal", return_value=[]), patch.object(
+            mod, "get_account_snapshot", return_value=mod.AccountSnapshot(500000.0, 400000.0, 0.0)
+        ), patch.object(mod, "load_state", side_effect=load_state):
+            eligible, deferred = mod.filter_ao_canary_candidates(None, config(), [candidate])
+        self.assertEqual(deferred, [])
+        self.assertEqual(len(eligible), 1)
+
     def test_blocks_at_daily_or_weekly_loss_limit(self):
         rows = [
             {
                 "time": "2026-10-03T10:00:00+03:00",
                 "event": "CLOSE",
                 "strategy": AO,
+                "strategy_version": mod.AO_CANARY_STRATEGY_VERSION,
                 "net_pnl_rub": -3000.0,
             }
         ]
@@ -90,6 +116,29 @@ class AoCanaryControlsTests(unittest.TestCase):
             )
         self.assertEqual(eligible, [])
         self.assertEqual(deferred[0]["defer_kind"], "ao_canary_weekly_loss")
+
+    def test_legacy_ao_losses_do_not_consume_canary_loss_budget(self):
+        rows = [
+            {
+                "time": "2026-10-03T10:00:00+03:00",
+                "event": "CLOSE",
+                "strategy": AO,
+                "strategy_version": "4",
+                "net_pnl_rub": -10000.0,
+            }
+        ]
+        candidate = {"symbol": "GDZ6", "strategy_name": AO, "allocator_quantity": 1}
+        with patch.object(mod, "load_trade_journal", return_value=rows), patch.object(
+            mod, "get_account_snapshot", return_value=mod.AccountSnapshot(500000.0, 400000.0, 0.0)
+        ), patch.object(mod, "load_state", return_value=mod.InstrumentState()):
+            eligible, deferred = mod.filter_ao_canary_candidates(
+                None,
+                config(),
+                [candidate],
+                now=datetime.fromisoformat("2026-10-03T15:00:00+03:00"),
+            )
+        self.assertEqual(deferred, [])
+        self.assertEqual(len(eligible), 1)
 
     def test_disabled_canary_does_not_change_candidates(self):
         candidate = {"symbol": "GDZ6", "strategy_name": AO, "allocator_quantity": 4}
