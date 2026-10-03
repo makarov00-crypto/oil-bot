@@ -19,6 +19,7 @@ from ao_chaikin_shadow import (
 
 STRATEGY_NAME = "ao_chaikin_1h"
 RISK_MULTIPLIER = 0.5
+LIVE_STRATEGY_VERSION = "4-canary-fast-only"
 
 
 def is_ao_chaikin_strategy(name: Any) -> bool:
@@ -70,6 +71,10 @@ def evaluate_signal(df, config, instrument, higher_tf_bias: str) -> tuple[str, s
     )
     signal = "HOLD"
     if result["decision"] == DECISION_ENTRY:
+        delayed_entry = str(result.get("entry_path") or "").upper().startswith("ПОЗДНЕЕ")
+        allow_delayed = bool(getattr(config, "ao_allow_delayed_entries", True))
+        if delayed_entry and not allow_delayed:
+            return "HOLD", "AO/Чайкин canary: поздние подтверждения остаются только в теневом наблюдении."
         signal = "LONG" if result["direction"] == DIRECTION_LONG else "SHORT"
     return signal, result["reason"]
 

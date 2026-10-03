@@ -51,6 +51,7 @@ from news_ingest import (
 from strategy_engine import evaluate_primary_signal_bundle, evaluate_owned_signal_bundle
 from strategies.ao_chaikin_1h import (
     build_entry_context as build_ao_chaikin_entry_context,
+    LIVE_STRATEGY_VERSION as AO_CANARY_STRATEGY_VERSION,
     RISK_MULTIPLIER as AO_RISK_MULTIPLIER,
     is_ao_chaikin_strategy,
     evaluate_position as evaluate_ao_chaikin_position,
@@ -150,7 +151,8 @@ NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 AO_CHAIKIN_SHADOW_JOURNAL: AoChaikinShadowJournal | None = None
 TRADE_QUALITY_REFRESH_SECONDS = 3600
-TRADE_QUALITY_ANALYTICS_VERSION = 10
+TRADE_QUALITY_ANALYTICS_VERSION = 11
+POSITION_RECONCILE_EVENT = "POSITION_RECONCILE"
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 NEWS_AI_DEFAULT_MODEL = "gpt-5.6-luna"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
@@ -242,6 +244,12 @@ class BotConfig:
     cash_manager_idle_minutes: int
     cash_manager_min_order_rub: float
     cash_manager_release_buffer_pct: float
+    ao_canary_enabled: bool
+    ao_canary_max_lots: int
+    ao_canary_max_open_positions: int
+    ao_canary_daily_loss_pct: float
+    ao_canary_weekly_loss_pct: float
+    ao_allow_delayed_entries: bool
 
 
 @dataclass
@@ -329,6 +337,7 @@ class InstrumentState:
     delayed_close_entry_price: float | None = None
     delayed_close_entry_commission_rub: float = 0.0
     delayed_close_strategy: str = ""
+    delayed_close_strategy_version: str = ""
     delayed_close_reason: str = ""
     delayed_close_entry_time: str = ""
     delayed_close_submitted_at: str = ""
@@ -337,6 +346,8 @@ class InstrumentState:
     last_fill_price: float | None = None
     entry_time: str = ""
     entry_strategy: str = ""
+    entry_strategy_version: str = ""
+    pending_strategy_version: str = ""
     entry_reason: str = ""
     last_strategy_name: str = ""
     last_higher_tf_bias: str = ""
@@ -598,6 +609,7 @@ def clear_pending_order(state: InstrumentState) -> None:
     state.pending_entry_reason = ""
     state.pending_exit_reason = ""
     state.pending_observation_uid = ""
+    state.pending_strategy_version = ""
 
 
 def clear_entry_protection(state: InstrumentState) -> None:
@@ -616,6 +628,7 @@ def clear_delayed_close_recovery(state: InstrumentState) -> None:
     state.delayed_close_entry_price = None
     state.delayed_close_entry_commission_rub = 0.0
     state.delayed_close_strategy = ""
+    state.delayed_close_strategy_version = ""
     state.delayed_close_reason = ""
     state.delayed_close_entry_time = ""
     state.delayed_close_submitted_at = ""
@@ -632,6 +645,7 @@ def build_delayed_close_snapshot(
     previous_exit_reason: str,
     previous_entry_time: datetime | None,
     submitted_at: datetime,
+    previous_strategy_version: str = "",
 ) -> dict[str, Any]:
     return {
         "side": previous_side,
@@ -639,6 +653,7 @@ def build_delayed_close_snapshot(
         "entry_price": previous_entry_price,
         "entry_commission_rub": float(previous_entry_commission or 0.0),
         "strategy": previous_strategy or "",
+        "strategy_version": previous_strategy_version or "",
         "reason": previous_exit_reason or "",
         "entry_time": previous_entry_time.isoformat() if previous_entry_time else "",
         "submitted_at": submitted_at.isoformat(),
@@ -654,6 +669,7 @@ def sync_legacy_delayed_close_fields(state: InstrumentState) -> None:
         state.delayed_close_entry_price = None
         state.delayed_close_entry_commission_rub = 0.0
         state.delayed_close_strategy = ""
+        state.delayed_close_strategy_version = ""
         state.delayed_close_reason = ""
         state.delayed_close_entry_time = ""
         state.delayed_close_submitted_at = ""
@@ -665,6 +681,7 @@ def sync_legacy_delayed_close_fields(state: InstrumentState) -> None:
     state.delayed_close_entry_price = item.get("entry_price")
     state.delayed_close_entry_commission_rub = float(item.get("entry_commission_rub") or 0.0)
     state.delayed_close_strategy = str(item.get("strategy") or "")
+    state.delayed_close_strategy_version = str(item.get("strategy_version") or "")
     state.delayed_close_reason = str(item.get("reason") or "")
     state.delayed_close_entry_time = str(item.get("entry_time") or "")
     state.delayed_close_submitted_at = str(item.get("submitted_at") or "")
@@ -700,6 +717,7 @@ def ensure_delayed_close_queue(state: InstrumentState) -> list[dict[str, Any]]:
                 "entry_price": state.delayed_close_entry_price,
                 "entry_commission_rub": float(state.delayed_close_entry_commission_rub or 0.0),
                 "strategy": state.delayed_close_strategy or "",
+                "strategy_version": state.delayed_close_strategy_version or "",
                 "reason": state.delayed_close_reason or "",
                 "entry_time": state.delayed_close_entry_time or "",
                 "submitted_at": state.delayed_close_submitted_at or "",
@@ -770,6 +788,8 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "entry_allocator_quantity": int(state.last_entry_allocator_quantity or 0),
         "entry_allocator_summary": str(state.last_entry_allocator_summary or ""),
         "entry_path": str(state.last_entry_path or ""),
+        "entry_time": str(state.entry_time or state.delayed_close_entry_time or ""),
+        "strategy_version": str(state.entry_strategy_version or state.pending_strategy_version or ""),
         "signal_summary": signal_summary,
         "execution_status": str(state.execution_status or ""),
         "shadow_ai": {
@@ -803,6 +823,7 @@ def append_trade_journal(
     dry_run: bool = True,
     state: InstrumentState | None = None,
     broker_op_id: str = "",
+    strategy_version: str = "",
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     if isinstance(event_time, datetime):
@@ -871,6 +892,10 @@ def append_trade_journal(
                 journal_time,
             )
             return
+    resolved_strategy_version = str(
+        strategy_version
+        or ((state.entry_strategy_version or state.pending_strategy_version) if state is not None else "")
+    )
     row = {
         "time": journal_time,
         "symbol": instrument.symbol,
@@ -887,6 +912,7 @@ def append_trade_journal(
         "reason": reason,
         "source": source,
         "strategy": strategy,
+        "strategy_version": resolved_strategy_version,
         "mode": "DRY_RUN" if dry_run else "LIVE",
         "session": get_market_session(),
     }
@@ -924,6 +950,7 @@ def append_allocator_decision(
     execution_status: str = "",
     execution_note: str = "",
     quantity: int = 0,
+    strategy_version: str = "",
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     row = {
@@ -948,6 +975,7 @@ def append_allocator_decision(
         "execution_status": execution_status,
         "execution_note": execution_note,
         "quantity": int(quantity or 0),
+        "strategy_version": strategy_version,
     }
     if priority_components:
         row["priority_components"] = {
@@ -1019,6 +1047,7 @@ def append_signal_observation_decision(
         "ai_canary_bucket": int(candidate.get("ai_canary_bucket") or 0),
         "ai_canary_percent": int(candidate.get("ai_canary_percent") or 0),
         "ai_canary_result": str(candidate.get("ai_canary_result") or ""),
+        "strategy_version": str(candidate.get("strategy_version") or ""),
     }
     shadow_ai = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
     if shadow_ai:
@@ -1042,6 +1071,7 @@ def append_signal_observation_decision(
         "symbol": str(candidate.get("symbol") or "").upper(),
         "signal": str(candidate.get("signal") or "").upper(),
         "strategy": strategy_name,
+        "strategy_version": str(candidate.get("strategy_version") or ""),
         "decision": decision,
         "decision_reason": decision_reason,
         "priority_score": float(candidate.get("priority_score") or 0.0),
@@ -2275,6 +2305,9 @@ def reconcile_state_accounting(symbol: str, state: InstrumentState) -> None:
         if str(row.get("symbol", "")).upper() != symbol.upper():
             continue
         event = str(row.get("event", "")).upper()
+        if event == POSITION_RECONCILE_EVENT:
+            unmatched_open_rows = [row] if int(row.get("qty_lots") or 0) > 0 else []
+            continue
         if event == "OPEN":
             if unmatched_open_rows and is_duplicate_carry_open(unmatched_open_rows[-1], row):
                 continue
@@ -2334,15 +2367,64 @@ def get_active_journal_lots(symbol: str, side: str, rows: list[dict[str, Any]] |
     for row in source_rows:
         if str(row.get("symbol", "")).upper() != target_symbol:
             continue
-        if str(row.get("side", "")).upper() != target_side:
-            continue
         event = str(row.get("event", "")).upper()
         qty = int(row.get("qty_lots") or 0)
+        row_side = str(row.get("side", "")).upper()
+        if event == POSITION_RECONCILE_EVENT:
+            # A broker-confirmed anchor starts a new accounting cycle for both
+            # directions while preserving every older journal row.
+            active_lots = qty if row_side == target_side else 0
+            continue
+        if row_side != target_side:
+            continue
         if event == "OPEN":
             active_lots += qty
         elif event == "CLOSE":
             active_lots = max(0, active_lots - qty)
     return max(0, active_lots)
+
+
+def append_position_reconciliation(
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    *,
+    price: float,
+    journal_long_lots: int,
+    journal_short_lots: int,
+) -> None:
+    if is_ao_chaikin_strategy(state.entry_strategy) and not state.entry_strategy_version:
+        # Positions opened before version stamping belong to the original live v4 cohort.
+        state.entry_strategy_version = "4"
+    reason = (
+        "Сверка позиции с брокером: "
+        f"журнал LONG {journal_long_lots}, SHORT {journal_short_lots}; "
+        f"брокер {state.position_side} {state.position_qty}."
+    )
+    append_trade_journal(
+        instrument,
+        POSITION_RECONCILE_EVENT,
+        state.position_side,
+        state.position_qty,
+        price,
+        gross_pnl_rub=None,
+        commission_rub=None,
+        net_pnl_rub=None,
+        reason=reason,
+        source="broker_position_reconciliation",
+        strategy=state.entry_strategy or state.last_strategy_name or "recovered_position",
+        dry_run=config.dry_run,
+        state=state,
+    )
+    logging.warning("symbol=%s status=journal_position_reconciled reason=%s", instrument.symbol, reason)
+    send_msg(
+        config,
+        build_telegram_card(
+            "Сверка торгового журнала",
+            "⚠️",
+            [format_instrument_title(instrument), reason, "История сохранена; добавлена корректирующая запись."],
+        ),
+    )
 
 
 def apply_recovered_close_to_state(row: dict[str, Any]) -> bool:
@@ -2709,6 +2791,7 @@ def confirm_pending_close_from_broker(
     previous_entry_time: datetime | None,
     source: str,
     recovered_status: str,
+    previous_strategy_version: str = "",
     not_before: datetime | None = None,
 ) -> bool:
     if previous_side == "FLAT" or previous_qty <= 0:
@@ -2800,6 +2883,7 @@ def confirm_pending_close_from_broker(
         reason=previous_exit_reason,
         source=source,
         strategy=previous_strategy,
+        strategy_version=previous_strategy_version,
         dry_run=False,
         state=state,
         broker_op_id=close_op_id or "",
@@ -2832,6 +2916,8 @@ def confirm_pending_close_from_broker(
     )
     state.last_error = ""
     clear_pending_order(state)
+    if state.position_side == "FLAT":
+        state.entry_strategy_version = ""
     save_state(instrument.symbol, state)
     logging.info(
         "symbol=%s status=pending_close_confirmed_via_portfolio qty=%s source=%s",
@@ -2919,6 +3005,7 @@ def reconcile_delayed_close_from_broker(
             previous_entry_price=item.get("entry_price"),
             previous_entry_commission=float(item.get("entry_commission_rub") or 0.0),
             previous_strategy=str(item.get("strategy") or ""),
+            previous_strategy_version=str(item.get("strategy_version") or ""),
             previous_exit_reason=str(item.get("reason") or "Закрытие подтверждено брокерской операцией"),
             previous_entry_time=previous_entry_time,
             source="delayed_broker_ops_recovery",
@@ -3062,6 +3149,15 @@ def build_trade_journal_queues_for_day(
         side = str(row.get("side") or "").upper()
         event = str(row.get("event") or "").upper()
         if not symbol or not side:
+            continue
+        if event == POSITION_RECONCILE_EVENT:
+            for queue_key in [queue_key for queue_key in queues if queue_key[0] == symbol]:
+                queues.pop(queue_key, None)
+            qty = max(0, int(row.get("qty_lots") or 0))
+            for _ in range(qty):
+                split_row = dict(row)
+                split_row["qty_lots"] = 1
+                queues[(symbol, side)].append(split_row)
             continue
         if event == "OPEN":
             qty = max(1, int(row.get("qty_lots") or 0))
@@ -3500,6 +3596,7 @@ def defer_close_recovery_to_broker_ops(
     previous_entry_time: datetime | None,
     pending_submitted_at: datetime | None,
     grace_seconds: float | None,
+    previous_strategy_version: str = "",
 ) -> bool:
     if previous_side == "FLAT" or previous_qty <= 0:
         return False
@@ -3528,6 +3625,7 @@ def defer_close_recovery_to_broker_ops(
             previous_entry_price=previous_entry_price,
             previous_entry_commission=previous_entry_commission,
             previous_strategy=previous_strategy,
+            previous_strategy_version=previous_strategy_version,
             previous_exit_reason=previous_exit_reason,
             previous_entry_time=previous_entry_time,
             submitted_at=effective_submitted_at,
@@ -3559,6 +3657,12 @@ def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, 
         if not symbol or not side:
             continue
         key = (symbol, side)
+        if event == POSITION_RECONCILE_EVENT:
+            for open_key in [open_key for open_key in open_by_key if open_key[0] == symbol]:
+                open_by_key.pop(open_key, None)
+            if int(row.get("qty_lots") or 0) > 0:
+                open_by_key[key] = [row]
+            continue
         if event == "OPEN":
             queue = open_by_key.setdefault(key, [])
             if queue and is_duplicate_carry_open(queue[-1], row):
@@ -3570,12 +3674,16 @@ def pair_trade_journal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, 
         open_row = None
         if open_by_key.get(key):
             open_row = open_by_key[key].pop()
+        open_context = open_row.get("context") if open_row and isinstance(open_row.get("context"), dict) else {}
         closed_reviews.append(
             {
                 "symbol": symbol,
                 "side": row.get("side", open_row.get("side") if open_row else ""),
                 "strategy": row.get("strategy") or (open_row.get("strategy") if open_row else ""),
-                "entry_time": open_row.get("time") if open_row else "",
+                "strategy_version": row.get("strategy_version") or (
+                    open_row.get("strategy_version") if open_row else ""
+                ) or open_context.get("strategy_version", ""),
+                "entry_time": open_context.get("entry_time") or (open_row.get("time") if open_row else ""),
                 "exit_time": row.get("time", ""),
                 "entry_price": open_row.get("price") if open_row else None,
                 "exit_price": row.get("price"),
@@ -3677,6 +3785,12 @@ def load_config() -> BotConfig:
             0.0,
             min(1.0, parse_float_env("OIL_CASH_MANAGER_RELEASE_BUFFER_PCT", 0.15)),
         ),
+        ao_canary_enabled=parse_bool_env("OIL_AO_CANARY_ENABLED", False),
+        ao_canary_max_lots=max(1, parse_int_env("OIL_AO_CANARY_MAX_LOTS", 1)),
+        ao_canary_max_open_positions=max(1, parse_int_env("OIL_AO_CANARY_MAX_OPEN_POSITIONS", 1)),
+        ao_canary_daily_loss_pct=max(0.0, parse_float_env("OIL_AO_CANARY_DAILY_LOSS_PCT", 0.5)),
+        ao_canary_weekly_loss_pct=max(0.0, parse_float_env("OIL_AO_CANARY_WEEKLY_LOSS_PCT", 1.0)),
+        ao_allow_delayed_entries=parse_bool_env("OIL_AO_ALLOW_DELAYED_ENTRIES", True),
     )
 
 
@@ -7344,6 +7458,8 @@ def sync_state_with_portfolio(
         state.position_side = "LONG" if qty > 0 else "SHORT"
         if not state.entry_time:
             state.entry_time = datetime.now(UTC).isoformat()
+    if is_ao_chaikin_strategy(state.entry_strategy) and not state.entry_strategy_version:
+        state.entry_strategy_version = "4"
     state.max_price = max(state.max_price or last_price, last_price)
     state.min_price = min(state.min_price or last_price, last_price)
     pending_open_submitted_at = (
@@ -7351,6 +7467,27 @@ def sync_state_with_portfolio(
         if state.pending_order_id and state.pending_order_action == "OPEN"
         else None
     )
+    journal_long_lots = get_active_journal_lots(instrument.symbol, "LONG")
+    journal_short_lots = get_active_journal_lots(instrument.symbol, "SHORT")
+    stable_broker_position = (
+        previous_side == state.position_side
+        and previous_qty == state.position_qty
+        and not state.pending_order_id
+        and not state.delayed_close_recovery_needed
+    )
+    expected_long_lots = state.position_qty if state.position_side == "LONG" else 0
+    expected_short_lots = state.position_qty if state.position_side == "SHORT" else 0
+    if stable_broker_position and (
+        journal_long_lots != expected_long_lots or journal_short_lots != expected_short_lots
+    ):
+        append_position_reconciliation(
+            config,
+            instrument,
+            state,
+            price=state.entry_price or last_price,
+            journal_long_lots=journal_long_lots,
+            journal_short_lots=journal_short_lots,
+        )
     active_open_lots = get_active_journal_lots(instrument.symbol, state.position_side)
     missing_open_lots = max(0, int(state.position_qty) - int(active_open_lots))
     has_matching_open_entry = (
@@ -7546,6 +7683,135 @@ def get_global_daily_loss_block_reason(client: Client, config: BotConfig) -> str
         f"Жёсткий стоп активирован после превышения расширенного порога "
         f"-{float(status.get('hard_limit_rub') or 0.0):.2f} RUB."
     )
+
+
+def get_ao_live_strategy_version(config: BotConfig | Any) -> str:
+    return AO_CANARY_STRATEGY_VERSION if bool(getattr(config, "ao_canary_enabled", False)) else "4"
+
+
+def calculate_ao_canary_closed_net(
+    rows: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, float]:
+    current = (now or datetime.now(UTC)).astimezone(MOSCOW_TZ)
+    day_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = day_start - timedelta(days=day_start.weekday())
+    daily_net = 0.0
+    weekly_net = 0.0
+    for row in rows:
+        if str(row.get("event") or "").upper() != "CLOSE":
+            continue
+        if not is_ao_chaikin_strategy(row.get("strategy")):
+            continue
+        row_dt = parse_state_datetime(str(row.get("time") or ""))
+        if row_dt is None:
+            continue
+        row_moscow = row_dt.astimezone(MOSCOW_TZ)
+        try:
+            value = float(
+                row.get("net_pnl_rub")
+                if row.get("net_pnl_rub") not in (None, "")
+                else row.get("pnl_rub") or 0.0
+            )
+        except (TypeError, ValueError):
+            continue
+        if row_moscow >= week_start:
+            weekly_net += value
+        if row_moscow >= day_start:
+            daily_net += value
+    return {"daily_net_rub": round(daily_net, 2), "weekly_net_rub": round(weekly_net, 2)}
+
+
+def count_open_ao_positions(config: BotConfig | Any) -> int:
+    count = 0
+    for symbol in getattr(config, "symbols", []):
+        state = load_state(str(symbol))
+        confirmed = (
+            state.position_side in {"LONG", "SHORT"}
+            and state.position_qty > 0
+            and is_ao_chaikin_strategy(state.entry_strategy)
+        )
+        pending = (
+            state.pending_order_action == "OPEN"
+            and state.pending_order_qty > 0
+            and is_ao_chaikin_strategy(state.entry_strategy or state.last_strategy_name)
+        )
+        if confirmed or pending:
+            count += 1
+    return count
+
+
+def get_ao_canary_entry_block(
+    client: Client,
+    config: BotConfig | Any,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str]:
+    if not bool(getattr(config, "ao_canary_enabled", False)):
+        return "", ""
+    max_open = max(1, int(getattr(config, "ao_canary_max_open_positions", 1) or 1))
+    open_positions = count_open_ao_positions(config)
+    if open_positions >= max_open:
+        return (
+            "ao_canary_open_position_limit",
+            f"AO canary: уже открыто или отправлено {open_positions} AO-позиций, лимит {max_open}.",
+        )
+    snapshot = get_account_snapshot(client, config)
+    equity = snapshot.total_portfolio if snapshot.total_portfolio > 0 else snapshot.free_rub
+    if equity <= 0:
+        return "ao_canary_equity_unavailable", "AO canary: не удалось определить капитал для лимита риска."
+    pnl = calculate_ao_canary_closed_net(load_trade_journal(), now=now)
+    daily_pct = max(0.0, float(getattr(config, "ao_canary_daily_loss_pct", 0.5) or 0.0))
+    weekly_pct = max(0.0, float(getattr(config, "ao_canary_weekly_loss_pct", 1.0) or 0.0))
+    daily_limit = equity * daily_pct / 100.0
+    weekly_limit = equity * weekly_pct / 100.0
+    if daily_pct > 0.0 and pnl["daily_net_rub"] <= -daily_limit:
+        return (
+            "ao_canary_daily_loss",
+            f"AO canary: дневной NET {pnl['daily_net_rub']:.2f} RUB достиг лимита -{daily_limit:.2f} RUB ({daily_pct:.2f}%).",
+        )
+    if weekly_pct > 0.0 and pnl["weekly_net_rub"] <= -weekly_limit:
+        return (
+            "ao_canary_weekly_loss",
+            f"AO canary: недельный NET {pnl['weekly_net_rub']:.2f} RUB достиг лимита -{weekly_limit:.2f} RUB ({weekly_pct:.2f}%).",
+        )
+    return "", ""
+
+
+def filter_ao_canary_candidates(
+    client: Client,
+    config: BotConfig | Any,
+    candidates: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not bool(getattr(config, "ao_canary_enabled", False)):
+        return candidates, []
+    block_kind, block_reason = get_ao_canary_entry_block(client, config, now=now)
+    max_lots = max(1, int(getattr(config, "ao_canary_max_lots", 1) or 1))
+    eligible: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    for original in candidates:
+        item = original
+        if not is_ao_chaikin_strategy(item.get("strategy_name")):
+            eligible.append(item)
+            continue
+        item["strategy_version"] = get_ao_live_strategy_version(config)
+        if block_reason:
+            item["defer_kind"] = block_kind
+            item["defer_reason"] = block_reason
+            deferred.append(item)
+            continue
+        original_qty = max(0, int(item.get("allocator_quantity") or 0))
+        capped_qty = min(original_qty, max_lots)
+        if original_qty > 0 and capped_qty < original_qty:
+            item["allocator_quantity"] = capped_qty
+            requested_margin = float(item.get("requested_margin_rub") or 0.0)
+            item["requested_margin_rub"] = round(requested_margin * capped_qty / original_qty, 2)
+            item["ao_canary_quantity_cap"] = max_lots
+        eligible.append(item)
+    return eligible, deferred
 
 
 def get_daily_loss_recovery_entry_reason(
@@ -10475,6 +10741,7 @@ def sync_pending_order(
     previous_entry_price = state.entry_price
     previous_entry_commission = float(state.entry_commission_rub or 0.0)
     previous_strategy = state.entry_strategy
+    previous_strategy_version = state.entry_strategy_version
     previous_exit_reason = state.pending_exit_reason or "Заявка на закрытие подтверждена синхронизацией портфеля"
     pending_action = state.pending_order_action
     previous_entry_time = parse_state_datetime(state.entry_time) if previous_entry_price is not None else None
@@ -10491,6 +10758,8 @@ def sync_pending_order(
             previous_entry_commission = float(state.delayed_close_entry_commission_rub or 0.0)
         if not previous_strategy and state.delayed_close_strategy:
             previous_strategy = state.delayed_close_strategy
+        if not previous_strategy_version and state.delayed_close_strategy_version:
+            previous_strategy_version = state.delayed_close_strategy_version
         if (
             previous_exit_reason == "Заявка на закрытие подтверждена синхронизацией портфеля"
             and state.delayed_close_reason
@@ -10534,6 +10803,7 @@ def sync_pending_order(
             previous_entry_price=previous_entry_price,
             previous_entry_commission=previous_entry_commission,
             previous_strategy=previous_strategy,
+            previous_strategy_version=previous_strategy_version,
             previous_exit_reason=previous_exit_reason,
             previous_entry_time=previous_entry_time,
             source="portfolio_confirmation",
@@ -10568,6 +10838,7 @@ def sync_pending_order(
                 previous_entry_price=previous_entry_price,
                 previous_entry_commission=previous_entry_commission,
                 previous_strategy=previous_strategy,
+                previous_strategy_version=previous_strategy_version,
                 previous_exit_reason=previous_exit_reason,
                 previous_entry_time=previous_entry_time,
                 source="pending_order_recovery",
@@ -10588,6 +10859,7 @@ def sync_pending_order(
                     previous_entry_price=previous_entry_price,
                     previous_entry_commission=previous_entry_commission,
                     previous_strategy=previous_strategy,
+                    previous_strategy_version=previous_strategy_version,
                     previous_exit_reason=previous_exit_reason,
                     previous_entry_time=previous_entry_time,
                     pending_submitted_at=pending_submitted_at,
@@ -10651,6 +10923,7 @@ def sync_pending_order(
                     previous_entry_price=previous_entry_price,
                     previous_entry_commission=previous_entry_commission,
                     previous_strategy=previous_strategy,
+                    previous_strategy_version=previous_strategy_version,
                     previous_exit_reason=previous_exit_reason,
                     previous_entry_time=previous_entry_time,
                     pending_submitted_at=pending_submitted_at,
@@ -10890,6 +11163,26 @@ def open_position(
 ) -> None:
     if state.position_qty > 0 or has_pending_order(state):
         return
+    if is_ao_chaikin_strategy(strategy_name) and bool(getattr(config, "ao_canary_enabled", False)):
+        delayed_entry = (
+            state.last_entry_path == "delayed_ao_confirmation"
+            or "позднее подтверждение ao" in str(entry_reason or "").lower()
+        )
+        if delayed_entry and not bool(getattr(config, "ao_allow_delayed_entries", False)):
+            block_reason = "AO canary: поздние подтверждения остаются только в теневом наблюдении."
+            state.last_error = block_reason
+            state.last_allocator_quantity = 0
+            state.last_allocator_summary = f"Аллокатор заблокирован: {block_reason}"
+            save_state(instrument.symbol, state)
+            return
+        _block_kind, block_reason = get_ao_canary_entry_block(client, config)
+        if block_reason:
+            state.last_error = block_reason
+            state.last_allocator_quantity = 0
+            state.last_allocator_summary = f"Аллокатор заблокирован: {block_reason}"
+            save_state(instrument.symbol, state)
+            logging.warning("symbol=%s status=entry_blocked_ao_canary reason=%s", instrument.symbol, block_reason)
+            return
     session_name = get_market_session()
     if not session_allows_new_entries(session_name, instrument.symbol):
         session_block_reason = f"Новые входы заблокированы для сессии {session_name}."
@@ -10951,6 +11244,9 @@ def open_position(
         stop_distance_price=float(stop_plan.get("distance") or 0.0),
     )
     quantity = int(allocator_sizing.get("quantity") or 0)
+    if is_ao_chaikin_strategy(strategy_name) and bool(getattr(config, "ao_canary_enabled", False)):
+        quantity = min(quantity, max(1, int(getattr(config, "ao_canary_max_lots", 1) or 1)))
+        allocator_sizing["quantity"] = quantity
     if quantity > 0 and quantity_cap is not None and quantity_cap > 0:
         original_quantity = quantity
         quantity = min(quantity, int(quantity_cap))
@@ -11047,6 +11343,7 @@ def open_position(
         state.breakeven_armed = False
         state.entry_time = datetime.now(UTC).isoformat()
         state.entry_strategy = strategy_name
+        state.entry_strategy_version = get_ao_live_strategy_version(config) if is_ao_chaikin_strategy(strategy_name) else ""
         state.entry_reason = compact_reason(entry_reason or "Тестовый вход по стратегии.")
         state.execution_status = "confirmed_open"
         save_state(instrument.symbol, state)
@@ -11091,6 +11388,8 @@ def open_position(
         logging.warning("symbol=%s status=order_rejected reason=%s", instrument.symbol, request_reason)
         return
     state.entry_strategy = strategy_name
+    state.entry_strategy_version = get_ao_live_strategy_version(config) if is_ao_chaikin_strategy(strategy_name) else ""
+    state.pending_strategy_version = state.entry_strategy_version
     state.pending_entry_reason = compact_reason(entry_reason)
     state.pending_order_id = order_id
     state.pending_order_action = "OPEN"
@@ -11182,6 +11481,7 @@ def close_position(
         state.breakeven_armed = False
         state.entry_time = ""
         state.entry_strategy = ""
+        state.entry_strategy_version = ""
         state.entry_reason = ""
         state.position_notional_rub = 0.0
         state.position_variation_margin_rub = 0.0
@@ -11213,6 +11513,7 @@ def close_position(
     state.delayed_close_entry_price = state.entry_price
     state.delayed_close_entry_commission_rub = float(state.entry_commission_rub or 0.0)
     state.delayed_close_strategy = state.entry_strategy
+    state.delayed_close_strategy_version = state.entry_strategy_version
     state.delayed_close_reason = exit_reason
     state.delayed_close_entry_time = state.entry_time or ""
     state.delayed_close_submitted_at = state.pending_submitted_at
@@ -11904,6 +12205,11 @@ def process_instrument(
                                                 "symbol": instrument.symbol,
                                                 "signal": signal,
                                                 "strategy_name": primary_strategy_name,
+                                                "strategy_version": (
+                                                    get_ao_live_strategy_version(config)
+                                                    if is_ao_chaikin_strategy(primary_strategy_name)
+                                                    else ""
+                                                ),
                                                 "reason": reason,
                                                 "observed_at": datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat(),
                                                 "observed_price": current_price,
@@ -12087,8 +12393,14 @@ def run_bot() -> int:
                                 cycle_candidates.append(candidate)
                         apply_signal_ai_shadow_reviews(cycle_candidates)
                         ranked_candidates, ai_canary_deferred = filter_signal_ai_canary_candidates(cycle_candidates)
-                        selected_candidates, deferred_candidates = rank_cycle_entry_candidates(ranked_candidates)
-                        deferred_candidates = [*ai_canary_deferred, *deferred_candidates]
+                        ranked_candidates, ao_canary_deferred = filter_ao_canary_candidates(
+                            client, config, ranked_candidates
+                        )
+                        selected_candidates, deferred_candidates = rank_cycle_entry_candidates(
+                            ranked_candidates,
+                            max_entries=1 if config.ao_canary_enabled else 2,
+                        )
+                        deferred_candidates = [*ai_canary_deferred, *ao_canary_deferred, *deferred_candidates]
                         for item in deferred_candidates:
                             append_signal_observation_decision(
                                 item,
@@ -12145,6 +12457,7 @@ def run_bot() -> int:
                                 execution_status=execution_status,
                                 execution_note=execution_note,
                                 quantity=int(item.get("allocator_quantity") or 0),
+                                strategy_version=str(item.get("strategy_version") or ""),
                             )
                             if execution_status == "submitted_open":
                                 state.pending_observation_uid = observation_uid

@@ -63,6 +63,16 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if not symbol or side not in {"LONG", "SHORT"}:
             continue
         key = (symbol, side)
+        if event == "POSITION_RECONCILE":
+            for open_key in [open_key for open_key in opens if open_key[0] == symbol]:
+                opens.pop(open_key, None)
+            try:
+                qty = max(0, int(row.get("qty_lots") or 0))
+            except (TypeError, ValueError):
+                qty = 0
+            if qty > 0:
+                opens[key] = [dict(row)] * qty
+            continue
         if event == "OPEN":
             try:
                 qty = max(1, int(row.get("qty_lots") or 1))
@@ -85,6 +95,14 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if entry_price <= 0.0 or exit_price <= 0.0:
             continue
         entry_time = entry.get("_dt")
+        if str(entry.get("event") or "").upper() == "POSITION_RECONCILE":
+            anchor_context = entry.get("context") if isinstance(entry.get("context"), dict) else {}
+            try:
+                reconciled_entry_time = datetime.fromisoformat(str(anchor_context.get("entry_time") or ""))
+            except (TypeError, ValueError):
+                reconciled_entry_time = None
+            if isinstance(reconciled_entry_time, datetime):
+                entry_time = reconciled_entry_time
         exit_time = row.get("_dt")
         if not isinstance(entry_time, datetime) or not isinstance(exit_time, datetime) or exit_time < entry_time:
             continue
@@ -103,6 +121,12 @@ def pair_closed_trades(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "symbol": symbol,
                 "side": side,
                 "strategy": str(row.get("strategy") or entry.get("strategy") or ""),
+                "strategy_version": str(
+                    row.get("strategy_version")
+                    or entry.get("strategy_version")
+                    or entry_context.get("strategy_version")
+                    or ""
+                ),
                 "entry_time": entry_time.isoformat(),
                 "exit_time": exit_time.isoformat(),
                 "entry_price": entry_price,

@@ -86,6 +86,32 @@ class AoChaikinLiveTests(unittest.TestCase):
                         actual, _ = evaluate_signal(None, None, None, "")
                     self.assertEqual(actual, wanted)
 
+    def test_live_canary_rejects_delayed_entry_but_keeps_fast_entry(self):
+        delayed = {
+            "decision": DECISION_ENTRY,
+            "direction": DIRECTION_LONG,
+            "entry_path": "ПОЗДНЕЕ ПОДТВЕРЖДЕНИЕ AO",
+            "reason": "Long: позднее подтверждение AO",
+        }
+        fast = {
+            **delayed,
+            "entry_path": "БЫСТРОЕ ПОДТВЕРЖДЕНИЕ AO",
+            "reason": "Long: быстрое подтверждение AO",
+        }
+        config = SimpleNamespace(ao_allow_delayed_entries=False)
+        with patch("strategies.ao_chaikin_1h._closed_indicators", return_value=prepared([-.1, .2, .8])), patch(
+            "strategies.ao_chaikin_1h.evaluate_shadow_candle", return_value=delayed
+        ):
+            signal, reason = evaluate_signal(None, config, SimpleNamespace(symbol="TEST"), "")
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("canary", reason.lower())
+
+        with patch("strategies.ao_chaikin_1h._closed_indicators", return_value=prepared([-.1, .2, .8])), patch(
+            "strategies.ao_chaikin_1h.evaluate_shadow_candle", return_value=fast
+        ):
+            signal, _ = evaluate_signal(None, config, SimpleNamespace(symbol="TEST"), "")
+        self.assertEqual(signal, "LONG")
+
     def test_zero_and_momentum_exit_parity_both_directions(self):
         for sign, side, direction in ((1, "LONG", DIRECTION_LONG), (-1, "SHORT", DIRECTION_SHORT)):
             for ao, prices, expected_exit in (([10, 9, 8, 6], [100, 105, 104, 103], True),
