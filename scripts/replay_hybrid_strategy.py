@@ -20,13 +20,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot_oil_main import APP_NAME, Client, SUPPORTED_INTERVALS, load_config, resolve_instruments
+from signal_ai_reviewer import get_signal_ai_model
 from strategy_ai_guard import PROMPT_VERSION, RegimeReview, request_entry_review, request_regime_review
 
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
-STRATEGY_VERSION = "ao-candle-mtf-replay-v1"
+STRATEGY_VERSION = "ao-candle-mtf-replay-v2"
 COMMISSION_RATE = 0.00025
+INITIAL_STOP_ATR = 0.80
+BREAKEVEN_TRIGGER_ATR = 0.20
 
 
 @dataclass
@@ -232,6 +235,8 @@ def find_candidates(symbol: str, hourly: pd.DataFrame, start: pd.Timestamp, end:
         bars_since_cross = index - cross_index if cross_index is not None else -1
         ao_supports_direction = ao > 0 if direction == "LONG" else ao < 0
         entry_path = "ZERO_CROSS" if ao_supports_direction and 0 <= bars_since_cross <= 3 else "CONTINUATION" if ao_supports_direction else "EARLY_REVERSAL"
+        if entry_path == "CONTINUATION":
+            continue
         used_waves.add(wave_key)
         result.append(Candidate(
             symbol=symbol,
@@ -275,6 +280,50 @@ def compact_bars(frame: pd.DataFrame, until: pd.Timestamp, limit: int) -> list[d
     return rows
 
 
+def market_structure_features(frame: pd.DataFrame, until: pd.Timestamp, limit: int) -> dict[str, Any]:
+    tail = frame.loc[frame["closed_at"] <= until].tail(limit).copy()
+    if len(tail) < 3:
+        return {"bars": len(tail), "data_quality": "INCOMPLETE"}
+    closes = tail["close"].astype(float)
+    changes = closes.diff().dropna()
+    atr = max(_finite(tail.iloc[-1]["atr"]), 1e-12)
+    net_move = _finite(closes.iloc[-1] - closes.iloc[0])
+    total_path = float(changes.abs().sum())
+    ao = tail["ao"].astype(float)
+    ao_delta = tail["ao_delta"].astype(float)
+    close_vs_ema = closes - tail["ema20"].astype(float)
+
+    def sign_changes(series: pd.Series) -> int:
+        values = series.dropna().tolist()
+        signs = [1 if value > 0 else -1 if value < 0 else 0 for value in values]
+        nonzero = [value for value in signs if value]
+        return sum(left != right for left, right in zip(nonzero, nonzero[1:]))
+
+    recent_bodies = tail["body_atr"].astype(float).tail(3)
+    prior_bodies = tail["body_atr"].astype(float).iloc[-8:-3]
+    recent_body_mean = _finite(recent_bodies.mean())
+    prior_body_mean = _finite(prior_bodies.mean()) if len(prior_bodies) else 0.0
+    recent_volume = _finite(tail["volume"].tail(3).mean())
+    prior_volume = max(_finite(tail["volume"].iloc[-12:-3].mean(), 1.0), 1.0)
+    return {
+        "bars": len(tail),
+        "net_move_atr": round(net_move / atr, 3),
+        "path_efficiency": round(abs(net_move) / total_path, 3) if total_path > 0 else 0.0,
+        "range_atr": round((_finite(tail["high"].max()) - _finite(tail["low"].min())) / atr, 3),
+        "up_candle_ratio": round(float((tail["close"] > tail["open"]).mean()), 3),
+        "ao_zero_crosses": sign_changes(ao),
+        "ao_slope_reversals": sign_changes(ao_delta),
+        "ema20_price_crosses": sign_changes(close_vs_ema),
+        "ema20_gap_atr": round((_finite(closes.iloc[-1]) - _finite(tail.iloc[-1]["ema20"])) / atr, 3),
+        "ema50_gap_atr": round((_finite(closes.iloc[-1]) - _finite(tail.iloc[-1]["ema50"])) / atr, 3),
+        "last3_body_atr_mean": round(recent_body_mean, 3),
+        "body_compression_ratio": round(recent_body_mean / prior_body_mean, 3) if prior_body_mean > 0 else None,
+        "rsi_change": round(_finite(tail.iloc[-1]["rsi"]) - _finite(tail.iloc[0]["rsi"]), 2),
+        "volume_ratio_last3": round(recent_volume / prior_volume, 3),
+        "data_quality": "COMPLETE",
+    }
+
+
 def ai_contexts(candidate: Candidate, frames: dict[int, pd.DataFrame]) -> tuple[dict[str, Any], dict[str, Any]]:
     at = pd.Timestamp(candidate.signal_time)
     four_hour = resample_four_hours(frames[60])
@@ -286,6 +335,11 @@ def ai_contexts(candidate: Candidate, frames: dict[int, pd.DataFrame]) -> tuple[
             "1h": compact_bars(frames[60], at, 60),
             "4h": compact_bars(four_hour, at, 18),
             "30m": compact_bars(frames[30], at, 48),
+        },
+        "derived_features": {
+            "1h": market_structure_features(frames[60], at, 60),
+            "4h": market_structure_features(four_hour, at, 18),
+            "30m": market_structure_features(frames[30], at, 48),
         },
     }
     entry = {
@@ -303,11 +357,23 @@ def ai_contexts(candidate: Candidate, frames: dict[int, pd.DataFrame]) -> tuple[
             "wave_started_at": candidate.wave_time,
             "two_candle_body_atr": round(candidate.candle_body_atr_sum, 3),
             "distance_from_wave_start_atr": round(candidate.distance_from_wave_atr, 3),
+            "execution_plan": {
+                "initial_stop_atr": INITIAL_STOP_ATR,
+                "breakeven_trigger_atr": BREAKEVEN_TRIGGER_ATR,
+                "breakeven_covers_both_commissions": True,
+                "commission_rate_per_side": COMMISSION_RATE,
+                "exit": "30m momentum exhaustion or opposite AO zero cross",
+            },
         },
         "timeframes": {
             "1h": compact_bars(frames[60], at, 16),
             "30m": compact_bars(frames[30], at, 24),
             "15m": compact_bars(frames[15], at, 32),
+        },
+        "derived_features": {
+            "1h": market_structure_features(frames[60], at, 16),
+            "30m": market_structure_features(frames[30], at, 24),
+            "15m": market_structure_features(frames[15], at, 32),
         },
     }
     return regime, entry
@@ -322,9 +388,10 @@ def review_candidates(
 ) -> None:
     cache: dict[str, Any] = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
     prior_regimes = prior_regimes or {}
+    ai_model = get_signal_ai_model()
     for number, candidate in enumerate(candidates, start=1):
         regime_context, entry_context = ai_contexts(candidate, all_frames[candidate.symbol])
-        key = hashlib.sha256((PROMPT_VERSION + json.dumps({"regime": regime_context, "entry": entry_context}, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
+        key = hashlib.sha256((PROMPT_VERSION + ai_model + json.dumps({"regime": regime_context, "entry": entry_context}, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
         cached = cache.get(key)
         if cached:
             candidate.regime_review = dict(cached["regime"])
@@ -336,7 +403,7 @@ def review_candidates(
             entry = request_entry_review(api_key, entry_context, regime)
             candidate.regime_review = regime.as_dict()
             candidate.entry_review = entry.as_dict()
-            cache[key] = {"prompt_version": PROMPT_VERSION, "regime": candidate.regime_review, "entry": candidate.entry_review}
+            cache[key] = {"prompt_version": PROMPT_VERSION, "model": ai_model, "regime": candidate.regime_review, "entry": candidate.entry_review}
             cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
         apply_ai_gate(candidate)
 
@@ -347,17 +414,13 @@ def apply_ai_gate(candidate: Candidate) -> None:
     reasons: list[str] = []
     if regime.get("data_quality") != "COMPLETE" or entry.get("data_quality") != "COMPLETE":
         reasons.append("неполные данные")
-    regime_name = str(regime.get("regime") or "")
-    confidence = int(regime.get("regime_confidence_pct") or 0)
-    if regime_name == "CHOP" and confidence >= 70:
-        reasons.append(f"пила {confidence}%")
-    opposite = "TREND_SHORT" if candidate.direction == "LONG" else "TREND_LONG"
-    if regime_name == opposite and confidence >= 65:
-        reasons.append(f"противоположный тренд {confidence}%")
+    chop_probability = int(regime.get("chop_probability_pct") or 0)
+    if str(regime.get("texture") or "") == "CHOP" and chop_probability >= 70:
+        reasons.append(f"пила {chop_probability}%")
     score = int(entry.get("entry_score_pct") or 0)
-    if str(entry.get("decision") or "") != "ALLOW":
+    if str(entry.get("decision") or "") != "ENTER":
         reasons.append(f"решение {entry.get('decision') or 'ABSTAIN'}")
-    if score < 55:
+    if score < 60:
         reasons.append(f"оценка входа {score}%")
     candidate.ai_allowed = not reasons
     candidate.ai_gate_reason = "; ".join(reasons) if reasons else ("полноценный вход" if score >= 70 else "canary 1 лот")
@@ -371,7 +434,15 @@ def next_open(frame: pd.DataFrame, moment: pd.Timestamp) -> tuple[pd.Timestamp, 
     return pd.Timestamp(row["time"]), _finite(row["open"])
 
 
-def simulate_trade(candidate: Candidate, frames: dict[int, pd.DataFrame], point_value: float, week_end: pd.Timestamp) -> SimulatedTrade | None:
+def true_breakeven_price(entry_price: float, direction: str, tick_size: float) -> float:
+    if direction == "LONG":
+        raw = entry_price * (1 + COMMISSION_RATE) / (1 - COMMISSION_RATE)
+        return math.ceil(raw / tick_size) * tick_size if tick_size > 0 else raw
+    raw = entry_price * (1 - COMMISSION_RATE) / (1 + COMMISSION_RATE)
+    return math.floor(raw / tick_size) * tick_size if tick_size > 0 else raw
+
+
+def simulate_trade(candidate: Candidate, frames: dict[int, pd.DataFrame], point_value: float, tick_size: float, week_end: pd.Timestamp) -> SimulatedTrade | None:
     fifteen = frames[15]
     thirty = frames[30]
     fill = next_open(fifteen, pd.Timestamp(candidate.signal_time))
@@ -379,7 +450,7 @@ def simulate_trade(candidate: Candidate, frames: dict[int, pd.DataFrame], point_
         return None
     entry_time, entry_price = fill
     sign = 1.0 if candidate.direction == "LONG" else -1.0
-    stop = entry_price - sign * candidate.atr * 0.80
+    stop = entry_price - sign * candidate.atr * INITIAL_STOP_ATR
     breakeven = False
     best_move = 0.0
     worst_move = 0.0
@@ -400,9 +471,9 @@ def simulate_trade(candidate: Candidate, frames: dict[int, pd.DataFrame], point_
         adverse = (entry_price - low) if candidate.direction == "LONG" else (high - entry_price)
         best_move = max(best_move, favorable)
         worst_move = max(worst_move, adverse)
-        if not breakeven and best_move >= candidate.atr * 0.70:
+        if not breakeven and best_move >= candidate.atr * BREAKEVEN_TRIGGER_ATR:
             breakeven = True
-            stop = entry_price
+            stop = true_breakeven_price(entry_price, candidate.direction, tick_size)
         closed_at = pd.Timestamp(bar["closed_at"])
         eligible = thirty.loc[(thirty["closed_at"] <= closed_at) & (thirty["closed_at"] > entry_time)]
         if len(eligible) < 3:
@@ -453,7 +524,13 @@ def simulate(candidates: list[Candidate], frames: dict[str, dict[int, pd.DataFra
             continue
         if pd.Timestamp(candidate.signal_time) < available_after.get(candidate.symbol, pd.Timestamp.min.tz_localize("UTC")):
             continue
-        trade = simulate_trade(candidate, frames[candidate.symbol], metadata[candidate.symbol]["point_value"], week_end)
+        trade = simulate_trade(
+            candidate,
+            frames[candidate.symbol],
+            metadata[candidate.symbol]["point_value"],
+            metadata[candidate.symbol]["tick_size"],
+            week_end,
+        )
         if trade:
             trades.append(trade)
             available_after[candidate.symbol] = pd.Timestamp(trade.exit_time)
@@ -463,7 +540,8 @@ def simulate(candidates: list[Candidate], frames: dict[str, dict[int, pd.DataFra
 def metrics(trades: list[SimulatedTrade]) -> dict[str, Any]:
     net = [trade.net_pnl_rub for trade in trades]
     wins = [value for value in net if value > 0]
-    losses = [value for value in net if value <= 0]
+    losses = [value for value in net if value < 0]
+    flats = [value for value in net if value == 0]
     equity = 0.0
     peak = 0.0
     drawdown = 0.0
@@ -472,7 +550,7 @@ def metrics(trades: list[SimulatedTrade]) -> dict[str, Any]:
         peak = max(peak, equity)
         drawdown = max(drawdown, peak - equity)
     return {
-        "trades": len(trades), "wins": len(wins), "losses": len(losses),
+        "trades": len(trades), "wins": len(wins), "losses": len(losses), "flats": len(flats),
         "win_rate_pct": round(len(wins) / len(trades) * 100, 1) if trades else 0.0,
         "gross_pnl_rub": round(sum(trade.gross_pnl_rub for trade in trades), 2),
         "commission_rub": round(sum(trade.commission_rub for trade in trades), 2),
@@ -634,15 +712,17 @@ def main() -> int:
     frames, metadata = load_or_fetch_frames(args.cache_dir, warmup, fetch_end)
     candidates = [candidate for symbol, symbol_frames in frames.items() for candidate in find_candidates(symbol, symbol_frames[60], start, end)]
     candidates.sort(key=lambda item: item.signal_time)
+    ai_model = get_signal_ai_model()
     prior_regimes: dict[tuple[str, str, str], dict[str, Any]] = {}
     prior_output_path = args.output.with_suffix(".json")
     if prior_output_path.exists():
         try:
             prior_payload = json.loads(prior_output_path.read_text(encoding="utf-8"))
-            for item in prior_payload.get("candidates") or []:
-                review = item.get("regime_review")
-                if isinstance(review, dict):
-                    prior_regimes[(str(item.get("symbol")), str(item.get("direction")), str(item.get("signal_time")))] = review
+            if prior_payload.get("ai_model") == ai_model and prior_payload.get("prompt_version") == PROMPT_VERSION:
+                for item in prior_payload.get("candidates") or []:
+                    review = item.get("regime_review")
+                    if isinstance(review, dict):
+                        prior_regimes[(str(item.get("symbol")), str(item.get("direction")), str(item.get("signal_time")))] = review
         except (OSError, json.JSONDecodeError):
             prior_regimes = {}
     if args.skip_ai:
@@ -660,6 +740,7 @@ def main() -> int:
     payload = {
         "strategy_version": STRATEGY_VERSION,
         "prompt_version": PROMPT_VERSION,
+        "ai_model": ai_model,
         "period": {"start": start.isoformat(), "end": end.isoformat()},
         "candidates": [asdict(item) for item in candidates],
         "mechanical": {"metrics": metrics(mechanical), "trades": [asdict(item) for item in mechanical]},

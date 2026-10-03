@@ -20,7 +20,11 @@ class StrategyAiGuardTests(unittest.TestCase):
         self.assertIn("4h", payload["timeframes"])
 
     def test_entry_prompt_has_independent_regime_and_strategy_context(self) -> None:
-        regime = RegimeReview("CHOP", 81, "NONE", 88, ["частые развороты", "нет продвижения"], "COMPLETE")
+        regime = RegimeReview(
+            regime="CHOP", structure_4h="MIXED", swing_1h="RANGE", phase_30m="RANGE", texture="CHOP",
+            regime_confidence_pct=81, trend_maturity="NONE", chop_probability_pct=88,
+            evidence=["частые развороты", "нет продвижения"], data_quality="COMPLETE",
+        )
         entry = {"strategy": "ao-candle-mtf-replay-v1", "candidate": {"direction": "LONG"}, "timeframes": {"1h": []}}
         prompt = build_entry_prompt(entry, regime)
         payload = json.loads(prompt.split("\n\n", 1)[1])
@@ -29,8 +33,14 @@ class StrategyAiGuardTests(unittest.TestCase):
         self.assertNotIn("entry_edge_score", prompt)
 
     def test_review_contract_uses_percent_scale(self) -> None:
-        review = EntryReview("SHORT", 73, "ALLOW", 21, "ALIGNED", ["свежая волна", "свечи расширяются"], ["AO начнёт расти"], "COMPLETE")
+        review = EntryReview(
+            candidate_direction="SHORT", entry_score_pct=73, decision="ENTER",
+            expected_outcome="PROFIT", setup_phase="ON_TIME", late_entry_risk_pct=21,
+            timeframe_alignment="ALIGNED", evidence=["свежая волна", "свечи расширяются"],
+            invalidation=["AO начнёт расти"], data_quality="COMPLETE",
+        )
         self.assertEqual(review.as_dict()["entry_score_pct"], 73)
+        self.assertEqual(review.as_dict()["decision"], "ENTER")
 
 
 if __name__ == "__main__":

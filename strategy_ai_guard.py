@@ -12,50 +12,59 @@ from signal_ai_reviewer import get_ai_api_mode, get_ai_api_url, get_signal_ai_mo
 
 
 REGIME_SYSTEM_INSTRUCTIONS = """Ты независимый классификатор режима рынка для фьючерсной стратегии.
-Используй только переданные закрытые свечи и индикаторы. Сначала изучи развитие цены
-за последние 2-3 торговых дня на 1ч, затем проверь 4ч и 30м. Не повторяй готовые
-оценки торгового бота: их во входных данных нет. Определи один режим:
-TREND_LONG, TREND_SHORT, CHOP или TRANSITION. Отдельно определи зрелость движения:
-EARLY, MIDDLE, EXHAUSTED или NONE. Пила означает возвраты цены в один диапазон,
-частые смены направления AO, переплетение средних и отсутствие чистого продвижения
-относительно ATR. Тренд требует последовательного продвижения цены и устойчивого
-импульса. При неполных или устаревших данных верни data_quality=INCOMPLETE.
-Ответ должен строго соответствовать JSON-схеме."""
+Используй только переданные закрытые свечи, индикаторы и рассчитанные числовые признаки.
+Разделяй четыре разных понятия: структура 4ч, активная волна 1ч, текущая фаза 30м и
+текстура рынка. Старший тренд является контекстом, но не имеет права автоматически
+запрещать свежий разворот на 1ч/30м. Сначала изучи 2-3 торговых дня на 1ч, затем
+сопоставь их с 4ч и 30м.
+
+Пила определяется измеримо: низкая эффективность направленного движения, частые
+пересечения AO через ноль, частые возвраты цены через EMA20, смешанные свечи и
+сохранение цены внутри одного диапазона. Тренд требует чистого продвижения цены,
+последовательности максимумов/минимумов и устойчивого импульса. TRANSITION означает
+реальную смену фазы, а не универсальный ответ при любом конфликте таймфреймов.
+При неполных или устаревших данных верни data_quality=INCOMPLETE. Ответ должен строго
+соответствовать JSON-схеме."""
 
 
-ENTRY_SYSTEM_INSTRUCTIONS = """Ты независимый контролёр входа стратегии AO_CANDLE_MTF_V1.
-Стратегия допускает три равноправных типа входа на закрытых свечах 1ч:
+ENTRY_SYSTEM_INSTRUCTIONS = """Ты независимый контролёр входа стратегии AO_CANDLE_MTF_V2.
+Стратегия допускает два типа входа на закрытых свечах 1ч:
 1) EARLY_REVERSAL: AO ещё может находиться по старую сторону нуля, но минимум две
 свечи подряд меняется в сторону кандидата, цена подтверждает разворот двумя
 направленными свечами, RSI разворачивается. Пересечение нуля здесь не требуется.
 2) ZERO_CROSS: недавнее пересечение AO(5,34) через ноль, усиление AO и две
 направленные свечи.
-3) CONTINUATION: тренд уже существует, после отката AO снова ускоряется вместе
-с двумя направленными свечами. Новое пересечение нуля здесь не требуется.
+
+Поздний CONTINUATION запрещён и не должен поступать кандидатом. Если основная часть
+движения уже прошла, выбери BLOCK_LATE или WAIT_PULLBACK.
 
 Поле bars_since_ao_zero_cross=-1 означает отсутствие недавнего пересечения и
-является нормальным для EARLY_REVERSAL и CONTINUATION. Не штрафуй вход только за
+является нормальным для EARLY_REVERSAL. Не штрафуй вход только за
 это значение. Основные условия всех путей: свежий наклон AO, две направленные
 свечи с достаточным телом, ограниченное расстояние от начала локальной волны и
 RSI, движущийся в сторону кандидата. 30м и 15м используются для проверки текущего
 момента. Chaikin и MACD подтверждают качество, но не заменяют цену и AO.
 
-Оцени ровно предложенный вход. Особенно проверяй, не прошла ли основная часть
-движения, не уменьшаются ли тела свечей, не затухает ли AO и не началась ли пила.
-Положительный AO сам по себе не разрешает поздний LONG; отрицательный AO сам по
-себе не разрешает поздний SHORT. Оценка entry_score_pct означает обоснованность
-того, что цена сначала пройдёт не менее 0.6 ATR в направлении входа, прежде чем
-уйдёт на 0.4 ATR против него, в течение следующих четырёх часов.
+Оцени ровно предложенный вход и фактический денежный сценарий стратегии: первоначальный
+стоп 0.80 ATR; после движения 0.20 ATR стоп переводится в настоящий безубыток с
+компенсацией комиссий входа и выхода; прибыль удерживается до истощения импульса на
+30м или обратного пересечения AO. Комиссия равна 0.025% на каждую сторону.
+entry_score_pct означает вероятность положительного NET результата именно при этих
+правилах, а не вероятность любого краткого движения в сторону входа.
 
-Рубрика: соответствие режиму 25, свежесть волны 25, свечной импульс 20,
-структура AO 15, согласованность таймфреймов 10, RSI/Chaikin/MACD/объём 5.
-При уверенной пиле итог не выше 40; при сильном противоположном тренде не выше 30.
-Метка EXHAUSTED для старого движения не запрещает свежий EARLY_REVERSAL против него.
-Считай локальную волну опоздавшей, только если переданный кандидат уже далеко от
-её начала, тела свечей сжались или AO начал слабеть.
+Особенно проверяй, не прошла ли основная часть движения, не уменьшаются ли тела свечей,
+не затухает ли AO и не началась ли пила. Положительный AO сам по себе не разрешает
+LONG; отрицательный AO сам по себе не разрешает SHORT. Если направление выглядит
+верным, но момент плохой, выбирай WAIT_PULLBACK, а не ENTER.
 
-Решение обязано соответствовать баллу: ALLOW при 55-100, BLOCK при 0-54,
-ABSTAIN только при неполных данных. Не используй будущие данные.
+Рубрика: качество активной волны 25, свежесть момента 25, свечной импульс 15,
+структура AO 15, измеримая текстура рынка 10, согласованность таймфреймов 5,
+RSI/Chaikin/MACD/объём 5. Метка EXHAUSTED для старого движения не запрещает свежий
+EARLY_REVERSAL против него. Сильный 4ч тренд уменьшает оценку контртрендового входа,
+но не блокирует его, если на 1ч и 30м подтверждён новый импульс.
+
+Решение обязано соответствовать баллу: ENTER при 60-100; WAIT_PULLBACK или один из
+BLOCK при 0-59; ABSTAIN только при неполных данных. Не используй будущие данные.
 Ответ должен строго соответствовать JSON-схеме."""
 
 
@@ -64,13 +73,17 @@ REGIME_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "regime": {"type": "string", "enum": ["TREND_LONG", "TREND_SHORT", "CHOP", "TRANSITION"]},
+        "structure_4h": {"type": "string", "enum": ["LONG", "SHORT", "MIXED"]},
+        "swing_1h": {"type": "string", "enum": ["LONG", "SHORT", "RANGE"]},
+        "phase_30m": {"type": "string", "enum": ["ACCELERATING_LONG", "ACCELERATING_SHORT", "PULLBACK", "EXHAUSTING", "RANGE"]},
+        "texture": {"type": "string", "enum": ["TREND", "CHOP", "TRANSITION"]},
         "regime_confidence_pct": {"type": "integer", "minimum": 0, "maximum": 100},
         "trend_maturity": {"type": "string", "enum": ["EARLY", "MIDDLE", "EXHAUSTED", "NONE"]},
         "chop_probability_pct": {"type": "integer", "minimum": 0, "maximum": 100},
         "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 6},
         "data_quality": {"type": "string", "enum": ["COMPLETE", "INCOMPLETE"]},
     },
-    "required": ["regime", "regime_confidence_pct", "trend_maturity", "chop_probability_pct", "evidence", "data_quality"],
+    "required": ["regime", "structure_4h", "swing_1h", "phase_30m", "texture", "regime_confidence_pct", "trend_maturity", "chop_probability_pct", "evidence", "data_quality"],
 }
 
 
@@ -80,14 +93,16 @@ ENTRY_SCHEMA: dict[str, Any] = {
     "properties": {
         "candidate_direction": {"type": "string", "enum": ["LONG", "SHORT"]},
         "entry_score_pct": {"type": "integer", "minimum": 0, "maximum": 100},
-        "decision": {"type": "string", "enum": ["ALLOW", "BLOCK", "ABSTAIN"]},
+        "decision": {"type": "string", "enum": ["ENTER", "WAIT_PULLBACK", "BLOCK_CHOP", "BLOCK_LATE", "BLOCK_AGAINST_STRUCTURE", "ABSTAIN"]},
+        "expected_outcome": {"type": "string", "enum": ["PROFIT", "BREAKEVEN", "LOSS", "UNCERTAIN"]},
+        "setup_phase": {"type": "string", "enum": ["EARLY", "ON_TIME", "LATE"]},
         "late_entry_risk_pct": {"type": "integer", "minimum": 0, "maximum": 100},
         "timeframe_alignment": {"type": "string", "enum": ["ALIGNED", "MIXED", "CONFLICT"]},
         "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 7},
         "invalidation": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5},
         "data_quality": {"type": "string", "enum": ["COMPLETE", "INCOMPLETE"]},
     },
-    "required": ["candidate_direction", "entry_score_pct", "decision", "late_entry_risk_pct", "timeframe_alignment", "evidence", "invalidation", "data_quality"],
+    "required": ["candidate_direction", "entry_score_pct", "decision", "expected_outcome", "setup_phase", "late_entry_risk_pct", "timeframe_alignment", "evidence", "invalidation", "data_quality"],
 }
 
 
@@ -99,6 +114,10 @@ PROMPT_VERSION = hashlib.sha256(
 @dataclass(frozen=True)
 class RegimeReview:
     regime: str
+    structure_4h: str
+    swing_1h: str
+    phase_30m: str
+    texture: str
     regime_confidence_pct: int
     trend_maturity: str
     chop_probability_pct: int
@@ -114,6 +133,8 @@ class EntryReview:
     candidate_direction: str
     entry_score_pct: int
     decision: str
+    expected_outcome: str
+    setup_phase: str
     late_entry_risk_pct: int
     timeframe_alignment: str
     evidence: list[str]
@@ -167,6 +188,10 @@ def request_regime_review(api_key: str, context: dict[str, Any], *, timeout: int
     item = _request_json(api_key, REGIME_SYSTEM_INSTRUCTIONS, build_regime_prompt(context), "market_regime_review", REGIME_SCHEMA, timeout)
     return RegimeReview(
         regime=str(item["regime"]),
+        structure_4h=str(item["structure_4h"]),
+        swing_1h=str(item["swing_1h"]),
+        phase_30m=str(item["phase_30m"]),
+        texture=str(item["texture"]),
         regime_confidence_pct=int(item["regime_confidence_pct"]),
         trend_maturity=str(item["trend_maturity"]),
         chop_probability_pct=int(item["chop_probability_pct"]),
@@ -181,6 +206,8 @@ def request_entry_review(api_key: str, context: dict[str, Any], regime: RegimeRe
         candidate_direction=str(item["candidate_direction"]),
         entry_score_pct=int(item["entry_score_pct"]),
         decision=str(item["decision"]),
+        expected_outcome=str(item["expected_outcome"]),
+        setup_phase=str(item["setup_phase"]),
         late_entry_risk_pct=int(item["late_entry_risk_pct"]),
         timeframe_alignment=str(item["timeframe_alignment"]),
         evidence=[str(value) for value in item["evidence"]],

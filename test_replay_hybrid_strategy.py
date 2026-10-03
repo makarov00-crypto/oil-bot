@@ -25,16 +25,16 @@ class ReplayHybridStrategyTests(unittest.TestCase):
 
     def test_ai_gate_blocks_confident_chop(self) -> None:
         candidate = self.candidate()
-        candidate.regime_review = {"regime": "CHOP", "regime_confidence_pct": 82, "data_quality": "COMPLETE"}
-        candidate.entry_review = {"decision": "ALLOW", "entry_score_pct": 78, "data_quality": "COMPLETE"}
+        candidate.regime_review = {"texture": "CHOP", "chop_probability_pct": 82, "data_quality": "COMPLETE"}
+        candidate.entry_review = {"decision": "ENTER", "entry_score_pct": 78, "data_quality": "COMPLETE"}
         replay.apply_ai_gate(candidate)
         self.assertFalse(candidate.ai_allowed)
         self.assertIn("пила", candidate.ai_gate_reason)
 
     def test_ai_gate_allows_complete_aligned_candidate(self) -> None:
         candidate = self.candidate()
-        candidate.regime_review = {"regime": "TREND_LONG", "regime_confidence_pct": 77, "data_quality": "COMPLETE"}
-        candidate.entry_review = {"decision": "ALLOW", "entry_score_pct": 68, "data_quality": "COMPLETE"}
+        candidate.regime_review = {"texture": "TREND", "chop_probability_pct": 8, "data_quality": "COMPLETE"}
+        candidate.entry_review = {"decision": "ENTER", "entry_score_pct": 68, "data_quality": "COMPLETE"}
         replay.apply_ai_gate(candidate)
         self.assertTrue(candidate.ai_allowed)
         self.assertIn("canary", candidate.ai_gate_reason)
@@ -48,6 +48,15 @@ class ReplayHybridStrategyTests(unittest.TestCase):
         self.assertEqual(result["net_pnl_rub"], 30)
         self.assertEqual(result["commission_rub"], 20)
         self.assertEqual(result["max_drawdown_rub"], 60)
+
+    def test_true_breakeven_covers_both_commissions(self) -> None:
+        for direction in ("LONG", "SHORT"):
+            entry = 100.0
+            exit_price = replay.true_breakeven_price(entry, direction, 0.01)
+            sign = 1 if direction == "LONG" else -1
+            gross = (exit_price - entry) * sign
+            commission = (entry + exit_price) * replay.COMMISSION_RATE
+            self.assertGreaterEqual(gross - commission, -1e-9)
 
 
 if __name__ == "__main__":
