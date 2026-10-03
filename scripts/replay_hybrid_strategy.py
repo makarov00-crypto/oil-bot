@@ -540,9 +540,11 @@ def simulate(candidates: list[Candidate], frames: dict[str, dict[int, pd.DataFra
 
 def metrics(trades: list[SimulatedTrade]) -> dict[str, Any]:
     net = [trade.net_pnl_rub for trade in trades]
-    wins = [value for value in net if value > 0]
-    losses = [value for value in net if value < 0]
-    flats = [value for value in net if value == 0]
+    protected = [trade for trade in trades if trade.exit_reason == "BREAKEVEN_STOP"]
+    decisive = [trade for trade in trades if trade.exit_reason != "BREAKEVEN_STOP"]
+    wins = [trade.net_pnl_rub for trade in decisive if trade.net_pnl_rub > 0]
+    losses = [trade.net_pnl_rub for trade in decisive if trade.net_pnl_rub < 0]
+    flats = [trade.net_pnl_rub for trade in decisive if trade.net_pnl_rub == 0]
     equity = 0.0
     peak = 0.0
     drawdown = 0.0
@@ -551,8 +553,9 @@ def metrics(trades: list[SimulatedTrade]) -> dict[str, Any]:
         peak = max(peak, equity)
         drawdown = max(drawdown, peak - equity)
     return {
-        "trades": len(trades), "wins": len(wins), "losses": len(losses), "flats": len(flats),
-        "win_rate_pct": round(len(wins) / len(trades) * 100, 1) if trades else 0.0,
+        "trades": len(trades), "wins": len(wins), "losses": len(losses),
+        "protected_breakeven": len(protected), "flats": len(flats),
+        "win_rate_pct": round(len(wins) / len(decisive) * 100, 1) if decisive else 0.0,
         "gross_pnl_rub": round(sum(trade.gross_pnl_rub for trade in trades), 2),
         "commission_rub": round(sum(trade.commission_rub for trade in trades), 2),
         "net_pnl_rub": round(sum(net), 2), "max_drawdown_rub": round(drawdown, 2),
