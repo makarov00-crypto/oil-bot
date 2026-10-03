@@ -16,8 +16,9 @@ class StrategyAiGuardTests(unittest.TestCase):
         }
         prompt = build_regime_prompt(context)
         payload = json.loads(prompt.split("\n\n", 1)[1])
-        self.assertEqual(len(payload["timeframes"]["1h"]), 2)
-        self.assertIn("4h", payload["timeframes"])
+        self.assertEqual(len(payload["market_context"]["timeframes"]["1h"]), 2)
+        self.assertIn("4h", payload["market_context"]["timeframes"])
+        self.assertIn("swing_1h", payload["required_output_contract"])
 
     def test_entry_prompt_has_independent_regime_and_strategy_context(self) -> None:
         regime = RegimeReview(

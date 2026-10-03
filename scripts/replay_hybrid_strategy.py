@@ -702,7 +702,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay AO/candle multi-timeframe strategy with an AI entry guard")
     parser.add_argument("--start", default="2026-09-28T00:00:00+03:00")
     parser.add_argument("--end", default="2026-10-03T00:00:00+03:00")
-    parser.add_argument("--cache-dir", type=Path, default=ROOT / "bot_state" / "research" / "week_2026-09-28")
+    parser.add_argument("--cache-dir", type=Path, default=ROOT / "bot_state" / "research" / "week_2026-09-28_v2")
     parser.add_argument("--output", type=Path, default=ROOT / "reports" / "strategy_replay_2026-09-28_2026-10-02")
     parser.add_argument("--skip-ai", action="store_true")
     return parser.parse_args()
@@ -712,7 +712,7 @@ def main() -> int:
     args = parse_args()
     start = pd.Timestamp(args.start).tz_convert("UTC")
     end = pd.Timestamp(args.end).tz_convert("UTC")
-    warmup = (start - pd.Timedelta(days=8)).to_pydatetime()
+    warmup = (start - pd.Timedelta(days=35)).to_pydatetime()
     fetch_end = (end + pd.Timedelta(hours=2)).to_pydatetime()
     frames, metadata = load_or_fetch_frames(args.cache_dir, warmup, fetch_end)
     candidates = [candidate for symbol, symbol_frames in frames.items() for candidate in find_candidates(symbol, symbol_frames[60], start, end)]

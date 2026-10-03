@@ -107,7 +107,7 @@ ENTRY_SCHEMA: dict[str, Any] = {
 
 
 PROMPT_VERSION = hashlib.sha256(
-    (REGIME_SYSTEM_INSTRUCTIONS + ENTRY_SYSTEM_INSTRUCTIONS + json.dumps(REGIME_SCHEMA, sort_keys=True) + json.dumps(ENTRY_SCHEMA, sort_keys=True)).encode()
+    ("embedded-contract-v2" + REGIME_SYSTEM_INSTRUCTIONS + ENTRY_SYSTEM_INSTRUCTIONS + json.dumps(REGIME_SCHEMA, sort_keys=True) + json.dumps(ENTRY_SCHEMA, sort_keys=True)).encode()
 ).hexdigest()[:12]
 
 
@@ -146,13 +146,40 @@ class EntryReview:
 
 
 def build_regime_prompt(context: dict[str, Any]) -> str:
-    return "Определи режим рынка по полному контексту.\n\n" + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    contract = {
+        "regime": "TREND_LONG|TREND_SHORT|CHOP|TRANSITION",
+        "structure_4h": "LONG|SHORT|MIXED",
+        "swing_1h": "LONG|SHORT|RANGE",
+        "phase_30m": "ACCELERATING_LONG|ACCELERATING_SHORT|PULLBACK|EXHAUSTING|RANGE",
+        "texture": "TREND|CHOP|TRANSITION",
+        "regime_confidence_pct": "integer 0..100",
+        "trend_maturity": "EARLY|MIDDLE|EXHAUSTED|NONE",
+        "chop_probability_pct": "integer 0..100",
+        "evidence": ["2..6 strings"],
+        "data_quality": "COMPLETE|INCOMPLETE",
+    }
+    return (
+        "Определи режим рынка по полному контексту. Верни только JSON ровно с указанными ключами и значениями enum.\n\n"
+        + json.dumps({"required_output_contract": contract, "market_context": context}, ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def build_entry_prompt(context: dict[str, Any], regime: RegimeReview | dict[str, Any]) -> str:
     regime_payload = regime.as_dict() if isinstance(regime, RegimeReview) else dict(regime)
-    payload = {"regime_review": regime_payload, "entry_context": context}
-    return "Оцени обоснованность только предложенного входа.\n\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    contract = {
+        "candidate_direction": "LONG|SHORT",
+        "entry_score_pct": "integer 0..100",
+        "decision": "ENTER|WAIT_PULLBACK|BLOCK_CHOP|BLOCK_LATE|BLOCK_AGAINST_STRUCTURE|ABSTAIN",
+        "expected_outcome": "PROFIT|BREAKEVEN|LOSS|UNCERTAIN",
+        "setup_phase": "EARLY|ON_TIME|LATE",
+        "late_entry_risk_pct": "integer 0..100",
+        "timeframe_alignment": "ALIGNED|MIXED|CONFLICT",
+        "evidence": ["2..7 strings"],
+        "invalidation": ["1..5 strings"],
+        "data_quality": "COMPLETE|INCOMPLETE",
+    }
+    payload = {"required_output_contract": contract, "regime_review": regime_payload, "entry_context": context}
+    return "Оцени обоснованность только предложенного входа. Верни только JSON ровно с указанными ключами и значениями enum.\n\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _request_json(api_key: str, instructions: str, prompt: str, schema_name: str, schema: dict[str, Any], timeout: int) -> dict[str, Any]:
