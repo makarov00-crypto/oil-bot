@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 
 from bot_oil_main import APP_NAME, Client, SUPPORTED_INTERVALS, load_config, resolve_instruments
 from signal_ai_reviewer import get_signal_ai_model
-from strategy_ai_guard import PROMPT_VERSION, RegimeReview, request_entry_review, request_regime_review
+from strategy_ai_guard import ENTRY_PROMPT_VERSION, PROMPT_VERSION, REGIME_PROMPT_VERSION, RegimeReview, request_entry_review, request_regime_review
 
 
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -452,7 +452,7 @@ def apply_ai_gate(candidate: Candidate) -> None:
     score = int(entry.get("entry_score_pct") or 0)
     if str(entry.get("decision") or "") != "ENTER":
         reasons.append(f"решение {entry.get('decision') or 'ABSTAIN'}")
-    if score < 60:
+    if score < 55:
         reasons.append(f"оценка входа {score}%")
     candidate.ai_allowed = not reasons
     candidate.ai_gate_reason = "; ".join(reasons) if reasons else ("полноценный вход" if score >= 70 else "canary 1 лот")
@@ -753,7 +753,11 @@ def main() -> int:
     if prior_output_path.exists():
         try:
             prior_payload = json.loads(prior_output_path.read_text(encoding="utf-8"))
-            if prior_payload.get("ai_model") == ai_model and prior_payload.get("prompt_version") == PROMPT_VERSION:
+            same_regime_contract = (
+                prior_payload.get("regime_prompt_version") == REGIME_PROMPT_VERSION
+                or prior_payload.get("prompt_version") == "da1926dd7376"
+            )
+            if prior_payload.get("ai_model") == ai_model and same_regime_contract:
                 for item in prior_payload.get("candidates") or []:
                     review = item.get("regime_review")
                     if isinstance(review, dict):
@@ -775,6 +779,8 @@ def main() -> int:
     payload = {
         "strategy_version": STRATEGY_VERSION,
         "prompt_version": PROMPT_VERSION,
+        "regime_prompt_version": REGIME_PROMPT_VERSION,
+        "entry_prompt_version": ENTRY_PROMPT_VERSION,
         "ai_model": ai_model,
         "period": {"start": start.isoformat(), "end": end.isoformat()},
         "candidates": [asdict(item) for item in candidates],

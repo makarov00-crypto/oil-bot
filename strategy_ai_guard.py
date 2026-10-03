@@ -63,8 +63,8 @@ RSI/Chaikin/MACD/объём 5. Метка EXHAUSTED для старого дви
 EARLY_REVERSAL против него. Сильный 4ч тренд уменьшает оценку контртрендового входа,
 но не блокирует его, если на 1ч и 30м подтверждён новый импульс.
 
-Решение обязано соответствовать баллу: ENTER при 60-100; WAIT_PULLBACK или один из
-BLOCK при 0-59; ABSTAIN только при неполных данных. Не используй будущие данные.
+Решение обязано соответствовать баллу: ENTER при 55-100; WAIT_PULLBACK или один из
+BLOCK при 0-54; ABSTAIN только при неполных данных. Не используй будущие данные.
 Ответ должен строго соответствовать JSON-схеме."""
 
 
@@ -106,9 +106,13 @@ ENTRY_SCHEMA: dict[str, Any] = {
 }
 
 
-PROMPT_VERSION = hashlib.sha256(
-    ("embedded-contract-v2" + REGIME_SYSTEM_INSTRUCTIONS + ENTRY_SYSTEM_INSTRUCTIONS + json.dumps(REGIME_SCHEMA, sort_keys=True) + json.dumps(ENTRY_SCHEMA, sort_keys=True)).encode()
+REGIME_PROMPT_VERSION = hashlib.sha256(
+    ("embedded-contract-v2" + REGIME_SYSTEM_INSTRUCTIONS + json.dumps(REGIME_SCHEMA, sort_keys=True)).encode()
 ).hexdigest()[:12]
+ENTRY_PROMPT_VERSION = hashlib.sha256(
+    ("embedded-contract-v2" + ENTRY_SYSTEM_INSTRUCTIONS + json.dumps(ENTRY_SCHEMA, sort_keys=True)).encode()
+).hexdigest()[:12]
+PROMPT_VERSION = hashlib.sha256((REGIME_PROMPT_VERSION + ENTRY_PROMPT_VERSION).encode()).hexdigest()[:12]
 
 
 @dataclass(frozen=True)

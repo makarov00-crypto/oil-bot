@@ -39,6 +39,13 @@ class ReplayHybridStrategyTests(unittest.TestCase):
         self.assertTrue(candidate.ai_allowed)
         self.assertIn("canary", candidate.ai_gate_reason)
 
+    def test_ai_gate_uses_calibrated_55_percent_threshold(self) -> None:
+        candidate = self.candidate()
+        candidate.regime_review = {"texture": "TREND", "chop_probability_pct": 10, "data_quality": "COMPLETE"}
+        candidate.entry_review = {"decision": "ENTER", "entry_score_pct": 55, "data_quality": "COMPLETE"}
+        replay.apply_ai_gate(candidate)
+        self.assertTrue(candidate.ai_allowed)
+
     def test_metrics_include_commission_and_drawdown(self) -> None:
         trades = [
             replay.SimulatedTrade("A", "LONG", "2026-01-01T00:00:00+00:00", "2026-01-01T01:00:00+00:00", 1, 2, 100, 10, 90, "EXIT", False, 1, 0, "", None, ""),
