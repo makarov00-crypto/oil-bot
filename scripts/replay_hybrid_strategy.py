@@ -544,6 +544,8 @@ def build_report(start: pd.Timestamp, end: pd.Timestamp, candidates: list[Candid
     mechanical_metrics, ai_metrics = metrics(mechanical), metrics(ai_trades)
     diagnostics = outcome_diagnostics(candidates, mechanical)
     ai_effect = round(ai_metrics["net_pnl_rub"] - mechanical_metrics["net_pnl_rub"], 2)
+    ai_damage = round(mechanical_metrics["net_pnl_rub"] - ai_metrics["net_pnl_rub"], 2)
+    mechanical_vs_actual = round(mechanical_metrics["net_pnl_rub"] - actual["net_pnl_rub_1lot"], 2)
     lines = [
         f"# Исторический прогон {STRATEGY_VERSION}", "",
         f"Период: {start.tz_convert(MOSCOW).strftime('%d.%m.%Y %H:%M')} — {end.tz_convert(MOSCOW).strftime('%d.%m.%Y %H:%M')} МСК.",
@@ -575,6 +577,23 @@ def build_report(start: pd.Timestamp, end: pd.Timestamp, candidates: list[Candid
     ])
     for entry_path, values in diagnostics["entry_paths"].items():
         lines.append(f"| {entry_path} | {values['trades']} | {values['wins']} | {values['net_pnl_rub']:.2f} |")
+    lines.extend([
+        "", "## Вывод по неделе", "",
+        f"- Механический контур улучшил результат относительно фактических сделок, приведённых к 1 лоту, на {mechanical_vs_actual:+.2f} RUB, но всё равно завершил неделю в минусе.",
+        f"- До комиссий механический результат составил {mechanical_metrics['gross_pnl_rub']:+.2f} RUB; комиссии {mechanical_metrics['commission_rub']:.2f} RUB превратили его в {mechanical_metrics['net_pnl_rub']:+.2f} RUB.",
+        f"- ИИ ухудшил результат на {ai_damage:.2f} RUB. В текущем виде его нельзя включать как торговый фильтр без перекалибровки на более длинной истории.",
+        "- Убыточнее всего оказался поздний CONTINUATION. Ранний разворот дал положительный итог, однако доля плюсовых сделок остаётся низкой.",
+        "", "## Все смоделированные сделки", "",
+        "| Сигнал МСК | Инструмент | Сторона | Тип входа | Оценка ИИ | Решение ИИ | Вход МСК | Выход МСК | Net, RUB | Причина выхода |",
+        "|---|---|---|---|---:|---|---|---|---:|---|",
+    ])
+    candidate_by_key = {(item.symbol, item.signal_time): item for item in candidates}
+    for trade in mechanical:
+        candidate = candidate_by_key[(trade.symbol, trade.candidate_time)]
+        score = (candidate.entry_review or {}).get("entry_score_pct", "-")
+        lines.append(
+            f"| {pd.Timestamp(candidate.signal_time).tz_convert(MOSCOW).strftime('%d.%m %H:%M')} | {trade.symbol} | {trade.direction} | {candidate.entry_path} | {score}% | {'ALLOW' if candidate.ai_allowed else 'BLOCK'} | {pd.Timestamp(trade.entry_time).tz_convert(MOSCOW).strftime('%d.%m %H:%M')} | {pd.Timestamp(trade.exit_time).tz_convert(MOSCOW).strftime('%d.%m %H:%M')} | {trade.net_pnl_rub:.2f} | {trade.exit_reason} |"
+        )
     lines.extend([
         "",
         "## Решения ИИ", "",
