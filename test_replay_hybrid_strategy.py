@@ -19,6 +19,7 @@ class ReplayHybridStrategyTests(unittest.TestCase):
             symbol="BRX6", direction="LONG", signal_time="2026-10-02T12:00:00+00:00",
             signal_price=100.0, atr=1.0, ao=0.5, ao_strength_atr=0.5,
             bars_since_cross=1, wave_time="2026-10-02T11:00:00+00:00",
+            entry_path="ZERO_CROSS",
             candle_body_atr_sum=0.8, distance_from_wave_atr=0.4,
         )
 

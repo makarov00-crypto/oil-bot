@@ -40,6 +40,7 @@ class Candidate:
     ao_strength_atr: float
     bars_since_cross: int
     wave_time: str
+    entry_path: str
     candle_body_atr_sum: float
     distance_from_wave_atr: float
     regime_review: dict[str, Any] | None = None
@@ -229,6 +230,8 @@ def find_candidates(symbol: str, hourly: pd.DataFrame, start: pd.Timestamp, end:
                 cross_index = candidate_cross
                 break
         bars_since_cross = index - cross_index if cross_index is not None else -1
+        ao_supports_direction = ao > 0 if direction == "LONG" else ao < 0
+        entry_path = "ZERO_CROSS" if ao_supports_direction and 0 <= bars_since_cross <= 3 else "CONTINUATION" if ao_supports_direction else "EARLY_REVERSAL"
         used_waves.add(wave_key)
         result.append(Candidate(
             symbol=symbol,
@@ -240,6 +243,7 @@ def find_candidates(symbol: str, hourly: pd.DataFrame, start: pd.Timestamp, end:
             ao_strength_atr=abs(ao) / atr,
             bars_since_cross=bars_since_cross,
             wave_time=wave_time,
+            entry_path=entry_path,
             candle_body_atr_sum=body_sum_atr,
             distance_from_wave_atr=distance_atr,
         ))
@@ -295,6 +299,7 @@ def ai_contexts(candidate: Candidate, frames: dict[int, pd.DataFrame]) -> tuple[
             "ao_1h": candidate.ao,
             "ao_strength_atr": round(candidate.ao_strength_atr, 3),
             "bars_since_ao_zero_cross": candidate.bars_since_cross,
+            "entry_path": candidate.entry_path,
             "wave_started_at": candidate.wave_time,
             "two_candle_body_atr": round(candidate.candle_body_atr_sum, 3),
             "distance_from_wave_start_atr": round(candidate.distance_from_wave_atr, 3),
