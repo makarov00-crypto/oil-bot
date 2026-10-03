@@ -236,6 +236,7 @@ def find_candidates(symbol: str, hourly: pd.DataFrame, start: pd.Timestamp, end:
         ao_supports_direction = ao > 0 if direction == "LONG" else ao < 0
         entry_path = "ZERO_CROSS" if ao_supports_direction and 0 <= bars_since_cross <= 3 else "CONTINUATION" if ao_supports_direction else "EARLY_REVERSAL"
         if entry_path == "CONTINUATION":
+            used_waves.add(wave_key)
             continue
         used_waves.add(wave_key)
         result.append(Candidate(
