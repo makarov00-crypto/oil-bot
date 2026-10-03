@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import math
@@ -391,6 +392,7 @@ def review_candidates(
     cache: dict[str, Any] = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
     prior_regimes = prior_regimes or {}
     ai_model = get_signal_ai_model()
+    pending: list[tuple[int, Candidate, dict[str, Any], dict[str, Any], str]] = []
     for number, candidate in enumerate(candidates, start=1):
         regime_context, entry_context = ai_contexts(candidate, all_frames[candidate.symbol])
         key = hashlib.sha256((PROMPT_VERSION + ai_model + json.dumps({"regime": regime_context, "entry": entry_context}, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
@@ -398,16 +400,44 @@ def review_candidates(
         if cached:
             candidate.regime_review = dict(cached["regime"])
             candidate.entry_review = dict(cached["entry"])
+            apply_ai_gate(candidate)
         else:
-            print(f"AI {number}/{len(candidates)} {candidate.symbol} {candidate.direction} {candidate.signal_time}", flush=True)
-            prior = prior_regimes.get((candidate.symbol, candidate.direction, candidate.signal_time))
-            regime = RegimeReview(**prior) if prior else request_regime_review(api_key, regime_context, timeout=AI_REQUEST_TIMEOUT_SECONDS)
-            entry = request_entry_review(api_key, entry_context, regime, timeout=AI_REQUEST_TIMEOUT_SECONDS)
-            candidate.regime_review = regime.as_dict()
-            candidate.entry_review = entry.as_dict()
-            cache[key] = {"prompt_version": PROMPT_VERSION, "model": ai_model, "regime": candidate.regime_review, "entry": candidate.entry_review}
+            pending.append((number, candidate, regime_context, entry_context, key))
+
+    def fetch_review(item: tuple[int, Candidate, dict[str, Any], dict[str, Any], str]) -> tuple[int, Candidate, str, dict[str, Any], dict[str, Any]]:
+        number, candidate, regime_context, entry_context, key = item
+        print(f"AI {number}/{len(candidates)} {candidate.symbol} {candidate.direction} {candidate.signal_time}", flush=True)
+        prior = prior_regimes.get((candidate.symbol, candidate.direction, candidate.signal_time))
+        regime = RegimeReview(**prior) if prior else request_regime_review(api_key, regime_context, timeout=AI_REQUEST_TIMEOUT_SECONDS)
+        entry = request_entry_review(api_key, entry_context, regime, timeout=AI_REQUEST_TIMEOUT_SECONDS)
+        return number, candidate, key, regime.as_dict(), entry.as_dict()
+
+    workers = max(1, min(8, int(os.getenv("OIL_STRATEGY_AI_WORKERS", "1") or 1)))
+    failures: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(fetch_review, item): item for item in pending}
+        for future in concurrent.futures.as_completed(futures):
+            item = futures[future]
+            try:
+                _, candidate, key, regime_review, entry_review = future.result()
+            except Exception as exc:
+                _, failed_candidate, _, _, _ = item
+                message = f"{failed_candidate.symbol} {failed_candidate.signal_time}: {type(exc).__name__}: {exc}"
+                failures.append(message)
+                print(f"AI ERROR {message}", flush=True)
+                continue
+            candidate.regime_review = regime_review
+            candidate.entry_review = entry_review
+            apply_ai_gate(candidate)
+            cache[key] = {
+                "prompt_version": PROMPT_VERSION,
+                "model": ai_model,
+                "regime": regime_review,
+                "entry": entry_review,
+            }
             cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-        apply_ai_gate(candidate)
+    if failures:
+        raise RuntimeError("Не завершены ответы ИИ: " + " | ".join(failures))
 
 
 def apply_ai_gate(candidate: Candidate) -> None:
