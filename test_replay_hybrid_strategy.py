@@ -65,6 +65,12 @@ class ReplayHybridStrategyTests(unittest.TestCase):
             commission = (entry + exit_price) * replay.COMMISSION_RATE
             self.assertGreaterEqual(gross - commission, -1e-9)
 
+    def test_report_conclusion_reflects_result_sign(self) -> None:
+        self.assertIn("в плюсе", replay.signed_result_text(535.92))
+        self.assertIn("в минусе", replay.signed_result_text(-12.5))
+        self.assertIn("улучшил", replay.ai_effect_text(615.93))
+        self.assertIn("ухудшил", replay.ai_effect_text(-535.28))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -653,11 +653,36 @@ def outcome_diagnostics(candidates: list[Candidate], trades: list[SimulatedTrade
     }
 
 
+def signed_result_text(value: float) -> str:
+    if value > 0:
+        return f"завершил неделю в плюсе на {value:+.2f} RUB"
+    if value < 0:
+        return f"завершил неделю в минусе на {value:.2f} RUB"
+    return "завершил неделю без прибыли и убытка"
+
+
+def ai_effect_text(effect: float) -> str:
+    if effect > 0:
+        return f"ИИ улучшил результат на {effect:.2f} RUB относительно механического контура."
+    if effect < 0:
+        return f"ИИ ухудшил результат на {abs(effect):.2f} RUB относительно механического контура."
+    return "ИИ не изменил результат относительно механического контура."
+
+
+def entry_path_result_text(diagnostics: dict[str, Any]) -> str:
+    parts = []
+    for entry_path, values in diagnostics["entry_paths"].items():
+        if values["trades"]:
+            parts.append(f"{entry_path}: {values['net_pnl_rub']:+.2f} RUB ({values['trades']} сделок)")
+        else:
+            parts.append(f"{entry_path}: сделок не было")
+    return "Результат по типам входа: " + "; ".join(parts) + "."
+
+
 def build_report(start: pd.Timestamp, end: pd.Timestamp, candidates: list[Candidate], mechanical: list[SimulatedTrade], ai_trades: list[SimulatedTrade], actual: dict[str, Any]) -> str:
     mechanical_metrics, ai_metrics = metrics(mechanical), metrics(ai_trades)
     diagnostics = outcome_diagnostics(candidates, mechanical)
     ai_effect = round(ai_metrics["net_pnl_rub"] - mechanical_metrics["net_pnl_rub"], 2)
-    ai_damage = round(mechanical_metrics["net_pnl_rub"] - ai_metrics["net_pnl_rub"], 2)
     mechanical_vs_actual = round(mechanical_metrics["net_pnl_rub"] - actual["net_pnl_rub_1lot"], 2)
     lines = [
         f"# Исторический прогон {STRATEGY_VERSION}", "",
@@ -692,10 +717,10 @@ def build_report(start: pd.Timestamp, end: pd.Timestamp, candidates: list[Candid
         lines.append(f"| {entry_path} | {values['trades']} | {values['wins']} | {values['net_pnl_rub']:.2f} |")
     lines.extend([
         "", "## Вывод по неделе", "",
-        f"- Механический контур улучшил результат относительно фактических сделок, приведённых к 1 лоту, на {mechanical_vs_actual:+.2f} RUB, но всё равно завершил неделю в минусе.",
+        f"- Механический контур изменил результат относительно фактических сделок, приведённых к 1 лоту, на {mechanical_vs_actual:+.2f} RUB и {signed_result_text(mechanical_metrics['net_pnl_rub'])}.",
         f"- До комиссий механический результат составил {mechanical_metrics['gross_pnl_rub']:+.2f} RUB; комиссии {mechanical_metrics['commission_rub']:.2f} RUB превратили его в {mechanical_metrics['net_pnl_rub']:+.2f} RUB.",
-        f"- ИИ ухудшил результат на {ai_damage:.2f} RUB. В текущем виде его нельзя включать как торговый фильтр без перекалибровки на более длинной истории.",
-        "- Убыточнее всего оказался поздний CONTINUATION. Ранний разворот дал положительный итог, однако доля плюсовых сделок остаётся низкой.",
+        f"- {ai_effect_text(ai_effect)} Для решения о торговом фильтре нужна проверка на более длинной истории.",
+        f"- {entry_path_result_text(diagnostics)}",
         "", "## Все смоделированные сделки", "",
         "| Сигнал МСК | Инструмент | Сторона | Тип входа | Оценка ИИ | Решение ИИ | Вход МСК | Выход МСК | Net, RUB | Причина выхода |",
         "|---|---|---|---|---:|---|---|---|---:|---|",
