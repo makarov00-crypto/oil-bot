@@ -186,50 +186,49 @@ def find_candidates(symbol: str, hourly: pd.DataFrame, start: pd.Timestamp, end:
         if signal_time < start or signal_time > end:
             continue
         ao = _finite(row["ao"])
-        if ao == 0.0 or _finite(row["atr"]) <= 0:
+        atr = _finite(row["atr"])
+        if atr <= 0:
             continue
-        direction = "LONG" if ao > 0 else "SHORT"
+        delta_now = _finite(row["ao_delta"])
+        delta_previous = _finite(hourly.iloc[index - 1]["ao_delta"])
+        recent = hourly.iloc[index - 1:index + 1]
+        long_impulse = delta_now > 0 and delta_previous > 0 and bool((recent["close"] > recent["open"]).all())
+        short_impulse = delta_now < 0 and delta_previous < 0 and bool((recent["close"] < recent["open"]).all())
+        if not long_impulse and not short_impulse:
+            continue
+        direction = "LONG" if long_impulse else "SHORT"
+        slope_sign = 1.0 if direction == "LONG" else -1.0
+        wave_index = index - 1
+        for position in range(index - 2, max(0, index - 9), -1):
+            if _finite(hourly.iloc[position]["ao_delta"]) * slope_sign <= 0:
+                break
+            wave_index = position
+        wave_time = pd.Timestamp(hourly.iloc[wave_index]["closed_at"]).isoformat()
+        wave_key = (direction, wave_time)
+        if wave_key in used_waves:
+            continue
+        body_sum_atr = float(recent["body"].sum()) / atr
+        if body_sum_atr < 0.50 or _finite(row["body_atr"]) < 0.15:
+            continue
+        previous_rsi = _finite(hourly.iloc[index - 1]["rsi"], 50.0)
+        rsi = _finite(row["rsi"], 50.0)
+        if direction == "LONG" and not (rsi >= 48.0 and rsi >= previous_rsi):
+            continue
+        if direction == "SHORT" and not (rsi <= 58.0 and rsi <= previous_rsi):
+            continue
+        wave_price = _finite(hourly.iloc[wave_index]["close"])
+        distance_atr = ((_finite(row["close"]) - wave_price) * (1 if direction == "LONG" else -1)) / atr
+        if distance_atr < 0.0 or distance_atr > 1.20:
+            continue
         cross_index = None
-        for candidate_cross in range(index - 1, max(0, index - 3), -1):
+        for candidate_cross in range(index, max(0, index - 9), -1):
             previous_ao = _finite(hourly.iloc[candidate_cross - 1]["ao"])
             cross_ao = _finite(hourly.iloc[candidate_cross]["ao"])
             crossed = previous_ao <= 0 < cross_ao if direction == "LONG" else previous_ao >= 0 > cross_ao
             if crossed:
                 cross_index = candidate_cross
                 break
-        if cross_index is None:
-            continue
-        bars_since_cross = index - cross_index
-        if bars_since_cross not in {1, 2}:
-            continue
-        wave_time = pd.Timestamp(hourly.iloc[cross_index]["closed_at"]).isoformat()
-        wave_key = (direction, wave_time)
-        if wave_key in used_waves:
-            continue
-        ao_values = [_finite(hourly.iloc[pos]["ao"]) for pos in range(cross_index, index + 1)]
-        strengthening = all(left < right for left, right in zip(ao_values, ao_values[1:])) if direction == "LONG" else all(left > right for left, right in zip(ao_values, ao_values[1:]))
-        if not strengthening:
-            continue
-        recent = hourly.iloc[index - 1:index + 1]
-        directional_candles = bool((recent["close"] > recent["open"]).all()) if direction == "LONG" else bool((recent["close"] < recent["open"]).all())
-        if not directional_candles:
-            continue
-        atr = _finite(row["atr"])
-        body_sum_atr = float(recent["body"].sum()) / atr
-        if body_sum_atr < 0.50 or _finite(row["body_atr"]) < 0.15:
-            continue
-        if abs(ao) / atr < 0.20:
-            continue
-        previous_rsi = _finite(hourly.iloc[index - 1]["rsi"], 50.0)
-        rsi = _finite(row["rsi"], 50.0)
-        if direction == "LONG" and not (rsi >= 50.0 and rsi >= previous_rsi):
-            continue
-        if direction == "SHORT" and not (rsi <= 50.0 and rsi <= previous_rsi):
-            continue
-        wave_price = _finite(hourly.iloc[cross_index]["close"])
-        distance_atr = ((_finite(row["close"]) - wave_price) * (1 if direction == "LONG" else -1)) / atr
-        if distance_atr < 0.0 or distance_atr > 1.20:
-            continue
+        bars_since_cross = index - cross_index if cross_index is not None else -1
         used_waves.add(wave_key)
         result.append(Candidate(
             symbol=symbol,
@@ -521,7 +520,7 @@ def build_report(start: pd.Timestamp, end: pd.Timestamp, candidates: list[Candid
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay AO/candle multi-timeframe strategy with an AI entry guard")
     parser.add_argument("--start", default="2026-09-28T00:00:00+03:00")
-    parser.add_argument("--end", default="2026-10-02T23:59:59+03:00")
+    parser.add_argument("--end", default="2026-10-03T00:00:00+03:00")
     parser.add_argument("--cache-dir", type=Path, default=ROOT / "bot_state" / "research" / "week_2026-09-28")
     parser.add_argument("--output", type=Path, default=ROOT / "reports" / "strategy_replay_2026-09-28_2026-10-02")
     parser.add_argument("--skip-ai", action="store_true")
