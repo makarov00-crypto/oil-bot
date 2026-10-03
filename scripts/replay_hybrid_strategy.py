@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot_oil_main import APP_NAME, Client, SUPPORTED_INTERVALS, load_config, resolve_instruments
-from strategy_ai_guard import PROMPT_VERSION, request_entry_review, request_regime_review
+from strategy_ai_guard import PROMPT_VERSION, RegimeReview, request_entry_review, request_regime_review
 
 
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -313,8 +313,15 @@ def ai_contexts(candidate: Candidate, frames: dict[int, pd.DataFrame]) -> tuple[
     return regime, entry
 
 
-def review_candidates(candidates: list[Candidate], all_frames: dict[str, dict[int, pd.DataFrame]], cache_path: Path, api_key: str) -> None:
+def review_candidates(
+    candidates: list[Candidate],
+    all_frames: dict[str, dict[int, pd.DataFrame]],
+    cache_path: Path,
+    api_key: str,
+    prior_regimes: dict[tuple[str, str, str], dict[str, Any]] | None = None,
+) -> None:
     cache: dict[str, Any] = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+    prior_regimes = prior_regimes or {}
     for number, candidate in enumerate(candidates, start=1):
         regime_context, entry_context = ai_contexts(candidate, all_frames[candidate.symbol])
         key = hashlib.sha256((PROMPT_VERSION + json.dumps({"regime": regime_context, "entry": entry_context}, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
@@ -324,7 +331,8 @@ def review_candidates(candidates: list[Candidate], all_frames: dict[str, dict[in
             candidate.entry_review = dict(cached["entry"])
         else:
             print(f"AI {number}/{len(candidates)} {candidate.symbol} {candidate.direction} {candidate.signal_time}", flush=True)
-            regime = request_regime_review(api_key, regime_context)
+            prior = prior_regimes.get((candidate.symbol, candidate.direction, candidate.signal_time))
+            regime = RegimeReview(**prior) if prior else request_regime_review(api_key, regime_context)
             entry = request_entry_review(api_key, entry_context, regime)
             candidate.regime_review = regime.as_dict()
             candidate.entry_review = entry.as_dict()
@@ -541,6 +549,17 @@ def main() -> int:
     frames, metadata = load_or_fetch_frames(args.cache_dir, warmup, fetch_end)
     candidates = [candidate for symbol, symbol_frames in frames.items() for candidate in find_candidates(symbol, symbol_frames[60], start, end)]
     candidates.sort(key=lambda item: item.signal_time)
+    prior_regimes: dict[tuple[str, str, str], dict[str, Any]] = {}
+    prior_output_path = args.output.with_suffix(".json")
+    if prior_output_path.exists():
+        try:
+            prior_payload = json.loads(prior_output_path.read_text(encoding="utf-8"))
+            for item in prior_payload.get("candidates") or []:
+                review = item.get("regime_review")
+                if isinstance(review, dict):
+                    prior_regimes[(str(item.get("symbol")), str(item.get("direction")), str(item.get("signal_time")))] = review
+        except (OSError, json.JSONDecodeError):
+            prior_regimes = {}
     if args.skip_ai:
         for item in candidates:
             item.ai_allowed = True
@@ -549,7 +568,7 @@ def main() -> int:
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is required unless --skip-ai is used")
-        review_candidates(candidates, frames, args.cache_dir / "ai_reviews.json", api_key)
+        review_candidates(candidates, frames, args.cache_dir / "ai_reviews.json", api_key, prior_regimes)
     mechanical = simulate(candidates, frames, metadata, end, ai_only=False)
     ai_trades = simulate(candidates, frames, metadata, end, ai_only=not args.skip_ai)
     actual = actual_week_metrics(ROOT / "logs" / "trade_journal.jsonl", start, end)
