@@ -496,11 +496,54 @@ def actual_week_metrics(journal_path: Path, start: pd.Timestamp, end: pd.Timesta
                 continue
             trades.append(row)
     values = [_finite(row.get("net_pnl_rub"), _finite(row.get("pnl_rub"))) for row in trades]
-    return {"trades": len(trades), "net_pnl_rub": round(sum(values), 2), "rows": trades}
+    normalized = [
+        value / max(1, int(row.get("qty_lots") or 1))
+        for row, value in zip(trades, values)
+    ]
+    return {
+        "trades": len(trades),
+        "net_pnl_rub": round(sum(values), 2),
+        "net_pnl_rub_1lot": round(sum(normalized), 2),
+        "rows": trades,
+    }
+
+
+def outcome_diagnostics(candidates: list[Candidate], trades: list[SimulatedTrade]) -> dict[str, Any]:
+    candidate_by_key = {(item.symbol, item.signal_time): item for item in candidates}
+
+    def summarize(selected: list[SimulatedTrade]) -> dict[str, Any]:
+        values = [trade.net_pnl_rub for trade in selected]
+        return {
+            "trades": len(selected),
+            "wins": sum(value > 0 for value in values),
+            "net_pnl_rub": round(sum(values), 2),
+        }
+
+    decisions = {"allowed": [], "blocked": []}
+    score_bins = {"0-39": [], "40-54": [], "55-69": [], "70-100": []}
+    entry_paths: dict[str, list[SimulatedTrade]] = {
+        "EARLY_REVERSAL": [], "ZERO_CROSS": [], "CONTINUATION": [],
+    }
+    for trade in trades:
+        candidate = candidate_by_key.get((trade.symbol, trade.candidate_time))
+        if candidate is None:
+            continue
+        decisions["allowed" if candidate.ai_allowed else "blocked"].append(trade)
+        score = int((candidate.entry_review or {}).get("entry_score_pct") or 0)
+        score_bin = "0-39" if score < 40 else "40-54" if score < 55 else "55-69" if score < 70 else "70-100"
+        score_bins[score_bin].append(trade)
+        entry_paths.setdefault(candidate.entry_path, []).append(trade)
+    return {
+        "decisions": {key: summarize(value) for key, value in decisions.items()},
+        "score_bins": {key: summarize(value) for key, value in score_bins.items()},
+        "entry_paths": {key: summarize(value) for key, value in entry_paths.items()},
+    }
 
 
 def build_report(start: pd.Timestamp, end: pd.Timestamp, candidates: list[Candidate], mechanical: list[SimulatedTrade], ai_trades: list[SimulatedTrade], actual: dict[str, Any]) -> str:
     mechanical_metrics, ai_metrics = metrics(mechanical), metrics(ai_trades)
+    diagnostics = outcome_diagnostics(candidates, mechanical)
+    ai_effect = round(ai_metrics["net_pnl_rub"] - mechanical_metrics["net_pnl_rub"], 2)
     lines = [
         f"# Исторический прогон {STRATEGY_VERSION}", "",
         f"Период: {start.tz_convert(MOSCOW).strftime('%d.%m.%Y %H:%M')} — {end.tz_convert(MOSCOW).strftime('%d.%m.%Y %H:%M')} МСК.",
@@ -510,11 +553,34 @@ def build_report(start: pd.Timestamp, end: pd.Timestamp, candidates: list[Candid
         "|---|---:|---:|---:|---:|---:|---:|---:|",
         f"| Механическая стратегия | {len(candidates)} | {mechanical_metrics['trades']} | {mechanical_metrics['win_rate_pct']}% | {mechanical_metrics['net_pnl_rub']:.2f} | {mechanical_metrics['commission_rub']:.2f} | {mechanical_metrics['max_drawdown_rub']:.2f} | {mechanical_metrics['profit_factor'] or '-'} |",
         f"| Стратегия + ИИ | {sum(1 for item in candidates if item.ai_allowed)} | {ai_metrics['trades']} | {ai_metrics['win_rate_pct']}% | {ai_metrics['net_pnl_rub']:.2f} | {ai_metrics['commission_rub']:.2f} | {ai_metrics['max_drawdown_rub']:.2f} | {ai_metrics['profit_factor'] or '-'} |",
-        f"| Фактический бот | - | {actual['trades']} | - | {actual['net_pnl_rub']:.2f} | - | - | - |", "",
+        f"| Фактический бот, реальные лоты | - | {actual['trades']} | - | {actual['net_pnl_rub']:.2f} | - | - | - |",
+        f"| Фактический бот, нормализация до 1 лота | - | {actual['trades']} | - | {actual['net_pnl_rub_1lot']:.2f} | - | - | - |", "",
+        "## Проверка пользы ИИ", "",
+        f"ИИ изменил недельный результат на {ai_effect:+.2f} RUB относительно механического контура.", "",
+        "### Допущенные и заблокированные сделки", "",
+        "| Решение ИИ | Сделок | Плюсовых | Net, RUB |",
+        "|---|---:|---:|---:|",
+        f"| ALLOW | {diagnostics['decisions']['allowed']['trades']} | {diagnostics['decisions']['allowed']['wins']} | {diagnostics['decisions']['allowed']['net_pnl_rub']:.2f} |",
+        f"| BLOCK | {diagnostics['decisions']['blocked']['trades']} | {diagnostics['decisions']['blocked']['wins']} | {diagnostics['decisions']['blocked']['net_pnl_rub']:.2f} |", "",
+        "### Фактический результат по оценке ИИ", "",
+        "| Оценка входа | Сделок | Плюсовых | Net, RUB |",
+        "|---|---:|---:|---:|",
+    ]
+    for score_bin, values in diagnostics["score_bins"].items():
+        lines.append(f"| {score_bin}% | {values['trades']} | {values['wins']} | {values['net_pnl_rub']:.2f} |")
+    lines.extend([
+        "", "### Фактический результат по типу входа", "",
+        "| Тип входа | Сделок | Плюсовых | Net, RUB |",
+        "|---|---:|---:|---:|",
+    ])
+    for entry_path, values in diagnostics["entry_paths"].items():
+        lines.append(f"| {entry_path} | {values['trades']} | {values['wins']} | {values['net_pnl_rub']:.2f} |")
+    lines.extend([
+        "",
         "## Решения ИИ", "",
         "| Время МСК | Инструмент | Сигнал | Режим | Уверенность | Оценка входа | Решение | Причина gate |",
         "|---|---|---|---|---:|---:|---|---|",
-    ]
+    ])
     for item in candidates:
         regime, entry = item.regime_review or {}, item.entry_review or {}
         time_text = pd.Timestamp(item.signal_time).tz_convert(MOSCOW).strftime("%d.%m %H:%M")
@@ -579,6 +645,7 @@ def main() -> int:
         "candidates": [asdict(item) for item in candidates],
         "mechanical": {"metrics": metrics(mechanical), "trades": [asdict(item) for item in mechanical]},
         "ai_filtered": {"metrics": metrics(ai_trades), "trades": [asdict(item) for item in ai_trades]},
+        "diagnostics": outcome_diagnostics(candidates, mechanical),
         "actual": actual,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
