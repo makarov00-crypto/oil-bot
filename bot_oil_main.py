@@ -102,6 +102,8 @@ from tinkoff.invest import (
     RequestError,
 )
 from strategies.base import StrategyProfile
+from strategies.v35_signals import enrich_candles as enrich_v35_candles
+from v35_shadow import V35ShadowJournal
 
 
 APP_NAME = "oil-bot-main"
@@ -140,16 +142,22 @@ CASH_MANAGER_STATE_PATH = STATE_DIR / "_cash_manager.json"
 LOG_DIR = Path(__file__).with_name("logs")
 SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
 AO_CHAIKIN_SHADOW_PATH = LOG_DIR / "ao_chaikin_shadow.jsonl"
+V35_SHADOW_PATH = LOG_DIR / "v35_shadow_candidates.jsonl"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
+V35_SHADOW_STATUS_PATH = STATE_DIR / "_v35_shadow_status.json"
+V35_SHADOW_LOCK_PATH = STATE_DIR / "_v35_shadow_cycle.lock"
 TRADE_QUALITY_LOCK_PATH = STATE_DIR / "_trade_quality_analytics.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 AO_CHAIKIN_SHADOW_JOURNAL: AoChaikinShadowJournal | None = None
+V35_SHADOW_JOURNAL: V35ShadowJournal | None = None
+V35_SHADOW_LAST_SLOT = ""
+V35_SHADOW_LAST_ATTEMPT_MONOTONIC = 0.0
 TRADE_QUALITY_REFRESH_SECONDS = 3600
 TRADE_QUALITY_ANALYTICS_VERSION = 11
 POSITION_RECONCILE_EVENT = "POSITION_RECONCILE"
@@ -4185,6 +4193,104 @@ def observe_ao_chaikin_shadow_strategy(
             notify_completed_conditional_shadow_exit_reports(config)
         except Exception as error:
             logging.warning("Не удалось подготовить отчёт по теневому выходу: %s", error)
+
+
+def get_v35_shadow_enabled() -> bool:
+    return parse_bool_env("OIL_V35_SHADOW_ENABLED", False)
+
+
+def maybe_observe_v35_shadow_cycle(
+    client: Client,
+    config: BotConfig,
+    watchlist: list[InstrumentConfig],
+) -> dict[str, Any] | None:
+    """Collect one independent v35 decision set per completed 15m slot."""
+    if not get_v35_shadow_enabled() or get_market_session() in {"CLOSED", "CLEARING"}:
+        return None
+    global V35_SHADOW_JOURNAL, V35_SHADOW_LAST_SLOT, V35_SHADOW_LAST_ATTEMPT_MONOTONIC
+    now = pd.Timestamp.now(tz="UTC")
+    slot = now.floor("15min").isoformat()
+    if slot == V35_SHADOW_LAST_SLOT:
+        return None
+    monotonic_now = time.monotonic()
+    if monotonic_now - V35_SHADOW_LAST_ATTEMPT_MONOTONIC < 60:
+        return None
+    V35_SHADOW_LAST_ATTEMPT_MONOTONIC = monotonic_now
+    if V35_SHADOW_JOURNAL is None:
+        V35_SHADOW_JOURNAL = V35ShadowJournal(V35_SHADOW_PATH, V35_SHADOW_STATUS_PATH)
+    try:
+        frames_by_symbol: dict[str, dict[int, pd.DataFrame]] = {}
+        for instrument in watchlist:
+            frames_by_symbol[instrument.symbol] = {
+                interval_minutes: enrich_v35_candles(
+                    get_candles(
+                        client,
+                        config,
+                        instrument,
+                        SUPPORTED_INTERVALS[interval_minutes],
+                        lookback_hours=lookback_hours,
+                    ),
+                    interval_minutes,
+                )
+                for interval_minutes, lookback_hours in ((60, 240), (30, 120), (15, 72))
+            }
+        status = V35_SHADOW_JOURNAL.observe(
+            frames_by_symbol,
+            start=now - pd.Timedelta(hours=12),
+            end=now,
+            contract_by_symbol={item.symbol: item.symbol for item in watchlist},
+        )
+    except Exception as error:
+        logging.warning("v35_shadow_cycle_unavailable error=%s", error)
+        return None
+    V35_SHADOW_LAST_SLOT = slot
+    logging.info(
+        "v35_shadow_cycle candidates=%s v10=%s allowed=%s new=%s orders=%s",
+        status.get("multitimeframe_candidates"),
+        status.get("v10_allowed"),
+        status.get("hierarchical_allowed"),
+        status.get("new_records"),
+        status.get("order_submission_enabled"),
+    )
+    return status
+
+
+def maybe_start_v35_shadow_refresh() -> None:
+    """Run the 33 candle requests outside the latency-sensitive trading loop."""
+    if not get_v35_shadow_enabled() or get_market_session() in {"CLOSED", "CLEARING"}:
+        return
+    current_slot = pd.Timestamp.now(tz="UTC").floor("15min")
+    if V35_SHADOW_STATUS_PATH.exists():
+        try:
+            payload = json.loads(V35_SHADOW_STATUS_PATH.read_text(encoding="utf-8"))
+            updated_at = pd.to_datetime(payload.get("updated_at"), utc=True, errors="coerce")
+            if pd.notna(updated_at) and updated_at.floor("15min") >= current_slot:
+                return
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    if V35_SHADOW_LOCK_PATH.exists():
+        try:
+            age_seconds = datetime.now(UTC).timestamp() - V35_SHADOW_LOCK_PATH.stat().st_mtime
+            if age_seconds < 20 * 60:
+                return
+        except OSError:
+            return
+        V35_SHADOW_LOCK_PATH.unlink(missing_ok=True)
+    V35_SHADOW_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    V35_SHADOW_LOCK_PATH.write_text(current_slot.isoformat(), encoding="utf-8")
+    script_path = Path(__file__).with_name("scripts") / "collect_v35_shadow_cycle.py"
+    try:
+        subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=str(Path(__file__).resolve().parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logging.info("v35_shadow_refresh_started slot=%s", current_slot.isoformat())
+    except OSError as error:
+        V35_SHADOW_LOCK_PATH.unlink(missing_ok=True)
+        logging.warning("v35_shadow_refresh_start_failed error=%s", error)
 
 
 def load_signal_ai_shadow_index() -> dict[str, dict[str, Any]]:
@@ -12400,6 +12506,7 @@ def run_bot() -> int:
                             )
                             if candidate:
                                 cycle_candidates.append(candidate)
+                        maybe_start_v35_shadow_refresh()
                         apply_signal_ai_shadow_reviews(cycle_candidates)
                         ranked_candidates, ai_canary_deferred = filter_signal_ai_canary_candidates(cycle_candidates)
                         ranked_candidates, ao_canary_deferred = filter_ao_canary_candidates(
