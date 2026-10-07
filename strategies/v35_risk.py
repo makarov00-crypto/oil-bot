@@ -99,6 +99,29 @@ def initial_stop_for_candidate(
     return stop
 
 
+def initial_stop_from_structure(
+    candidate: V35Candidate,
+    *,
+    structure_low: float,
+    structure_high: float,
+    entry_price: float,
+    tick_size: float,
+) -> float:
+    """Build the live stop from the same hourly structure used by the replay."""
+    if candidate.direction == "LONG":
+        structure_stop = structure_low - candidate.atr * INITIAL_STOP_BUFFER_ATR
+        minimum_stop = entry_price - candidate.atr * INITIAL_STOP_MIN_ATR
+        raw_stop = min(structure_stop, minimum_stop)
+    else:
+        structure_stop = structure_high + candidate.atr * INITIAL_STOP_BUFFER_ATR
+        minimum_stop = entry_price + candidate.atr * INITIAL_STOP_MIN_ATR
+        raw_stop = max(structure_stop, minimum_stop)
+    stop = round_initial_stop(raw_stop, candidate.direction, tick_size)
+    if (entry_price - stop) * _sign(candidate.direction) <= 0:
+        raise ValueError("Initial stop must be on the loss side of entry")
+    return stop
+
+
 def position_size_for_risk(
     entry_price: float,
     stop_price: float,
@@ -170,6 +193,149 @@ def trailing_stop(
         raw = best_price + TRAIL_DISTANCE_ATR * candidate.atr
         rounded = math.ceil(raw / tick_size) * tick_size if tick_size > 0 else raw
     return _tighten_stop(current_stop, round(rounded, 12), candidate.direction)
+
+
+def _path_efficiency(closes: pd.Series) -> float:
+    values = pd.to_numeric(closes, errors="coerce").dropna()
+    if len(values) < 2:
+        return 0.0
+    path = float(values.diff().abs().sum())
+    return abs(float(values.iloc[-1] - values.iloc[0])) / path if path > 0 else 0.0
+
+
+def closing_pattern(
+    candidate: V35Candidate,
+    completed_30m: pd.DataFrame,
+    *,
+    profit_phase: bool,
+    confirm_bars: int = 2,
+) -> str | None:
+    """Return the frozen mechanical exit pattern for completed 30m candles."""
+    if len(completed_30m) < max(5, confirm_bars + 2):
+        return None
+    recent = completed_30m.tail(confirm_bars)
+    sign = _sign(candidate.direction)
+    opposite_candles = (((recent["close"] - recent["open"]) * sign) < 0).all()
+    opposite_body = float(recent["body"].sum()) >= candidate.atr * 0.28
+    ao_reversal = ((recent["ao_delta"] * sign) < 0).all()
+    latest_histogram = _finite(recent.iloc[-1]["macd_hist"])
+    previous_histogram = _finite(recent.iloc[-2]["macd_hist"])
+    histogram_opposite = latest_histogram * sign < 0
+    histogram_accelerating = latest_histogram * sign < previous_histogram * sign
+    if (
+        opposite_candles
+        and opposite_body
+        and ao_reversal
+        and histogram_opposite
+        and histogram_accelerating
+    ):
+        return "CONFIRMED_REVERSAL"
+
+    if profit_phase:
+        tail = completed_30m.tail(5)
+        price_range = _finite(tail["high"].max()) - _finite(tail["low"].min())
+        body_mean = _finite(tail["body"].mean())
+        efficiency = _path_efficiency(tail["close"])
+        if (
+            price_range <= candidate.atr * 0.55
+            and body_mean <= candidate.atr * 0.10
+            and efficiency < 0.30
+        ):
+            return "PROFIT_CONSOLIDATION"
+    return None
+
+
+def advance_on_price_tick(
+    state: ProtectionState,
+    candidate: V35Candidate,
+    current_price: float,
+    completed_30m: pd.DataFrame,
+    tick_size: float,
+) -> ProtectionState:
+    """Advance a live shadow position on every bot poll without submitting orders."""
+    if state.exit_reason or current_price <= 0:
+        return state
+    sign = _sign(state.direction)
+    stop_hit = (
+        current_price <= state.current_stop
+        if state.direction == "LONG"
+        else current_price >= state.current_stop
+    )
+    if stop_hit:
+        reason = {
+            "RISK": "RISK_STOP",
+            "BREAKEVEN": "BREAKEVEN_STOP",
+            "PROFIT": "PROFIT_TRAILING_STOP",
+        }[state.phase]
+        return replace(
+            state,
+            exit_reason=reason,
+            exit_price=current_price,
+            stop_gap_points=max(0.0, (state.current_stop - current_price) * sign),
+        )
+
+    favorable = (current_price - state.entry_price) * sign
+    adverse = (state.entry_price - current_price) * sign
+    best_move = max(state.best_move, favorable)
+    worst_move = max(state.worst_move, adverse)
+    best_price = (
+        max(state.best_price, current_price)
+        if state.direction == "LONG"
+        else min(state.best_price, current_price)
+    )
+    phase = state.phase
+    current_stop = state.current_stop
+    breakeven_armed = state.breakeven_armed
+    profit_armed = state.profit_trail_armed
+    if not breakeven_armed and best_move >= state.initial_distance * BREAKEVEN_TRIGGER_R:
+        breakeven_armed = True
+        phase = "BREAKEVEN"
+        current_stop = _tighten_stop(
+            current_stop,
+            breakeven_stop_price(state.entry_price, state.direction, tick_size),
+            state.direction,
+        )
+    if not profit_armed and best_move >= state.initial_distance * PROFIT_TRIGGER_R:
+        profit_armed = True
+        phase = "PROFIT"
+
+    last_trail_30m = state.last_trail_30m
+    latest_30m = (
+        pd.Timestamp(completed_30m.iloc[-1]["closed_at"]).isoformat()
+        if not completed_30m.empty
+        else ""
+    )
+    if profit_armed and latest_30m and latest_30m != last_trail_30m:
+        current_stop = trailing_stop(candidate, completed_30m, best_price, current_stop, tick_size)
+        last_trail_30m = latest_30m
+
+    updated = replace(
+        state,
+        current_stop=current_stop,
+        phase=phase,
+        best_price=best_price,
+        best_move=best_move,
+        worst_move=worst_move,
+        breakeven_armed=breakeven_armed,
+        profit_trail_armed=profit_armed,
+        last_trail_30m=last_trail_30m,
+    )
+    tightened_stop_hit = (
+        current_price <= updated.current_stop
+        if state.direction == "LONG"
+        else current_price >= updated.current_stop
+    )
+    if tightened_stop_hit:
+        reason = "PROFIT_TRAILING_STOP" if updated.phase == "PROFIT" else "BREAKEVEN_STOP"
+        return replace(updated, exit_reason=reason, exit_price=current_price)
+    close_reason = closing_pattern(
+        candidate,
+        completed_30m,
+        profit_phase=updated.phase == "PROFIT",
+    )
+    if close_reason:
+        return replace(updated, exit_reason=close_reason, exit_price=current_price)
+    return updated
 
 
 def stop_fill_price(direction: str, stop_price: float, bar_open: float) -> float:

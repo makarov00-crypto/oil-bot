@@ -103,7 +103,7 @@ from tinkoff.invest import (
 )
 from strategies.base import StrategyProfile
 from strategies.v35_signals import enrich_candles as enrich_v35_candles
-from v35_shadow import V35ShadowJournal
+from v35_shadow import V35ShadowJournal, V35ShadowPortfolio
 
 
 APP_NAME = "oil-bot-main"
@@ -143,11 +143,13 @@ LOG_DIR = Path(__file__).with_name("logs")
 SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
 AO_CHAIKIN_SHADOW_PATH = LOG_DIR / "ao_chaikin_shadow.jsonl"
 V35_SHADOW_PATH = LOG_DIR / "v35_shadow_candidates.jsonl"
+V35_SHADOW_EVENT_PATH = LOG_DIR / "v35_shadow_positions.jsonl"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
 V35_SHADOW_STATUS_PATH = STATE_DIR / "_v35_shadow_status.json"
+V35_SHADOW_PORTFOLIO_PATH = STATE_DIR / "_v35_shadow_portfolio.json"
 V35_SHADOW_LOCK_PATH = STATE_DIR / "_v35_shadow_cycle.lock"
 TRADE_QUALITY_LOCK_PATH = STATE_DIR / "_trade_quality_analytics.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -156,6 +158,7 @@ NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 AO_CHAIKIN_SHADOW_JOURNAL: AoChaikinShadowJournal | None = None
 V35_SHADOW_JOURNAL: V35ShadowJournal | None = None
+V35_SHADOW_PORTFOLIO: V35ShadowPortfolio | None = None
 V35_SHADOW_LAST_SLOT = ""
 V35_SHADOW_LAST_ATTEMPT_MONOTONIC = 0.0
 TRADE_QUALITY_REFRESH_SECONDS = 3600
@@ -4291,6 +4294,58 @@ def maybe_start_v35_shadow_refresh() -> None:
     except OSError as error:
         V35_SHADOW_LOCK_PATH.unlink(missing_ok=True)
         logging.warning("v35_shadow_refresh_start_failed error=%s", error)
+
+
+def manage_v35_shadow_positions(
+    client: Client,
+    watchlist: list[InstrumentConfig],
+) -> dict[str, Any] | None:
+    """Advance accepted v35 shadow positions on every 10-second bot cycle."""
+    if not get_v35_shadow_enabled() or get_market_session() in {"CLOSED", "CLEARING"}:
+        return None
+    global V35_SHADOW_PORTFOLIO
+    if V35_SHADOW_PORTFOLIO is None:
+        V35_SHADOW_PORTFOLIO = V35ShadowPortfolio(
+            V35_SHADOW_PATH,
+            V35_SHADOW_EVENT_PATH,
+            V35_SHADOW_PORTFOLIO_PATH,
+            V35_SHADOW_STATUS_PATH,
+        )
+    symbols = V35_SHADOW_PORTFOLIO.symbols_requiring_prices()
+    if not symbols:
+        return V35_SHADOW_PORTFOLIO.advance({}, {})
+    instruments = {
+        instrument.symbol: instrument
+        for instrument in watchlist
+        if instrument.symbol in symbols
+    }
+    if not instruments:
+        return None
+    try:
+        response = client.market_data.get_last_prices(
+            figi=[instrument.figi for instrument in instruments.values()]
+        )
+        prices_by_figi = {
+            str(getattr(item, "figi", "")): quotation_to_float(getattr(item, "price", None))
+            for item in response.last_prices
+        }
+        prices = {
+            symbol: prices_by_figi.get(instrument.figi, 0.0)
+            for symbol, instrument in instruments.items()
+        }
+        metadata: dict[str, dict[str, float]] = {}
+        for symbol, instrument in instruments.items():
+            point_value = 1.0
+            if instrument.min_price_increment > 0 and instrument.min_price_increment_amount > 0:
+                point_value = instrument.min_price_increment_amount / instrument.min_price_increment
+            metadata[symbol] = {
+                "tick_size": max(0.000001, instrument.min_price_increment),
+                "point_value": max(0.000001, point_value),
+            }
+        return V35_SHADOW_PORTFOLIO.advance(prices, metadata)
+    except Exception as error:
+        logging.warning("v35_shadow_position_cycle_unavailable error=%s", error)
+        return None
 
 
 def load_signal_ai_shadow_index() -> dict[str, dict[str, Any]]:
@@ -12507,6 +12562,7 @@ def run_bot() -> int:
                             if candidate:
                                 cycle_candidates.append(candidate)
                         maybe_start_v35_shadow_refresh()
+                        manage_v35_shadow_positions(client, watchlist)
                         apply_signal_ai_shadow_reviews(cycle_candidates)
                         ranked_candidates, ai_canary_deferred = filter_signal_ai_canary_candidates(cycle_candidates)
                         ranked_candidates, ao_canary_deferred = filter_ao_canary_candidates(

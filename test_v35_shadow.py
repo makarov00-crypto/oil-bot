@@ -1,5 +1,6 @@
 import json
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -7,7 +8,12 @@ from unittest.mock import patch
 import pandas as pd
 
 from strategies.v35_signals import V35Candidate
-from v35_shadow import ORDER_SUBMISSION_ENABLED, V35ShadowJournal, read_shadow_records
+from v35_shadow import (
+    ORDER_SUBMISSION_ENABLED,
+    V35ShadowJournal,
+    V35ShadowPortfolio,
+    read_shadow_records,
+)
 
 
 def candidate() -> V35Candidate:
@@ -92,6 +98,100 @@ class V35ShadowTests(unittest.TestCase):
                     end=pd.Timestamp("2026-10-01T13:00:00Z"),
                 )
             hierarchy.assert_not_called()
+
+    def test_portfolio_runs_full_tick_lifecycle_without_orders(self) -> None:
+        item = candidate()
+        row = {
+            "candidate_id": "candidate-1",
+            "symbol": "TEST",
+            "contract_symbol": "TEST",
+            "signal_time": item.signal_time,
+            "direction": item.direction,
+            "gate_allowed": True,
+            "candidate": asdict(item),
+            "hourly_structure": {"low": 99.0, "high": 101.0},
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidates = root / "candidates.jsonl"
+            events = root / "events.jsonl"
+            state = root / "state.json"
+            status = root / "status.json"
+            candidates.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            portfolio = V35ShadowPortfolio(candidates, events, state, status)
+            meta = {"TEST": {"tick_size": 0.1, "point_value": 10.0}}
+
+            opened = portfolio.advance(
+                {"TEST": 100.0},
+                meta,
+                now=pd.Timestamp("2026-10-01T12:05:00Z"),
+            )
+            self.assertEqual(opened["active_positions"], 1)
+            self.assertFalse(opened["order_submission_enabled"])
+            position = portfolio.state["positions"]["TEST"]
+            distance = position["protection"]["initial_distance"]
+            entry = position["protection"]["entry_price"]
+
+            portfolio.advance(
+                {"TEST": entry + distance},
+                meta,
+                now=pd.Timestamp("2026-10-01T12:05:10Z"),
+            )
+            self.assertEqual(
+                portfolio.state["positions"]["TEST"]["protection"]["phase"],
+                "BREAKEVEN",
+            )
+            portfolio.advance(
+                {"TEST": entry + distance * 1.30},
+                meta,
+                now=pd.Timestamp("2026-10-01T12:05:20Z"),
+            )
+            protected = portfolio.state["positions"]["TEST"]["protection"]
+            self.assertEqual(protected["phase"], "PROFIT")
+            result = portfolio.advance(
+                {"TEST": protected["current_stop"] - 0.1},
+                meta,
+                now=pd.Timestamp("2026-10-01T12:05:30Z"),
+            )
+            self.assertEqual(result["active_positions"], 0)
+            self.assertEqual(result["closed_trades"], 1)
+            recorded = read_shadow_records(events)
+            self.assertEqual(recorded[0]["event"], "OPEN")
+            self.assertTrue(any(event["event"] == "PHASE" for event in recorded))
+            close = next(event for event in recorded if event["event"] == "CLOSE")
+            self.assertEqual(close["exit_reason"], "PROFIT_TRAILING_STOP")
+            self.assertFalse(close["order_submission_enabled"])
+
+    def test_portfolio_never_opens_stale_candidate(self) -> None:
+        item = candidate()
+        row = {
+            "candidate_id": "candidate-stale",
+            "symbol": "TEST",
+            "signal_time": item.signal_time,
+            "direction": item.direction,
+            "gate_allowed": True,
+            "candidate": asdict(item),
+            "hourly_structure": {"low": 99.0, "high": 101.0},
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidates = root / "candidates.jsonl"
+            events = root / "events.jsonl"
+            candidates.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            portfolio = V35ShadowPortfolio(
+                candidates,
+                events,
+                root / "state.json",
+                root / "status.json",
+            )
+            result = portfolio.advance(
+                {"TEST": 100.0},
+                {"TEST": {"tick_size": 0.1, "point_value": 10.0}},
+                now=pd.Timestamp("2026-10-01T13:00:00Z"),
+            )
+            self.assertEqual(result["active_positions"], 0)
+            self.assertEqual(result["skipped_candidates"], 1)
+            self.assertEqual(read_shadow_records(events)[0]["reason"], "STALE_CANDIDATE")
 
 
 if __name__ == "__main__":
