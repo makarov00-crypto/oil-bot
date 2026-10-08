@@ -12,6 +12,7 @@ from v35_shadow import (
     ORDER_SUBMISSION_ENABLED,
     V35ShadowJournal,
     V35ShadowPortfolio,
+    _market_snapshot,
     read_shadow_records,
 )
 
@@ -42,6 +43,34 @@ def candidate() -> V35Candidate:
 class V35ShadowTests(unittest.TestCase):
     def test_shadow_is_hard_disabled_for_order_submission(self) -> None:
         self.assertFalse(ORDER_SUBMISSION_ENABLED)
+
+    def test_market_snapshot_covers_symbols_without_entry_candidates(self) -> None:
+        start = pd.Timestamp("2026-10-01T00:00:00Z")
+        rows = []
+        for index in range(80):
+            close = 100.0 + index * 0.4
+            rows.append({
+                "time": start + pd.Timedelta(hours=index),
+                "closed_at": start + pd.Timedelta(hours=index + 1),
+                "open": close - 0.25,
+                "high": close + 0.4,
+                "low": close - 0.4,
+                "close": close,
+                "body": 0.25,
+                "atr": 0.8,
+                "ao": 1.0 + index * 0.02,
+                "ao_delta": 0.02,
+                "macd_hist": 0.4,
+            })
+        frame = pd.DataFrame(rows)
+        snapshot = _market_snapshot(
+            {"AAA": {60: frame, 30: pd.DataFrame(), 15: pd.DataFrame()}},
+            start + pd.Timedelta(hours=81),
+        )
+        self.assertEqual(set(snapshot), {"AAA"})
+        self.assertIn(snapshot["AAA"]["regime"], {"TREND", "PULLBACK", "CHOP", "SHOCK_AFTER_RANGE"})
+        self.assertEqual(snapshot["AAA"]["direction"], "LONG")
+        self.assertEqual(snapshot["AAA"]["asset_group"], "EQUITY")
 
     def test_journal_records_mechanical_gate_once(self) -> None:
         frames = {"TEST": {15: pd.DataFrame(), 30: pd.DataFrame(), 60: pd.DataFrame()}}

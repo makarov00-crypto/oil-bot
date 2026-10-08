@@ -9,7 +9,14 @@ from typing import Any
 
 import pandas as pd
 
-from strategies.v35_hierarchy import hierarchical_context, hierarchical_gate
+from strategies.v35_hierarchy import (
+    aggregate_directional_regime,
+    asset_group_for_symbol,
+    hierarchical_context,
+    hierarchical_gate,
+    instrument_snapshot,
+)
+from strategies.v35_market_regime import classify_market_regime
 from strategies.v35_risk import (
     COMMISSION_RATE_PER_SIDE,
     ProtectionState,
@@ -97,6 +104,63 @@ def _management_context(frame: pd.DataFrame) -> list[dict[str, Any]]:
             else:
                 item[name] = float(value)
         result.append(item)
+    return result
+
+
+def _market_snapshot(
+    frames_by_symbol: dict[str, dict[int, pd.DataFrame]],
+    moment: pd.Timestamp,
+) -> dict[str, dict[str, Any]]:
+    hourly = {
+        symbol: frames[60]
+        for symbol, frames in frames_by_symbol.items()
+        if 60 in frames and not frames[60].empty
+    }
+    local = {
+        symbol: snapshot
+        for symbol, frame in hourly.items()
+        if (snapshot := instrument_snapshot(frame, moment)) is not None
+    }
+    equity = [
+        snapshot
+        for symbol, snapshot in local.items()
+        if asset_group_for_symbol(symbol) == "EQUITY"
+    ]
+    global_regime = aggregate_directional_regime(equity, local.get("IMOEXF"))
+    result: dict[str, dict[str, Any]] = {}
+    for symbol, frame in hourly.items():
+        assessment = classify_market_regime(frame)
+        snapshot = local.get(symbol) or {}
+        group = asset_group_for_symbol(symbol)
+        members = [
+            item
+            for member_symbol, item in local.items()
+            if asset_group_for_symbol(member_symbol) == group
+        ]
+        group_regime = aggregate_directional_regime(
+            members,
+            local.get("IMOEXF") if group == "EQUITY" else snapshot,
+        )
+        result[symbol] = {
+            "symbol": symbol,
+            "regime": assessment.regime,
+            "confidence": assessment.confidence,
+            "direction": assessment.direction,
+            "reasons": assessment.reasons,
+            "features": assessment.features,
+            "local_stage": snapshot.get("stage", "UNKNOWN"),
+            "local_direction": snapshot.get("direction", assessment.direction),
+            "asset_group": group,
+            "group_regime": group_regime.get("regime", "UNKNOWN"),
+            "group_breadth": group_regime.get("breadth", 0.0),
+            "global_regime": global_regime.get("regime", "UNKNOWN"),
+            "global_breadth": global_regime.get("breadth", 0.0),
+            "closed_at": (
+                pd.Timestamp(frame.iloc[-1]["closed_at"]).isoformat()
+                if "closed_at" in frame and not frame.empty
+                else ""
+            ),
+        }
     return result
 
 
@@ -193,6 +257,7 @@ class V35ShadowJournal:
                 symbol: _management_context(frames.get(30, pd.DataFrame()))
                 for symbol, frames in frames_by_symbol.items()
             },
+            "market_snapshot": _market_snapshot(frames_by_symbol, pd.Timestamp(end)),
             **counts,
         }
         _atomic_write_json(self.status_path, status)

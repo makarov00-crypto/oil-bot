@@ -60,6 +60,7 @@ from trade_quality import (
     summarize_trade_dimension,
     summarize_trade_quality,
 )
+from v35_dashboard import build_v35_dashboard_html, build_v35_dashboard_payload
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -161,6 +162,7 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
+        ("/v35", "Стратегия v3.5", "v35"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
@@ -7885,6 +7887,11 @@ def dashboard() -> str:
     return build_dashboard_html()
 
 
+@app.get("/v35", response_class=HTMLResponse)
+def v35_dashboard() -> str:
+    return build_v35_dashboard_html().replace("__SITE_NAV__", build_site_nav("v35"))
+
+
 @app.get("/docs", response_class=HTMLResponse)
 def docs() -> str:
     return build_docs_html()
@@ -7963,6 +7970,13 @@ def api_dashboard(date: str | None = None) -> dict:
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
+
+
+@app.get("/api/v35", response_class=JSONResponse)
+def api_v35(days: int = 7, symbol: str | None = None) -> JSONResponse:
+    selected_days = None if days == 0 else max(1, min(days, 365))
+    payload = build_v35_dashboard_payload(days=selected_days, symbol=symbol)
+    return JSONResponse(content=payload, headers=NO_CACHE_HEADERS)
 
 
 @app.get("/api/allocator", response_class=JSONResponse)
