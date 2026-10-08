@@ -76,6 +76,18 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def append_cycle_audit(path: Path, payload: dict[str, Any]) -> None:
+    """Persist one collector outcome so background failures cannot disappear."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema_version": SHADOW_SCHEMA_VERSION,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        **payload,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+
 def _hourly_structure(candidate: V35Candidate, hourly: pd.DataFrame) -> dict[str, Any]:
     if hourly.empty or "closed_at" not in hourly:
         return {}
@@ -203,11 +215,10 @@ class V35ShadowJournal:
                 v10_allowed = short_entry_allowed(candidate, DEFAULT_SHORT_BODY_THRESHOLD_ATR)
                 if v10_allowed:
                     counts["v10_allowed"] += 1
-                context: dict[str, Any] = {}
+                context = hierarchical_context(candidate, hourly_by_symbol)
                 gate_allowed = False
                 gate_reason = "V10_SHORT_QUALITY_REJECTED"
                 if v10_allowed:
-                    context = hierarchical_context(candidate, hourly_by_symbol)
                     gate_allowed, gate_reason = hierarchical_gate(context)
                 if gate_allowed:
                     counts["hierarchical_allowed"] += 1

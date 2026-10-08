@@ -24,10 +24,12 @@ class V35DashboardTests(unittest.TestCase):
             portfolio = root / "portfolio.json"
             candidates = root / "candidates.jsonl"
             events = root / "events.jsonl"
+            cycles = root / "cycles.jsonl"
+            runtime = root / "runtime.json"
             write_json(status, {
                 "strategy_version": "v35-test",
                 "updated_at": "2026-10-08T17:59:55+00:00",
-                "symbols": ["AAA", "BBB"],
+                "symbols": ["AAA", "BBB", "CCC"],
                 "multitimeframe_candidates": 2,
                 "v10_allowed": 1,
                 "hierarchical_allowed": 1,
@@ -142,6 +144,8 @@ class V35DashboardTests(unittest.TestCase):
                     "exit_reason": "PROFIT_TRAILING_STOP",
                 },
             ])
+            write_jsonl(cycles, [{"status": "success", "duration_seconds": 4.2}])
+            write_json(runtime, {"session": "MAIN"})
 
             payload = build_v35_dashboard_payload(
                 days=7,
@@ -150,6 +154,8 @@ class V35DashboardTests(unittest.TestCase):
                 portfolio_path=portfolio,
                 candidate_path=candidates,
                 event_path=events,
+                cycle_path=cycles,
+                runtime_path=runtime,
             )
 
             self.assertTrue(payload["meta"]["fresh"])
@@ -165,6 +171,10 @@ class V35DashboardTests(unittest.TestCase):
             self.assertEqual(payload["market_map"][0]["path_efficiency"], 66.0)
             self.assertEqual(payload["funnel"][2]["count"], 1)
             self.assertEqual(payload["breakdowns"]["regimes"][0]["key"], "TREND")
+            self.assertEqual(payload["meta"]["session"], "MAIN")
+            self.assertEqual(payload["data_quality"]["cycle_rows_total"], 1)
+            self.assertEqual(payload["data_quality"]["latest_cycle_status"], "success")
+            self.assertEqual(payload["meta"]["symbols"], ["AAA", "BBB", "CCC"])
 
     def test_symbol_filter_applies_to_period_metrics_and_records(self) -> None:
         with TemporaryDirectory() as directory:
@@ -173,6 +183,8 @@ class V35DashboardTests(unittest.TestCase):
             portfolio = root / "portfolio.json"
             candidates = root / "candidates.jsonl"
             events = root / "events.jsonl"
+            cycles = root / "cycles.jsonl"
+            runtime = root / "runtime.json"
             write_json(status, {"updated_at": "2026-10-08T17:00:00+00:00"})
             write_json(portfolio, {"updated_at": "2026-10-08T17:00:00+00:00", "positions": {}})
             write_jsonl(candidates, [
@@ -180,6 +192,8 @@ class V35DashboardTests(unittest.TestCase):
                 {"candidate_id": "2", "symbol": "BBB", "signal_time": "2026-10-08T12:00:00+00:00", "v10_allowed": True, "gate_allowed": True, "candidate": {}},
             ])
             write_jsonl(events, [])
+            write_jsonl(cycles, [])
+            write_json(runtime, {"session": "CLEARING"})
             payload = build_v35_dashboard_payload(
                 days=7,
                 symbol="bbb",
@@ -188,11 +202,14 @@ class V35DashboardTests(unittest.TestCase):
                 portfolio_path=portfolio,
                 candidate_path=candidates,
                 event_path=events,
+                cycle_path=cycles,
+                runtime_path=runtime,
             )
             self.assertEqual(payload["kpis"]["candidates"], 1)
             self.assertEqual(payload["candidates"][0]["symbol"], "BBB")
             self.assertEqual(payload["meta"]["selected_symbol"], "BBB")
             self.assertEqual(payload["meta"]["symbols"], ["AAA", "BBB"])
+            self.assertEqual(payload["meta"]["session"], "CLEARING")
 
     def test_page_is_dedicated_to_mechanical_v35_control(self) -> None:
         html = build_v35_dashboard_html()

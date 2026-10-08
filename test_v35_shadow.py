@@ -12,6 +12,7 @@ from v35_shadow import (
     ORDER_SUBMISSION_ENABLED,
     V35ShadowJournal,
     V35ShadowPortfolio,
+    append_cycle_audit,
     _market_snapshot,
     read_shadow_records,
 )
@@ -107,7 +108,7 @@ class V35ShadowTests(unittest.TestCase):
             status = json.loads(status_path.read_text(encoding="utf-8"))
             self.assertFalse(status["order_submission_enabled"])
 
-    def test_v10_rejection_never_calls_hierarchical_gate(self) -> None:
+    def test_v10_rejection_keeps_context_without_calling_hierarchical_gate(self) -> None:
         weak_short = candidate()
         weak_short.direction = "SHORT"
         weak_short.execution_score = 5
@@ -118,15 +119,31 @@ class V35ShadowTests(unittest.TestCase):
                 Path(directory) / "candidates.jsonl",
                 Path(directory) / "status.json",
             )
+            context = {"global_regime": "BEAR", "group_regime": "BEAR", "local_stage": "TREND_MATURE"}
             with patch("v35_shadow.find_multitimeframe_candidates", return_value=[weak_short]), patch(
-                "v35_shadow.hierarchical_context"
-            ) as hierarchy:
+                "v35_shadow.hierarchical_context", return_value=context
+            ) as hierarchy, patch("v35_shadow.hierarchical_gate") as gate:
                 journal.observe(
                     frames,
                     start=pd.Timestamp("2026-10-01T00:00:00Z"),
                     end=pd.Timestamp("2026-10-01T13:00:00Z"),
                 )
-            hierarchy.assert_not_called()
+            hierarchy.assert_called_once()
+            gate.assert_not_called()
+            row = read_shadow_records(Path(directory) / "candidates.jsonl")[0]
+            self.assertEqual(row["context"], context)
+            self.assertEqual(row["global_regime"], "BEAR")
+            self.assertEqual(row["gate_reason"], "V10_SHORT_QUALITY_REJECTED")
+
+    def test_cycle_audit_is_append_only(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "cycles.jsonl"
+            append_cycle_audit(path, {"status": "success", "symbols_count": 11})
+            append_cycle_audit(path, {"status": "failed", "error_type": "TimeoutError"})
+            rows = read_shadow_records(path)
+            self.assertEqual([row["status"] for row in rows], ["success", "failed"])
+            self.assertEqual(rows[0]["symbols_count"], 11)
+            self.assertTrue(all(row.get("recorded_at") for row in rows))
 
     def test_portfolio_runs_full_tick_lifecycle_without_orders(self) -> None:
         item = candidate()

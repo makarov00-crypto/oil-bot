@@ -15,6 +15,8 @@ V35_STATUS_PATH = STATE_DIR / "_v35_shadow_status.json"
 V35_PORTFOLIO_PATH = STATE_DIR / "_v35_shadow_portfolio.json"
 V35_CANDIDATE_PATH = LOG_DIR / "v35_shadow_candidates.jsonl"
 V35_EVENT_PATH = LOG_DIR / "v35_shadow_positions.jsonl"
+V35_CYCLE_PATH = LOG_DIR / "v35_shadow_cycles.jsonl"
+RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -177,6 +179,8 @@ def build_v35_dashboard_payload(
     portfolio_path: Path = V35_PORTFOLIO_PATH,
     candidate_path: Path = V35_CANDIDATE_PATH,
     event_path: Path = V35_EVENT_PATH,
+    cycle_path: Path = V35_CYCLE_PATH,
+    runtime_path: Path = RUNTIME_STATUS_PATH,
 ) -> dict[str, Any]:
     generated_at = now or datetime.now(timezone.utc)
     if generated_at.tzinfo is None:
@@ -187,8 +191,10 @@ def build_v35_dashboard_payload(
 
     status = _read_json(status_path)
     portfolio = _read_json(portfolio_path)
+    runtime = _read_json(runtime_path)
     raw_candidates = _read_jsonl(candidate_path)
     raw_events = _read_jsonl(event_path)
+    raw_cycles = _read_jsonl(cycle_path)
     candidates = [
         row for row in raw_candidates
         if _in_period(row, cutoff, "signal_time", "recorded_at")
@@ -274,7 +280,16 @@ def build_v35_dashboard_payload(
     age_seconds = max(0.0, (generated_at - freshest).total_seconds()) if freshest else None
     is_fresh = age_seconds is not None and age_seconds <= 1_200
 
-    symbols = sorted({str(row.get("symbol") or "") for row in raw_candidates if row.get("symbol")})
+    symbols = sorted({
+        *[str(value) for value in status.get("symbols") or [] if value],
+        *[str(value) for value in market_source if value],
+        *[str(row.get("symbol")) for row in raw_candidates if row.get("symbol")],
+        *[str(row.get("symbol")) for row in raw_events if row.get("symbol")],
+        *[str(value) for value in positions_source if value],
+    })
+    recent_cycles = raw_cycles[-96:]
+    failed_cycles = sum(1 for row in recent_cycles if str(row.get("status") or "") == "failed")
+    latest_cycle_audit = recent_cycles[-1] if recent_cycles else {}
     recent_events = sorted(
         events,
         key=lambda item: str(item.get("event_time") or item.get("recorded_at") or ""),
@@ -291,6 +306,7 @@ def build_v35_dashboard_payload(
             "updated_at": freshest.isoformat() if freshest else "",
             "age_seconds": round(age_seconds, 1) if age_seconds is not None else None,
             "fresh": is_fresh,
+            "session": str(runtime.get("session") or "UNKNOWN"),
             "days": days,
             "selected_symbol": selected_symbol,
             "symbols": symbols,
@@ -348,6 +364,11 @@ def build_v35_dashboard_payload(
             "events_available": event_path.exists(),
             "candidate_rows_total": len(raw_candidates),
             "event_rows_total": len(raw_events),
+            "cycle_audit_available": cycle_path.exists(),
+            "cycle_rows_total": len(raw_cycles),
+            "recent_failed_cycles": failed_cycles,
+            "latest_cycle_status": str(latest_cycle_audit.get("status") or "UNKNOWN"),
+            "latest_cycle_duration_seconds": _as_float(latest_cycle_audit.get("duration_seconds")),
         },
     }
 
@@ -429,7 +450,7 @@ def build_v35_dashboard_html() -> str:
     function renderClosed(rows){$('closedRows').innerHTML=rows.length?rows.map(r=>`<tr><td class="primary">${esc(r.symbol)}</td><td>${esc(label(r.direction))}</td><td class="mono">${num(r.entry_price,4)} → ${num(r.exit_price,4)}</td><td class="mono ${Number(r.net_pnl_rub)>=0?'good-text':'bad-text'}">${money(r.net_pnl_rub)}</td><td class="mono">${Number(r.net_r_multiple)>=0?'+':''}${num(r.net_r_multiple,2)} ед. риска</td><td>${esc(label(r.exit_reason))}<span class="secondary">${time(r.event_time)}</span></td></tr>`).join(''):'<tr><td colspan="6"><div class="empty">Закрытых сделок пока нет</div></td></tr>';}
     function renderEvents(rows){$('events').innerHTML=rows.length?rows.slice(0,70).map(r=>{const value=r.net_pnl_rub!==undefined?money(r.net_pnl_rub):r.stop!==undefined?`стоп ${num(r.stop,4)}`:r.price!==undefined?num(r.price,4):'';return `<div class="event"><div class="event-type">${esc(label(String(r.event||'').toUpperCase()))}</div><div class="primary">${esc(r.symbol||'—')}</div><div class="event-text">${time(r.event_time||r.recorded_at)} · ${esc(label(r.phase||r.exit_reason||r.reason||r.direction))}</div><div class="event-value ${Number(r.net_pnl_rub||0)>=0?'good-text':''}">${value}</div></div>`}).join(''):'<div class="empty">Событий сопровождения пока нет</div>';}
     function renderEquity(rows){const target=$('equityChart');const values=(rows||[]).map(x=>Number(x.value||0));$('equitySummary').textContent=money(values.at(-1)||0);if(values.length<2){target.innerHTML='<div class="chart-empty">Кривая появится после первой закрытой сделки</div>';return;}const w=700,h=190,p=18,min=Math.min(0,...values),max=Math.max(0,...values),span=Math.max(1,max-min);const pts=values.map((v,i)=>`${p+i*(w-2*p)/Math.max(1,values.length-1)},${p+(max-v)*(h-2*p)/span}`);const zero=p+(max)*(h-2*p)/span;target.innerHTML=`<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#49d6ff" stop-opacity=".24"/><stop offset="1" stop-color="#49d6ff" stop-opacity="0"/></linearGradient></defs><line class="chart-zero" x1="${p}" x2="${w-p}" y1="${zero}" y2="${zero}"/><polygon class="chart-area" points="${pts.join(' ')} ${w-p},${h-p} ${p},${h-p}"/><polyline class="chart-line" points="${pts.join(' ')}"/><text class="chart-label" x="${p}" y="12">${money(max)}</text><text class="chart-label" x="${p}" y="${h-2}">${money(min)}</text></svg>`;}
-    function renderQuality(data){const q=data.data_quality,m=data.meta,l=data.latest_cycle;const cells=[`Статус ${q.status_available?'есть':'нет'}`,`Портфель ${q.portfolio_available?'есть':'нет'}`,`Кандидатов в журнале ${num(q.candidate_rows_total)}`,`Событий ${num(q.event_rows_total)}`,`Инструментов в цикле ${num(l.symbols_count)}`,`Возраст данных ${m.age_seconds===null?'—':num(m.age_seconds,0)+' сек.'}`,`Реальные заявки ${m.order_submission_enabled?'ВКЛЮЧЕНЫ':'отключены'}`];$('quality').innerHTML=cells.map(x=>`<span>${esc(x)}</span>`).join('');const pill=$('dataPill');pill.className=`pill ${m.fresh?'good':'bad'}`;pill.querySelector('span').textContent=m.fresh?'данные свежие':'данные устарели';$('refreshTime').textContent=`обновлено ${time(m.updated_at)} · авто 10 сек.`;}
+    function renderQuality(data){const q=data.data_quality,m=data.meta,l=data.latest_cycle;const paused=['CLOSED','CLEARING'].includes(m.session);const cycleText=q.cycle_rows_total?`${num(q.cycle_rows_total)} · ошибок ${num(q.recent_failed_cycles)}`:'начнётся со следующего расчёта';const cells=[`Статус ${q.status_available?'есть':'нет'}`,`Портфель ${q.portfolio_available?'есть':'нет'}`,`Кандидатов в журнале ${num(q.candidate_rows_total)}`,`Событий ${num(q.event_rows_total)}`,`Расчётов ${cycleText}`,`Инструментов в цикле ${num(l.symbols_count)}`,`Возраст данных ${m.age_seconds===null?'—':num(m.age_seconds,0)+' сек.'}`,`Реальные заявки ${m.order_submission_enabled?'ВКЛЮЧЕНЫ':'отключены'}`];$('quality').innerHTML=cells.map(x=>`<span>${esc(x)}</span>`).join('');const pill=$('dataPill');pill.className=`pill ${paused?'warn':m.fresh?'good':'bad'}`;pill.querySelector('span').textContent=paused?'рынок закрыт · последний срез':m.fresh?'данные свежие':'данные устарели';$('refreshTime').textContent=`обновлено ${time(m.updated_at)} · авто 10 сек.`;}
     async function refresh(){const params=new URLSearchParams();if(state.days)params.set('days',state.days);else params.set('days','0');if(state.symbol)params.set('symbol',state.symbol);try{const response=await fetch(`/api/v35?${params}`,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const data=await response.json();renderKpis(data);renderPositions(data.positions||[]);renderMarket(data.market_map||[]);renderBars('funnel',data.funnel||[]);renderBars('regimes',data.breakdowns?.regimes||[]);renderBars('patterns',data.breakdowns?.patterns||[]);renderBars('rejections',data.breakdowns?.gate_reasons||[],true);renderEquity(data.equity_curve||[]);renderCandidates(data.candidates||[]);renderClosed(data.closed_trades||[]);renderEvents(data.events||[]);renderQuality(data);const select=$('symbolFilter');const current=state.symbol;select.innerHTML='<option value="">Все инструменты</option>'+data.meta.symbols.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');select.value=current;}catch(error){$('refreshTime').textContent=`ошибка обновления: ${error.message}`;$('dataPill').className='pill bad';$('dataPill').querySelector('span').textContent='нет данных';}}
     document.querySelectorAll('.segment').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('.segment').forEach(x=>x.classList.remove('active'));button.classList.add('active');state.days=Number(button.dataset.days);refresh();}));$('symbolFilter').addEventListener('change',event=>{state.symbol=event.target.value;refresh();});refresh();setInterval(refresh,10000);
   </script>
