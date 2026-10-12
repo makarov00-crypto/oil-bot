@@ -4,11 +4,17 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from strategies.v35_pattern_library import PATTERN_CATALOG
 from strategies.v35_signals import V35Candidate
 
 
-MODEL_VERSION = "hierarchical-market-regime-v29-frozen"
+MODEL_VERSION = "hierarchical-market-regime-v30-direct"
 BEAR_SHORT_STAGES = {"RANGE", "TRANSITION", "BREAKOUT_ATTEMPT"}
+BULL_LONG_TRANSITION_MIN_PATTERN_CONFIDENCE = 80
+BULL_LONG_TRANSITION_MIN_BODY_ATR = 1.50
+COUNTERTREND_MIN_PATTERN_CONFIDENCE = 80
+COUNTERTREND_MIN_LARGEST_BODY_ATR = 0.75
+MIN_EXECUTION_SCORE = 5
 
 
 def _finite(value: Any, default: float = 0.0) -> float:
@@ -244,18 +250,54 @@ def hierarchical_context(
     }
 
 
-def hierarchical_gate(context: dict[str, Any]) -> tuple[bool, str]:
+def _is_strong_bull_transition(candidate: V35Candidate | None, direction: str) -> bool:
+    return bool(
+        candidate is not None
+        and candidate.direction == direction == "LONG"
+        and candidate.pattern_confidence >= BULL_LONG_TRANSITION_MIN_PATTERN_CONFIDENCE
+        and candidate.body_sum_atr >= BULL_LONG_TRANSITION_MIN_BODY_ATR
+        and candidate.execution_score >= MIN_EXECUTION_SCORE
+    )
+
+
+def _is_strong_countertrend_reversal(candidate: V35Candidate | None, direction: str) -> bool:
+    if candidate is None or candidate.direction != direction:
+        return False
+    pattern = PATTERN_CATALOG.get(candidate.classic_pattern) or {}
+    return bool(
+        pattern.get("family") == "REVERSAL"
+        and candidate.pattern_confidence >= COUNTERTREND_MIN_PATTERN_CONFIDENCE
+        and candidate.largest_body_atr >= COUNTERTREND_MIN_LARGEST_BODY_ATR
+        and candidate.execution_score >= MIN_EXECUTION_SCORE
+    )
+
+
+def hierarchical_gate(
+    context: dict[str, Any],
+    candidate: V35Candidate | None = None,
+) -> tuple[bool, str]:
     regime = context["group_regime"]
     stage = context["local_stage"]
     direction = context["direction"]
-    if regime == "BULL" and direction == "LONG" and stage == "TREND_EARLY":
-        return True, "BULL_LONG_EARLY_TREND"
-    if regime == "BEAR" and direction == "SHORT" and stage in BEAR_SHORT_STAGES:
-        return True, f"BEAR_SHORT_{stage}"
     if regime in {"SHOCK", "SIDEWAYS"}:
         return False, f"GROUP_{regime}"
+    if regime == "BULL" and direction == "LONG" and stage == "TREND_EARLY":
+        return True, "BULL_LONG_EARLY_TREND"
+    if (
+        regime == "BULL"
+        and direction == "LONG"
+        and stage == "TRANSITION"
+        and _is_strong_bull_transition(candidate, direction)
+    ):
+        return True, "BULL_LONG_STRONG_TRANSITION"
+    if regime == "BEAR" and direction == "SHORT" and stage in BEAR_SHORT_STAGES:
+        return True, f"BEAR_SHORT_{stage}"
     if regime == "BULL" and direction != "LONG":
+        if _is_strong_countertrend_reversal(candidate, direction):
+            return True, "BULL_SHORT_STRONG_REVERSAL"
         return False, "BULL_DIRECTION_MISMATCH"
     if regime == "BEAR" and direction != "SHORT":
+        if _is_strong_countertrend_reversal(candidate, direction):
+            return True, "BEAR_LONG_STRONG_REVERSAL"
         return False, "BEAR_DIRECTION_MISMATCH"
     return False, f"STAGE_{stage}_NOT_ALLOWED_IN_{regime}"

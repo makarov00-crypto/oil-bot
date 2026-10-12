@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from strategies.v35_hierarchy import (
+    MODEL_VERSION as HIERARCHY_MODEL_VERSION,
     aggregate_directional_regime,
     asset_group_for_symbol,
     hierarchical_context,
@@ -219,7 +220,7 @@ class V35ShadowJournal:
                 gate_allowed = False
                 gate_reason = "V10_SHORT_QUALITY_REJECTED"
                 if v10_allowed:
-                    gate_allowed, gate_reason = hierarchical_gate(context)
+                    gate_allowed, gate_reason = hierarchical_gate(context, candidate)
                 if gate_allowed:
                     counts["hierarchical_allowed"] += 1
                 if uid in known_ids:
@@ -227,6 +228,7 @@ class V35ShadowJournal:
                 row = {
                     "schema_version": SHADOW_SCHEMA_VERSION,
                     "strategy_version": STRATEGY_VERSION,
+                    "hierarchy_model_version": HIERARCHY_MODEL_VERSION,
                     "recorded_at": datetime.now(timezone.utc).isoformat(),
                     "candidate_id": uid,
                     "symbol": symbol,
@@ -259,6 +261,7 @@ class V35ShadowJournal:
         status = {
             "schema_version": SHADOW_SCHEMA_VERSION,
             "strategy_version": STRATEGY_VERSION,
+            "hierarchy_model_version": HIERARCHY_MODEL_VERSION,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "window_start": pd.Timestamp(start).isoformat(),
             "window_end": pd.Timestamp(end).isoformat(),

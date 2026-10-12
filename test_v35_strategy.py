@@ -65,6 +65,66 @@ class V35StrategyTests(unittest.TestCase):
             (False, "GROUP_SIDEWAYS"),
         )
 
+    def test_hierarchical_gate_allows_strong_bull_transition_directly(self) -> None:
+        context = {"group_regime": "BULL", "direction": "LONG", "local_stage": "TRANSITION"}
+        strong = replace(
+            candidate("LONG"),
+            classic_pattern="MOMENTUM_BREAKOUT",
+            pattern_confidence=82,
+            body_sum_atr=1.50,
+            execution_score=5,
+        )
+        self.assertEqual(
+            hierarchical_gate(context, strong),
+            (True, "BULL_LONG_STRONG_TRANSITION"),
+        )
+        self.assertEqual(
+            hierarchical_gate(context, replace(strong, body_sum_atr=1.49)),
+            (False, "STAGE_TRANSITION_NOT_ALLOWED_IN_BULL"),
+        )
+
+    def test_hierarchical_gate_allows_only_strong_countertrend_reversals(self) -> None:
+        bull_context = {"group_regime": "BULL", "direction": "SHORT", "local_stage": "TREND_MATURE"}
+        bear_context = {"group_regime": "BEAR", "direction": "LONG", "local_stage": "TRANSITION"}
+        reversal = replace(
+            candidate("SHORT"),
+            classic_pattern="FAILED_BREAKOUT_REVERSAL",
+            pattern_confidence=80,
+            largest_body_atr=0.75,
+            execution_score=5,
+        )
+        self.assertEqual(
+            hierarchical_gate(bull_context, reversal),
+            (True, "BULL_SHORT_STRONG_REVERSAL"),
+        )
+        self.assertEqual(
+            hierarchical_gate(bear_context, replace(reversal, direction="LONG", classic_pattern="FALLING_WEDGE_BREAKOUT")),
+            (True, "BEAR_LONG_STRONG_REVERSAL"),
+        )
+        self.assertEqual(
+            hierarchical_gate(bull_context, replace(reversal, classic_pattern="MOMENTUM_BREAKOUT")),
+            (False, "BULL_DIRECTION_MISMATCH"),
+        )
+
+    def test_hierarchical_gate_keeps_sideways_and_shock_as_hard_blocks(self) -> None:
+        strong = replace(
+            candidate("LONG"),
+            classic_pattern="FALLING_WEDGE_BREAKOUT",
+            pattern_confidence=95,
+            largest_body_atr=2.0,
+            body_sum_atr=3.0,
+            execution_score=6,
+        )
+        for regime in ("SIDEWAYS", "SHOCK"):
+            with self.subTest(regime=regime):
+                self.assertEqual(
+                    hierarchical_gate(
+                        {"group_regime": regime, "direction": "LONG", "local_stage": "TRANSITION"},
+                        strong,
+                    ),
+                    (False, f"GROUP_{regime}"),
+                )
+
     def test_v10_short_filter_requires_complete_execution_or_large_hourly_impulse(self) -> None:
         weak = candidate("SHORT")
         self.assertFalse(short_entry_allowed(weak))

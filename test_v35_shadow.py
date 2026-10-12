@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from strategies.v35_hierarchy import MODEL_VERSION as HIERARCHY_MODEL_VERSION
 from strategies.v35_signals import V35Candidate
 from v35_shadow import (
     ORDER_SUBMISSION_ENABLED,
@@ -104,8 +105,10 @@ class V35ShadowTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertTrue(rows[0]["gate_allowed"])
             self.assertEqual(rows[0]["gate_reason"], "BULL_LONG_EARLY_TREND")
+            self.assertEqual(rows[0]["hierarchy_model_version"], HIERARCHY_MODEL_VERSION)
             self.assertFalse(rows[0]["order_submission_enabled"])
             status = json.loads(status_path.read_text(encoding="utf-8"))
+            self.assertEqual(status["hierarchy_model_version"], HIERARCHY_MODEL_VERSION)
             self.assertFalse(status["order_submission_enabled"])
 
     def test_v10_rejection_keeps_context_without_calling_hierarchical_gate(self) -> None:
