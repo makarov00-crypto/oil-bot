@@ -11,6 +11,7 @@ from strategies.v35_hierarchy import MODEL_VERSION as HIERARCHY_MODEL_VERSION
 from strategies.v35_signals import V35Candidate
 from v35_shadow import (
     ORDER_SUBMISSION_ENABLED,
+    SHADOW_SINGLE_LOT_RISK_CAP_RUB,
     V35ShadowJournal,
     V35ShadowPortfolio,
     append_cycle_audit,
@@ -210,6 +211,77 @@ class V35ShadowTests(unittest.TestCase):
             close = next(event for event in recorded if event["event"] == "CLOSE")
             self.assertEqual(close["exit_reason"], "PROFIT_TRAILING_STOP")
             self.assertFalse(close["order_submission_enabled"])
+
+    def test_shadow_allows_one_lot_above_standard_risk_budget(self) -> None:
+        item = candidate()
+        row = {
+            "candidate_id": "candidate-high-risk-one-lot",
+            "symbol": "TEST",
+            "contract_symbol": "TEST",
+            "signal_time": item.signal_time,
+            "direction": item.direction,
+            "gate_allowed": True,
+            "candidate": asdict(item),
+            "hourly_structure": {"low": 99.0, "high": 101.0},
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidates = root / "candidates.jsonl"
+            events = root / "events.jsonl"
+            candidates.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            portfolio = V35ShadowPortfolio(
+                candidates,
+                events,
+                root / "state.json",
+                root / "status.json",
+            )
+
+            result = portfolio.advance(
+                {"TEST": 100.0},
+                {"TEST": {"tick_size": 0.1, "point_value": 1_000.0}},
+                now=pd.Timestamp("2026-10-01T12:05:00Z"),
+            )
+
+            self.assertEqual(result["active_positions"], 1)
+            position = portfolio.state["positions"]["TEST"]
+            self.assertEqual(position["quantity"], 1)
+            self.assertTrue(position["single_lot_risk_override"])
+            self.assertGreater(position["initial_risk_rub"], 1_000.0)
+            self.assertLessEqual(position["initial_risk_rub"], SHADOW_SINGLE_LOT_RISK_CAP_RUB)
+
+    def test_shadow_still_skips_one_lot_above_shadow_cap(self) -> None:
+        item = candidate()
+        row = {
+            "candidate_id": "candidate-over-shadow-cap",
+            "symbol": "TEST",
+            "contract_symbol": "TEST",
+            "signal_time": item.signal_time,
+            "direction": item.direction,
+            "gate_allowed": True,
+            "candidate": asdict(item),
+            "hourly_structure": {"low": 99.0, "high": 101.0},
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidates = root / "candidates.jsonl"
+            events = root / "events.jsonl"
+            candidates.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            portfolio = V35ShadowPortfolio(
+                candidates,
+                events,
+                root / "state.json",
+                root / "status.json",
+            )
+
+            result = portfolio.advance(
+                {"TEST": 100.0},
+                {"TEST": {"tick_size": 0.1, "point_value": 5_000.0}},
+                now=pd.Timestamp("2026-10-01T12:05:00Z"),
+            )
+
+            self.assertEqual(result["active_positions"], 0)
+            self.assertEqual(result["skipped_candidates"], 1)
+            self.assertEqual(read_shadow_records(events)[0]["reason"], "ONE_LOT_EXCEEDS_RISK")
 
     def test_portfolio_never_opens_stale_candidate(self) -> None:
         item = candidate()

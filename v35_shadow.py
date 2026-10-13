@@ -20,6 +20,7 @@ from strategies.v35_hierarchy import (
 from strategies.v35_market_regime import classify_market_regime
 from strategies.v35_risk import (
     COMMISSION_RATE_PER_SIDE,
+    RISK_BUDGET_RUB,
     ProtectionState,
     adverse_slippage_price,
     advance_on_price_tick,
@@ -41,6 +42,7 @@ ORDER_SUBMISSION_ENABLED = False
 DEFAULT_SHORT_BODY_THRESHOLD_ATR = 2.25
 MAX_ENTRY_AGE_MINUTES = 30
 MAX_PROCESSED_CANDIDATES = 2_000
+SHADOW_SINGLE_LOT_RISK_CAP_RUB = 5_000.0
 
 
 def candidate_id(candidate: V35Candidate) -> str:
@@ -441,6 +443,13 @@ class V35ShadowPortfolio:
         except (KeyError, TypeError, ValueError):
             self._skip(row, "INVALID_RISK_PLAN", now)
             return
+        single_lot_risk_override = False
+        if (
+            quantity < 1
+            and RISK_BUDGET_RUB < risk_per_lot <= SHADOW_SINGLE_LOT_RISK_CAP_RUB
+        ):
+            quantity = 1
+            single_lot_risk_override = True
         if quantity < 1:
             self._skip(row, "ONE_LOT_EXCEEDS_RISK", now)
             return
@@ -458,6 +467,7 @@ class V35ShadowPortfolio:
             "tick_size": tick_size,
             "risk_per_lot_rub": risk_per_lot,
             "initial_risk_rub": risk_per_lot * quantity,
+            "single_lot_risk_override": single_lot_risk_override,
             "last_price": entry_price,
             "last_observed_at": now.isoformat(),
         }
@@ -473,6 +483,7 @@ class V35ShadowPortfolio:
             "initial_stop": initial_stop,
             "quantity": quantity,
             "initial_risk_rub": round(risk_per_lot * quantity, 2),
+            "single_lot_risk_override": single_lot_risk_override,
             "phase": protection.phase,
         })
 
