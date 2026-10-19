@@ -179,6 +179,25 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("if (!selectedDate && initialDashboardRequest)", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_all_trade_rows_are_cached_until_storage_changes(self) -> None:
+        row = {"time": "2026-10-19T10:00:00+03:00", "event": "OPEN", "symbol": "BRX6"}
+        with TemporaryDirectory() as temp_dir:
+            journal_path = dashboard.Path(temp_dir) / "trade_journal.jsonl"
+            database_path = dashboard.Path(temp_dir) / "trade.sqlite3"
+            journal_path.write_text("first\n", encoding="utf-8")
+            database_path.write_text("db\n", encoding="utf-8")
+            dashboard._load_all_trade_rows_cached.cache_clear()
+            with patch.object(dashboard, "TRADE_JOURNAL_PATH", journal_path), patch.object(
+                dashboard, "TRADE_DB_PATH", database_path
+            ), patch.object(dashboard, "load_trade_rows_from_storage", return_value=[row]) as load_mock:
+                dashboard.load_all_trade_rows()
+                dashboard.load_all_trade_rows()
+                journal_path.write_text("first\nsecond\n", encoding="utf-8")
+                dashboard.load_all_trade_rows()
+
+        self.assertEqual(load_mock.call_count, 2)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_allocator_is_embedded_in_trade_review_and_removed_from_site_nav(self) -> None:
         html = dashboard.build_dashboard_html()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -27,8 +28,22 @@ def _normalize_symbol(value: str | None) -> str:
     return str(value or "").strip().upper()
 
 
+def _path_signature(path: Path) -> tuple[str, int, int]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return str(path), -1, -1
+    return str(path), stat.st_mtime_ns, stat.st_size
+
+
 def _read_payload() -> dict[str, Any]:
-    path = get_active_contracts_path()
+    path, mtime_ns, size = _path_signature(get_active_contracts_path())
+    return _read_payload_cached(path, mtime_ns, size)
+
+
+@lru_cache(maxsize=8)
+def _read_payload_cached(path_value: str, _mtime_ns: int, _size: int) -> dict[str, Any]:
+    path = Path(path_value)
     if not path.exists():
         return {"contracts": []}
     try:
@@ -44,6 +59,8 @@ def _write_payload(payload: dict[str, Any]) -> None:
     path = get_active_contracts_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    _read_payload_cached.cache_clear()
+    _get_active_contract_symbol_cached.cache_clear()
 
 
 def list_active_contracts() -> list[dict[str, Any]]:
@@ -72,6 +89,17 @@ def list_active_contracts() -> list[dict[str, Any]]:
 
 def get_active_contract_symbol(template_symbol: str) -> str | None:
     normalized_template = _normalize_symbol(template_symbol)
+    path, mtime_ns, size = _path_signature(get_active_contracts_path())
+    return _get_active_contract_symbol_cached(normalized_template, path, mtime_ns, size)
+
+
+@lru_cache(maxsize=2048)
+def _get_active_contract_symbol_cached(
+    normalized_template: str,
+    _path: str,
+    _mtime_ns: int,
+    _size: int,
+) -> str | None:
     contracts = list_active_contracts()
     current_symbol = normalized_template
     visited: set[str] = set()

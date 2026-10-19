@@ -1,6 +1,9 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import active_contracts as active_contracts_module
 
 from active_contracts import (
     get_active_contract_symbol,
@@ -120,6 +123,21 @@ class ActiveContractsTest(unittest.TestCase):
 
         self.assertEqual(get_active_contract_template("SRU6"), "SRM6")
         self.assertEqual(get_active_contract_template("SRZ6"), "SRM6")
+
+    def test_repeated_symbol_resolution_does_not_reread_contract_file(self) -> None:
+        upsert_active_contract("BMM6", "BRX6")
+        active_contracts_module._read_payload_cached.cache_clear()
+        active_contracts_module._get_active_contract_symbol_cached.cache_clear()
+
+        with patch.object(
+            active_contracts_module.json,
+            "loads",
+            wraps=active_contracts_module.json.loads,
+        ) as loads_mock:
+            for _ in range(20):
+                self.assertEqual(get_instrument_history_symbol("BMM6"), "BRX6")
+
+        self.assertEqual(loads_mock.call_count, 1)
 
 
 if __name__ == "__main__":

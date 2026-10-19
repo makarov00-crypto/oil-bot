@@ -2369,10 +2369,24 @@ def is_duplicate_carry_open(existing_open: dict[str, Any], candidate_open: dict[
 
 
 def load_all_trade_rows() -> list[dict]:
+    cached = _load_all_trade_rows_cached(
+        _path_cache_signature(TRADE_JOURNAL_PATH),
+        _path_cache_signature(TRADE_DB_PATH),
+        _path_cache_signature(Path(f"{TRADE_DB_PATH}-wal")),
+    )
+    return [dict(row) for row in cached]
+
+
+@lru_cache(maxsize=4)
+def _load_all_trade_rows_cached(
+    _journal_signature: tuple[str, int, int],
+    _database_signature: tuple[str, int, int],
+    _database_wal_signature: tuple[str, int, int],
+) -> tuple[dict, ...]:
     try:
         rows = load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH)
     except Exception:
-        return []
+        return ()
     normalized_rows: list[dict] = []
     for row in rows:
         dt = parse_trade_time(row.get("time"))
@@ -2382,7 +2396,7 @@ def load_all_trade_rows() -> list[dict]:
         item["_dt"] = dt
         item["_date"] = dt.date().isoformat()
         normalized_rows.append(item)
-    return normalized_rows
+    return tuple(normalized_rows)
 
 
 def load_trade_rows_for_day(target_day: date, limit: int | None = 200) -> list[dict]:
@@ -2984,6 +2998,7 @@ def load_trade_quality_analytics() -> dict[str, Any]:
     return _load_trade_quality_analytics_cached(
         _path_cache_signature(TRADE_QUALITY_ANALYTICS_PATH),
         _path_cache_signature(TRADE_DB_PATH),
+        _path_cache_signature(Path(f"{TRADE_DB_PATH}-wal")),
         _path_cache_signature(TRADE_JOURNAL_PATH),
         _path_cache_signature(AO_CHAIKIN_SHADOW_PATH),
     )
@@ -2993,6 +3008,7 @@ def load_trade_quality_analytics() -> dict[str, Any]:
 def _load_trade_quality_analytics_cached(
     _analytics_signature: tuple[str, int, int],
     _database_signature: tuple[str, int, int],
+    _database_wal_signature: tuple[str, int, int],
     _journal_signature: tuple[str, int, int],
     _shadow_signature: tuple[str, int, int],
 ) -> dict[str, Any]:
