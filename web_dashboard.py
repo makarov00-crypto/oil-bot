@@ -3992,6 +3992,14 @@ def build_dashboard_html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
   <title>Панель Oil Bot</title>
+  <script>
+    window.__initialDashboardRequest = fetch('/api/dashboard')
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => ({ data }), (error) => ({ error }));
+  </script>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -5409,14 +5417,6 @@ def build_dashboard_html() -> str:
   </style>
 </head>
 <body>
-  <script>
-    window.__initialDashboardRequest = fetch('/api/dashboard')
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
-      })
-      .then((data) => ({ data }), (error) => ({ error }));
-  </script>
   __SITE_NAV__
   <div class="wrap">
     <div class="hero">

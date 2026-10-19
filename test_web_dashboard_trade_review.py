@@ -175,6 +175,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_dashboard_starts_initial_api_request_before_large_inline_script(self) -> None:
         html = dashboard.build_dashboard_html()
 
+        self.assertLess(html.index("window.__initialDashboardRequest"), html.index("<style>"))
         self.assertLess(html.index("window.__initialDashboardRequest"), html.index("function escapeHtml"))
         self.assertIn("if (!selectedDate && initialDashboardRequest)", html)
 
