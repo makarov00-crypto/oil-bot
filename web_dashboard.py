@@ -45,7 +45,7 @@ from trade_storage import (
     summarize_news_allocator_impact,
     summarize_news_source_stats,
 )
-from strategy_research import AO_ROLLOUT_AT, build_ai_research, build_ao_execution_research
+from strategy_research import AO_ROLLOUT_AT, build_ao_execution_research
 from trade_quality import (
     build_trade_quality_overview,
     pair_closed_trades,
@@ -64,7 +64,6 @@ STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
-SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
 AO_CHAIKIN_SHADOW_PATH = LOG_DIR / "ao_chaikin_shadow.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
@@ -1329,170 +1328,6 @@ def load_trade_rows(limit: int = 50) -> list[dict]:
         normalized.append(item)
     return normalized
 
-
-def load_signal_ai_shadow_summary(limit: int = 12) -> dict[str, Any]:
-    enabled = os.getenv("OIL_SIGNAL_AI_SHADOW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-    performance = {
-        "evaluated_1h": 0,
-        "evaluated_2h": 0,
-        "evaluated_4h": 0,
-        "evaluated_8h": 0,
-        "correct_4h": 0,
-        "executed": 0,
-        "enter_evaluated_4h": 0,
-        "enter_correct_4h": 0,
-        "abstain_evaluated_4h": 0,
-        "abstain_correct_4h": 0,
-    }
-    shadow_outcomes_by_key: dict[str, dict[str, Any]] = {}
-    raw_shadow_observations = load_signal_observations_from_storage(
-        TRADE_DB_PATH,
-        newest_first=True,
-        context_key="shadow_ai",
-    )
-    shadow_observations_by_key: dict[str, dict[str, Any]] = {}
-    decision_priority = {"selected": 2, "deferred": 1}
-    for row in raw_shadow_observations:
-        context = row.get("context") if isinstance(row.get("context"), dict) else {}
-        candle_time = str(context.get("candle_time") or row.get("observation_key") or "")
-        key = ":".join([str(row.get("symbol") or "").upper(), str(row.get("signal") or "").upper(), candle_time])
-        current = shadow_observations_by_key.get(key)
-        if current is None:
-            shadow_observations_by_key[key] = row
-            continue
-        current_rank = decision_priority.get(str(current.get("decision") or "").lower(), 0)
-        row_rank = decision_priority.get(str(row.get("decision") or "").lower(), 0)
-        if row_rank > current_rank or (
-            row_rank == current_rank and str(row.get("observed_at") or "") > str(current.get("observed_at") or "")
-        ):
-            shadow_observations_by_key[key] = row
-    shadow_observations = list(shadow_observations_by_key.values())
-    for row in shadow_observations:
-        context = row.get("context") if isinstance(row.get("context"), dict) else {}
-        shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
-        shadow_status = str(context.get("shadow_ai_status") or "").lower()
-        if not shadow_ai and not shadow_status:
-            continue
-        candle_time = str(context.get("candle_time") or row.get("observation_key") or "")
-        shadow_key = ":".join([str(row.get("symbol") or "").upper(), str(row.get("signal") or "").upper(), candle_time])
-        outcomes = context.get("shadow_ai_outcomes") if isinstance(context.get("shadow_ai_outcomes"), dict) else {}
-        shadow_outcomes_by_key[shadow_key] = outcomes
-        execution_status = str(context.get("execution_status") or "").lower()
-        if execution_status in {"confirmed_open", "recovered_open", "submitted_open"}:
-            performance["executed"] += 1
-        for hours in (1, 2, 4, 8):
-            outcome = outcomes.get(f"{hours}h") if isinstance(outcomes, dict) else None
-            if not isinstance(outcome, dict) or "favorable" not in outcome:
-                continue
-            performance[f"evaluated_{hours}h"] += 1
-            if hours == 4:
-                action = str(shadow_ai.get("action") or "")
-                favorable = bool(outcome.get("favorable"))
-                verdict = evaluate_shadow_ai_verdict(action, favorable)
-                if verdict:
-                    performance["correct_4h"] += 1
-                normalized_action = action.strip().upper()
-                if normalized_action in {"ВХОД", "ENTER"}:
-                    performance["enter_evaluated_4h"] += 1
-                    if verdict:
-                        performance["enter_correct_4h"] += 1
-                elif normalized_action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"}:
-                    performance["abstain_evaluated_4h"] += 1
-                    if verdict:
-                        performance["abstain_correct_4h"] += 1
-    latest: dict[str, dict[str, Any]] = {}
-    try:
-        lines = SIGNAL_AI_SHADOW_PATH.read_text(encoding="utf-8").splitlines()[-300:] if SIGNAL_AI_SHADOW_PATH.exists() else []
-    except OSError:
-        lines = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        key = str(row.get("key") or "")
-        if key:
-            latest[key] = row
-    # The database is authoritative for executed candidates. It also retains an
-    # explicit provider failure when the external AI could not answer in time.
-    for row in shadow_observations:
-        context = row.get("context") if isinstance(row.get("context"), dict) else {}
-        shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
-        shadow_status = str(context.get("shadow_ai_status") or "").lower()
-        if not shadow_ai and not shadow_status:
-            continue
-        candle_time = str(context.get("candle_time") or row.get("observation_key") or "")
-        key = ":".join([str(row.get("symbol") or "").upper(), str(row.get("signal") or "").upper(), candle_time])
-        if not key or key in latest:
-            continue
-        latest[key] = {
-            "time": str(row.get("observed_at") or ""),
-            "key": key,
-            "symbol": str(row.get("symbol") or "").upper(),
-            "signal": str(row.get("signal") or "").upper(),
-            "strategy": str(row.get("strategy") or ""),
-            "candle_time": candle_time,
-            "review": shadow_ai,
-            "status": shadow_status or "ready",
-            "error": str(context.get("shadow_ai_error") or ""),
-        }
-    reviews = sorted(latest.values(), key=lambda item: str(item.get("time") or ""), reverse=True)[:limit]
-    for item in reviews:
-        raw_symbol = str(item.get("symbol") or "")
-        item["symbol"] = get_instrument_history_symbol(raw_symbol)
-        raw_key = str(item.get("key") or "")
-        if raw_key:
-            key_symbol, separator, remainder = raw_key.partition(":")
-            item["key"] = (
-                f"{get_instrument_history_symbol(key_symbol)}{separator}{remainder}"
-                if separator
-                else get_instrument_history_symbol(key_symbol)
-            )
-        review = item.get("review")
-        if isinstance(review, dict):
-            review = dict(review)
-            review["symbol"] = get_instrument_history_symbol(str(review.get("symbol") or raw_symbol))
-            item["review"] = review
-        item["shadow_ai_outcomes"] = shadow_outcomes_by_key.get(str(item.get("key") or ""), {})
-        item["shadow_ai_4h_due"] = False
-        try:
-            observed_at = datetime.fromisoformat(str(item.get("time") or ""))
-            if observed_at.tzinfo is None:
-                observed_at = observed_at.replace(tzinfo=timezone.utc)
-            item["shadow_ai_4h_due"] = datetime.now(timezone.utc) >= observed_at.astimezone(timezone.utc) + timedelta(hours=4)
-        except ValueError:
-            pass
-    supporting = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"})
-    abstaining = sum(1 for item in reviews if str((item.get("review") or {}).get("action") or "") in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"})
-    overall_target = 40
-    enter_target = 20
-    evaluated_4h = int(performance["evaluated_4h"])
-    enter_evaluated_4h = int(performance["enter_evaluated_4h"])
-    return {
-        "enabled": enabled,
-        "count": len(reviews),
-        "supporting": supporting,
-        "abstaining": abstaining,
-        "reviews": reviews,
-        "readiness": {
-            "overall_target": overall_target,
-            "enter_target": enter_target,
-            "overall_remaining": max(0, overall_target - evaluated_4h),
-            "enter_remaining": max(0, enter_target - enter_evaluated_4h),
-            "ready": evaluated_4h >= overall_target and enter_evaluated_4h >= enter_target,
-        },
-        **performance,
-    }
-
-
-def evaluate_shadow_ai_verdict(action: str, favorable: bool) -> bool | None:
-    """Interpret the market result in the context of the AI recommendation."""
-    normalized_action = str(action or "").strip().upper()
-    if normalized_action in {"ВХОД", "УДЕРЖИВАТЬ", "ENTER", "HOLD"}:
-        return favorable
-    if normalized_action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN", "ВЫЙТИ", "EXIT", "ПЕРЕВОРОТ", "REVERSE"}:
-        return not favorable
-    return None
 
 
 def load_allocator_decisions_for_day(target_day: date, limit: int = 20) -> list[dict[str, Any]]:
@@ -3229,20 +3064,14 @@ def load_shadow_strategy_workspace() -> dict[str, Any]:
 
 
 def load_strategy_research_workspace() -> dict[str, Any]:
-    # Keep the old fields for already installed iOS builds; the current views
-    # show only the distinct exit experiment.
     observations = load_signal_observations_from_storage(
         TRADE_DB_PATH, newest_first=True, since=AO_ROLLOUT_AT.isoformat()
-    )
-    ai_observations = load_signal_observations_from_storage(
-        TRADE_DB_PATH, newest_first=True, context_key="shadow_ai"
     )
     records = read_shadow_records(AO_CHAIKIN_SHADOW_PATH)
     exit_analytics = build_shadow_exit_analytics(records)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "execution": build_ao_execution_research(observations),
-        "ai": build_ai_research(ai_observations),
         "exit_experiment": exit_analytics.get("conditional_two_hour_experiment") or {},
     }
 
@@ -4181,11 +4010,6 @@ def build_dashboard_html() -> str:
       background: rgba(55, 230, 164, 0.11);
       color: var(--good);
     }
-    .news-ai-summary {
-      max-width: 320px;
-      color: #dbe9f8;
-      line-height: 1.35;
-    }
     .news-overview {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4224,7 +4048,7 @@ def build_dashboard_html() -> str:
     }
     .news-diagnostics {
       display: grid;
-      grid-template-columns: 1.25fr repeat(3, minmax(0, 1fr));
+      grid-template-columns: 1.25fr repeat(2, minmax(0, 1fr));
       gap: 12px;
       margin-top: 12px;
     }
@@ -5354,7 +5178,7 @@ def build_dashboard_html() -> str:
         <table id="newsTable" style="margin-top:16px;">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сигнал</th><th>Решение</th><th>Источник</th><th>AI-разбор</th><th>Детали</th>
+              <th>Инструмент</th><th>Сигнал</th><th>Решение</th><th>Источник</th><th>Детали</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -5777,10 +5601,7 @@ def build_dashboard_html() -> str:
     function formatNewsWhatMatters(item) {
       const bias = formatBiasLabel(item.bias || 'NEUTRAL');
       const action = formatNewsActionability(item.actionability || '');
-      const ai = item.ai_direction
-        ? ` · AI: ${formatBiasLabel(item.ai_direction)} ${formatNewsQuality(item.ai_confidence)}`
-        : '';
-      return `${bias} · ${action}${ai}`;
+      return `${bias} · ${action}`;
     }
 
     function formatNewsTradeGate(item) {
@@ -5812,7 +5633,7 @@ def build_dashboard_html() -> str:
 
     function formatNewsDecisionReason(item) {
       const reason = String(item.trade_gate_reason || '').trim();
-      return shortNewsText(reason || (item.trade_eligible ? 'ИИ подтвердил торговый смысл' : 'нет допуска к сделке'), 86);
+      return shortNewsText(reason || (item.trade_eligible ? 'новость допущена к решению' : 'нет допуска к сделке'), 86);
     }
 
     function formatRuntimeState(value) {
@@ -6609,7 +6430,7 @@ def build_dashboard_html() -> str:
         {
           title: 'Торговое влияние',
           value: tradeNews.length ? tradeNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'новости не допущены к сделкам',
-          sub: tradeNews.length ? 'ИИ подтвердил направление и горизонт' : 'нет подтверждённого влияния на входы',
+          sub: tradeNews.length ? 'новостные правила разрешили влияние на вход' : 'нет подтверждённого влияния на входы',
         },
         {
           title: `Качество за ${Number(analytics.days || 10)} дней`,
@@ -6659,12 +6480,6 @@ def build_dashboard_html() -> str:
           body: diagnosticRows(analytics.directions),
         },
         {
-          title: 'Проверка ИИ',
-          main: 'подтверждение направления',
-          note: 'сравнение словаря с выводом ИИ',
-          body: diagnosticRows(analytics.ai_confirmation),
-        },
-        {
           title: 'Влияние на аллокатор',
           main: `${Number(allocatorImpact.total_count || 0)} вмешательств`,
           note: allocatorEvaluated
@@ -6693,10 +6508,6 @@ def build_dashboard_html() -> str:
         const tradeGate = formatNewsTradeGate(item);
         const tradeGateShort = formatNewsDecisionReason(item);
         const calibration = formatNewsCalibration(item);
-        const aiSummary = item.ai_reason
-          ? shortNewsText(item.ai_reason, 150)
-          : shortNewsText(reasonText, 150);
-        const aiRisk = item.ai_risk ? shortNewsText(item.ai_risk, 96) : '';
         const nowText = `${formatNewsHorizon(item.horizon || '')} · ${formatStrength(item.strength || '-')}`;
         const detailLines = [
           `${formatNewsCategory(item.category || '')} · ${nowText}`,
@@ -6708,8 +6519,6 @@ def build_dashboard_html() -> str:
           tradeGate,
           formatNewsCategory(item.category || ''),
           item.topics && item.topics.length ? `темы: ${item.topics.join(', ')}` : '',
-          item.ai_reason ? `AI: ${item.ai_reason}` : '',
-          item.ai_risk ? `риск: ${item.ai_risk}` : '',
           reasonText,
         ].filter(Boolean).join(' · ');
         const detailsButton = hasMessage
@@ -6720,7 +6529,6 @@ def build_dashboard_html() -> str:
           <td><div class="trade-cell-main">${escapeHtml(summaryText)}</div><div class="trade-cell-sub">${escapeHtml(whatMatters)}</div></td>
           <td><div>${formatNewsDecision(item)}</div><div class="trade-cell-sub">${escapeHtml(tradeGateShort)}</div></td>
           <td><div class="trade-cell-main">${escapeHtml(sourceLabel)}</div><div class="trade-cell-sub">${escapeHtml(sourceSummary)}</div></td>
-          <td><div class="news-ai-summary">${escapeHtml(aiSummary)}</div>${aiRisk ? `<div class="trade-cell-sub">риск: ${escapeHtml(aiRisk)}</div>` : ''}</td>
           <td><div class="news-reason"><div class="news-detail-list">${detailLines.map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>${detailsButton}</div></td>
         </tr>`);
         newsCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
@@ -6742,7 +6550,7 @@ def build_dashboard_html() -> str:
         </article>`);
       }
       if (!activeBiases.length) {
-        newsBody.insertAdjacentHTML('beforeend', '<tr><td colspan="6" class="muted">Активных новостных сигналов сейчас нет.</td></tr>');
+        newsBody.insertAdjacentHTML('beforeend', '<tr><td colspan="5" class="muted">Активных новостных сигналов сейчас нет.</td></tr>');
         newsCards.insertAdjacentHTML('beforeend', '<div class="muted">Активных новостных сигналов сейчас нет.</div>');
       }
 

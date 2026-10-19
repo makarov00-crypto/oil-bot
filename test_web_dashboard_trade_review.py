@@ -186,6 +186,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertNotIn("ИИ на входах AO / Чайкин", html)
         self.assertNotIn("AI-разбор дня", html)
+        self.assertNotIn("AI-разбор", html)
+        self.assertNotIn("Проверка ИИ", html)
+        self.assertNotIn("news-ai-summary", html)
         self.assertNotIn("shadowAiCandidates", html)
         self.assertNotIn("aiReviewRefreshBtn", html)
         self.assertNotIn("/api/ai-review/refresh", paths)
@@ -276,93 +279,6 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn('class="shadow-ai-field-label">Решение', html)
         self.assertNotIn('class="shadow-ai-field-label">Итог NET', html)
         self.assertNotIn('class="shadow-ai-field-label">Причина ИИ', html)
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_shadow_ai_abstention_is_correct_when_original_signal_loses(self) -> None:
-        self.assertTrue(dashboard.evaluate_shadow_ai_verdict("ВОЗДЕРЖАТЬСЯ", False))
-        self.assertFalse(dashboard.evaluate_shadow_ai_verdict("ВОЗДЕРЖАТЬСЯ", True))
-        self.assertTrue(dashboard.evaluate_shadow_ai_verdict("ВХОД", True))
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_shadow_ai_summary_separates_enter_and_abstain_results(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
-            shadow_path = dashboard.Path(temp_dir) / "shadow.jsonl"
-            shadow_path.write_text("", encoding="utf-8")
-            rows = [
-                ("BRU6", "ВХОД", True),
-                ("NGQ6", "ВХОД", False),
-                ("RNU6", "ВОЗДЕРЖАТЬСЯ", False),
-            ]
-            for index, (symbol, action, favorable) in enumerate(rows):
-                append_signal_observation(
-                    db_path,
-                    {
-                        "observed_at": f"2026-08-10T1{index}:00:00+03:00",
-                        "symbol": symbol,
-                        "signal": "LONG",
-                        "decision": "selected",
-                        "context": {
-                            "candle_time": f"2026-08-10 1{index}:00",
-                            "shadow_ai": {"action": action, "confidence": 0.8},
-                            "shadow_ai_outcomes": {"4h": {"favorable": favorable}},
-                        },
-                    },
-                )
-            with patch.object(dashboard, "TRADE_DB_PATH", db_path), patch.object(
-                dashboard, "SIGNAL_AI_SHADOW_PATH", shadow_path
-            ):
-                summary = dashboard.load_signal_ai_shadow_summary()
-
-        self.assertEqual(summary["evaluated_4h"], 3)
-        self.assertEqual(summary["correct_4h"], 2)
-        self.assertEqual(summary["enter_evaluated_4h"], 2)
-        self.assertEqual(summary["enter_correct_4h"], 1)
-        self.assertEqual(summary["abstain_evaluated_4h"], 1)
-        self.assertEqual(summary["abstain_correct_4h"], 1)
-        self.assertFalse(summary["readiness"]["ready"])
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_shadow_ai_summary_dedupes_deferred_then_selected_candidate(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            db_path = dashboard.Path(temp_dir) / "trade_analytics.sqlite3"
-            shadow_path = dashboard.Path(temp_dir) / "shadow.jsonl"
-            shadow_path.write_text("", encoding="utf-8")
-            base = {
-                "symbol": "BRU6",
-                "signal": "LONG",
-                "strategy": "reversal_1h",
-                "context": {
-                    "candle_time": "2026-08-20 10:00",
-                    "shadow_ai": {"action": "ВХОД", "confidence": 0.8},
-                    "shadow_ai_outcomes": {"4h": {"favorable": True}},
-                },
-            }
-            append_signal_observation(
-                db_path,
-                {
-                    **base,
-                    "observation_uid": "legacy-deferred",
-                    "observed_at": "2026-08-20T11:00:00+03:00",
-                    "decision": "deferred",
-                },
-            )
-            append_signal_observation(
-                db_path,
-                {
-                    **base,
-                    "observation_uid": "legacy-selected",
-                    "observed_at": "2026-08-20T11:02:00+03:00",
-                    "decision": "selected",
-                },
-            )
-            with patch.object(dashboard, "TRADE_DB_PATH", db_path), patch.object(
-                dashboard, "SIGNAL_AI_SHADOW_PATH", shadow_path
-            ):
-                summary = dashboard.load_signal_ai_shadow_summary()
-
-        self.assertEqual(summary["evaluated_4h"], 1)
-        self.assertEqual(summary["enter_evaluated_4h"], 1)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_quality_lab_uses_unambiguous_labels(self) -> None:
