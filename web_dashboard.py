@@ -1101,6 +1101,15 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _path_cache_signature(path: Path) -> tuple[str, int, int]:
+    """Return a cheap cache key that changes whenever a local data file changes."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return str(path), -1, -1
+    return str(path), stat.st_mtime_ns, stat.st_size
+
+
 def current_watchlist_symbols() -> set[str]:
     return set(merge_with_custom_symbols(load_base_symbols_from_env()))
 
@@ -2972,6 +2981,25 @@ def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) ->
 
 
 def load_trade_quality_analytics() -> dict[str, Any]:
+    return _load_trade_quality_analytics_cached(
+        _path_cache_signature(TRADE_QUALITY_ANALYTICS_PATH),
+        _path_cache_signature(TRADE_DB_PATH),
+        _path_cache_signature(TRADE_JOURNAL_PATH),
+        _path_cache_signature(AO_CHAIKIN_SHADOW_PATH),
+    )
+
+
+@lru_cache(maxsize=4)
+def _load_trade_quality_analytics_cached(
+    _analytics_signature: tuple[str, int, int],
+    _database_signature: tuple[str, int, int],
+    _journal_signature: tuple[str, int, int],
+    _shadow_signature: tuple[str, int, int],
+) -> dict[str, Any]:
+    return _load_trade_quality_analytics_uncached()
+
+
+def _load_trade_quality_analytics_uncached() -> dict[str, Any]:
     if not TRADE_QUALITY_ANALYTICS_PATH.exists():
         return {
             "available": False,
@@ -3126,11 +3154,32 @@ def load_ao_chaikin_shadow_strategy() -> dict[str, Any]:
         "yes",
         "on",
     }
+    path, mtime_ns, size = _path_cache_signature(AO_CHAIKIN_SHADOW_PATH)
+    return _load_ao_chaikin_shadow_strategy_cached(path, mtime_ns, size, enabled)
+
+
+@lru_cache(maxsize=4)
+def _load_ao_chaikin_shadow_strategy_cached(
+    path: str,
+    _mtime_ns: int,
+    _size: int,
+    enabled: bool,
+) -> dict[str, Any]:
     return build_shadow_strategy_payload(
-        AO_CHAIKIN_SHADOW_PATH,
+        Path(path),
         enabled=enabled,
         period_days=30,
     )
+
+
+def build_dashboard_ao_shadow_payload() -> dict[str, Any]:
+    """Keep dashboard totals while sending only the rows the UI can display."""
+    payload = load_ao_chaikin_shadow_strategy()
+    compact = dict(payload)
+    hypotheses = dict(payload.get("entry_hypotheses") or {})
+    hypotheses["items"] = list(hypotheses.get("items") or [])[:12]
+    compact["entry_hypotheses"] = hypotheses
+    return compact
 
 
 def load_shadow_strategy_workspace() -> dict[str, Any]:
@@ -5348,6 +5397,14 @@ def build_dashboard_html() -> str:
   </style>
 </head>
 <body>
+  <script>
+    window.__initialDashboardRequest = fetch('/api/dashboard')
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => ({ data }), (error) => ({ error }));
+  </script>
   __SITE_NAV__
   <div class="wrap">
     <div class="hero">
@@ -6750,12 +6807,23 @@ def build_dashboard_html() -> str:
     }
 
     let selectedQualityStrategy = 'current';
+    let initialDashboardRequest = window.__initialDashboardRequest || null;
 
     async function loadData() {
       const dateInput = document.getElementById('selectedDate');
       const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
-      const response = await fetch(`/api/dashboard${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`);
-      const data = await response.json();
+      let data;
+      if (!selectedDate && initialDashboardRequest) {
+        const request = initialDashboardRequest;
+        initialDashboardRequest = null;
+        const result = await request;
+        if (result.error) throw result.error;
+        data = result.data;
+      } else {
+        const response = await fetch(`/api/dashboard${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        data = await response.json();
+      }
       instrumentNames = { ...instrumentNames, ...(data.instrument_catalog || {}) };
 
       if (dateInput && data.daily && data.daily.selected_date) {
@@ -7953,7 +8021,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "news": load_news_snapshot(),
         "signal_ai_shadow": load_signal_ai_shadow_summary(),
         "signal_ai_entry": load_signal_ai_entry_workspace(),
-        "ao_chaikin_shadow": load_ao_chaikin_shadow_strategy(),
+        "ao_chaikin_shadow": build_dashboard_ao_shadow_payload(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),
         "allocator_workspace": load_allocator_workspace(target_day, display_states, portfolio_view),

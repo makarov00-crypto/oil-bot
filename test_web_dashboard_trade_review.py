@@ -140,6 +140,45 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(result["decisions"][1]["decision"], "ВХОД")
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_ao_chaikin_shadow_payload_is_cached_until_source_changes(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = dashboard.Path(temp_dir) / "ao-shadow.jsonl"
+            path.write_text("{}\n", encoding="utf-8")
+            dashboard._load_ao_chaikin_shadow_strategy_cached.cache_clear()
+            with patch.object(dashboard, "AO_CHAIKIN_SHADOW_PATH", path), patch.object(
+                dashboard, "build_shadow_strategy_payload", return_value={"available": True}
+            ) as build_mock:
+                dashboard.load_ao_chaikin_shadow_strategy()
+                dashboard.load_ao_chaikin_shadow_strategy()
+                path.write_text("{}\n{}\n", encoding="utf-8")
+                dashboard.load_ao_chaikin_shadow_strategy()
+
+        self.assertEqual(build_mock.call_count, 2)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_dashboard_sends_only_visible_ao_hypothesis_rows(self) -> None:
+        source = {
+            "available": True,
+            "entry_hypotheses": {
+                "summary": {"eligible": 20},
+                "items": [{"key": str(index)} for index in range(20)],
+            },
+        }
+        with patch.object(dashboard, "load_ao_chaikin_shadow_strategy", return_value=source):
+            result = dashboard.build_dashboard_ao_shadow_payload()
+
+        self.assertEqual(len(result["entry_hypotheses"]["items"]), 12)
+        self.assertEqual(result["entry_hypotheses"]["summary"]["eligible"], 20)
+        self.assertEqual(len(source["entry_hypotheses"]["items"]), 20)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_dashboard_starts_initial_api_request_before_large_inline_script(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertLess(html.index("window.__initialDashboardRequest"), html.index("function escapeHtml"))
+        self.assertIn("if (!selectedDate && initialDashboardRequest)", html)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_allocator_is_embedded_in_trade_review_and_removed_from_site_nav(self) -> None:
         html = dashboard.build_dashboard_html()
 
