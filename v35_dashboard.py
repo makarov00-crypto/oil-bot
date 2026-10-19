@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from strategies.v35_signals import STRATEGY_VERSION
+
 
 BASE_DIR = Path(__file__).resolve().parent
 STATE_DIR = BASE_DIR / "bot_state"
@@ -195,13 +197,25 @@ def build_v35_dashboard_payload(
     raw_candidates = _read_jsonl(candidate_path)
     raw_events = _read_jsonl(event_path)
     raw_cycles = _read_jsonl(cycle_path)
-    candidates = [
+    current_version = STRATEGY_VERSION
+    status_is_current = str(status.get("strategy_version") or "") == current_version
+    current_candidates = [
         row for row in raw_candidates
+        if not current_version or not row.get("strategy_version")
+        or str(row.get("strategy_version")) == current_version
+    ]
+    current_events = [
+        row for row in raw_events
+        if not current_version or not row.get("strategy_version")
+        or str(row.get("strategy_version")) == current_version
+    ]
+    candidates = [
+        row for row in current_candidates
         if _in_period(row, cutoff, "signal_time", "recorded_at")
         and (not selected_symbol or str(row.get("symbol") or "").upper() == selected_symbol)
     ]
     events = [
-        row for row in raw_events
+        row for row in current_events
         if _in_period(row, cutoff, "event_time", "recorded_at")
         and (not selected_symbol or str(row.get("symbol") or "").upper() == selected_symbol)
     ]
@@ -299,7 +313,7 @@ def build_v35_dashboard_payload(
 
     return {
         "meta": {
-            "strategy_version": str(status.get("strategy_version") or portfolio.get("strategy_version") or "v3.5"),
+            "strategy_version": current_version,
             "mode": "SHADOW",
             "order_submission_enabled": bool(portfolio.get("order_submission_enabled", False)),
             "generated_at": generated_at.isoformat(),
@@ -333,10 +347,10 @@ def build_v35_dashboard_payload(
             "window_start": str(status.get("window_start") or ""),
             "window_end": str(status.get("window_end") or ""),
             "symbols_count": len(status.get("symbols") or []),
-            "multitimeframe_candidates": _as_int(status.get("multitimeframe_candidates")),
-            "v10_allowed": _as_int(status.get("v10_allowed")),
-            "hierarchical_allowed": _as_int(status.get("hierarchical_allowed")),
-            "new_records": _as_int(status.get("new_records")),
+            "multitimeframe_candidates": _as_int(status.get("multitimeframe_candidates")) if status_is_current else 0,
+            "v10_allowed": _as_int(status.get("v10_allowed")) if status_is_current else 0,
+            "hierarchical_allowed": _as_int(status.get("hierarchical_allowed")) if status_is_current else 0,
+            "new_records": _as_int(status.get("new_records")) if status_is_current else 0,
         },
         "funnel": [
             {"key": "CANDIDATES", "count": len(candidates)},
@@ -362,8 +376,8 @@ def build_v35_dashboard_payload(
             "portfolio_available": bool(portfolio),
             "candidates_available": candidate_path.exists(),
             "events_available": event_path.exists(),
-            "candidate_rows_total": len(raw_candidates),
-            "event_rows_total": len(raw_events),
+            "candidate_rows_total": len(current_candidates),
+            "event_rows_total": len(current_events),
             "cycle_audit_available": cycle_path.exists(),
             "cycle_rows_total": len(raw_cycles),
             "recent_failed_cycles": failed_cycles,
@@ -380,7 +394,7 @@ def build_v35_dashboard_html() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow, noarchive" />
-  <title>Стратегия v3.5 · Oil Bot</title>
+  <title>Стратегия v3.6 · Oil Bot</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -406,7 +420,7 @@ def build_v35_dashboard_html() -> str:
   __SITE_NAV__
   <main class="wrap">
     <section class="hero">
-      <div><div class="eyebrow">Механическая стратегия · реальный поток брокера</div><h1>Стратегия v3.5</h1><p>Контроль режима рынка, технических паттернов, допуска входа и четырёх фаз защиты позиции.</p></div>
+      <div><div class="eyebrow">Механическая стратегия · реальный поток брокера</div><h1>Стратегия v3.6</h1><p>Тренд последних 2–3 дней, ранний вход на 15/30 минутах и четыре фазы защиты позиции.</p></div>
       <div class="hero-status"><span class="pill warn"><i class="dot"></i>Теневая торговля</span><span class="pill good" id="dataPill"><i class="dot"></i><span>данные</span></span><span class="pill good"><i class="dot"></i>заявки отключены</span></div>
     </section>
     <section class="toolbar">
@@ -432,7 +446,7 @@ def build_v35_dashboard_html() -> str:
       <div class="panel" style="margin:0"><div class="panel-head"><div><h2>Жизненный цикл</h2><div class="panel-sub">Вход, безубыток, защита прибыли и закрытие.</div></div></div><div class="timeline" id="events"></div></div>
     </section>
     <section class="panel" style="margin-top:14px"><div class="panel-head"><div><h2>Контроль контура</h2><div class="panel-sub">Полнота журналов и свежесть расчёта.</div></div></div><div class="quality" id="quality"></div></section>
-    <div class="footer-note">Дашборд показывает техническую тень v3.5. Он не отправляет заявки брокеру. Денежный результат включает расчётную комиссию и моделируемое проскальзывание.</div>
+    <div class="footer-note">Дашборд показывает техническую тень v3.6. Он не отправляет заявки брокеру. Денежный результат включает расчётную комиссию и моделируемое проскальзывание.</div>
   </main>
   <script>
     const state={days:7,symbol:''}; const $=id=>document.getElementById(id);
@@ -440,7 +454,7 @@ def build_v35_dashboard_html() -> str:
     const num=(value,digits=0)=>new Intl.NumberFormat('ru-RU',{minimumFractionDigits:digits,maximumFractionDigits:digits}).format(Number(value||0));
     const money=value=>`${Number(value||0)>=0?'+':''}${num(value,2)} руб.`;
     const time=value=>{if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});};
-    const labels={CANDIDATES:'Кандидаты',MECHANICS:'Механика',HIERARCHY:'Иерархия рынка',OPENED:'Открыты',CLOSED:'Закрыты',TREND:'Тренд',CHOP:'Пила',PULLBACK:'Коррекция',SHOCK_AFTER_RANGE:'Импульс после боковика',UNKNOWN:'Нет данных',UNCLASSIFIED:'Не определено',NONE:'Нет',LONG:'Лонг',SHORT:'Шорт',MIXED:'Смешанное',BULL:'Рост',BEAR:'Падение',SIDEWAYS:'Боковик',SHOCK:'Шок',RANGE:'Диапазон',TRANSITION:'Переход',BREAKOUT_ATTEMPT:'Попытка пробоя',EMERGING_BREAKOUT:'Начало пробоя',TREND_EARLY:'Ранний тренд',TREND_MATURE:'Зрелый тренд',TREND_EXHAUSTED:'Затухание тренда',TREND_PULLBACK_RESUMPTION:'Возобновление тренда после коррекции',LATE_EXHAUSTION:'Позднее затухание движения',POST_SHOCK_RANGE:'Боковик после импульса',TIGHT_CHOP:'Узкая пила',RISK:'Риск',BREAKEVEN:'Безубыток',PROFIT:'Защита прибыли',OPEN:'Вход',PHASE:'Смена фазы',STOP_MOVED:'Стоп передвинут',CLOSE:'Закрытие',SKIP:'Пропуск',BLOCKER:'Блокирующий фактор',V10_SHORT_QUALITY_REJECTED:'Слабый импульс шорта',LOW_CONFIDENCE_REGIME_OBSERVE:'Недостаточная уверенность в режиме рынка',GROUP_SIDEWAYS:'Боковик группы',GLOBAL_SIDEWAYS:'Боковик рынка',GROUP_SHOCK:'Шоковый режим группы',ACTIVE_POSITION_EXISTS:'Позиция уже открыта',STALE_CANDIDATE:'Сигнал устарел',ONE_LOT_EXCEEDS_RISK:'Риск одного лота выше лимита',INVALID_RISK_PLAN:'Не построен риск-план',AO_ZERO_CROSS:'AO пересёк ноль',AO_ZERO_REJECTION:'Отскок AO от нулевой линии',IMPULSE_BREAK:'Импульсный пробой',PATTERN_MOMENTUM:'Импульс паттерна',PROFIT_TRAILING_STOP:'Защитный стоп прибыли',INITIAL_RISK_STOP:'Исходный риск-стоп',RISK_STOP:'Исходный риск-стоп',BREAKEVEN_STOP:'Стоп в безубытке',CONFIRMED_REVERSAL:'Подтверждённый разворот',PROFIT_CONSOLIDATION:'Консолидация прибыли',STRONG_REVERSAL:'Сильный разворот',BULL_LONG_EARLY_TREND:'Ранний лонг по растущему рынку',BULL_LONG_STRONG_TRANSITION:'Сильный лонг на переходе к росту',BULL_SHORT_STRONG_REVERSAL:'Сильный разворот вниз против растущей группы',BEAR_LONG_STRONG_REVERSAL:'Сильный разворот вверх против падающей группы',BEAR_SHORT_RANGE:'Шорт из диапазона на падающем рынке',BEAR_SHORT_TRANSITION:'Шорт на переходе к падению',BEAR_SHORT_BREAKOUT_ATTEMPT:'Шорт на попытке пробоя вниз',BULL_DIRECTION_MISMATCH:'Направление против растущего рынка',BEAR_DIRECTION_MISMATCH:'Направление против падающего рынка',TREND_ALIGNED:'По направлению тренда',TREND_DIRECTION_MISMATCH:'Направление против тренда',PULLBACK_ALIGNED:'Коррекция подтверждает направление',PULLBACK_MISMATCH:'Коррекция против направления',BREAKOUT:'Пробой',CONTINUATION:'Продолжение',REVERSAL:'Разворот',MOMENTUM_BREAKOUT:'Импульсный пробой структуры',RANGE_BREAKOUT:'Пробой диапазона',BULL_FLAG_BREAKOUT:'Бычий флаг',BEAR_FLAG_BREAKDOWN:'Медвежий флаг',BULL_PENNANT_BREAKOUT:'Бычий вымпел',BEAR_PENNANT_BREAKDOWN:'Медвежий вымпел',ASCENDING_TRIANGLE_BREAKOUT:'Восходящий треугольник',DESCENDING_TRIANGLE_BREAKDOWN:'Нисходящий треугольник',SYMMETRICAL_TRIANGLE_BREAKOUT:'Симметричный треугольник',FALLING_WEDGE_BREAKOUT:'Падающий клин',RISING_WEDGE_BREAKDOWN:'Растущий клин',DOUBLE_BOTTOM_BREAKOUT:'Двойное дно',DOUBLE_TOP_BREAKOUT:'Двойная вершина',HEAD_AND_SHOULDERS_BREAKDOWN:'Голова и плечи',INVERSE_HEAD_AND_SHOULDERS_BREAKOUT:'Обратная голова и плечи',FAILED_BREAKOUT_REVERSAL:'Ложный пробой с возвратом'};
+    const labels={CANDIDATES:'Кандидаты',MECHANICS:'Механика',HIERARCHY:'Иерархия рынка',OPENED:'Открыты',CLOSED:'Закрыты',TREND:'Тренд',CHOP:'Пила',PULLBACK:'Коррекция',SHOCK_AFTER_RANGE:'Импульс после боковика',UNKNOWN:'Нет данных',UNCLASSIFIED:'Не определено',NONE:'Нет',LONG:'Лонг',SHORT:'Шорт',MIXED:'Смешанное',BULL:'Рост',BEAR:'Падение',SIDEWAYS:'Боковик',SHOCK:'Шок',RANGE:'Диапазон',TRANSITION:'Переход',BREAKOUT_ATTEMPT:'Попытка пробоя',EMERGING_BREAKOUT:'Начало пробоя',TREND_EARLY:'Ранний тренд',TREND_MATURE:'Зрелый тренд',TREND_EXHAUSTED:'Затухание тренда',TREND_PULLBACK_RESUMPTION:'Возобновление тренда после коррекции',MACRO_TREND_CONTINUATION:'Продолжение устойчивого тренда',LOWER_TF_TREND_CONTINUATION:'Раннее продолжение тренда',LATE_EXHAUSTION:'Позднее затухание движения',POST_SHOCK_RANGE:'Боковик после импульса',TIGHT_CHOP:'Узкая пила',RISK:'Риск',BREAKEVEN:'Безубыток',PROFIT:'Защита прибыли',OPEN:'Вход',PHASE:'Смена фазы',STOP_MOVED:'Стоп передвинут',CLOSE:'Закрытие',SKIP:'Пропуск',BLOCKER:'Блокирующий фактор',V10_SHORT_QUALITY_REJECTED:'Слабый импульс шорта',LOW_CONFIDENCE_REGIME_OBSERVE:'Недостаточная уверенность в режиме рынка',GROUP_SIDEWAYS:'Боковик группы',GLOBAL_SIDEWAYS:'Боковик рынка',GROUP_SHOCK:'Шоковый режим группы',ACTIVE_POSITION_EXISTS:'Позиция уже открыта',STALE_CANDIDATE:'Сигнал устарел',ONE_LOT_EXCEEDS_RISK:'Риск одного лота выше лимита',INVALID_RISK_PLAN:'Не построен риск-план',AO_ZERO_CROSS:'AO пересёк ноль',AO_ZERO_REJECTION:'Отскок AO от нулевой линии',IMPULSE_BREAK:'Импульсный пробой',PATTERN_MOMENTUM:'Импульс паттерна',PROFIT_TRAILING_STOP:'Защитный стоп прибыли',INITIAL_RISK_STOP:'Исходный риск-стоп',RISK_STOP:'Исходный риск-стоп',BREAKEVEN_STOP:'Стоп в безубытке',CONFIRMED_REVERSAL:'Подтверждённый разворот',PROFIT_CONSOLIDATION:'Консолидация прибыли',STRONG_REVERSAL:'Сильный разворот',BULL_LONG_EARLY_TREND:'Ранний лонг по растущему рынку',BULL_LONG_STRONG_TRANSITION:'Сильный лонг на переходе к росту',BULL_SHORT_STRONG_REVERSAL:'Сильный разворот вниз против растущей группы',BEAR_LONG_STRONG_REVERSAL:'Сильный разворот вверх против падающей группы',BEAR_SHORT_RANGE:'Шорт из диапазона на падающем рынке',BEAR_SHORT_TRANSITION:'Шорт на переходе к падению',BEAR_SHORT_BREAKOUT_ATTEMPT:'Шорт на попытке пробоя вниз',BULL_DIRECTION_MISMATCH:'Направление против растущего рынка',BEAR_DIRECTION_MISMATCH:'Направление против падающего рынка',TREND_ALIGNED:'По направлению тренда',TREND_DIRECTION_MISMATCH:'Направление против тренда',PULLBACK_ALIGNED:'Коррекция подтверждает направление',PULLBACK_MISMATCH:'Коррекция против направления',BREAKOUT:'Пробой',CONTINUATION:'Продолжение',REVERSAL:'Разворот',MOMENTUM_BREAKOUT:'Импульсный пробой структуры',RANGE_BREAKOUT:'Пробой диапазона',BULL_FLAG_BREAKOUT:'Бычий флаг',BEAR_FLAG_BREAKDOWN:'Медвежий флаг',BULL_PENNANT_BREAKOUT:'Бычий вымпел',BEAR_PENNANT_BREAKDOWN:'Медвежий вымпел',ASCENDING_TRIANGLE_BREAKOUT:'Восходящий треугольник',DESCENDING_TRIANGLE_BREAKDOWN:'Нисходящий треугольник',SYMMETRICAL_TRIANGLE_BREAKOUT:'Симметричный треугольник',FALLING_WEDGE_BREAKOUT:'Падающий клин',RISING_WEDGE_BREAKDOWN:'Растущий клин',DOUBLE_BOTTOM_BREAKOUT:'Двойное дно',DOUBLE_TOP_BREAKOUT:'Двойная вершина',HEAD_AND_SHOULDERS_BREAKDOWN:'Голова и плечи',INVERSE_HEAD_AND_SHOULDERS_BREAKOUT:'Обратная голова и плечи',FAILED_BREAKOUT_REVERSAL:'Ложный пробой с возвратом'};
     const label=value=>{const key=String(value||'');if(labels[key])return labels[key];if(key.startsWith('STAGE_'))return 'Стадия рынка не допускает вход';if(key.startsWith('BEAR_SHORT_'))return 'Шорт подтверждён падающим рынком';return key?key.replaceAll('_',' '):'—';};
     function renderBars(id,rows,reject=false){const target=$(id);const max=Math.max(1,...(rows||[]).map(x=>Number(x.count||0)));target.innerHTML=(rows||[]).length?(rows||[]).map(x=>`<div class="bar-row"><div class="bar-name" title="${esc(label(x.key))}">${esc(label(x.key))}</div><div class="bar-track"><div class="bar-fill ${reject?'reject':''}" style="width:${Math.max(2,Number(x.count||0)/max*100)}%"></div></div><div class="bar-value">${num(x.count)}</div></div>`).join(''):'<div class="empty">Данных пока нет</div>';}
     function renderKpis(data){const k=data.kpis;const cards=[['Кандидаты',num(k.candidates),`${num(k.gate_allowed)} допущено · ${num(k.acceptance_rate,1)}%`,''],['Позиции',num(k.active_positions),`${num(k.protected_positions)} защищено стопом`,''],['Закрыто',num(k.closed_trades),`${num(k.profitable_trades)} плюс · ${num(k.losing_trades)} минус`,''],['Результат',money(k.realized_net_pnl_rub),'после расчётных комиссий',k.realized_net_pnl_rub>0?'good-text':k.realized_net_pnl_rub<0?'bad-text':''],['Доля прибыльных',`${num(k.win_rate,1)}%`,`отношение прибыли к убытку ${k.profit_factor===null?'—':num(k.profit_factor,2)}`,''],['Средний результат',`${k.average_r>=0?'+':''}${num(k.average_r,3)} ед. риска`,`${num(k.skipped_candidates)} технических пропусков`,k.average_r>0?'good-text':k.average_r<0?'bad-text':'']];$('kpis').innerHTML=cards.map(c=>`<article class="card"><div class="label">${c[0]}</div><div class="value ${c[3]}">${c[1]}</div><div class="note">${c[2]}</div></article>`).join('');}

@@ -5,14 +5,19 @@ from pathlib import Path
 
 import pandas as pd
 
-from strategies.v35_hierarchy import hierarchical_gate
+from strategies.v35_hierarchy import aggregate_directional_regime, hierarchical_gate
 from strategies.v35_risk import (
     advance_on_15m_bar,
     initial_stop_for_candidate,
     new_protection_state,
     position_size_for_risk,
 )
-from strategies.v35_signals import V35Candidate, enrich_candles, short_entry_allowed
+from strategies.v35_signals import (
+    V35Candidate,
+    enrich_candles,
+    find_trend_continuation_candidates,
+    short_entry_allowed,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -39,6 +44,102 @@ def candidate(direction: str = "LONG", atr: float = 10.0) -> V35Candidate:
         chaikin=10.0,
         execution_score=5,
     )
+
+
+def trend_frames(direction: str) -> dict[int, pd.DataFrame]:
+    sign = 1.0 if direction == "LONG" else -1.0
+    origin = pd.Timestamp("2026-10-01T00:00:00Z")
+
+    hourly_rows = []
+    for index in range(80):
+        close = 100.0 + sign * index * 0.35
+        hourly_rows.append({
+            "time": origin + pd.Timedelta(hours=index),
+            "closed_at": origin + pd.Timedelta(hours=index + 1),
+            "open": close - sign * 0.18,
+            "high": close + 0.30,
+            "low": close - 0.30,
+            "close": close,
+            "volume": 100.0,
+            "body": 0.18,
+            "body_atr": 0.18,
+            "atr": 1.0,
+            "ao": sign * (0.5 + index * 0.01),
+            "ao_delta": sign * 0.01,
+            "macd_hist": sign * 0.20,
+            "chaikin": sign * 10.0,
+            "ema20": close - sign * 0.50,
+            "ema50": close - sign * 1.00,
+        })
+
+    half_hour_rows = []
+    for index in range(160):
+        close = 100.0 + sign * index * 0.17
+        half_hour_rows.append({
+            "time": origin + pd.Timedelta(minutes=30 * index),
+            "closed_at": origin + pd.Timedelta(minutes=30 * (index + 1)),
+            "open": close - sign * 0.10,
+            "high": close + 0.15,
+            "low": close - 0.15,
+            "close": close,
+            "body": 0.10,
+            "ao": sign * (0.4 + index * 0.002),
+            "ao_delta": sign * 0.002,
+            "macd_hist": sign * (0.10 + index * 0.001),
+        })
+
+    quarter_hour_rows = []
+    for index in range(320):
+        close = 100.0 + sign * index * 0.08
+        quarter_hour_rows.append({
+            "time": origin + pd.Timedelta(minutes=15 * index),
+            "closed_at": origin + pd.Timedelta(minutes=15 * (index + 1)),
+            "open": close - sign * 0.05,
+            "high": close + 0.08,
+            "low": close - 0.08,
+            "close": close,
+            "body": 0.05,
+            "ao": sign * (0.3 + index * 0.001),
+            "ao_delta": sign * 0.001,
+            "macd_hist": sign * (0.08 + index * 0.0005),
+        })
+
+    # A compact pause followed by a fresh 15-minute structure break. There is
+    # deliberately no named hourly pattern: the macro trend supplies context.
+    for index in range(312, 319):
+        base = 125.0 if direction == "LONG" else 75.0
+        close = base + sign * ((index - 312) % 2) * 0.03
+        quarter_hour_rows[index].update({
+            "open": close + sign * 0.01,
+            "high": close + 0.05,
+            "low": close - 0.05,
+            "close": close,
+            "body": 0.01,
+            "ao_delta": -sign * 0.001,
+            "macd_hist": sign * 0.04,
+        })
+    trigger = quarter_hour_rows[319]
+    prior = quarter_hour_rows[315:319]
+    trigger_close = (
+        max(row["high"] for row in prior) + 0.18
+        if direction == "LONG"
+        else min(row["low"] for row in prior) - 0.18
+    )
+    trigger_open = trigger_close - sign * 0.12
+    trigger.update({
+        "open": trigger_open,
+        "high": max(trigger_open, trigger_close) + 0.04,
+        "low": min(trigger_open, trigger_close) - 0.04,
+        "close": trigger_close,
+        "body": 0.12,
+        "ao_delta": sign * 0.03,
+        "macd_hist": sign * 0.09,
+    })
+    return {
+        60: pd.DataFrame(hourly_rows),
+        30: pd.DataFrame(half_hour_rows),
+        15: pd.DataFrame(quarter_hour_rows),
+    }
 
 
 class V35StrategyTests(unittest.TestCase):
@@ -125,11 +226,57 @@ class V35StrategyTests(unittest.TestCase):
                     (False, f"GROUP_{regime}"),
                 )
 
+    def test_trend_continuation_gate_is_symmetric_for_long_and_short(self) -> None:
+        for regime, direction in (("BULL", "LONG"), ("BEAR", "SHORT")):
+            for stage in ("TREND_EARLY", "PULLBACK", "BREAKOUT_ATTEMPT", "TREND_MATURE"):
+                with self.subTest(regime=regime, direction=direction, stage=stage):
+                    item = replace(
+                        candidate(direction),
+                        entry_pattern="LOWER_TF_TREND_CONTINUATION",
+                        execution_score=5,
+                    )
+                    self.assertEqual(
+                        hierarchical_gate(
+                            {"group_regime": regime, "direction": direction, "local_stage": stage},
+                            item,
+                        ),
+                        (True, f"{regime}_{direction}_{stage}"),
+                    )
+
+    def test_single_local_shock_does_not_turn_whole_group_into_shock(self) -> None:
+        rows = [
+            {"stage": "SHOCK", "move_atr": -2.0},
+            {"stage": "TREND_MATURE", "move_atr": -1.4},
+        ]
+        regime = aggregate_directional_regime(rows, rows[0])
+        self.assertEqual(regime["regime"], "BEAR")
+
+    def test_lower_timeframe_continuation_finds_long_and_short_without_named_pattern(self) -> None:
+        for direction in ("LONG", "SHORT"):
+            frames = trend_frames(direction)
+            end = pd.Timestamp(frames[15].iloc[-1]["closed_at"])
+            result = find_trend_continuation_candidates(
+                "TEST",
+                frames,
+                end - pd.Timedelta(hours=2),
+                end,
+            )
+            self.assertTrue(result, direction)
+            self.assertEqual(result[-1].direction, direction)
+            self.assertEqual(result[-1].entry_pattern, "LOWER_TF_TREND_CONTINUATION")
+            self.assertEqual(result[-1].classic_pattern, "MACRO_TREND_CONTINUATION")
+            self.assertGreaterEqual(result[-1].execution_score, 5)
+
     def test_v10_short_filter_requires_complete_execution_or_large_hourly_impulse(self) -> None:
         weak = candidate("SHORT")
         self.assertFalse(short_entry_allowed(weak))
         self.assertTrue(short_entry_allowed(replace(weak, execution_score=6)))
         self.assertTrue(short_entry_allowed(replace(weak, body_sum_atr=2.25)))
+        self.assertTrue(short_entry_allowed(replace(
+            weak,
+            entry_pattern="LOWER_TF_TREND_CONTINUATION",
+            execution_score=5,
+        )))
         self.assertTrue(short_entry_allowed(candidate("LONG")))
 
     def test_initial_stop_uses_structure_and_minimum_atr_distance(self) -> None:

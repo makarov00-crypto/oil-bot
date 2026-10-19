@@ -180,7 +180,7 @@ def _market_snapshot(
 
 
 class V35ShadowJournal:
-    """Append-only journal for mechanical v35 decisions. It never submits orders."""
+    """Append-only journal for the current mechanical shadow strategy."""
 
     def __init__(self, path: Path, status_path: Path):
         self.path = path
@@ -281,7 +281,7 @@ class V35ShadowJournal:
 
 
 class V35ShadowPortfolio:
-    """Persistent 10-second lifecycle for accepted v35 shadow candidates."""
+    """Persistent 10-second lifecycle for accepted shadow candidates."""
 
     def __init__(
         self,
@@ -321,6 +321,7 @@ class V35ShadowPortfolio:
             return self._empty_state()
         base = self._empty_state()
         base.update(payload)
+        base["strategy_version"] = STRATEGY_VERSION
         base["order_submission_enabled"] = ORDER_SUBMISSION_ENABLED
         base["positions"] = payload.get("positions") if isinstance(payload.get("positions"), dict) else {}
         return base

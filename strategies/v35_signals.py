@@ -10,7 +10,7 @@ from strategies.v35_market_regime import classify_market_regime, regime_allows_p
 from strategies.v35_pattern_library import classify_entry_pattern
 
 
-STRATEGY_VERSION = "four-phase-hierarchical-v35-shadow-candidate"
+STRATEGY_VERSION = "four-phase-hierarchical-v36-shadow-continuation"
 MOSCOW = ZoneInfo("Europe/Moscow")
 LAST_NEW_ENTRY_MOSCOW_HOUR = 22
 LAST_NEW_ENTRY_MOSCOW_MINUTE = 30
@@ -403,6 +403,197 @@ def _find_15m_execution(
     return None
 
 
+def _latest_closed_position(frame: pd.DataFrame, moment: pd.Timestamp) -> int | None:
+    if frame.empty or "closed_at" not in frame:
+        return None
+    closed_at = pd.to_datetime(frame["closed_at"], utc=True, errors="coerce")
+    eligible = closed_at.loc[closed_at <= moment]
+    if eligible.empty:
+        return None
+    return int(frame.index.get_loc(eligible.index[-1]))
+
+
+def _lower_timeframe_confirmation(
+    frame: pd.DataFrame,
+    moment: pd.Timestamp,
+    direction: str,
+) -> tuple[pd.Series, int] | None:
+    position = _latest_closed_position(frame, moment)
+    if position is None or position < 2:
+        return None
+    sign = _sign(direction)
+    row = frame.iloc[position]
+    previous = frame.iloc[position - 1]
+    body_aligned = (_finite(row["close"]) - _finite(row["open"])) * sign > 0
+    close_progress = (_finite(row["close"]) - _finite(previous["close"])) * sign > 0
+    ao_turn = _finite(row["ao_delta"]) * sign > 0
+    histogram = _finite(row["macd_hist"])
+    histogram_delta = histogram - _finite(previous["macd_hist"])
+    hist_turn = histogram_delta * sign > 0
+    hist_aligned = histogram * sign > 0
+    score = sum((body_aligned, close_progress, ao_turn, hist_turn, hist_aligned))
+    if body_aligned and close_progress and (ao_turn or hist_turn) and score >= 3:
+        return row, score
+    return None
+
+
+def find_trend_continuation_candidates(
+    symbol: str,
+    frames: dict[int, pd.DataFrame],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> list[V35Candidate]:
+    """Find an early 15m continuation inside an established 48h hourly trend.
+
+    A named chart pattern is supporting evidence here, not a mandatory gate.
+    The same price and indicator rules are applied with a direction sign, so
+    LONG and SHORT cannot silently diverge.
+    """
+    hourly = frames[60]
+    confirmation_frame = frames[30]
+    execution_frame = frames[15]
+    result: list[V35Candidate] = []
+    last_execution_by_direction: dict[str, pd.Timestamp] = {}
+    for index in range(8, len(execution_frame)):
+        row = execution_frame.iloc[index]
+        signal_time = pd.Timestamp(row["closed_at"])
+        if signal_time < start or signal_time > end or not entry_time_has_session_buffer(signal_time):
+            continue
+        hourly_position = _latest_closed_position(hourly, signal_time)
+        if hourly_position is None or hourly_position < 40:
+            continue
+        macro = classify_market_regime(hourly, hourly_position)
+        if macro.regime not in {"TREND", "PULLBACK"} or macro.direction not in {"LONG", "SHORT"}:
+            continue
+        direction = macro.direction
+        sign = _sign(direction)
+        atr = _finite(hourly.iloc[hourly_position]["atr"])
+        if atr <= 0:
+            continue
+
+        previous = execution_frame.iloc[index - 1]
+        prior_structure = execution_frame.iloc[index - 4:index]
+        prior_pause = execution_frame.iloc[index - 6:index]
+        body = abs(_finite(row["close"]) - _finite(row["open"]))
+        body_atr = body / atr
+        body_aligned = (_finite(row["close"]) - _finite(row["open"])) * sign > 0
+        close_progress = (_finite(row["close"]) - _finite(previous["close"])) * sign > 0
+        breaks_structure = (
+            _finite(row["close"]) > _finite(prior_structure["high"].max())
+            if direction == "LONG"
+            else _finite(row["close"]) < _finite(prior_structure["low"].min())
+        )
+        ao_turn = _finite(row["ao_delta"]) * sign > 0
+        histogram = _finite(row["macd_hist"])
+        histogram_delta = histogram - _finite(previous["macd_hist"])
+        hist_turn = histogram_delta * sign > 0
+        hist_aligned = histogram * sign > 0
+        pause_has_counter_candle = bool(
+            (((prior_pause["close"] - prior_pause["open"]) * sign) <= 0).any()
+        )
+        pause_mean_body_atr = _finite(
+            (prior_pause["close"] - prior_pause["open"]).abs().mean()
+        ) / atr
+        pause_efficiency = _path_efficiency(prior_pause["close"])
+        controlled_pause = bool(
+            pause_has_counter_candle or pause_mean_body_atr <= 0.14 or pause_efficiency < 0.45
+        )
+        execution_score = sum((
+            body_aligned,
+            close_progress,
+            body_atr >= 0.06,
+            breaks_structure,
+            ao_turn,
+            hist_turn or hist_aligned,
+        ))
+        if not (
+            body_aligned
+            and close_progress
+            and 0.06 <= body_atr <= 0.65
+            and breaks_structure
+            and controlled_pause
+            and ao_turn
+            and (hist_turn or hist_aligned)
+            and execution_score >= 5
+        ):
+            continue
+
+        confirmation = _lower_timeframe_confirmation(
+            confirmation_frame, signal_time, direction
+        )
+        if confirmation is None:
+            continue
+        confirmation_row, confirmation_score = confirmation
+        pattern_decision = classify_entry_pattern(hourly, hourly_position, direction)
+        strongest_blocker = max(
+            (item.confidence for item in pattern_decision.blockers), default=0
+        )
+        strongest_pattern = pattern_decision.primary
+        if strongest_blocker >= 80 and (
+            strongest_pattern is None or strongest_blocker >= strongest_pattern.confidence
+        ):
+            continue
+
+        previous_execution = last_execution_by_direction.get(direction)
+        if previous_execution is not None and signal_time <= previous_execution + pd.Timedelta(hours=2):
+            continue
+        recent3 = execution_frame.iloc[index - 2:index + 1]
+        aligned = ((recent3["close"] - recent3["open"]) * sign) > 0
+        directional_bodies = (recent3.loc[aligned, "close"] - recent3.loc[aligned, "open"]).abs()
+        recent6 = execution_frame.iloc[index - 5:index + 1]
+        body_sum_atr = float(directional_bodies.sum()) / atr
+        largest_body_atr = _finite(directional_bodies.max()) / atr
+        range_atr = (
+            _finite(recent6["high"].max()) - _finite(recent6["low"].min())
+        ) / atr
+        ao = _finite(row["ao"])
+        near_zero = _finite(execution_frame.iloc[index - 5:index + 1]["ao"].abs().min()) / atr
+        pattern_confidence = (
+            strongest_pattern.confidence
+            if strongest_pattern is not None
+            else min(85, 60 + macro.confidence // 5 + confirmation_score)
+        )
+        result.append(V35Candidate(
+            symbol=symbol,
+            direction=direction,
+            signal_time=signal_time.isoformat(),
+            signal_price=_finite(row["close"]),
+            atr=atr,
+            entry_pattern="LOWER_TF_TREND_CONTINUATION",
+            directional_bars=int(aligned.sum()),
+            body_sum_atr=round(body_sum_atr, 4),
+            largest_body_atr=round(largest_body_atr, 4),
+            path_efficiency_6=round(_path_efficiency(recent6["close"]), 4),
+            range_atr_6=round(range_atr, 4),
+            ao=round(ao, 6),
+            ao_delta=round(_finite(row["ao_delta"]), 6),
+            ao_zero_distance_atr=round(near_zero, 4),
+            macd_hist=round(histogram, 6),
+            macd_hist_delta=round(histogram_delta, 6),
+            chaikin=round(_finite(hourly.iloc[hourly_position]["chaikin"]), 4),
+            classic_pattern=(
+                strongest_pattern.name if strongest_pattern is not None else "MACRO_TREND_CONTINUATION"
+            ),
+            pattern_confidence=pattern_confidence,
+            pattern_blockers=tuple(item.name for item in pattern_decision.blockers),
+            pattern_supports=tuple(item.name for item in pattern_decision.supports),
+            pattern_matches=tuple(item.name for item in pattern_decision.matches),
+            setup_time=pd.Timestamp(hourly.iloc[hourly_position]["closed_at"]).isoformat(),
+            confirmation_time=pd.Timestamp(confirmation_row["closed_at"]).isoformat(),
+            execution_time=signal_time.isoformat(),
+            confirmation_score=confirmation_score,
+            execution_score=execution_score,
+            market_regime=macro.regime,
+            regime_confidence=macro.confidence,
+            regime_direction=macro.direction,
+            regime_gate_reason="MACRO_TREND_ALIGNED",
+            regime_reasons=macro.reasons,
+            regime_features=macro.features,
+        ))
+        last_execution_by_direction[direction] = signal_time
+    return result
+
+
 def find_multitimeframe_candidates(
     symbol: str,
     frames: dict[int, pd.DataFrame],
@@ -411,8 +602,9 @@ def find_multitimeframe_candidates(
     *,
     apply_regime_filter: bool = True,
 ) -> list[V35Candidate]:
+    continuation = find_trend_continuation_candidates(symbol, frames, start, end)
     setups = find_hourly_setups(symbol, frames[60], start, end, apply_regime_filter=apply_regime_filter)
-    result: list[V35Candidate] = []
+    legacy: list[V35Candidate] = []
     last_execution_by_direction: dict[str, pd.Timestamp] = {}
     for setup in setups:
         setup_time = pd.Timestamp(setup.signal_time)
@@ -431,7 +623,7 @@ def find_multitimeframe_candidates(
         previous_execution = last_execution_by_direction.get(setup.direction)
         if previous_execution is not None and execution_time <= previous_execution + pd.Timedelta(hours=6):
             continue
-        result.append(replace(
+        legacy.append(replace(
             setup,
             signal_time=execution_time.isoformat(),
             signal_price=_finite(execution_row["close"]),
@@ -441,10 +633,25 @@ def find_multitimeframe_candidates(
             execution_score=execution_score,
         ))
         last_execution_by_direction[setup.direction] = execution_time
+    combined = sorted(
+        [*continuation, *legacy],
+        key=lambda item: (item.signal_time, item.entry_pattern != "LOWER_TF_TREND_CONTINUATION"),
+    )
+    result: list[V35Candidate] = []
+    last_by_direction: dict[str, pd.Timestamp] = {}
+    for item in combined:
+        moment = pd.Timestamp(item.signal_time)
+        previous = last_by_direction.get(item.direction)
+        if previous is not None and moment <= previous + pd.Timedelta(hours=2):
+            continue
+        result.append(item)
+        last_by_direction[item.direction] = moment
     return result
 
 
 def short_entry_allowed(candidate: V35Candidate, body_threshold_atr: float = 2.25) -> bool:
     if candidate.direction != "SHORT":
         return True
+    if candidate.entry_pattern == "LOWER_TF_TREND_CONTINUATION":
+        return candidate.execution_score >= 5
     return bool(candidate.execution_score >= 6 or candidate.body_sum_atr >= body_threshold_atr)

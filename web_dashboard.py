@@ -151,7 +151,7 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
-        ("/v35", "Стратегия v3.5", "v35"),
+        ("/v35", "Стратегия v3.6", "v35"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []

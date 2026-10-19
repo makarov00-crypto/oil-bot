@@ -8,8 +8,15 @@ from strategies.v35_pattern_library import PATTERN_CATALOG
 from strategies.v35_signals import V35Candidate
 
 
-MODEL_VERSION = "hierarchical-market-regime-v30-direct"
+MODEL_VERSION = "hierarchical-market-regime-v31-symmetric-continuation"
 BEAR_SHORT_STAGES = {"RANGE", "TRANSITION", "BREAKOUT_ATTEMPT"}
+TREND_CONTINUATION_STAGES = {
+    "TREND_EARLY",
+    "PULLBACK",
+    "TRANSITION",
+    "BREAKOUT_ATTEMPT",
+    "TREND_MATURE",
+}
 BULL_LONG_TRANSITION_MIN_PATTERN_CONFIDENCE = 80
 BULL_LONG_TRANSITION_MIN_BODY_ATR = 1.50
 COUNTERTREND_MIN_PATTERN_CONFIDENCE = 80
@@ -179,7 +186,7 @@ def aggregate_directional_regime(
     median = _finite(moves.median())
     anchor_move = _finite(anchor.get("move_atr")) if anchor else median
     shock_share = sum(row["stage"] == "SHOCK" for row in rows) / len(rows)
-    if shock_share >= 0.50 or (anchor and anchor["stage"] == "SHOCK"):
+    if shock_share > 0.50:
         regime = "SHOCK"
     elif up >= 0.60 and median >= 0.35 and anchor_move >= 0:
         regime = "BULL"
@@ -281,6 +288,17 @@ def hierarchical_gate(
     direction = context["direction"]
     if regime in {"SHOCK", "SIDEWAYS"}:
         return False, f"GROUP_{regime}"
+    continuation = bool(
+        candidate is not None
+        and candidate.entry_pattern == "LOWER_TF_TREND_CONTINUATION"
+        and candidate.execution_score >= MIN_EXECUTION_SCORE
+    )
+    aligned_continuation = (
+        (regime == "BULL" and direction == "LONG")
+        or (regime == "BEAR" and direction == "SHORT")
+    )
+    if continuation and aligned_continuation and stage in TREND_CONTINUATION_STAGES:
+        return True, f"{regime}_{direction}_{stage}"
     if regime == "BULL" and direction == "LONG" and stage == "TREND_EARLY":
         return True, "BULL_LONG_EARLY_TREND"
     if (

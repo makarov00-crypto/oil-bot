@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from strategies.v35_signals import STRATEGY_VERSION
 from v35_dashboard import build_v35_dashboard_html, build_v35_dashboard_payload
 
 
@@ -213,7 +214,7 @@ class V35DashboardTests(unittest.TestCase):
 
     def test_page_is_dedicated_to_mechanical_v35_control(self) -> None:
         html = build_v35_dashboard_html()
-        self.assertIn("Стратегия v3.5", html)
+        self.assertIn("Стратегия v3.6", html)
         self.assertIn("/api/v35", html)
         self.assertIn("Воронка входов", html)
         self.assertIn("Жизненный цикл", html)
@@ -223,6 +224,7 @@ class V35DashboardTests(unittest.TestCase):
         self.assertIn("Сильный лонг на переходе к росту", html)
         self.assertIn("Сильный разворот вниз против растущей группы", html)
         self.assertIn("Сильный разворот вверх против падающей группы", html)
+        self.assertIn("Раннее продолжение тренда", html)
         self.assertIn("minmax(300px,1fr)", html)
         self.assertIn('id="candidateTableWrap"', html)
         self.assertIn("rows.slice(0,15)", html)
@@ -235,6 +237,41 @@ class V35DashboardTests(unittest.TestCase):
         self.assertNotIn("RUB", html)
         self.assertNotIn("AI-разбор", html)
         self.assertNotIn("Теневой ИИ", html)
+
+    def test_payload_does_not_mix_previous_strategy_version(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            status = root / "status.json"
+            portfolio = root / "portfolio.json"
+            candidates = root / "candidates.jsonl"
+            events = root / "events.jsonl"
+            cycles = root / "cycles.jsonl"
+            runtime = root / "runtime.json"
+            write_json(status, {"strategy_version": STRATEGY_VERSION, "updated_at": "2026-10-08T17:00:00+00:00"})
+            write_json(portfolio, {"strategy_version": STRATEGY_VERSION, "updated_at": "2026-10-08T17:00:00+00:00", "positions": {}})
+            write_jsonl(candidates, [
+                {"candidate_id": "old", "strategy_version": "v35", "symbol": "AAA", "signal_time": "2026-10-08T12:00:00+00:00", "gate_allowed": True, "candidate": {}},
+                {"candidate_id": "new", "strategy_version": STRATEGY_VERSION, "symbol": "AAA", "signal_time": "2026-10-08T13:00:00+00:00", "gate_allowed": True, "candidate": {}},
+            ])
+            write_jsonl(events, [
+                {"candidate_id": "old", "strategy_version": "v35", "symbol": "AAA", "event": "CLOSE", "event_time": "2026-10-08T14:00:00+00:00", "net_pnl_rub": 900.0},
+                {"candidate_id": "new", "strategy_version": STRATEGY_VERSION, "symbol": "AAA", "event": "CLOSE", "event_time": "2026-10-08T15:00:00+00:00", "net_pnl_rub": 100.0},
+            ])
+            write_jsonl(cycles, [])
+            write_json(runtime, {"session": "MAIN"})
+            payload = build_v35_dashboard_payload(
+                days=7,
+                now=datetime(2026, 10, 8, 18, 0, tzinfo=timezone.utc),
+                status_path=status,
+                portfolio_path=portfolio,
+                candidate_path=candidates,
+                event_path=events,
+                cycle_path=cycles,
+                runtime_path=runtime,
+            )
+            self.assertEqual(payload["kpis"]["candidates"], 1)
+            self.assertEqual(payload["kpis"]["closed_trades"], 1)
+            self.assertEqual(payload["kpis"]["realized_net_pnl_rub"], 100.0)
 
 
 if __name__ == "__main__":

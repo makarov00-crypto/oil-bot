@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from strategies.v35_hierarchy import MODEL_VERSION as HIERARCHY_MODEL_VERSION
-from strategies.v35_signals import V35Candidate
+from strategies.v35_signals import STRATEGY_VERSION, V35Candidate
 from v35_shadow import (
     ORDER_SUBMISSION_ENABLED,
     SHADOW_SINGLE_LOT_RISK_CAP_RUB,
@@ -46,6 +46,19 @@ def candidate() -> V35Candidate:
 class V35ShadowTests(unittest.TestCase):
     def test_shadow_is_hard_disabled_for_order_submission(self) -> None:
         self.assertFalse(ORDER_SUBMISSION_ENABLED)
+
+    def test_portfolio_state_adopts_current_strategy_version(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            state.write_text(json.dumps({"strategy_version": "old", "positions": {}}), encoding="utf-8")
+            portfolio = V35ShadowPortfolio(
+                root / "candidates.jsonl",
+                root / "events.jsonl",
+                state,
+                root / "status.json",
+            )
+            self.assertEqual(portfolio.state["strategy_version"], STRATEGY_VERSION)
 
     def test_market_snapshot_covers_symbols_without_entry_candidates(self) -> None:
         start = pd.Timestamp("2026-10-01T00:00:00Z")
