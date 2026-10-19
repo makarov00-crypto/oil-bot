@@ -9,7 +9,6 @@ import sys
 from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, HTTPException
@@ -39,12 +38,6 @@ from instrument_groups import (
 )
 from news_rules import NEWS_RULES
 from strategy_registry import get_primary_strategies, get_secondary_strategies
-from daily_ai_review import (
-    FOLLOWUP_SYSTEM_INSTRUCTIONS,
-    DEFAULT_MODEL as DEFAULT_AI_MODEL,
-    build_review_prompt,
-    request_openai_text,
-)
 from trade_storage import (
     load_signal_observations as load_signal_observations_from_storage,
     load_trade_rows as load_trade_rows_from_storage,
@@ -53,7 +46,6 @@ from trade_storage import (
     summarize_news_source_stats,
 )
 from strategy_research import AO_ROLLOUT_AT, build_ai_research, build_ao_execution_research
-from signal_ai_entry_analytics import build_signal_ai_entry_analytics
 from trade_quality import (
     build_trade_quality_overview,
     pair_closed_trades,
@@ -80,10 +72,6 @@ PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
 NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
-AI_REVIEW_DIR = LOG_DIR / "ai_reviews"
-AI_REVIEW_SCRIPT_PATH = BASE_DIR / "deploy" / "run_remote_ai_review_server.sh"
-AI_REVIEW_LOG_PATH = LOG_DIR / "automation" / "remote_ai_review.log"
-AI_REVIEW_LOCK_PATH = BASE_DIR / ".locks" / "remote_ai_review.lock"
 TRADE_RECOVERY_SCRIPT_PATH = BASE_DIR / "scripts" / "recover_trade_operations.py"
 TRADE_RECOVERY_LOCK_PATH = BASE_DIR / ".locks" / "trade_operations_recovery.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -145,8 +133,8 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
 STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "ao_chaikin_1h": {
         "title": "AO / Чайкин 1ч",
-        "summary": "Основная стратегия: AO(5,34), Чайкин(5,20), закрытые часовые свечи; логика версии 4. Новые сделки используют 50% базового риска.",
-        "when": "Все новые входы текущих активных инструментов. Старые позиции reversal_1h сопровождаются прежней логикой до закрытия.",
+        "summary": "Архивная стратегия переходного периода. Её входы отключены, но уже открытая AO-позиция сохраняет исходные правила выхода до закрытия.",
+        "when": "Только для сопровождения уже открытых позиций с владельцем ao_chaikin_1h и для исторической аналитики.",
     },
     "reversal_15m": {
         "title": "Локальный переворот 15м",
@@ -156,7 +144,7 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
     "reversal_1h": {
         "title": "Часовой переворот 1ч",
         "summary": "Тот же unified-подход на часовом графике: MACD, AO, объём, импульс и режим рынка, но с меньшей чувствительностью к 15-минутной пиле.",
-        "when": "Сопровождает только ранее открытые позиции до закрытия; новые входы выполняются через ao_chaikin_1h.",
+        "when": "Основная стратегия для всех новых входов текущих активных инструментов.",
     },
 }
 
@@ -548,26 +536,27 @@ def build_docs_html() -> str:
     <section class="panel hero">
       <h1>Документация стратегий</h1>
       <p>
-        Все новые входы текущих инструментов выполняются по `ao_chaikin_1h` с 50% базового риска на сделку.
-        Ранее открытые позиции `reversal_1h` сохраняют прежнее сопровождение до закрытия.
+        Все новые входы текущих инструментов выполняются по `reversal_1h`.
+        Уже открытые позиции сохраняют стратегию-владельца и её правила выхода до закрытия.
       </p>
     </section>
     <section class="panel">
       <h2>Что сейчас реально работает</h2>
       <div class="overview-grid">
         <article class="overview-card">
-          <h3>AO / Чайкин 1ч</h3>
-          <p>Основная логика работает по версии 4: `AO(5,34)` по средней цене максимума и минимума,
-             Чайкин `EMA(5) − EMA(20)` накопленного денежного потока, `ATR(14)`.</p>
+          <h3>Часовой переворот 1ч</h3>
+          <p>Основная логика новых входов снова работает через `reversal_1h`: MACD, AO, объём,
+             импульс, ATR и режим локального часового рынка.</p>
         </article>
         <article class="overview-card">
           <h3>Переход открытых позиций</h3>
-          <p>Стратегия выбирается по идентификатору входа. Позиции `reversal_1h` доводятся по старым правилам.
-             После закрытия следующий вход возможен только по новой стратегии.</p>
+          <p>Стратегия выхода выбирается по идентификатору входа. Уже открытая позиция `ao_chaikin_1h`
+             доводится по AO-правилам; после её закрытия новый вход будет оценивать `reversal_1h`.</p>
         </article>
         <article class="overview-card">
           <h3>Исторические стратегии</h3>
-          <p>`reversal_15m` и остальные старые модули доступны в истории. Для новых входов они не выбираются.</p>
+          <p>`ao_chaikin_1h`, `reversal_15m` и остальные старые модули доступны в истории.
+             Их сигналы не выбираются для новых входов.</p>
         </article>
       </div>
     </section>
@@ -585,30 +574,27 @@ def build_docs_html() -> str:
       </div>
     </section>
     <section class="panel">
-      <h2>Как работает `ao_chaikin_1h`</h2>
+      <h2>Как работает `reversal_1h`</h2>
       <div class="steps">
         <article class="step">
           <div class="step__num">01</div>
-          <div><h3>Вход на закрытых часовых свечах</h3>
-            <p>Быстрый вход выполняется на второй усиливающейся свече после пересечения AO через ноль.
-               Если на ней сила ниже порога, допускается позднее подтверждение со второй по четвёртую свечу.
-               Для лонга и шорта правила зеркальны. Сила `abs(AO) / ATR` должна быть не ниже `0,60`.</p>
+          <div><h3>Локальный часовой разворот</h3>
+            <p>Основной триггер — новое значимое пересечение MACD. Направление подтверждают AO,
+               структура свечей и локальная рыночная картина.</p>
           </div>
         </article>
         <article class="step">
           <div class="step__num">02</div>
-          <div><h3>Оценка потока Чайкина</h3>
-            <p>Для быстрого входа Чайкин остаётся оценкой качества и не блокирует сигнал. Поздний вход требует,
-               чтобы поток Чайкина и цена подтверждали направление, а цена ушла от точки пересечения не более
-               чем на `1,50 ATR`.</p>
+          <div><h3>Проверка силы</h3>
+            <p>Объём, размер свечи, ATR, RSI и осцилляторы отделяют направленное движение от сжатия,
+               пилы и слишком позднего входа.</p>
           </div>
         </article>
         <article class="step">
           <div class="step__num">03</div>
-          <div><h3>Удержание и выход</h3>
-            <p>Выходим, когда AO достигает нуля или пересекает его против позиции. Другой выход требует одновременно
-               трёх последовательных ослаблений AO, остатка импульса не более 70% пика с момента входа и закрытия
-               цены против позиции относительно предыдущей свечи.</p>
+          <div><h3>Владелец позиции</h3>
+            <p>Новая позиция получает владельца `reversal_1h` и до закрытия использует его выходы.
+               Это исключает незаметную смену логики сопровождения во время сделки.</p>
           </div>
         </article>
       </div>
@@ -617,15 +603,14 @@ def build_docs_html() -> str:
       <h2>Как бот ограничивает риск</h2>
       <div class="overview-grid">
         <article class="overview-card">
-          <h3>50% базового риска</h3>
-          <p>Новые сделки получают половину базового допустимого убытка на сделку. Число контрактов зависит от
-             расстояния до стопа, целых лотов, доступного капитала, ГО и общих лимитов риска.
-             Допускается один лот сверх половинного бюджета, если позволяют брокер, ГО и совокупный риск портфеля.</p>
+          <h3>Боевые лимиты</h3>
+          <p>Размер позиции зависит от стопа, доступного капитала, ГО, качества входа и совокупного риска портфеля.
+             Дневные ограничения и аварийная защита продолжают действовать.</p>
         </article>
         <article class="overview-card">
           <h3>Защита позиции</h3>
-          <p>Аварийная защита сохраняется. Программный выход новой стратегии подтверждается закрытой часовой свечой.
-             Для ранее открытых `reversal_1h` продолжают действовать прежние выходы и защитные правила.</p>
+          <p>Аварийная защита сохраняется. Программный выход подтверждается закрытой часовой свечой.
+             Для ранее открытой AO-позиции продолжают действовать её исходные выходы и защитные правила.</p>
         </article>
       </div>
     </section>
@@ -691,10 +676,10 @@ def build_docs_html() -> str:
         <article class="step">
           <div class="step__num">04</div>
           <div>
-            <h3>Новости и AI-разбор</h3>
+            <h3>Новости</h3>
             <p>
-              Новости показывают внешний контекст по инструментам, а AI-разбор собирает сводку по рыночной картине дня.
-              Это не замена журналу сделок, а дополнительный слой анализа и обзора рынка.
+              Новости показывают внешний контекст по инструментам. Торговое решение и факт исполнения проверяются
+              по сигналам, журналу сделок и состоянию аллокатора.
             </p>
           </div>
         </article>
@@ -3140,8 +3125,8 @@ def _load_trade_quality_analytics_uncached() -> dict[str, Any]:
             "exit_diagnostics": sorted(exits, key=lambda row: str(row.get("exit_time") or ""), reverse=True),
         }
 
-    current = cohort("ao_chaikin_1h")
-    archive = cohort("reversal_1h")
+    current = cohort("reversal_1h")
+    archive = cohort("ao_chaikin_1h")
     result.update(current)
     result["archive"] = archive
     result["unattributed_hypotheses"] = sum(1 for row in result["missed_entry_evaluations"] if row.get("source_kind") == "strategy_hold" and not strategy_of(row))
@@ -3245,14 +3230,6 @@ def load_strategy_research_workspace() -> dict[str, Any]:
         "ai": build_ai_research(ai_observations),
         "exit_experiment": exit_analytics.get("conditional_two_hour_experiment") or {},
     }
-
-
-def load_signal_ai_entry_workspace() -> dict[str, Any]:
-    observations = load_signal_observations_from_storage(
-        TRADE_DB_PATH, newest_first=True, since=AO_ROLLOUT_AT.isoformat()
-    )
-    closed_trades = pair_closed_trades(load_all_trade_rows())
-    return build_signal_ai_entry_analytics(observations, closed_trades)
 
 
 def load_trade_review_for_day(
@@ -3532,181 +3509,6 @@ def build_portfolio_view_for_day(
     view["bot_actual_varmargin_by_symbol_source"] = actual_varmargin_source
     view["generated_at_moscow"] = history_entry.get("generated_at_moscow") or portfolio.get("generated_at_moscow")
     return view
-
-
-def load_ai_review(target_day: date) -> dict:
-    dated_path = AI_REVIEW_DIR / f"{target_day.isoformat()}_review.md"
-    latest_path = AI_REVIEW_DIR / "latest_review.md"
-    today = datetime.now(MOSCOW_TZ).date()
-    source_path = dated_path
-    prefetched_content: str | None = None
-    if target_day == today and not dated_path.exists() and latest_path.exists():
-        try:
-            latest_content = latest_path.read_text(encoding="utf-8").strip()
-        except Exception:
-            latest_content = ""
-        expected_header = f"# AI Review {target_day.isoformat()}"
-        if latest_content.splitlines()[:1] == [expected_header]:
-            source_path = latest_path
-            prefetched_content = latest_content
-    if not source_path.exists():
-        return {
-            "available": False,
-            "date": target_day.isoformat(),
-            "content": "",
-            "updated_at_moscow": None,
-            "status": "missing",
-            "followups": [],
-        }
-    try:
-        content = prefetched_content
-        if content is None:
-            content = source_path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return {
-            "available": False,
-            "date": target_day.isoformat(),
-            "content": "",
-            "updated_at_moscow": None,
-            "status": "error",
-            "followups": [],
-        }
-    try:
-        modified = datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc).astimezone(MOSCOW_TZ)
-        modified_text = modified.strftime("%d.%m %H:%M:%S МСК")
-    except Exception:
-        modified_text = None
-    return {
-        "available": bool(content),
-        "date": target_day.isoformat(),
-        "source": source_path.name,
-        "content": content,
-        "updated_at_moscow": modified_text,
-        "status": "ready" if content else "empty",
-        "followups": load_ai_review_followups(target_day),
-    }
-
-
-def get_ai_review_followup_path(target_day: date) -> Path:
-    return AI_REVIEW_DIR / f"{target_day.isoformat()}_followups.json"
-
-
-def load_ai_review_followups(target_day: date) -> list[dict[str, object]]:
-    path = get_ai_review_followup_path(target_day)
-    if not path.exists():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    if not isinstance(payload, list):
-        return []
-    items: list[dict[str, object]] = []
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        items.append(
-            {
-                "id": str(item.get("id") or ""),
-                "question": str(item.get("question") or ""),
-                "answer": str(item.get("answer") or ""),
-                "model": str(item.get("model") or ""),
-                "created_at_moscow": str(item.get("created_at_moscow") or ""),
-            }
-        )
-    return items
-
-
-def save_ai_review_followups(target_day: date, items: list[dict[str, object]]) -> None:
-    path = get_ai_review_followup_path(target_day)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def build_ai_review_followup_prompt(target_day: date, review_content: str, question: str) -> str:
-    context_prompt = build_review_prompt(BASE_DIR, target_day)
-    return (
-        f"Дата разбора: {target_day.isoformat()}\n\n"
-        "Основной AI-разбор дня:\n"
-        f"{review_content.strip()}\n\n"
-        "Текущий контекст дня:\n"
-        f"{context_prompt.strip()}\n\n"
-        "Дополнительный вопрос пользователя:\n"
-        f"{question.strip()}\n"
-    )
-
-
-def run_ai_review_followup(target_day: date, question: str) -> dict[str, object]:
-    clean_question = str(question or "").strip()
-    if not clean_question:
-        raise HTTPException(status_code=400, detail="Нужно ввести вопрос к AI-разбору.")
-    ai_review = load_ai_review(target_day)
-    if not ai_review.get("available") or not str(ai_review.get("content") or "").strip():
-        raise HTTPException(status_code=400, detail="Сначала нужен основной AI-разбор за выбранную дату.")
-
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(status_code=500, detail="На сервере не задан OPENAI_API_KEY.")
-
-    model = os.getenv("OIL_AI_FOLLOWUP_MODEL", os.getenv("OIL_AI_MODEL", DEFAULT_AI_MODEL)).strip() or DEFAULT_AI_MODEL
-    prompt = build_ai_review_followup_prompt(target_day, str(ai_review.get("content") or ""), clean_question)
-    answer = request_openai_text(api_key, model, FOLLOWUP_SYSTEM_INSTRUCTIONS, prompt)
-    created_at = datetime.now(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК")
-    item = {
-        "id": uuid4().hex,
-        "question": clean_question,
-        "answer": answer.strip(),
-        "model": model,
-        "created_at_moscow": created_at,
-    }
-    followups = load_ai_review_followups(target_day)
-    followups.append(item)
-    save_ai_review_followups(target_day, followups[-12:])
-    return {
-        "ok": True,
-        "date": target_day.isoformat(),
-        "item": item,
-        "message": "Дополнительный AI-разбор готов.",
-    }
-
-
-def start_ai_review_refresh(target_day: date | None = None) -> dict[str, object]:
-    if not AI_REVIEW_SCRIPT_PATH.exists():
-        raise HTTPException(status_code=500, detail="Скрипт AI-разбора не найден на сервере.")
-    if AI_REVIEW_LOCK_PATH.exists():
-        return {
-            "started": False,
-            "status": "already_running",
-            "message": "AI-разбор уже выполняется.",
-            "date": target_day.isoformat() if target_day else None,
-        }
-
-    env = os.environ.copy()
-    env["APP_DIR"] = str(BASE_DIR)
-    if target_day is not None:
-        env["AI_TARGET_DATE"] = target_day.isoformat()
-
-    AI_REVIEW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with AI_REVIEW_LOG_PATH.open("ab") as log_handle:
-        subprocess.Popen(
-            [str(AI_REVIEW_SCRIPT_PATH)],
-            cwd=str(BASE_DIR),
-            env=env,
-            stdout=log_handle,
-            stderr=log_handle,
-            start_new_session=True,
-        )
-
-    return {
-        "started": True,
-        "status": "started",
-        "message": (
-            f"AI-разбор для {target_day.isoformat()} запущен."
-            if target_day is not None
-            else "AI-разбор запущен."
-        ),
-        "date": target_day.isoformat() if target_day else None,
-    }
 
 
 def run_trade_operations_recovery(target_day: date | None = None) -> dict[str, object]:
@@ -4864,85 +4666,10 @@ def build_dashboard_html() -> str:
       padding-top: 0;
       border-top: 0;
     }
-    .quality-ai {
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px solid rgba(102, 174, 255, 0.10);
-    }
-    .quality-ai-head,
-    .shadow-ai-head {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .quality-ai-title,
-    .shadow-ai-title {
-      color: #eef6ff;
-      font-weight: 750;
-    }
-    .quality-ai-meta,
-    .shadow-ai-meta {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .quality-ai-reason {
-      margin-top: 7px;
-      color: #bdcde0;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .shadow-ai-list,
     .allocator-candidate-list,
     .allocator-history {
       display: grid;
       gap: 10px;
-    }
-    .shadow-ai-list {
-      margin-top: 12px;
-      max-height: 480px;
-      overflow-y: auto;
-      padding-right: 6px;
-    }
-    .shadow-ai-performance {
-      margin-top: 14px;
-    }
-    .shadow-ai-card {
-      min-width: 0;
-      padding: 13px 14px;
-      border: 1px solid rgba(102, 174, 255, 0.14);
-      border-radius: 8px;
-      background: rgba(7, 14, 27, 0.58);
-    }
-    .shadow-ai-decision {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      flex-wrap: wrap;
-    }
-    .shadow-ai-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr);
-      gap: 10px;
-      margin-top: 11px;
-    }
-    .shadow-ai-field {
-      min-width: 0;
-      padding-left: 10px;
-      border-left: 2px solid rgba(67, 197, 255, 0.28);
-    }
-    .shadow-ai-field-label {
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.2;
-    }
-    .shadow-ai-field-value {
-      margin-top: 4px;
-      color: #dce9f8;
-      font-size: 12px;
-      line-height: 1.45;
-      overflow-wrap: anywhere;
     }
     .allocator-kpis {
       display: grid;
@@ -5353,7 +5080,6 @@ def build_dashboard_html() -> str:
       .toolbar-inline select {
         width: 100%;
       }
-      .shadow-ai-grid,
       .allocator-kpis,
       .allocator-candidate,
       .allocator-compare-controls,
@@ -5362,8 +5088,6 @@ def build_dashboard_html() -> str:
       .allocator-detail-grid {
         grid-template-columns: 1fr;
       }
-      .shadow-ai-head,
-      .quality-ai-head,
       .allocator-section-head {
         flex-direction: column;
       }
@@ -5545,24 +5269,6 @@ def build_dashboard_html() -> str:
           <span><span class="legend-dot" style="background:#37e6a4;"></span>Накопленный итог за 30 дней, RUB</span>
         </div>
       </div>
-    </section>
-
-    <section class="panel" style="margin-bottom:16px;">
-      <div class="section-title">
-        <div>
-          <h2>ИИ на входах AO / Чайкин</h2>
-          <p class="muted">От сигнала до закрытой сделки. ИИ пока наблюдает и не меняет входы AO.</p>
-        </div>
-      </div>
-      <div class="grid">
-        <div><div class="muted">Кандидатов AO</div><div class="metric" id="shadowAiCandidates">0</div></div>
-        <div><div class="muted">Ответов ИИ</div><div class="metric" id="shadowAiReviewed">0</div></div>
-        <div><div class="muted">Вход подтверждён</div><div class="metric" id="shadowAiConfirmed">0</div></div>
-        <div><div class="muted">Закрыто</div><div class="metric" id="shadowAiClosed">0</div></div>
-      </div>
-      <div class="trade-review-summary shadow-ai-performance" id="shadowAiPerformance"></div>
-      <p class="muted" id="shadowAiNote"></p>
-      <div id="shadowAiRows" class="shadow-ai-list"></div>
     </section>
 
     <div class="grid">
@@ -5749,8 +5455,8 @@ def build_dashboard_html() -> str:
       <div id="reviewTabQuality" class="review-tab-panel">
         <div class="muted" id="tradeQualityMeta">Качество сделок ещё рассчитывается.</div>
         <div class="quality-tabs" role="group" aria-label="Стратегия для диагностики" style="margin:12px 0;">
-          <button class="quality-tab active" type="button" data-quality-strategy="current">AO / Чайкин · текущая</button>
-          <button class="quality-tab" type="button" data-quality-strategy="archive">Часовой разворот · архив</button>
+          <button class="quality-tab active" type="button" data-quality-strategy="current">Часовой разворот · текущая</button>
+          <button class="quality-tab" type="button" data-quality-strategy="archive">AO / Чайкин · архив</button>
         </div>
         <div class="trade-review-summary" id="tradeQualityOverview"></div>
         <div class="quality-tabs" role="tablist" aria-label="Диагностика качества">
@@ -5827,28 +5533,6 @@ def build_dashboard_html() -> str:
       </table>
     </section>
 
-    <section class="panel" style="margin-top:16px;">
-      <div class="section-title">
-        <h2>AI-разбор дня</h2>
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <button id="aiReviewRefreshBtn" class="btn-secondary" type="button">Обновить AI-разбор</button>
-          <div class="generated" id="aiReviewMeta">AI-разбор: -</div>
-        </div>
-      </div>
-      <div class="muted" id="aiReviewStatus" style="margin-bottom:12px;">Ручной запуск не выполнялся.</div>
-      <div class="review-scroll tall">
-        <div id="aiReviewContent" class="prose-review muted">AI-разбор пока не загружен.</div>
-      </div>
-      <div style="margin-top:16px; display:grid; gap:10px;">
-        <label for="aiReviewFollowupInput" class="muted">Дополнительный вопрос к AI-разбору</label>
-        <textarea id="aiReviewFollowupInput" rows="4" placeholder="Например: почему бот слабо использовал движение по нефти после 18:00?" style="width:100%; resize:vertical; background:rgba(8,16,32,.75); color:#e8f0ff; border:1px solid rgba(138,163,255,.16); border-radius:14px; padding:12px;"></textarea>
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <button id="aiReviewFollowupBtn" class="btn-secondary" type="button">Задать дополнительный вопрос</button>
-          <div class="generated" id="aiReviewFollowupStatus">Дополнительный разбор не запускался.</div>
-        </div>
-      </div>
-      <div id="aiReviewFollowups" class="review-scroll" style="margin-top:16px; display:grid; gap:14px;"></div>
-    </section>
   </div>
   <div id="newsPopover" class="news-popover" role="dialog" aria-hidden="true">
     <div class="news-popover-title" id="newsPopoverTitle">Текст новости</div>
@@ -6676,60 +6360,6 @@ def build_dashboard_html() -> str:
       return rows.filter((row) => String(row.event_status || '').toLowerCase() === value);
     }
 
-    function markdownToHtml(value) {
-      const text = String(value || '')
-        .replace(/\\r\\n/g, '\\n')
-        .replace(/^```(?:markdown|md)?\\s*$/gim, '')
-        .replace(/^```\\s*$/gm, '')
-        .trim();
-      if (!text) return '<span class="muted">AI-разбор для выбранной даты пока не найден.</span>';
-      const inlineMarkdown = (raw) => escapeHtml(raw)
-        .replace(/\\*\\*([^*\\n]+?)\\*\\*/g, '<strong>$1</strong>')
-        .replace(/`([^`\\n]+?)`/g, '<code>$1</code>');
-      const blocks = [];
-      let paragraph = [];
-      let listItems = [];
-
-      const flushParagraph = () => {
-        if (!paragraph.length) return;
-        blocks.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`);
-        paragraph = [];
-      };
-      const flushList = () => {
-        if (!listItems.length) return;
-        blocks.push(`<ul>${listItems.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ul>`);
-        listItems = [];
-      };
-
-      text.split('\\n').forEach((line) => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed === '---') {
-          flushParagraph();
-          flushList();
-          return;
-        }
-        const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
-        if (heading) {
-          flushParagraph();
-          flushList();
-          const level = heading[1].length;
-          blocks.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
-          return;
-        }
-        const bullet = trimmed.match(/^[-*]\\s+(.+)$/);
-        if (bullet) {
-          flushParagraph();
-          listItems.push(bullet[1]);
-          return;
-        }
-        flushList();
-        paragraph.push(trimmed);
-      });
-      flushParagraph();
-      flushList();
-      return blocks.join('');
-    }
-
     function renderPnlChart(series, selectedDate) {
       const canvas = document.getElementById('pnlChart');
       if (!canvas) return;
@@ -7263,42 +6893,6 @@ def build_dashboard_html() -> str:
         tradeCards.insertAdjacentHTML('beforeend', '<div class="muted">Журнал сделок пока пуст.</div>');
       }
 
-      const shadowAi = data.signal_ai_entry || {};
-      const aiCounts = shadowAi.counts || {};
-      const aiGroups = shadowAi.by_action || {};
-      document.getElementById('shadowAiCandidates').textContent = aiCounts.candidates ?? 0;
-      document.getElementById('shadowAiReviewed').textContent = `${aiCounts.reviewed ?? 0} / ${aiCounts.candidates ?? 0}`;
-      document.getElementById('shadowAiConfirmed').textContent = `${aiCounts.confirmed ?? 0} / ${aiCounts.selected ?? 0}`;
-      document.getElementById('shadowAiClosed').textContent = `${aiCounts.closed ?? 0} / ${aiCounts.confirmed ?? 0}`;
-      const aiCard = (label, group) => {
-        const g = aiGroups[group] || {};
-        const closed = Number(g.closed || 0);
-        const net = closed ? formatSignedRub(g.net_pnl_rub || 0) : '—';
-        return buildTradeSummaryCard(label, net,
-          `${g.reviewed || 0} советов · ${g.executed || 0} входов · ${closed} закрыто · ${g.wins || 0} в плюс${g.average_r == null ? '' : ` · средний R ${Number(g.average_r).toFixed(2)} (${g.r_evaluated || 0})`}`,
-          closed ? (Number(g.net_pnl_rub || 0) >= 0 ? 'good' : 'bad') : '');
-      };
-      const checked = Number(aiCounts.price_checked_4h || 0);
-      document.getElementById('shadowAiPerformance').innerHTML = aiCounts.candidates ? [
-        aiCard('ИИ: вход · NET закрытых', 'enter'),
-        aiCard('ИИ: пропустить · NET закрытых', 'abstain'),
-        buildTradeSummaryCard('Диагностика цены 4ч', checked ? `${checked} проверено` : '—',
-          `Вход: ${aiCounts.enter_favorable_4h || 0} из ${aiCounts.enter_checked_4h || 0} по цене · пропуск: ${aiCounts.abstain_unfavorable_4h || 0} из ${aiCounts.abstain_checked_4h || 0} · поздняя цена: ${aiCounts.price_check_late || 0}`),
-      ].join('') : '';
-      document.getElementById('shadowAiNote').textContent = aiCounts.candidates
-        ? `Ошибки на закрытых: ИИ поддержал убыточный вход ${aiCounts.supported_losers || 0} из ${aiGroups.enter?.closed || 0}; советовал пропустить прибыльный ${aiCounts.abstain_winners || 0} из ${aiGroups.abstain?.closed || 0}. ${aiCounts.unavailable || 0} ответов не получено · ${aiCounts.unmatched_closed || 0} закрытых без надёжной связи. Группы наблюдательные, эффект ИИ не доказан; проверка 4ч не является прибылью.`
-        : 'После перехода на AO ещё нет кандидатов для оценки ИИ. Исторические ответы относились к прежней стратегии и не входят в эту выборку.';
-      const shadowAiRows = document.getElementById('shadowAiRows');
-      shadowAiRows.innerHTML = (shadowAi.recent || []).length
-        ? shadowAi.recent.map(item => {
-            const ai = item.ai_action || (item.ai_status === 'unavailable' ? 'НЕТ ОТВЕТА' : 'ОЖИДАЕТ');
-            const execution = ['confirmed_open', 'recovered_open'].includes(item.execution_status)
-              ? 'ВХОД ПОДТВЕРЖДЁН' : item.decision === 'selected' ? 'ВХОД НЕ ПОДТВЕРЖДЁН' : 'ОТЛОЖЕН';
-            const net = item.closed_net_pnl_rub == null ? 'сделка ещё не закрыта или не связана' : formatSignedRub(item.closed_net_pnl_rub);
-            return `<article class="shadow-ai-card"><div class="shadow-ai-head"><div><div class="shadow-ai-title">${escapeHtml(instrumentText(item.symbol || '-'))}</div><div class="shadow-ai-meta">${escapeHtml(formatMoscowTime(item.observed_at || ''))} МСК · ${escapeHtml(item.candidate_id || '')}</div></div><div class="shadow-ai-decision">${signalBadge(item.signal || '-')}<span class="badge hold">${escapeHtml(ai)}</span></div></div><div class="shadow-ai-grid"><div class="shadow-ai-field"><div class="shadow-ai-field-label">Решение</div><div class="shadow-ai-field-value">${escapeHtml(execution)}${item.defer_kind ? ' · '+escapeHtml(item.defer_kind) : ''}</div></div><div class="shadow-ai-field"><div class="shadow-ai-field-label">Итог NET</div><div class="shadow-ai-field-value">${escapeHtml(net)}</div></div><div class="shadow-ai-field"><div class="shadow-ai-field-label">Причина ИИ</div><div class="shadow-ai-field-value">${escapeHtml(item.ai_reason || 'Нет ответа')}<br><span class="muted">${escapeHtml(item.model || 'модель не записана')} · ${escapeHtml(item.prompt_version || 'версия промпта не записана')}</span></div></div></div></article>`;
-          }).join('')
-        : '';
-
       const review = data.trade_review || {};
       document.getElementById('reviewClosed').textContent = review.closed_count ?? 0;
       document.getElementById('reviewWins').textContent = review.wins ?? 0;
@@ -7441,13 +7035,13 @@ def build_dashboard_html() -> str:
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
       const entryPathAnalysis = tradeQuality.entry_path_analysis || {};
       const aoEntryHypotheses = data.ao_chaikin_shadow?.entry_hypotheses || {};
-      const strategyHypotheses = selectedQualityStrategy === 'current'
+      const strategyHypotheses = selectedQualityStrategy === 'archive'
         ? (Array.isArray(aoEntryHypotheses.items) ? aoEntryHypotheses.items : [])
         : (Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : []);
-      const strategyHypothesesSummary = selectedQualityStrategy === 'current'
+      const strategyHypothesesSummary = selectedQualityStrategy === 'archive'
         ? (aoEntryHypotheses.summary || {})
         : {};
-      const strategyHypothesesByReason = selectedQualityStrategy === 'current' && Array.isArray(aoEntryHypotheses.by_reason)
+      const strategyHypothesesByReason = selectedQualityStrategy === 'archive' && Array.isArray(aoEntryHypotheses.by_reason)
         ? aoEntryHypotheses.by_reason
         : [];
       const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
@@ -7461,7 +7055,7 @@ def build_dashboard_html() -> str:
         button.classList.toggle('active', button.dataset.qualityStrategy === selectedQualityStrategy);
       });
       tradeQualityMeta.textContent = qualityWorkspace.available
-        ? `${selectedQualityStrategy === 'archive' ? 'Архив часового разворота' : 'Текущая AO / Чайкин с 22.09'} · период ${qualityWorkspace.period_days || 30} дней · обновлено ${formatMoscowTime(qualityWorkspace.generated_at || '')}. Расчёт по часовым свечам; минутные данные — на границах сделки.`
+        ? `${selectedQualityStrategy === 'archive' ? 'Архив AO / Чайкин' : 'Текущий часовой разворот'} · период ${qualityWorkspace.period_days || 30} дней · обновлено ${formatMoscowTime(qualityWorkspace.generated_at || '')}. Расчёт по часовым свечам; минутные данные — на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
       const capture = qualityOverview.profit_capture_pct == null ? '-' : `${Number(qualityOverview.profit_capture_pct).toFixed(1)}%`;
       const commissionShare = qualityOverview.commission_share_pct == null ? 'нет базы' : `${Number(qualityOverview.commission_share_pct).toFixed(1)}% валового результата`;
@@ -7469,7 +7063,7 @@ def build_dashboard_html() -> str:
         ? `среднее продолжение +${Number(qualityOverview.average_early_exit_4h_pct || 0).toFixed(2)}% за 4ч`
         : 'пока нет подтверждённых';
       tradeQualityOverview.innerHTML = qualityWorkspace.available && Number(qualityOverview.closed_trades || 0) === 0
-        ? '<div class="muted">Закрытых сделок этой стратегии пока нет. Показатели результата появятся после первого закрытия; проверка условного выхода AO уже доступна во вкладке «Выходы».</div>'
+        ? '<div class="muted">Закрытых сделок этой стратегии пока нет. Показатели результата появятся после первого закрытия.</div>'
         : qualityWorkspace.available ? [
         buildTradeSummaryCard('Итог после комиссии', formatSignedRub(qualityOverview.net_pnl_rub || 0), `${Number(qualityOverview.closed_trades || 0)} закрытых сделок`, Number(qualityOverview.net_pnl_rub || 0) >= 0 ? 'good' : 'bad'),
         buildTradeSummaryCard('Доля прибыльных', `${Number(qualityOverview.win_rate_pct || 0).toFixed(1)}%`, `${Number(qualityOverview.wins || 0)} в плюс · ${Number(qualityOverview.losses || 0)} в минус`),
@@ -7477,19 +7071,19 @@ def build_dashboard_html() -> str:
         buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
         buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
         buildTradeSummaryCard(
-          selectedQualityStrategy === 'current' ? 'Почти-входы AO' : 'Проверка удержаний',
-          selectedQualityStrategy === 'current'
+          selectedQualityStrategy === 'archive' ? 'Почти-входы AO' : 'Проверка удержаний',
+          selectedQualityStrategy === 'archive'
             ? `${strategyHypothesesSummary.confirmed || 0} из ${strategyHypothesesSummary.evaluated || 0}`
             : `${qualityOverview.strategy_hypotheses_positive_count || 0} из ${qualityOverview.strategy_hypotheses_evaluated_count || 0}`,
-          selectedQualityStrategy === 'current'
+          selectedQualityStrategy === 'archive'
             ? `${strategyHypothesesSummary.waiting || 0} ожидают оценки через 4 часа`
             : qualityOverview.strategy_hypotheses_evaluated_count
               ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_observations_count || 0} существенных`
               : 'часовые окна после HOLD ещё копятся'
         ),
       ].join('') : '';
-      qualityEntryPathBlock.hidden = selectedQualityStrategy !== 'current';
-      if (selectedQualityStrategy === 'current') {
+      qualityEntryPathBlock.hidden = selectedQualityStrategy !== 'archive';
+      if (selectedQualityStrategy === 'archive') {
         const entryPathRows = Array.isArray(entryPathAnalysis.paths) ? entryPathAnalysis.paths : [];
         const statusLabels = {
           no_entries: 'Ждём первые входы',
@@ -7586,9 +7180,6 @@ def build_dashboard_html() -> str:
                 ${value == null ? '' : `<div class="quality-horizon-delta ${deltaClass}">${escapeHtml(formatSignedRub(delta || 0))} относительно факта</div>`}
               </div>`;
             }).join('');
-            const hasAIReview = Boolean(item.shadow_ai_action);
-            const aiAction = ({ENTER: 'ВОЙТИ', HOLD: 'УДЕРЖИВАТЬ', EXIT: 'ВЫЙТИ', REVERSE: 'ПЕРЕВЕРНУТЬ', ABSTAIN: 'ВОЗДЕРЖАТЬСЯ'})[item.shadow_ai_action] || item.shadow_ai_action || 'ОЦЕНКА НЕ СОХРАНЯЛАСЬ';
-            const aiConfidence = hasAIReview && item.shadow_ai_confidence != null ? `${(Number(item.shadow_ai_confidence) * 100).toFixed(0)}%` : '';
             const excursion = item.mfe_pct == null
               ? 'ещё не рассчитано'
               : `+${Number(item.mfe_pct || 0).toFixed(2)}% / -${Number(item.mae_pct || 0).toFixed(2)}%`;
@@ -7610,17 +7201,12 @@ def build_dashboard_html() -> str:
               <div class="quality-horizon-grid">${holdTiles}</div>
               <div class="quality-card-note"><strong>Проверка выхода:</strong> ${escapeHtml(holdConclusion)}</div>
               <div class="quality-card-note"><strong>Выход:</strong> ${escapeHtml(shortDiagnosticText(item.exit_reason || 'причина не сохранена', 180))}</div>
-              <div class="quality-ai">
-                <div class="quality-ai-head"><div class="quality-ai-title">Теневой ИИ</div><div class="quality-ai-meta">${escapeHtml(aiAction)}${aiConfidence ? ` · уверенность ${escapeHtml(aiConfidence)}` : ''}</div></div>
-                <div class="quality-ai-reason"><strong>${hasAIReview ? 'Почему:' : 'Статус:'}</strong> ${escapeHtml(item.shadow_ai_reason ? shortDiagnosticText(item.shadow_ai_reason, 220) : 'На момент этого входа оценка ИИ ещё не записывалась в историю сделки.')}</div>
-                ${item.shadow_ai_risk_note ? `<div class="quality-ai-reason"><strong>Риск:</strong> ${escapeHtml(shortDiagnosticText(item.shadow_ai_risk_note, 180))}</div>` : ''}
-              </div>
             </article>`;
           }).join('')
         : '<div class="muted">Нет закрытых сделок для лаборатории за период.</div>';
       const exitExperiment = qualityWorkspace.exit_experiment || {};
       const exitExperimentEl = document.getElementById('aoExitExperiment');
-      exitExperimentEl.innerHTML = selectedQualityStrategy === 'current' ? `<article class="quality-card">
+      exitExperimentEl.innerHTML = selectedQualityStrategy === 'archive' ? `<article class="quality-card">
         <div class="quality-card-head"><div><div class="quality-card-title">Гипотеза: удержать AO ещё 2 часа</div>
         <div class="quality-card-meta">Теневые выходы AO · оценка на 1 лот · не фактический P&L</div></div></div>
         <div class="quality-metric-grid">
@@ -7651,11 +7237,11 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
-      if (selectedQualityStrategy === 'current') {
+      if (selectedQualityStrategy === 'archive') {
         const confirmedRate = strategyHypothesesSummary.confirmed_rate_pct == null
           ? 'ещё нет оценки'
           : `${Number(strategyHypothesesSummary.confirmed_rate_pct).toFixed(0)}%`;
-        strategyHypothesesIntro.textContent = 'Почти-входы текущей стратегии AO: фильтр остановил вход, после чего движение проверяется через 1, 2, 4 и 8 часов. Это условная проверка цены, а не фактическая сделка или доход.';
+        strategyHypothesesIntro.textContent = 'Архивные почти-входы AO: фильтр остановил вход, после чего движение проверялось через 1, 2, 4 и 8 часов. Это условная проверка цены, а не фактическая сделка или доход.';
         strategyHypothesesOverview.innerHTML = [
           buildTradeSummaryCard('Почти-входы', String(strategyHypothesesSummary.eligible || 0), `${strategyHypothesesSummary.eligible_observations || 0} отдельных наблюдений`),
           buildTradeSummaryCard('Оценено через 4 часа', String(strategyHypothesesSummary.evaluated || 0), `${strategyHypothesesSummary.waiting || 0} ещё накапливаются`),
@@ -7703,7 +7289,7 @@ def build_dashboard_html() -> str:
             }).join('')
           : '<div class="muted">Почти-входов пока нет. Обычные часы без сформированного сигнала сюда не попадают.</div>';
       } else {
-        strategyHypothesesIntro.textContent = 'Архив прежней стратегии: уникальные движения после решения «воздержаться». Повторные наблюдения одного движения объединены.';
+        strategyHypothesesIntro.textContent = 'Текущая стратегия: уникальные движения после решения «воздержаться». Повторные наблюдения одного движения объединены.';
         strategyHypothesesOverview.innerHTML = '';
         strategyHypothesesReasons.innerHTML = '';
         strategyHypothesesBody.innerHTML = sortedStrategyHypotheses.length
@@ -7719,87 +7305,9 @@ def build_dashboard_html() -> str:
                 <div class="quality-card-note"><strong>Почему не вошли:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 260))}</div>
               </article>`;
             }).join('')
-          : '<div class="muted">В архиве нет подтверждённых пропущенных движений.</div>';
+          : '<div class="muted">Нет подтверждённых пропущенных движений.</div>';
       }
 
-const aiReview = data.ai_review || {};
-      document.getElementById('aiReviewMeta').textContent = aiReview.available
-        ? `AI-разбор: ${aiReview.source || '-'} • обновлено ${aiReview.updated_at_moscow || '-'}`
-        : `AI-разбор: пока нет${aiReview.updated_at_moscow ? ` • последняя попытка ${aiReview.updated_at_moscow}` : ''}`;
-      document.getElementById('aiReviewContent').innerHTML = markdownToHtml(aiReview.content || '');
-      const aiFollowupsEl = document.getElementById('aiReviewFollowups');
-      if (aiFollowupsEl) {
-        const followups = Array.isArray(aiReview.followups) ? aiReview.followups : [];
-        aiFollowupsEl.innerHTML = '';
-        for (const item of followups.slice().reverse()) {
-          aiFollowupsEl.insertAdjacentHTML('beforeend', `
-            <div class="glass-card">
-              <div class="muted" style="margin-bottom:8px;">Дополнительный вопрос • ${escapeHtml(item.created_at_moscow || '-')} • ${escapeHtml(item.model || '-')}</div>
-              <div style="font-weight:600; margin-bottom:10px;">${escapeHtml(item.question || '-')}</div>
-              <div class="prose-review">${markdownToHtml(item.answer || '')}</div>
-            </div>
-          `);
-        }
-      }
-    }
-
-    async function refreshAIReview() {
-      const dateInput = document.getElementById('selectedDate');
-      const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
-      const btn = document.getElementById('aiReviewRefreshBtn');
-      const status = document.getElementById('aiReviewStatus');
-      if (!btn || !status) return;
-      btn.disabled = true;
-      status.textContent = 'Запускаю AI-разбор...';
-      try {
-        const response = await fetch(`/api/ai-review/refresh${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`, {
-          method: 'POST',
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.detail || payload.message || 'Не удалось запустить AI-разбор.');
-        }
-        status.textContent = payload.message || 'AI-разбор запущен.';
-        window.setTimeout(loadData, 4000);
-      } catch (error) {
-        status.textContent = error?.message || 'Не удалось запустить AI-разбор.';
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
-    async function askAIReviewFollowup() {
-      const dateInput = document.getElementById('selectedDate');
-      const selectedDate = dateInput && dateInput.value ? dateInput.value : '';
-      const input = document.getElementById('aiReviewFollowupInput');
-      const btn = document.getElementById('aiReviewFollowupBtn');
-      const status = document.getElementById('aiReviewFollowupStatus');
-      const question = input && input.value ? input.value.trim() : '';
-      if (!input || !btn || !status) return;
-      if (!question) {
-        status.textContent = 'Сначала введи вопрос к AI-разбору.';
-        return;
-      }
-      btn.disabled = true;
-      status.textContent = 'Запрашиваю дополнительный AI-разбор...';
-      try {
-        const response = await fetch(`/api/ai-review/followup${selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : ''}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question }),
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.detail || payload.message || 'Не удалось получить дополнительный AI-разбор.');
-        }
-        status.textContent = payload.message || 'Дополнительный AI-разбор готов.';
-        input.value = '';
-        await loadData();
-      } catch (error) {
-        status.textContent = error?.message || 'Не удалось получить дополнительный AI-разбор.';
-      } finally {
-        btn.disabled = false;
-      }
     }
 
     async function recoverTradeOperations() {
@@ -7883,14 +7391,6 @@ const aiReview = data.ai_review || {};
       }
       if (dateInput) {
         dateInput.addEventListener('change', refreshDashboard);
-      }
-      const aiRefreshBtn = document.getElementById('aiReviewRefreshBtn');
-      if (aiRefreshBtn) {
-        aiRefreshBtn.addEventListener('click', refreshAIReview);
-      }
-      const aiFollowupBtn = document.getElementById('aiReviewFollowupBtn');
-      if (aiFollowupBtn) {
-        aiFollowupBtn.addEventListener('click', askAIReviewFollowup);
       }
       const tradeRecoveryBtn = document.getElementById('tradeRecoveryBtn');
       if (tradeRecoveryBtn) {
@@ -8032,8 +7532,6 @@ def api_dashboard(date: str | None = None) -> dict:
         "portfolio": portfolio_view,
         "runtime": runtime,
         "news": load_news_snapshot(),
-        "signal_ai_shadow": load_signal_ai_shadow_summary(),
-        "signal_ai_entry": load_signal_ai_entry_workspace(),
         "ao_chaikin_shadow": build_dashboard_ao_shadow_payload(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),
@@ -8047,7 +7545,6 @@ def api_dashboard(date: str | None = None) -> dict:
         "manual_instruments": build_manual_instruments_payload(),
         "instrument_catalog": instrument_catalog,
         "daily": build_daily_performance(portfolio, target_day, accounting_history),
-        "ai_review": load_ai_review(target_day),
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }
@@ -8080,29 +7577,6 @@ def api_shadow_strategy() -> JSONResponse:
 @app.get("/api/strategy-research", response_class=JSONResponse)
 def api_strategy_research() -> JSONResponse:
     return JSONResponse(content=load_strategy_research_workspace(), headers=NO_CACHE_HEADERS)
-
-
-@app.post("/api/ai-review/refresh", response_class=JSONResponse)
-def api_ai_review_refresh(date: str | None = None) -> dict:
-    target_day: date | None = None
-    if date:
-        try:
-            target_day = datetime.strptime(date, "%Y-%m-%d").date()
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
-    return start_ai_review_refresh(target_day)
-
-
-@app.post("/api/ai-review/followup", response_class=JSONResponse)
-def api_ai_review_followup(payload: dict = Body(default={}), date: str | None = None) -> dict:
-    target_day = datetime.now(MOSCOW_TZ).date()
-    if date:
-        try:
-            target_day = datetime.strptime(date, "%Y-%m-%d").date()
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD.") from error
-    question = str((payload or {}).get("question") or "").strip()
-    return run_ai_review_followup(target_day, question)
 
 
 @app.post("/api/trades/recover", response_class=JSONResponse)

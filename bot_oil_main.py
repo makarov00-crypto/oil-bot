@@ -50,7 +50,6 @@ from news_ingest import (
 )
 from strategy_engine import evaluate_primary_signal_bundle, evaluate_owned_signal_bundle
 from strategies.ao_chaikin_1h import (
-    build_entry_context as build_ao_chaikin_entry_context,
     LIVE_STRATEGY_VERSION as AO_CANARY_STRATEGY_VERSION,
     RISK_MULTIPLIER as AO_RISK_MULTIPLIER,
     is_ao_chaikin_strategy,
@@ -12409,42 +12408,6 @@ def process_instrument(
                                                 "open_risk_reserved_rub": float((allocator_sizing or {}).get("reserved_open_risk_rub") or 0.0),
                                                 "open_risk_available_rub": float((allocator_sizing or {}).get("available_open_risk_rub") or 0.0),
                                                 "risk_per_contract_rub": float((allocator_sizing or {}).get("money_risk_per_contract_rub") or 0.0),
-                                                    "shadow_ai_context": {
-                                                    "close": round(float(lower_df.iloc[-1].get("close") or 0.0), 6),
-                                                    "ema20": round(float(lower_df.iloc[-1].get("ema20") or 0.0), 6),
-                                                    "distance_to_ema20_pct": round(
-                                                        abs(
-                                                            float(lower_df.iloc[-1].get("close") or 0.0)
-                                                            - float(lower_df.iloc[-1].get("ema20") or 0.0)
-                                                        )
-                                                        / max(abs(float(lower_df.iloc[-1].get("close") or 0.0)), 1e-9),
-                                                        5,
-                                                    ),
-                                                    "macd": round(float(lower_df.iloc[-1].get("macd") or 0.0), 6),
-                                                    "macd_signal": round(float(lower_df.iloc[-1].get("macd_signal") or 0.0), 6),
-                                                    "macd_histogram": round(
-                                                        float(lower_df.iloc[-1].get("macd") or 0.0)
-                                                        - float(lower_df.iloc[-1].get("macd_signal") or 0.0),
-                                                        6,
-                                                    ),
-                                                    "ao": round(float(lower_df.iloc[-1].get("ao") or 0.0), 6),
-                                                    "rsi": round(float(lower_df.iloc[-1].get("rsi") or 0.0), 3),
-                                                    "stochastic_k": round(float(lower_df.iloc[-1].get("stoch_k") or 0.0), 3),
-                                                    "stochastic_d": round(float(lower_df.iloc[-1].get("stoch_d") or 0.0), 3),
-                                                    "entry_path": str(state.last_entry_path or "standard"),
-                                                    "late_entry_warning": "late entry мягкий" in reason.lower(),
-                                                    "volume_ratio": round(float(regime_metrics.get("volume_ratio") or 0.0), 3),
-                                                    "atr_pct": round(float(regime_metrics.get("atr_pct") or 0.0), 5),
-                                                    "session": session_name,
-                                                    "news_bias": format_trading_news_bias_label(news_bias),
-                                                    "news_impact": describe_news_bias_impact(signal, news_bias),
-                                                    "position": "FLAT",
-                                                    **(
-                                                        build_ao_chaikin_entry_context(lower_df)
-                                                        if is_ao_chaikin_strategy(primary_strategy_name)
-                                                        else {}
-                                                    ),
-                                                },
                                             }
                                             state.last_allocator_summary = (
                                                 f"{state.last_allocator_summary} "
@@ -12564,16 +12527,11 @@ def run_bot() -> int:
                                 cycle_candidates.append(candidate)
                         maybe_start_v35_shadow_refresh()
                         manage_v35_shadow_positions(client, watchlist)
-                        apply_signal_ai_shadow_reviews(cycle_candidates)
-                        ranked_candidates, ai_canary_deferred = filter_signal_ai_canary_candidates(cycle_candidates)
-                        ranked_candidates, ao_canary_deferred = filter_ao_canary_candidates(
-                            client, config, ranked_candidates
-                        )
+                        ranked_candidates = cycle_candidates
                         selected_candidates, deferred_candidates = rank_cycle_entry_candidates(
                             ranked_candidates,
-                            max_entries=1 if config.ao_canary_enabled else 2,
+                            max_entries=2,
                         )
-                        deferred_candidates = [*ai_canary_deferred, *ao_canary_deferred, *deferred_candidates]
                         for item in deferred_candidates:
                             append_signal_observation_decision(
                                 item,
@@ -12652,9 +12610,6 @@ def run_bot() -> int:
                             defer_reason = str(item.get("defer_reason") or "кандидат отложен аллокатором")
                             mark_cycle_deferred_candidate(item, defer_reason)
                             logging.info("symbol=%s status=entry_deferred_cycle_rank reason=%s", symbol, defer_reason)
-                        retried_shadow_reviews = retry_signal_ai_shadow_reviews()
-                        if retried_shadow_reviews:
-                            logging.info("signal_ai_shadow_retries_completed count=%s", retried_shadow_reviews)
                         recovered_closes = reconcile_missing_trade_closes_from_broker(client, config, watchlist)
                         journal_integrity_alert = ""
                         if recovered_closes:
@@ -12663,7 +12618,6 @@ def run_bot() -> int:
                             if journal_integrity_alert:
                                 logging.warning(journal_integrity_alert)
                         update_signal_observation_outcomes(client, config, watchlist)
-                        update_signal_ai_shadow_outcomes(client, config, watchlist)
                         update_news_event_outcomes(client, config, watchlist)
                         maybe_start_trade_quality_refresh()
                         maybe_park_free_cash_in_fund(client, config, watchlist, cash_fund, cycle_candidates)

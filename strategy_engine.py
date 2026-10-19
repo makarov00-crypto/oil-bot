@@ -4,6 +4,7 @@ from strategies.ao_chaikin_1h import STRATEGY_NAME, evaluate_signal as evaluate_
 
 
 PRIMARY_EVALUATORS = {
+    "reversal_1h": evaluate_reversal_1h,
     STRATEGY_NAME: evaluate_ao_chaikin_1h,
 }
 
@@ -35,4 +36,4 @@ def evaluate_primary_signal_bundle(df, config, instrument, higher_tf_bias: str) 
         hold_reasons.append(f"{strategy_name}: {reason}")
 
     combined_reason = " | ".join(hold_reasons) if hold_reasons else "Нет доступных стратегий для инструмента."
-    return "HOLD", combined_reason, strategy_names[0] if strategy_names else STRATEGY_NAME
+    return "HOLD", combined_reason, strategy_names[0] if strategy_names else "reversal_1h"

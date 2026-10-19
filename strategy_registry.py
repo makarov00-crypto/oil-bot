@@ -1,5 +1,7 @@
 from instrument_groups import GROUP_BY_SYMBOL, get_symbol_template
-from strategies.ao_chaikin_1h import STRATEGY_NAME
+
+
+STRATEGY_NAME = "reversal_1h"
 
 PRIMARY_STRATEGIES_BY_GROUP = {
     "commodities": [STRATEGY_NAME],

@@ -70,12 +70,12 @@ class AoLiveIntegrationTests(unittest.TestCase):
         self.assertEqual(restored.pending_order_side, "SHORT")
         self.assertEqual(restored.pending_order_qty, 2)
 
-    def test_flat_position_uses_ao_even_with_stale_legacy_owner(self):
+    def test_flat_position_uses_restored_reversal_even_with_stale_owner(self):
         state = mod.InstrumentState(entry_strategy=LEGACY, last_strategy_name=LEGACY)
         actual = mod.evaluate_position_owned_signal(
             self.frame, self.config, self.instrument, "", state,
         )
-        self.assertEqual(actual[2], AO)
+        self.assertEqual(actual[2], LEGACY)
 
     def test_missing_owner_persists_legacy_and_uses_closed_candle_stop(self):
         state = mod.InstrumentState(

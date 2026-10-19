@@ -1,4 +1,5 @@
 import json
+import inspect
 import os
 import tempfile
 import unittest
@@ -13,6 +14,13 @@ from trade_storage import append_signal_observation, load_signal_observations
 
 
 class SignalAiReviewerTests(unittest.TestCase):
+    def test_live_loop_does_not_run_shadow_ai_or_ai_canary(self) -> None:
+        source = inspect.getsource(bot.run_bot)
+        self.assertNotIn("apply_signal_ai_shadow_reviews(", source)
+        self.assertNotIn("filter_signal_ai_canary_candidates(", source)
+        self.assertNotIn("retry_signal_ai_shadow_reviews(", source)
+        self.assertNotIn("update_signal_ai_shadow_outcomes(", source)
+
     def test_ao_prompt_uses_live_ao_indicators_without_legacy_ao(self) -> None:
         prompt = reviewer.build_signal_ai_prompt([{
             "symbol": "BRV6", "signal": "LONG", "strategy_name": "ao_chaikin_1h",

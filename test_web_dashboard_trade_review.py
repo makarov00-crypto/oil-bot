@@ -72,7 +72,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_trade_quality_tabs_use_structured_cards(self) -> None:
         html = dashboard.build_dashboard_html()
-        quality_render = html.split("qualityTradesBody.innerHTML =", 1)[1].split("const aiReview", 1)[0]
+        quality_render = html.split("qualityTradesBody.innerHTML =", 1)[1].split("const exitExperiment", 1)[0]
 
         self.assertIn('class="quality-card"', quality_render)
         self.assertIn('class="quality-horizon-grid"', quality_render)
@@ -85,7 +85,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("Ожидает оценки", html)
         self.assertNotIn('id="qualityShadowCount"', html)
         self.assertNotIn('id="shadowStrategyDecisions"', html)
-        self.assertIn('class="quality-ai"', quality_render)
+        self.assertNotIn('class="quality-ai"', quality_render)
         self.assertNotIn("buildReviewRowRich(", quality_render)
         self.assertIn('id="qualityEntryPathBlock"', html)
         self.assertIn('id="qualityEntryPathOverview"', html)
@@ -96,8 +96,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
     def test_exit_experiment_is_in_quality_and_research_page_redirects(self) -> None:
         dashboard_html = dashboard.build_dashboard_html()
         self.assertNotIn('href="/shadow-strategy"', dashboard_html)
-        self.assertIn('id="shadowAiCandidates"', dashboard_html)
-        self.assertIn('id="shadowAiPerformance"', dashboard_html)
+        self.assertNotIn('id="shadowAiCandidates"', dashboard_html)
+        self.assertNotIn('id="shadowAiPerformance"', dashboard_html)
         self.assertIn('id="aoExitExperiment"', dashboard_html)
         self.assertEqual(dashboard.shadow_strategy().headers["location"], "/#trade-review-quality-exits")
 
@@ -180,6 +180,18 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("if (!selectedDate && initialDashboardRequest)", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_dashboard_excludes_retired_ai_sections_and_routes(self) -> None:
+        html = dashboard.build_dashboard_html()
+        paths = {route.path for route in dashboard.app.routes}
+
+        self.assertNotIn("ИИ на входах AO / Чайкин", html)
+        self.assertNotIn("AI-разбор дня", html)
+        self.assertNotIn("shadowAiCandidates", html)
+        self.assertNotIn("aiReviewRefreshBtn", html)
+        self.assertNotIn("/api/ai-review/refresh", paths)
+        self.assertNotIn("/api/ai-review/followup", paths)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_all_trade_rows_are_cached_until_storage_changes(self) -> None:
         row = {"time": "2026-10-19T10:00:00+03:00", "event": "OPEN", "symbol": "BRX6"}
         with TemporaryDirectory() as temp_dir:
@@ -231,22 +243,23 @@ class DashboardTradeReviewTests(unittest.TestCase):
             with patch.object(dashboard, "TRADE_QUALITY_ANALYTICS_PATH", analytics_path):
                 result = dashboard.load_trade_quality_analytics()
 
-        self.assertEqual(result["trades"][0]["exit_time"], "2026-08-12T10:00:00+03:00")
-        self.assertEqual(result["archive"]["trades"][0]["exit_time"], "2026-08-13T10:00:00+03:00")
-        self.assertEqual(result["overview"]["net_pnl_rub"], 5)
-        self.assertEqual(result["archive"]["overview"]["net_pnl_rub"], -100)
+        self.assertEqual(result["trades"][0]["exit_time"], "2026-08-13T10:00:00+03:00")
+        self.assertEqual(result["archive"]["trades"][0]["exit_time"], "2026-08-12T10:00:00+03:00")
+        self.assertEqual(result["overview"]["net_pnl_rub"], -100)
+        self.assertEqual(result["archive"]["overview"]["net_pnl_rub"], 5)
         self.assertEqual(result["missed_entries"], [])
-        self.assertEqual(result["strategy_hypotheses"][0]["observed_at"], "2026-08-11T12:00:00+03:00")
+        self.assertEqual(result["strategy_hypotheses"], [])
+        self.assertEqual(result["archive"]["strategy_hypotheses"][0]["observed_at"], "2026-08-11T12:00:00+03:00")
         self.assertEqual(result["unexecuted_entries"], [])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_shadow_ai_review_uses_structured_fields(self) -> None:
+    def test_shadow_ai_review_is_not_rendered(self) -> None:
         html = dashboard.build_dashboard_html()
 
-        self.assertIn('class="shadow-ai-card"', html)
-        self.assertIn('class="shadow-ai-field-label">Решение', html)
-        self.assertIn('class="shadow-ai-field-label">Итог NET', html)
-        self.assertIn('class="shadow-ai-field-label">Причина ИИ', html)
+        self.assertNotIn('class="shadow-ai-card"', html)
+        self.assertNotIn('class="shadow-ai-field-label">Решение', html)
+        self.assertNotIn('class="shadow-ai-field-label">Итог NET', html)
+        self.assertNotIn('class="shadow-ai-field-label">Причина ИИ', html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_shadow_ai_abstention_is_correct_when_original_signal_loses(self) -> None:
@@ -894,50 +907,6 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(view["bot_realized_pnl_rub"], 2745.0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_load_ai_review_does_not_fallback_to_latest_for_historical_day(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            review_dir = dashboard.Path(temp_dir)
-            (review_dir / "latest_review.md").write_text("# latest", encoding="utf-8")
-
-            with patch.object(dashboard, "AI_REVIEW_DIR", review_dir):
-                payload = dashboard.load_ai_review(date(2026, 4, 24))
-
-        self.assertFalse(payload["available"])
-        self.assertEqual(payload["status"], "missing")
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_load_ai_review_uses_latest_for_today_when_dated_missing(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            review_dir = dashboard.Path(temp_dir)
-            (review_dir / "latest_review.md").write_text("# AI Review 2026-04-24", encoding="utf-8")
-
-            with patch.object(dashboard, "AI_REVIEW_DIR", review_dir), patch.object(
-                dashboard, "datetime"
-            ) as fake_datetime:
-                fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
-                fake_datetime.fromtimestamp.side_effect = datetime.fromtimestamp
-                payload = dashboard.load_ai_review(date(2026, 4, 24))
-
-        self.assertTrue(payload["available"])
-        self.assertEqual(payload["source"], "latest_review.md")
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_load_ai_review_rejects_latest_from_another_day(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            review_dir = dashboard.Path(temp_dir)
-            (review_dir / "latest_review.md").write_text("# AI Review 2026-04-22", encoding="utf-8")
-
-            with patch.object(dashboard, "AI_REVIEW_DIR", review_dir), patch.object(
-                dashboard, "datetime"
-            ) as fake_datetime:
-                fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
-                fake_datetime.fromtimestamp.side_effect = datetime.fromtimestamp
-                payload = dashboard.load_ai_review(date(2026, 4, 24))
-
-        self.assertFalse(payload["available"])
-        self.assertEqual(payload["status"], "missing")
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_api_dashboard_loads_full_day_trades_before_annotation(self) -> None:
         with patch.object(dashboard, "load_states", return_value={}), patch.object(
             dashboard, "load_portfolio_snapshot", return_value={}
@@ -957,9 +926,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
             dashboard, "summarize_states", return_value={}
         ), patch.object(dashboard, "load_meta", return_value={}), patch.object(
             dashboard, "build_manual_instruments_payload", return_value=[]
-        ), patch.object(dashboard, "build_daily_performance", return_value={}), patch.object(
-            dashboard, "load_ai_review", return_value={}
-        ):
+        ), patch.object(dashboard, "build_daily_performance", return_value={}):
             dashboard.api_dashboard("2026-04-24")
 
         rows_mock.assert_called_once_with(date(2026, 4, 24), None)
