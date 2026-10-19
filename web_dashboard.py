@@ -2219,6 +2219,21 @@ def humanize_strategy_name(strategy: str | None) -> str:
     return mapping.get(value, value or "неизвестная стратегия")
 
 
+def resolve_active_strategy_name(symbol: str, state: dict[str, Any]) -> str:
+    """Show the position owner while open, otherwise the current entry strategy."""
+    try:
+        position_qty = int(state.get("position_qty") or 0)
+    except (TypeError, ValueError):
+        position_qty = 0
+    entry_strategy = str(state.get("entry_strategy") or "").strip()
+    if position_qty and entry_strategy:
+        return entry_strategy
+    primary_strategies = get_primary_strategies(symbol)
+    if primary_strategies:
+        return str(primary_strategies[0])
+    return str(state.get("last_strategy_name") or entry_strategy or "-")
+
+
 def is_service_trade_reason(reason: str | None) -> bool:
     text = str(reason or "").strip().lower()
     if not text:
@@ -5623,7 +5638,7 @@ def build_dashboard_html() -> str:
     }
 
     function higherTFBadge(state) {
-      const strategy = String(state.last_strategy_name || state.entry_strategy || '').trim().toLowerCase();
+      const strategy = String(state.active_strategy_name || state.entry_strategy || state.last_strategy_name || '').trim().toLowerCase();
       if (strategy === 'reversal_15m') {
         return `<span class="badge hold">АРХИВ 15М</span>`;
       }
@@ -5637,7 +5652,7 @@ def build_dashboard_html() -> str:
     }
 
     function signalScopeBadge(state) {
-      const strategy = String(state.last_strategy_name || state.entry_strategy || '').trim().toLowerCase();
+      const strategy = String(state.active_strategy_name || state.entry_strategy || state.last_strategy_name || '').trim().toLowerCase();
       if (strategy === 'reversal_15m') {
         return `<span class="badge hold">АРХИВ 15М</span>`;
       }
@@ -6790,7 +6805,7 @@ def build_dashboard_html() -> str:
           <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
           <td>${signalScopeBadge(state)}</td>
-          <td>${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</td>
+          <td>${escapeHtml(formatStrategyLabel(state.active_strategy_name || state.entry_strategy || state.last_strategy_name || '-'))}</td>
           <td class="reason">${escapeHtml(newsSummary)}</td>
           <td class="reason">${escapeHtml(allocatorSummary)}</td>
           <td class="reason">${escapeHtml(signalReason)}</td>
@@ -6802,7 +6817,7 @@ def build_dashboard_html() -> str:
           </div>
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Контур</span><div class="mobile-card-value">${signalScopeBadge(state)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(state.last_strategy_name || state.entry_strategy || '-'))}</div></div>
+            <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(state.active_strategy_name || state.entry_strategy || state.last_strategy_name || '-'))}</div></div>
             <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(newsSummary)}</div></div>
           </div>
           <div class="mobile-card-footer">
@@ -7507,6 +7522,7 @@ def api_dashboard(date: str | None = None) -> dict:
     display_states: dict[str, dict] = {}
     for symbol, state in states.items():
         item = dict(state)
+        item["active_strategy_name"] = resolve_active_strategy_name(symbol, item)
         if item.get("_state_stale") and symbol not in broker_positions:
             item["last_signal"] = "HOLD"
             item["last_strategy_name"] = item.get("last_strategy_name") or item.get("entry_strategy") or "-"

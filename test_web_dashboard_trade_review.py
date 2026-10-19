@@ -192,6 +192,22 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn("/api/ai-review/followup", paths)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_active_strategy_uses_registry_when_flat_and_position_owner_when_open(self) -> None:
+        flat = {
+            "position_qty": 0,
+            "entry_strategy": "",
+            "last_strategy_name": "ao_chaikin_1h",
+        }
+        opened = {
+            "position_qty": 1,
+            "entry_strategy": "ao_chaikin_1h",
+            "last_strategy_name": "ao_chaikin_1h",
+        }
+
+        self.assertEqual(dashboard.resolve_active_strategy_name("BRX6", flat), "reversal_1h")
+        self.assertEqual(dashboard.resolve_active_strategy_name("IMOEXF", opened), "ao_chaikin_1h")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_all_trade_rows_are_cached_until_storage_changes(self) -> None:
         row = {"time": "2026-10-19T10:00:00+03:00", "event": "OPEN", "symbol": "BRX6"}
         with TemporaryDirectory() as temp_dir:
