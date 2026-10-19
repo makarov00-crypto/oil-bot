@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.middleware.gzip import GZipMiddleware
 from dotenv import load_dotenv
 from ao_chaikin_shadow import (
     build_shadow_exit_analytics,
@@ -91,6 +92,7 @@ RUNTIME_STALE_MINUTES = 10
 
 
 app = FastAPI(title="Oil Bot Dashboard", docs_url=None, redoc_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
@@ -2371,8 +2373,7 @@ def is_duplicate_carry_open(existing_open: dict[str, Any], candidate_open: dict[
 def load_all_trade_rows() -> list[dict]:
     cached = _load_all_trade_rows_cached(
         _path_cache_signature(TRADE_JOURNAL_PATH),
-        _path_cache_signature(TRADE_DB_PATH),
-        _path_cache_signature(Path(f"{TRADE_DB_PATH}-wal")),
+        str(TRADE_DB_PATH),
     )
     return [dict(row) for row in cached]
 
@@ -2380,8 +2381,7 @@ def load_all_trade_rows() -> list[dict]:
 @lru_cache(maxsize=4)
 def _load_all_trade_rows_cached(
     _journal_signature: tuple[str, int, int],
-    _database_signature: tuple[str, int, int],
-    _database_wal_signature: tuple[str, int, int],
+    _database_path: str,
 ) -> tuple[dict, ...]:
     try:
         rows = load_trade_rows_from_storage(TRADE_JOURNAL_PATH, TRADE_DB_PATH)
@@ -2997,8 +2997,6 @@ def load_trade_review(limit: int = 80, states: dict[str, dict] | None = None) ->
 def load_trade_quality_analytics() -> dict[str, Any]:
     return _load_trade_quality_analytics_cached(
         _path_cache_signature(TRADE_QUALITY_ANALYTICS_PATH),
-        _path_cache_signature(TRADE_DB_PATH),
-        _path_cache_signature(Path(f"{TRADE_DB_PATH}-wal")),
         _path_cache_signature(TRADE_JOURNAL_PATH),
         _path_cache_signature(AO_CHAIKIN_SHADOW_PATH),
     )
@@ -3007,8 +3005,6 @@ def load_trade_quality_analytics() -> dict[str, Any]:
 @lru_cache(maxsize=4)
 def _load_trade_quality_analytics_cached(
     _analytics_signature: tuple[str, int, int],
-    _database_signature: tuple[str, int, int],
-    _database_wal_signature: tuple[str, int, int],
     _journal_signature: tuple[str, int, int],
     _shadow_signature: tuple[str, int, int],
 ) -> dict[str, Any]:
@@ -8028,6 +8024,7 @@ def api_dashboard(date: str | None = None) -> dict:
     portfolio_view = build_portfolio_view_for_day(portfolio, target_day, accounting_history)
     trades = annotate_trade_rows(load_trade_rows_for_day(target_day, None), display_states, broker_positions)
     instrument_catalog = build_instrument_catalog(portfolio, trades, display_states)
+    allocator_workspace = load_allocator_workspace(target_day, display_states, portfolio_view)
     return {
         "service": get_bot_service_status(),
         "health": build_health_payload(display_states),
@@ -8040,8 +8037,8 @@ def api_dashboard(date: str | None = None) -> dict:
         "ao_chaikin_shadow": build_dashboard_ao_shadow_payload(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),
-        "allocator_workspace": load_allocator_workspace(target_day, display_states, portfolio_view),
-        "allocator_decisions": load_allocator_decisions_for_day(target_day, 20),
+        "allocator_workspace": allocator_workspace,
+        "allocator_decisions": list(allocator_workspace.get("recent_decisions") or [])[:20],
         "signal_observations": load_signal_observation_summary_for_day(target_day, 20),
         "summary": summarize_states(display_states, portfolio_view),
         "meta": load_meta(),
