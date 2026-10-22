@@ -3111,19 +3111,22 @@ def load_trade_review_for_day(
 def build_daily_performance(portfolio: dict, target_day: date, accounting_history: dict[str, Any] | None = None) -> dict:
     current_portfolio = float(portfolio.get("total_portfolio_rub") or 0.0)
     rows = load_all_trade_rows()
-    by_day: dict[str, dict[str, float]] = {}
+    history = accounting_history or {}
+    by_day: dict[str, dict[str, Any]] = {}
     cumulative = 0.0
     cumulative_base: float | None = None
     cumulative_from_base = 0.0
     today_key = datetime.now(MOSCOW_TZ).date().isoformat()
+    selected_key = target_day.isoformat()
 
-    days = sorted({row["_date"] for row in rows} | set((accounting_history or {}).keys()))
+    days = sorted({row["_date"] for row in rows} | set(history.keys()) | {selected_key})
     for day_key in days:
-        day_rows = []
-        for row in rows:
-            if row.get("_date") == day_key and str(row.get("event", "")).upper() == "CLOSE":
-                day_rows.append(row)
-        pnl = 0.0
+        day_rows = [
+            row
+            for row in rows
+            if row.get("_date") == day_key and str(row.get("event", "")).upper() == "CLOSE"
+        ]
+        closed_trade_pnl = 0.0
         wins = 0
         losses = 0
         for row in day_rows:
@@ -3131,13 +3134,34 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
                 trade_pnl = float(row.get("pnl_rub") or 0.0)
             except Exception:
                 trade_pnl = 0.0
-            pnl += trade_pnl
+            closed_trade_pnl += trade_pnl
             if trade_pnl > 0:
                 wins += 1
             elif trade_pnl < 0:
                 losses += 1
+        history_entry = dict(history.get(day_key) or {})
+        if "actual_account_cash_effect_rub" in history_entry:
+            pnl = float(history_entry.get("actual_account_cash_effect_rub") or 0.0)
+            pnl_source = "broker_variation_margin"
+        elif "actual_varmargin_rub" in history_entry or "actual_fee_expense_rub" in history_entry:
+            pnl = float(history_entry.get("actual_varmargin_rub") or 0.0) - float(
+                history_entry.get("actual_fee_expense_rub") or 0.0
+            )
+            pnl_source = "broker_variation_margin"
+        else:
+            pnl = closed_trade_pnl
+            pnl_source = "closed_trades"
+
+        if day_key == selected_key and portfolio.get("selected_is_today"):
+            live_vm_key = (
+                "bot_open_positions_variation_margin_rub"
+                if "bot_open_positions_variation_margin_rub" in portfolio
+                else "bot_estimated_variation_margin_rub"
+            )
+            pnl = float(portfolio.get(live_vm_key) or 0.0) - float(portfolio.get("bot_actual_fee_rub") or 0.0)
+            pnl_source = "live_variation_margin"
+
         cumulative += pnl
-        history_entry = dict((accounting_history or {}).get(day_key) or {})
         portfolio_base = history_entry.get("total_portfolio_rub")
         if portfolio_base in (None, "", 0, 0.0) and day_key == today_key and current_portfolio:
             portfolio_base = current_portfolio
@@ -3158,38 +3182,12 @@ def build_daily_performance(portfolio: dict, target_day: date, accounting_histor
             "wins": wins,
             "losses": losses,
             "pnl_rub": round(pnl, 2),
+            "pnl_source": pnl_source,
+            "closed_trade_pnl_rub": round(closed_trade_pnl, 2),
             "pnl_pct": round(pct, 2) if pct is not None else None,
             "cumulative_pnl_rub": round(cumulative, 2),
             "cumulative_pnl_pct": round(cumulative_pct, 2) if cumulative_pct is not None else None,
         }
-
-    selected_key = target_day.isoformat()
-    if selected_key not in by_day:
-        by_day[selected_key] = {
-            "date": selected_key,
-            "closed_count": 0,
-            "wins": 0,
-            "losses": 0,
-            "pnl_rub": 0.0,
-            "pnl_pct": None,
-            "cumulative_pnl_rub": cumulative,
-            "cumulative_pnl_pct": None,
-        }
-        days = sorted([*days, selected_key])
-    selected_entry = by_day[selected_key]
-    if portfolio.get("selected_is_today"):
-        selected_total = float(portfolio.get("bot_total_pnl_rub", portfolio.get("bot_estimated_variation_margin_rub")) or 0.0)
-    else:
-        selected_total = float(portfolio.get("bot_total_pnl_rub", selected_entry["pnl_rub"]) or 0.0)
-    if selected_entry is not None:
-        selected_base = float(portfolio.get("total_portfolio_rub") or 0.0)
-        previous_pnl = float(selected_entry["pnl_rub"] or 0.0)
-        delta = selected_total - previous_pnl
-        selected_entry["pnl_rub"] = round(selected_total, 2)
-        selected_entry["pnl_pct"] = round(selected_total / selected_base * 100.0, 2) if selected_base else None
-        for day_key in days[days.index(selected_key):]:
-            point = by_day[day_key]
-            point["cumulative_pnl_rub"] = round(float(point["cumulative_pnl_rub"] or 0.0) + delta, 2)
 
     chart_days = days[-30:]
     chart_series = []
@@ -3321,20 +3319,24 @@ def build_portfolio_view_for_day(
     view["bot_broker_day_pnl_rub"] = round(broker_open_positions_income, 2)
     view["bot_open_positions_live_pnl_rub"] = round(broker_open_positions_income, 2)
     view["bot_open_positions_income_rub"] = round(broker_open_positions_income, 2)
-    total_income = float(
-        history_entry.get(
-            "total_varmargin_rub",
-            closed_totals["gross_pnl_rub"] + broker_open_positions_income,
-        )
-        or 0.0
-    )
-    total_pnl = float(
-        history_entry.get(
-            "total_pnl_rub",
-            total_income - selected_actual_fee,
-        )
-        or 0.0
-    )
+    raw_total_income = history_entry.get("total_varmargin_rub")
+    if raw_total_income in (None, "") or (
+        not selected_is_today and float(raw_total_income or 0.0) == 0.0 and selected_actual_vm != 0.0
+    ):
+        if not selected_is_today and "actual_varmargin_rub" in history_entry:
+            raw_total_income = selected_actual_vm
+        else:
+            raw_total_income = closed_totals["gross_pnl_rub"] + broker_open_positions_income
+    total_income = float(raw_total_income or 0.0)
+    raw_total_pnl = history_entry.get("total_pnl_rub")
+    if raw_total_pnl in (None, "") or (
+        not selected_is_today and float(raw_total_pnl or 0.0) == 0.0 and selected_cash_effect != 0.0
+    ):
+        if not selected_is_today and "actual_account_cash_effect_rub" in history_entry:
+            raw_total_pnl = selected_cash_effect
+        else:
+            raw_total_pnl = total_income - selected_actual_fee
+    total_pnl = float(raw_total_pnl or 0.0)
     view["bot_total_varmargin_rub"] = round(total_income, 2)
     view["bot_total_variation_margin_rub"] = round(total_income, 2)
     view["bot_total_income_rub"] = round(total_income, 2)
@@ -3345,12 +3347,15 @@ def build_portfolio_view_for_day(
         "varmargin_by_symbol",
         portfolio.get("bot_actual_varmargin_by_symbol") if selected_is_today else {},
     ) or {}
-    actual_varmargin_source = "broker_operations"
+    actual_varmargin_source = str(history_entry.get("varmargin_by_symbol_source") or "broker_operations")
     if not actual_varmargin_by_symbol and live_varmargin_by_symbol:
         actual_varmargin_by_symbol = live_varmargin_by_symbol
-        actual_varmargin_source = "live_positions_fallback"
+        actual_varmargin_source = "live_positions_snapshot"
     view["bot_actual_varmargin_by_symbol"] = actual_varmargin_by_symbol
     view["bot_actual_varmargin_by_symbol_source"] = actual_varmargin_source
+    view["bot_actual_varmargin_by_symbol_observed_at"] = history_entry.get(
+        "varmargin_by_symbol_observed_at"
+    ) or portfolio.get("generated_at")
     view["generated_at_moscow"] = history_entry.get("generated_at_moscow") or portfolio.get("generated_at_moscow")
     return view
 
@@ -5081,11 +5086,11 @@ def build_dashboard_html() -> str:
       </div>
       <div class="grid">
         <div>
-          <div class="muted">Итог за день</div>
+          <div class="muted">ВМ после комиссий за день</div>
           <div class="metric" id="dayPnlRub">-</div>
         </div>
         <div>
-          <div class="muted">Итог за день, %</div>
+          <div class="muted">ВМ после комиссий, %</div>
           <div class="metric" id="dayPnlPct">-</div>
         </div>
         <div>
@@ -5093,20 +5098,29 @@ def build_dashboard_html() -> str:
           <div class="metric" id="dayClosedCount">-</div>
         </div>
         <div>
-          <div class="muted">Накопленный итог</div>
+          <div class="muted">Накопленная ВМ после комиссий</div>
           <div class="metric" id="cumPnlRub">-</div>
         </div>
         <div>
-          <div class="muted">Накопленный итог, %</div>
+          <div class="muted">Накопленная ВМ, %</div>
           <div class="metric" id="cumPnlPct">-</div>
         </div>
       </div>
+      <p class="muted" id="dayPnlSource" style="margin-top:10px;">Источник результата: -</p>
       <div class="chart-wrap">
         <canvas id="pnlChart" width="1200" height="280"></canvas>
         <div class="chart-legend">
-          <span><span class="legend-dot" style="background:#43c5ff;"></span>Итог за день, RUB</span>
-          <span><span class="legend-dot" style="background:#37e6a4;"></span>Накопленный итог за 30 дней, RUB</span>
+          <span><span class="legend-dot" style="background:#43c5ff;"></span>ВМ после комиссий за день, RUB</span>
+          <span><span class="legend-dot" style="background:#37e6a4;"></span>Накопленная ВМ за 30 дней, RUB</span>
         </div>
+      </div>
+      <h3 style="margin-top:18px;">Разбивка вариационной маржи по инструментам</h3>
+      <p class="muted" id="dayVmBreakdownSource">Источник разбивки: -</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Инструмент</th><th class="right">Вариационная маржа</th></tr></thead>
+          <tbody id="dayVmBreakdownBody"><tr><td colspan="2" class="muted">Нет данных</td></tr></tbody>
+        </table>
       </div>
     </section>
 
@@ -6364,6 +6378,30 @@ def build_dashboard_html() -> str:
       document.getElementById('dayClosedCount').textContent = daySelected.closed_count ?? 0;
       document.getElementById('cumPnlRub').textContent = formatRub(daySelected.cumulative_pnl_rub);
       document.getElementById('cumPnlPct').textContent = formatPct(daySelected.cumulative_pnl_pct);
+      const pnlSourceLabels = {
+        broker_variation_margin: 'Источник результата: операции вариационной маржи и комиссии брокера.',
+        live_variation_margin: 'Источник результата: текущая ВМ открытых позиций брокера за вычетом комиссий за день.',
+        closed_trades: 'Резервный источник результата: журнал закрытых сделок; брокерская ВМ недоступна.'
+      };
+      document.getElementById('dayPnlSource').textContent = pnlSourceLabels[daySelected.pnl_source]
+        || 'Источник результата: нет подтверждённых данных.';
+      const vmBySymbol = portfolio.bot_actual_varmargin_by_symbol || {};
+      const vmRows = Object.entries(vmBySymbol)
+        .map(([symbol, value]) => [symbol, Number(value || 0)])
+        .sort((left, right) => Math.abs(right[1]) - Math.abs(left[1]));
+      const vmBody = document.getElementById('dayVmBreakdownBody');
+      vmBody.innerHTML = vmRows.length
+        ? vmRows.map(([symbol, value]) => `<tr><td class="mono">${escapeHtml(symbol)}</td><td class="right mono">${formatRub(value)}</td></tr>`).join('')
+        : '<tr><td colspan="2" class="muted">Разбивка по инструментам для этой даты не сохранена.</td></tr>';
+      const vmSourceLabels = {
+        live_positions_snapshot: 'снимок открытых позиций брокера',
+        broker_operations: 'операции брокера',
+        unavailable: 'нет данных'
+      };
+      const vmSource = vmSourceLabels[portfolio.bot_actual_varmargin_by_symbol_source]
+        || portfolio.bot_actual_varmargin_by_symbol_source
+        || 'нет данных';
+      document.getElementById('dayVmBreakdownSource').textContent = `Источник разбивки: ${vmSource}.`;
       renderPnlChart(daily.series || [], daily.selected_date || '');
 
       const runtime = data.runtime || {};
@@ -7368,7 +7406,7 @@ def api_dashboard(date: str | None = None) -> dict:
         "trades": trades,
         "manual_instruments": build_manual_instruments_payload(),
         "instrument_catalog": instrument_catalog,
-        "daily": build_daily_performance(portfolio, target_day, accounting_history),
+        "daily": build_daily_performance(portfolio_view, target_day, accounting_history),
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
     }

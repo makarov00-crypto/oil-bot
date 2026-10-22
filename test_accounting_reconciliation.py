@@ -198,7 +198,73 @@ IMOEXF   1.22604    10</pre>
         self.assertTrue(refreshed)
         self.assertFalse(repeated)
         self.assertEqual(meta["accounting_reconciled_through"], "2026-07-22")
+        self.assertIn("accounting_reconciled_at", meta)
         refresh.assert_called_once_with(None, self.config, self.watchlist, date(2026, 7, 22))
+
+    def test_rechecks_completed_day_after_interval_for_late_broker_posting(self) -> None:
+        meta = {
+            "accounting_reconciled_through": "2026-07-22",
+            "accounting_reconciled_at": "2026-07-22T21:17:00+00:00",
+        }
+        now = datetime(2026, 7, 22, 21, 48, tzinfo=timezone.utc)
+        entry = {"source": "live", "actual_varmargin_rub": 6529.87}
+
+        with patch.object(mod, "update_accounting_history_for_day", return_value=entry) as refresh:
+            refreshed = mod.reconcile_previous_accounting_day_if_needed(
+                None, self.config, self.watchlist, meta, now=now
+            )
+
+        self.assertTrue(refreshed)
+        self.assertEqual(meta["accounting_reconciled_through"], "2026-07-22")
+        self.assertEqual(meta["accounting_reconciled_at"], now.isoformat())
+        refresh.assert_called_once_with(None, self.config, self.watchlist, date(2026, 7, 22))
+
+    def test_history_refresh_uses_broker_vm_totals_and_keeps_symbol_snapshot(self) -> None:
+        target_day = date(2026, 10, 21)
+        existing = {
+            target_day.isoformat(): {
+                "date": target_day.isoformat(),
+                "total_portfolio_rub": 526_400.69,
+                "varmargin_by_symbol": {"USDRUBF": 4700.0, "CNYRUBF": 3478.0},
+                "varmargin_by_symbol_source": "live_positions_snapshot",
+                "varmargin_by_symbol_observed_at": "2026-10-21T20:45:00+00:00",
+            }
+        }
+        accounting = {
+            "actual_varmargin_rub": 6529.87,
+            "actual_fee_expense_rub": 781.31,
+            "actual_account_cash_effect_rub": 5748.56,
+            "varmargin_by_symbol": {},
+            "source": "live",
+        }
+
+        with patch.object(mod, "get_accounting_snapshot_for_day", return_value=accounting), patch.object(
+            mod, "load_accounting_history", return_value=existing
+        ), patch.object(mod, "save_accounting_history") as save:
+            result = mod.update_accounting_history_for_day(
+                None, self.config, self.watchlist, target_day
+            )
+
+        self.assertEqual(result["actual_varmargin_rub"], 6529.87)
+        self.assertEqual(result["total_varmargin_rub"], 6529.87)
+        self.assertEqual(result["total_pnl_rub"], 5748.56)
+        self.assertEqual(result["varmargin_by_symbol"], existing[target_day.isoformat()]["varmargin_by_symbol"])
+        self.assertEqual(result["varmargin_by_symbol_source"], "live_positions_snapshot")
+        self.assertEqual(result["total_portfolio_rub"], 526_400.69)
+        save.assert_called_once()
+
+    def test_live_varmargin_snapshot_is_built_per_symbol(self) -> None:
+        payload = {
+            "broker_open_positions": [
+                {"symbol": "USDRUBF", "variation_margin_rub": 4750.0},
+                {"symbol": "CNYRUBF", "variation_margin_rub": 3552.0},
+                {"symbol": "", "variation_margin_rub": 100.0},
+            ]
+        }
+
+        result = mod.build_live_varmargin_by_symbol(payload)
+
+        self.assertEqual(result, {"USDRUBF": 4750.0, "CNYRUBF": 3552.0})
 
     def test_waits_until_broker_posting_window_has_ended(self) -> None:
         meta: dict[str, str] = {}

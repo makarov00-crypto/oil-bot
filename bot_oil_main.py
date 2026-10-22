@@ -175,6 +175,7 @@ NEWS_AI_DEFAULT_MODEL = "gpt-5.6-luna"
 NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 SIGNAL_OUTCOME_MAX_WAIT = timedelta(days=3)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
+ACCOUNTING_RECONCILE_RECHECK_SECONDS = 30 * 60
 MOEX_DERIVATIVES_BLOG_URL = "https://teletype.in/@moex_derivatives"
 MOEX_ISS_FUTURES_HISTORY_URL = "https://iss.moex.com/iss/history/engines/futures/markets/forts/securities"
 MOEX_ISS_FUTURES_SECURITIES_URL = "https://iss.moex.com/iss/engines/futures/markets/forts/securities"
@@ -7241,6 +7242,21 @@ def build_portfolio_snapshot_payload(
     }
 
 
+def build_live_varmargin_by_symbol(payload: dict[str, Any]) -> dict[str, float]:
+    """Build a point-in-time VM breakdown from the broker portfolio positions."""
+    result: dict[str, float] = {}
+    for item in payload.get("broker_open_positions") or []:
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        try:
+            value = float(item.get("variation_margin_rub") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        result[symbol] = round(result.get(symbol, 0.0) + value, 2)
+    return result
+
+
 def maybe_refresh_portfolio_snapshot(
     client: Client,
     config: BotConfig,
@@ -7264,18 +7280,26 @@ def maybe_refresh_portfolio_snapshot(
     save_portfolio_snapshot(payload)
     history = load_accounting_history()
     today_key = current_moscow_time().date().isoformat()
-    history[today_key] = {
+    existing_entry = dict(history.get(today_key) or {})
+    live_varmargin_by_symbol = build_live_varmargin_by_symbol(payload)
+    current_entry = dict(existing_entry)
+    current_entry.update({
         "date": today_key,
         "generated_at": payload.get("generated_at"),
         "generated_at_moscow": payload.get("generated_at_moscow"),
+        "total_portfolio_rub": payload.get("total_portfolio_rub", 0.0),
         "actual_varmargin_rub": payload.get("bot_actual_varmargin_rub", 0.0),
         "actual_fee_expense_rub": payload.get("bot_actual_fee_rub", 0.0),
         "actual_account_cash_effect_rub": payload.get("bot_actual_cash_effect_rub", 0.0),
         "total_varmargin_rub": payload.get("bot_total_varmargin_rub", 0.0),
         "broker_open_positions_pnl_rub": payload.get("bot_broker_day_pnl_rub", 0.0),
         "total_pnl_rub": payload.get("bot_total_pnl_rub", 0.0),
-        "varmargin_by_symbol": payload.get("bot_actual_varmargin_by_symbol", {}),
-    }
+        "varmargin_by_symbol": live_varmargin_by_symbol or payload.get("bot_actual_varmargin_by_symbol", {}),
+        "varmargin_by_symbol_source": "live_positions_snapshot" if live_varmargin_by_symbol else "broker_operations",
+        "varmargin_by_symbol_observed_at": payload.get("generated_at"),
+        "varmargin_by_symbol_total_rub": round(sum(live_varmargin_by_symbol.values()), 2),
+    })
+    history[today_key] = current_entry
     save_accounting_history(history)
     reconcile_previous_accounting_day_if_needed(client, config, watchlist, meta, now=now)
     reconcile_accounting_history_audit_if_needed(client, config, watchlist, meta, now=now)
@@ -7291,20 +7315,32 @@ def update_accounting_history_for_day(
 ) -> dict[str, Any]:
     accounting = get_accounting_snapshot_for_day(client, config, target_day, watchlist)
     generated_at = datetime.now(timezone.utc)
-    entry = {
+    history = load_accounting_history()
+    existing_entry = dict(history.get(target_day.isoformat()) or {})
+    broker_varmargin_by_symbol = dict(accounting.get("varmargin_by_symbol") or {})
+    entry = dict(existing_entry)
+    entry.update({
         "date": target_day.isoformat(),
         "generated_at": generated_at.isoformat(),
         "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
         "actual_varmargin_rub": float(accounting["actual_varmargin_rub"]),
         "actual_fee_expense_rub": float(accounting["actual_fee_expense_rub"]),
         "actual_account_cash_effect_rub": float(accounting["actual_account_cash_effect_rub"]),
-        "total_varmargin_rub": 0.0,
+        "total_varmargin_rub": float(accounting["actual_varmargin_rub"]),
         "broker_open_positions_pnl_rub": 0.0,
-        "total_pnl_rub": 0.0,
-        "varmargin_by_symbol": dict(accounting.get("varmargin_by_symbol") or {}),
+        "total_pnl_rub": float(accounting["actual_account_cash_effect_rub"]),
         "source": str(accounting.get("source") or "unknown"),
-    }
-    history = load_accounting_history()
+    })
+    if "actual_fee_cash_effect_rub" in accounting:
+        entry["actual_fee_cash_effect_rub"] = float(accounting.get("actual_fee_cash_effect_rub") or 0.0)
+    if broker_varmargin_by_symbol:
+        entry["varmargin_by_symbol"] = broker_varmargin_by_symbol
+        entry["varmargin_by_symbol_source"] = "broker_operations"
+        entry["varmargin_by_symbol_observed_at"] = generated_at.isoformat()
+        entry["varmargin_by_symbol_total_rub"] = round(sum(broker_varmargin_by_symbol.values()), 2)
+    else:
+        entry.setdefault("varmargin_by_symbol", {})
+        entry.setdefault("varmargin_by_symbol_source", "unavailable")
     history[target_day.isoformat()] = entry
     save_accounting_history(history)
     return entry
@@ -7318,15 +7354,27 @@ def reconcile_previous_accounting_day_if_needed(
     *,
     now: datetime | None = None,
 ) -> bool:
-    """Refresh yesterday once delayed evening-clearing entries are available."""
-    now_moscow = (now or current_moscow_time()).astimezone(MOSCOW_TZ)
+    """Refresh yesterday and recheck it for delayed broker postings."""
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    now_moscow = now_utc.astimezone(MOSCOW_TZ)
     if now_moscow.hour == 0 and now_moscow.minute <= 16:
         return False
 
     completed_day = now_moscow.date() - timedelta(days=1)
     completed_key = completed_day.isoformat()
     if str(meta.get("accounting_reconciled_through") or "") == completed_key:
-        return False
+        reconciled_at_raw = str(meta.get("accounting_reconciled_at") or "").strip()
+        if reconciled_at_raw:
+            try:
+                reconciled_at = datetime.fromisoformat(reconciled_at_raw)
+                if reconciled_at.tzinfo is None:
+                    reconciled_at = reconciled_at.replace(tzinfo=timezone.utc)
+                if (now_utc - reconciled_at).total_seconds() < ACCOUNTING_RECONCILE_RECHECK_SECONDS:
+                    return False
+            except ValueError:
+                pass
 
     entry = update_accounting_history_for_day(client, config, watchlist, completed_day)
     if str(entry.get("source") or "") != "live":
@@ -7338,6 +7386,7 @@ def reconcile_previous_accounting_day_if_needed(
         return False
 
     meta["accounting_reconciled_through"] = completed_key
+    meta["accounting_reconciled_at"] = now_utc.isoformat()
     logging.info(
         "Сверен завершённый день по брокерской ВМ: %s, ВМ=%s RUB",
         completed_key,

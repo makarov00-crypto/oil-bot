@@ -744,7 +744,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(by_date["2026-04-24"]["cumulative_pnl_pct"], 11.0)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_daily_performance_uses_total_bot_pnl_and_limits_chart_to_30_days(self) -> None:
+    def test_daily_performance_uses_live_variation_margin_and_limits_chart_to_30_days(self) -> None:
         rows = [
             {"_date": f"2026-03-{day:02d}", "event": "CLOSE", "pnl_rub": 10.0}
             for day in range(1, 32)
@@ -765,11 +765,78 @@ class DashboardTradeReviewTests(unittest.TestCase):
             fake_datetime.now.return_value = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
             result = dashboard.build_daily_performance(portfolio, date(2026, 4, 24), {})
 
-        self.assertEqual(result["selected"]["pnl_rub"], 2_990.89)
-        self.assertEqual(result["selected"]["pnl_pct"], 2.99)
+        self.assertEqual(result["selected"]["pnl_rub"], 220.0)
+        self.assertEqual(result["selected"]["pnl_pct"], 0.22)
         self.assertEqual(len(result["series"]), 30)
         self.assertEqual(result["series"][0]["date"], "2026-03-26")
         self.assertEqual(result["series"][-1]["date"], "2026-04-24")
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_daily_performance_uses_broker_variation_margin_for_completed_day(self) -> None:
+        rows = [{"_date": "2026-10-21", "event": "CLOSE", "pnl_rub": -10_675.41}]
+        history = {
+            "2026-10-21": {
+                "actual_varmargin_rub": 6529.87,
+                "actual_fee_expense_rub": 781.31,
+                "actual_account_cash_effect_rub": 5748.56,
+                "source": "live",
+            }
+        }
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows), patch.object(
+            dashboard, "datetime"
+        ) as fake_datetime:
+            fake_datetime.now.return_value = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+            result = dashboard.build_daily_performance({}, date(2026, 10, 21), history)
+
+        self.assertEqual(result["selected"]["pnl_rub"], 5748.56)
+        self.assertEqual(result["selected"]["pnl_source"], "broker_variation_margin")
+        self.assertEqual(result["selected"]["closed_trade_pnl_rub"], -10_675.41)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_daily_performance_uses_live_vm_less_fees_for_today(self) -> None:
+        portfolio = {
+            "selected_is_today": True,
+            "total_portfolio_rub": 526_400.69,
+            "bot_open_positions_variation_margin_rub": 14_310.56,
+            "bot_actual_fee_rub": 177.23,
+            "bot_total_pnl_rub": -999_999.0,
+        }
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=[]), patch.object(
+            dashboard, "datetime"
+        ) as fake_datetime:
+            fake_datetime.now.return_value = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+            result = dashboard.build_daily_performance(portfolio, date(2026, 10, 22), {})
+
+        self.assertEqual(result["selected"]["pnl_rub"], 14_133.33)
+        self.assertEqual(result["selected"]["pnl_source"], "live_variation_margin")
+        self.assertEqual(result["selected"]["pnl_pct"], 2.68)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_historical_day_is_not_overwritten_by_current_portfolio_total(self) -> None:
+        portfolio = {
+            "selected_is_today": False,
+            "total_portfolio_rub": 526_400.69,
+            "bot_total_pnl_rub": 12_625.62,
+        }
+        rows = [{"_date": "2026-10-20", "event": "CLOSE", "pnl_rub": -5929.92}]
+        history = {
+            "2026-10-20": {
+                "actual_varmargin_rub": -10_596.89,
+                "actual_fee_expense_rub": 655.79,
+                "actual_account_cash_effect_rub": -11_252.68,
+            }
+        }
+
+        with patch.object(dashboard, "load_all_trade_rows", return_value=rows), patch.object(
+            dashboard, "datetime"
+        ) as fake_datetime:
+            fake_datetime.now.return_value = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+            result = dashboard.build_daily_performance(portfolio, date(2026, 10, 20), history)
+
+        self.assertEqual(result["selected"]["pnl_rub"], -11_252.68)
+        self.assertNotEqual(result["selected"]["pnl_rub"], 12_625.62)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_build_portfolio_view_for_historical_day_ignores_current_live_positions(self) -> None:
