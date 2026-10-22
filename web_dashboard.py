@@ -5114,14 +5114,6 @@ def build_dashboard_html() -> str:
           <span><span class="legend-dot" style="background:#37e6a4;"></span>Накопленная ВМ за 30 дней, RUB</span>
         </div>
       </div>
-      <h3 style="margin-top:18px;">Разбивка вариационной маржи по инструментам</h3>
-      <p class="muted" id="dayVmBreakdownSource">Источник разбивки: -</p>
-      <div class="table-scroll">
-        <table>
-          <thead><tr><th>Инструмент</th><th class="right">Вариационная маржа</th></tr></thead>
-          <tbody id="dayVmBreakdownBody"><tr><td colspan="2" class="muted">Нет данных</td></tr></tbody>
-        </table>
-      </div>
     </section>
 
     <div class="grid">
@@ -6385,23 +6377,6 @@ def build_dashboard_html() -> str:
       };
       document.getElementById('dayPnlSource').textContent = pnlSourceLabels[daySelected.pnl_source]
         || 'Источник результата: нет подтверждённых данных.';
-      const vmBySymbol = portfolio.bot_actual_varmargin_by_symbol || {};
-      const vmRows = Object.entries(vmBySymbol)
-        .map(([symbol, value]) => [symbol, Number(value || 0)])
-        .sort((left, right) => Math.abs(right[1]) - Math.abs(left[1]));
-      const vmBody = document.getElementById('dayVmBreakdownBody');
-      vmBody.innerHTML = vmRows.length
-        ? vmRows.map(([symbol, value]) => `<tr><td class="mono">${escapeHtml(symbol)}</td><td class="right mono">${formatRub(value)}</td></tr>`).join('')
-        : '<tr><td colspan="2" class="muted">Разбивка по инструментам для этой даты не сохранена.</td></tr>';
-      const vmSourceLabels = {
-        live_positions_snapshot: 'снимок открытых позиций брокера',
-        broker_operations: 'операции брокера',
-        unavailable: 'нет данных'
-      };
-      const vmSource = vmSourceLabels[portfolio.bot_actual_varmargin_by_symbol_source]
-        || portfolio.bot_actual_varmargin_by_symbol_source
-        || 'нет данных';
-      document.getElementById('dayVmBreakdownSource').textContent = `Источник разбивки: ${vmSource}.`;
       renderPnlChart(daily.series || [], daily.selected_date || '');
 
       const runtime = data.runtime || {};

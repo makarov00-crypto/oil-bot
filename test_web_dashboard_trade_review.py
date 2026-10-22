@@ -43,6 +43,13 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn("BRX6: 'BR-11.26 Нефть Brent'", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
+    def test_dashboard_does_not_duplicate_varmargin_breakdown(self) -> None:
+        html = dashboard.build_dashboard_html()
+
+        self.assertNotIn("Разбивка вариационной маржи по инструментам", html)
+        self.assertNotIn("dayVmBreakdownBody", html)
+
+    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_news_coverage_payload_includes_human_keywords(self) -> None:
         payload = dashboard.build_news_coverage_payload()
         ozon_symbol = get_active_contract_symbol("ONU6")
