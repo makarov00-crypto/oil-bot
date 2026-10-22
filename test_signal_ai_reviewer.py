@@ -21,6 +21,60 @@ class SignalAiReviewerTests(unittest.TestCase):
         self.assertNotIn("retry_signal_ai_shadow_reviews(", source)
         self.assertNotIn("update_signal_ai_shadow_outcomes(", source)
 
+    def test_new_reversal_entry_clears_retired_shadow_ai_context(self) -> None:
+        state = bot.InstrumentState(
+            last_shadow_ai_action="ВОЗДЕРЖАТЬСЯ",
+            last_shadow_ai_direction="ЛОНГ",
+            last_shadow_ai_confidence=0.43,
+            last_shadow_ai_reason="старый ответ",
+            last_shadow_ai_candle_time="2026-10-19T13:00:00+03:00",
+            last_shadow_ai_candidate_id="ao_chaikin_1h:NGZ6:LONG:2026-10-19 13:00",
+            last_shadow_ai_status="ready",
+            last_shadow_ai_error="старый сбой",
+        )
+        config = SimpleNamespace(
+            dry_run=True,
+            cash_manager_enabled=False,
+            ao_canary_enabled=False,
+        )
+        instrument = bot.InstrumentConfig("NGZ6", "FIGI", "Природный газ")
+        sizing = {
+            "quantity": 1,
+            "money_risk_per_contract_rub": 100.0,
+            "risk_budget_rub": 1_000.0,
+        }
+
+        with patch.object(bot, "get_market_session", return_value="MAIN"), patch.object(
+            bot, "session_allows_new_entries", return_value=True
+        ), patch.object(bot, "get_global_daily_loss_block_reason", return_value=""), patch.object(
+            bot, "get_daily_loss_recovery_entry_reason", return_value=""
+        ), patch.object(bot, "recent_strategy_performance_block_reason", return_value=""), patch.object(
+            bot, "get_last_price", return_value=3.70
+        ), patch.object(bot, "build_strategy_entry_stop_plan", return_value={}), patch.object(
+            bot, "calculate_position_sizing_context", return_value=sizing
+        ), patch.object(bot, "build_position_sizing_lines", return_value=[]), patch.object(
+            bot, "build_allocator_summary_text", return_value="размер рассчитан"
+        ), patch.object(bot, "save_state"), patch.object(
+            bot, "append_trade_journal"
+        ) as append_journal, patch.object(bot, "maybe_notify_trade_execution"):
+            bot.open_position(
+                None,
+                config,
+                instrument,
+                state,
+                "SHORT",
+                "reversal_1h",
+                "часовой сигнал",
+            )
+
+        context = bot.build_trade_event_context(state)
+        self.assertNotIn("shadow_ai", context)
+        self.assertNotIn("shadow_ai_status", context)
+        self.assertNotIn("candidate_id", context)
+        self.assertNotIn("shadow_ai_error", context)
+        self.assertEqual(state.last_shadow_ai_candle_time, "")
+        append_journal.assert_called_once()
+
     def test_ao_prompt_uses_live_ao_indicators_without_legacy_ao(self) -> None:
         prompt = reviewer.build_signal_ai_prompt([{
             "symbol": "BRV6", "signal": "LONG", "strategy_name": "ao_chaikin_1h",

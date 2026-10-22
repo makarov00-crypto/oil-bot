@@ -774,6 +774,18 @@ def parse_state_datetime(value: str) -> datetime | None:
     return parsed
 
 
+def clear_retired_signal_ai_context(state: InstrumentState) -> None:
+    """Prevent retired signal-AI metadata from leaking into a new trade."""
+    state.last_shadow_ai_action = ""
+    state.last_shadow_ai_direction = ""
+    state.last_shadow_ai_confidence = 0.0
+    state.last_shadow_ai_reason = ""
+    state.last_shadow_ai_candle_time = ""
+    state.last_shadow_ai_candidate_id = ""
+    state.last_shadow_ai_status = ""
+    state.last_shadow_ai_error = ""
+
+
 def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
     if state is None:
         return {}
@@ -813,7 +825,7 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "candidate_id": str(state.last_shadow_ai_candidate_id or ""),
         "shadow_ai_error": str(state.last_shadow_ai_error or ""),
     }
-    return {key: value for key, value in context.items() if value not in ("", [], None)}
+    return {key: value for key, value in context.items() if value not in ("", [], {}, None)}
 
 
 def append_trade_journal(
@@ -11497,6 +11509,7 @@ def open_position(
         entry_ao_peak(entry_df, side)
         if is_ao_chaikin_strategy(strategy_name) and entry_df is not None else 0.0
     )
+    clear_retired_signal_ai_context(state)
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
         if signal == "LONG"
