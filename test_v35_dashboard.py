@@ -28,7 +28,7 @@ class V35DashboardTests(unittest.TestCase):
             cycles = root / "cycles.jsonl"
             runtime = root / "runtime.json"
             write_json(status, {
-                "strategy_version": "v35-test",
+                "strategy_version": STRATEGY_VERSION,
                 "updated_at": "2026-10-08T17:59:55+00:00",
                 "symbols": ["AAA", "BBB", "CCC"],
                 "multitimeframe_candidates": 2,
@@ -54,7 +54,7 @@ class V35DashboardTests(unittest.TestCase):
                 },
             })
             write_json(portfolio, {
-                "strategy_version": "v35-test",
+                "strategy_version": STRATEGY_VERSION,
                 "updated_at": "2026-10-08T17:59:58+00:00",
                 "order_submission_enabled": False,
                 "positions": {
@@ -249,10 +249,10 @@ class V35DashboardTests(unittest.TestCase):
             runtime = root / "runtime.json"
             write_json(status, {"strategy_version": STRATEGY_VERSION, "updated_at": "2026-10-08T17:00:00+00:00"})
             write_json(portfolio, {
-                "strategy_version": STRATEGY_VERSION,
+                "strategy_version": "v35",
                 "updated_at": "2026-10-08T17:00:00+00:00",
                 "positions": {
-                    "OLD": {"strategy_version": "v35", "symbol": "OLD"},
+                    "OLD": {"symbol": "OLD"},
                     "NEW": {"strategy_version": STRATEGY_VERSION, "symbol": "NEW"},
                 },
             })

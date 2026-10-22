@@ -221,11 +221,12 @@ def build_v35_dashboard_payload(
     ]
 
     positions_source = portfolio.get("positions") if isinstance(portfolio.get("positions"), dict) else {}
+    portfolio_strategy_version = str(portfolio.get("strategy_version") or current_version)
     positions = [
         _position_row(value)
         for key, value in positions_source.items()
         if isinstance(value, dict)
-        and (not value.get("strategy_version") or str(value.get("strategy_version")) == current_version)
+        and str(value.get("strategy_version") or portfolio_strategy_version) == current_version
         and (not selected_symbol or str(key).upper() == selected_symbol)
     ]
     positions.sort(key=lambda item: item["opened_at"], reverse=True)
