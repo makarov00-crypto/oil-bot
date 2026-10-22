@@ -8,7 +8,7 @@ from strategies.v35_pattern_library import PATTERN_CATALOG
 from strategies.v35_signals import V35Candidate
 
 
-MODEL_VERSION = "hierarchical-market-regime-v31-symmetric-continuation"
+MODEL_VERSION = "hierarchical-market-regime-v32-pattern-confirmed-continuation"
 BEAR_SHORT_STAGES = {"RANGE", "TRANSITION", "BREAKOUT_ATTEMPT"}
 TREND_CONTINUATION_STAGES = {
     "TREND_EARLY",
@@ -22,6 +22,7 @@ BULL_LONG_TRANSITION_MIN_BODY_ATR = 1.50
 COUNTERTREND_MIN_PATTERN_CONFIDENCE = 80
 COUNTERTREND_MIN_LARGEST_BODY_ATR = 0.75
 MIN_EXECUTION_SCORE = 5
+UNCONFIRMED_CONTINUATION_PATTERNS = {"", "MACRO_TREND_CONTINUATION", "UNCLASSIFIED"}
 
 
 def _finite(value: Any, default: float = 0.0) -> float:
@@ -293,6 +294,8 @@ def hierarchical_gate(
         and candidate.entry_pattern == "LOWER_TF_TREND_CONTINUATION"
         and candidate.execution_score >= MIN_EXECUTION_SCORE
     )
+    if continuation and candidate.classic_pattern in UNCONFIRMED_CONTINUATION_PATTERNS:
+        return False, "CONTINUATION_REQUIRES_NAMED_PATTERN"
     aligned_continuation = (
         (regime == "BULL" and direction == "LONG")
         or (regime == "BEAR" and direction == "SHORT")

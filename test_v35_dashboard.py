@@ -214,7 +214,7 @@ class V35DashboardTests(unittest.TestCase):
 
     def test_page_is_dedicated_to_mechanical_v35_control(self) -> None:
         html = build_v35_dashboard_html()
-        self.assertIn("Стратегия v3.6", html)
+        self.assertIn("Стратегия v3.7", html)
         self.assertIn("/api/v35", html)
         self.assertIn("Воронка входов", html)
         self.assertIn("Жизненный цикл", html)
@@ -224,7 +224,7 @@ class V35DashboardTests(unittest.TestCase):
         self.assertIn("Сильный лонг на переходе к росту", html)
         self.assertIn("Сильный разворот вниз против растущей группы", html)
         self.assertIn("Сильный разворот вверх против падающей группы", html)
-        self.assertIn("Раннее продолжение тренда", html)
+        self.assertIn("Продолжение тренда с фигурой", html)
         self.assertIn("minmax(300px,1fr)", html)
         self.assertIn('id="candidateTableWrap"', html)
         self.assertIn("rows.slice(0,15)", html)
@@ -248,7 +248,14 @@ class V35DashboardTests(unittest.TestCase):
             cycles = root / "cycles.jsonl"
             runtime = root / "runtime.json"
             write_json(status, {"strategy_version": STRATEGY_VERSION, "updated_at": "2026-10-08T17:00:00+00:00"})
-            write_json(portfolio, {"strategy_version": STRATEGY_VERSION, "updated_at": "2026-10-08T17:00:00+00:00", "positions": {}})
+            write_json(portfolio, {
+                "strategy_version": STRATEGY_VERSION,
+                "updated_at": "2026-10-08T17:00:00+00:00",
+                "positions": {
+                    "OLD": {"strategy_version": "v35", "symbol": "OLD"},
+                    "NEW": {"strategy_version": STRATEGY_VERSION, "symbol": "NEW"},
+                },
+            })
             write_jsonl(candidates, [
                 {"candidate_id": "old", "strategy_version": "v35", "symbol": "AAA", "signal_time": "2026-10-08T12:00:00+00:00", "gate_allowed": True, "candidate": {}},
                 {"candidate_id": "new", "strategy_version": STRATEGY_VERSION, "symbol": "AAA", "signal_time": "2026-10-08T13:00:00+00:00", "gate_allowed": True, "candidate": {}},
@@ -270,6 +277,8 @@ class V35DashboardTests(unittest.TestCase):
                 runtime_path=runtime,
             )
             self.assertEqual(payload["kpis"]["candidates"], 1)
+            self.assertEqual(payload["kpis"]["active_positions"], 1)
+            self.assertEqual(payload["positions"][0]["symbol"], "NEW")
             self.assertEqual(payload["kpis"]["closed_trades"], 1)
             self.assertEqual(payload["kpis"]["realized_net_pnl_rub"], 100.0)
 

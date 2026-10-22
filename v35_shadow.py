@@ -319,11 +319,17 @@ class V35ShadowPortfolio:
             return self._empty_state()
         if not isinstance(payload, dict):
             return self._empty_state()
+        previous_strategy_version = str(payload.get("strategy_version") or STRATEGY_VERSION)
         base = self._empty_state()
         base.update(payload)
         base["strategy_version"] = STRATEGY_VERSION
         base["order_submission_enabled"] = ORDER_SUBMISSION_ENABLED
         base["positions"] = payload.get("positions") if isinstance(payload.get("positions"), dict) else {}
+        for position in base["positions"].values():
+            if isinstance(position, dict):
+                position["strategy_version"] = str(
+                    position.get("strategy_version") or previous_strategy_version
+                )
         return base
 
     def _save(self, now: pd.Timestamp) -> None:
@@ -404,6 +410,7 @@ class V35ShadowPortfolio:
         self.state["skipped_candidates"] = int(self.state.get("skipped_candidates", 0)) + 1
         self._event({
             "event": "SKIP",
+            "strategy_version": str(row.get("strategy_version") or STRATEGY_VERSION),
             "candidate_id": uid,
             "symbol": row.get("symbol"),
             "direction": row.get("direction"),
@@ -455,7 +462,9 @@ class V35ShadowPortfolio:
             self._skip(row, "ONE_LOT_EXCEEDS_RISK", now)
             return
         protection = new_protection_state(candidate.direction, entry_price, initial_stop)
+        position_strategy_version = str(row.get("strategy_version") or STRATEGY_VERSION)
         self.state["positions"][symbol] = {
+            "strategy_version": position_strategy_version,
             "candidate_id": uid,
             "symbol": symbol,
             "contract_symbol": row.get("contract_symbol") or symbol,
@@ -476,6 +485,7 @@ class V35ShadowPortfolio:
         self.state["opened_trades"] = int(self.state.get("opened_trades", 0)) + 1
         self._event({
             "event": "OPEN",
+            "strategy_version": position_strategy_version,
             "candidate_id": uid,
             "symbol": symbol,
             "direction": candidate.direction,
@@ -517,6 +527,7 @@ class V35ShadowPortfolio:
         if updated.phase != previous.phase:
             self._event({
                 "event": "PHASE",
+                "strategy_version": str(position.get("strategy_version") or STRATEGY_VERSION),
                 "candidate_id": position["candidate_id"],
                 "symbol": symbol,
                 "direction": candidate.direction,
@@ -528,6 +539,7 @@ class V35ShadowPortfolio:
         if updated.current_stop != previous.current_stop:
             self._event({
                 "event": "STOP_MOVED",
+                "strategy_version": str(position.get("strategy_version") or STRATEGY_VERSION),
                 "candidate_id": position["candidate_id"],
                 "symbol": symbol,
                 "direction": candidate.direction,
@@ -555,6 +567,7 @@ class V35ShadowPortfolio:
         )
         self._event({
             "event": "CLOSE",
+            "strategy_version": str(position.get("strategy_version") or STRATEGY_VERSION),
             "candidate_id": position["candidate_id"],
             "symbol": symbol,
             "direction": candidate.direction,

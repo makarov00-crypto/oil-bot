@@ -10,7 +10,7 @@ from strategies.v35_market_regime import classify_market_regime, regime_allows_p
 from strategies.v35_pattern_library import classify_entry_pattern
 
 
-STRATEGY_VERSION = "four-phase-hierarchical-v36-shadow-continuation"
+STRATEGY_VERSION = "four-phase-hierarchical-v37-shadow-pattern-confirmed"
 MOSCOW = ZoneInfo("Europe/Moscow")
 LAST_NEW_ENTRY_MOSCOW_HOUR = 22
 LAST_NEW_ENTRY_MOSCOW_MINUTE = 30
@@ -443,11 +443,11 @@ def find_trend_continuation_candidates(
     start: pd.Timestamp,
     end: pd.Timestamp,
 ) -> list[V35Candidate]:
-    """Find an early 15m continuation inside an established 48h hourly trend.
+    """Find a pattern-confirmed 15m continuation in a 48h hourly trend.
 
-    A named chart pattern is supporting evidence here, not a mandatory gate.
-    The same price and indicator rules are applied with a direction sign, so
-    LONG and SHORT cannot silently diverge.
+    The hourly context must contain a recognized chart pattern. The 30m and
+    15m frames only confirm and time the entry. The same rules are applied
+    with a direction sign, so LONG and SHORT cannot silently diverge.
     """
     hourly = frames[60]
     confirmation_frame = frames[30]
@@ -529,8 +529,10 @@ def find_trend_continuation_candidates(
             (item.confidence for item in pattern_decision.blockers), default=0
         )
         strongest_pattern = pattern_decision.primary
+        if strongest_pattern is None:
+            continue
         if strongest_blocker >= 80 and (
-            strongest_pattern is None or strongest_blocker >= strongest_pattern.confidence
+            strongest_blocker >= strongest_pattern.confidence
         ):
             continue
 
@@ -548,11 +550,7 @@ def find_trend_continuation_candidates(
         ) / atr
         ao = _finite(row["ao"])
         near_zero = _finite(execution_frame.iloc[index - 5:index + 1]["ao"].abs().min()) / atr
-        pattern_confidence = (
-            strongest_pattern.confidence
-            if strongest_pattern is not None
-            else min(85, 60 + macro.confidence // 5 + confirmation_score)
-        )
+        pattern_confidence = strongest_pattern.confidence
         result.append(V35Candidate(
             symbol=symbol,
             direction=direction,
@@ -571,9 +569,7 @@ def find_trend_continuation_candidates(
             macd_hist=round(histogram, 6),
             macd_hist_delta=round(histogram_delta, 6),
             chaikin=round(_finite(hourly.iloc[hourly_position]["chaikin"]), 4),
-            classic_pattern=(
-                strongest_pattern.name if strongest_pattern is not None else "MACRO_TREND_CONTINUATION"
-            ),
+            classic_pattern=strongest_pattern.name,
             pattern_confidence=pattern_confidence,
             pattern_blockers=tuple(item.name for item in pattern_decision.blockers),
             pattern_supports=tuple(item.name for item in pattern_decision.supports),

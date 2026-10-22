@@ -60,6 +60,29 @@ class V35ShadowTests(unittest.TestCase):
             )
             self.assertEqual(portfolio.state["strategy_version"], STRATEGY_VERSION)
 
+    def test_portfolio_preserves_strategy_version_of_existing_positions(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            state.write_text(
+                json.dumps({
+                    "strategy_version": "previous-version",
+                    "positions": {"TEST": {"candidate_id": "old-position"}},
+                }),
+                encoding="utf-8",
+            )
+            portfolio = V35ShadowPortfolio(
+                root / "candidates.jsonl",
+                root / "events.jsonl",
+                state,
+                root / "status.json",
+            )
+            self.assertEqual(portfolio.state["strategy_version"], STRATEGY_VERSION)
+            self.assertEqual(
+                portfolio.state["positions"]["TEST"]["strategy_version"],
+                "previous-version",
+            )
+
     def test_market_snapshot_covers_symbols_without_entry_candidates(self) -> None:
         start = pd.Timestamp("2026-10-01T00:00:00Z")
         rows = []
@@ -165,6 +188,7 @@ class V35ShadowTests(unittest.TestCase):
     def test_portfolio_runs_full_tick_lifecycle_without_orders(self) -> None:
         item = candidate()
         row = {
+            "strategy_version": "candidate-version",
             "candidate_id": "candidate-1",
             "symbol": "TEST",
             "contract_symbol": "TEST",
@@ -220,6 +244,7 @@ class V35ShadowTests(unittest.TestCase):
             self.assertEqual(result["closed_trades"], 1)
             recorded = read_shadow_records(events)
             self.assertEqual(recorded[0]["event"], "OPEN")
+            self.assertTrue(all(event["strategy_version"] == "candidate-version" for event in recorded))
             self.assertTrue(any(event["event"] == "PHASE" for event in recorded))
             close = next(event for event in recorded if event["event"] == "CLOSE")
             self.assertEqual(close["exit_reason"], "PROFIT_TRAILING_STOP")

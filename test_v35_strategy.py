@@ -2,10 +2,12 @@ import hashlib
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
 from strategies.v35_hierarchy import aggregate_directional_regime, hierarchical_gate
+from strategies.v35_pattern_library import PatternDecision, PatternMatch
 from strategies.v35_risk import (
     advance_on_15m_bar,
     initial_stop_for_candidate,
@@ -234,6 +236,9 @@ class V35StrategyTests(unittest.TestCase):
                         candidate(direction),
                         entry_pattern="LOWER_TF_TREND_CONTINUATION",
                         execution_score=5,
+                        classic_pattern=(
+                            "BULL_FLAG_BREAKOUT" if direction == "LONG" else "BEAR_FLAG_BREAKDOWN"
+                        ),
                     )
                     self.assertEqual(
                         hierarchical_gate(
@@ -251,20 +256,55 @@ class V35StrategyTests(unittest.TestCase):
         regime = aggregate_directional_regime(rows, rows[0])
         self.assertEqual(regime["regime"], "BEAR")
 
-    def test_lower_timeframe_continuation_finds_long_and_short_without_named_pattern(self) -> None:
+    def test_trend_continuation_gate_rejects_synthetic_macro_pattern(self) -> None:
+        item = replace(
+            candidate("LONG"),
+            entry_pattern="LOWER_TF_TREND_CONTINUATION",
+            execution_score=5,
+            classic_pattern="MACRO_TREND_CONTINUATION",
+        )
+        self.assertEqual(
+            hierarchical_gate(
+                {"group_regime": "BULL", "direction": "LONG", "local_stage": "TREND_EARLY"},
+                item,
+            ),
+            (False, "CONTINUATION_REQUIRES_NAMED_PATTERN"),
+        )
+
+    def test_lower_timeframe_continuation_requires_named_pattern(self) -> None:
         for direction in ("LONG", "SHORT"):
             frames = trend_frames(direction)
             end = pd.Timestamp(frames[15].iloc[-1]["closed_at"])
-            result = find_trend_continuation_candidates(
-                "TEST",
-                frames,
-                end - pd.Timedelta(hours=2),
-                end,
+            no_pattern = PatternDecision(False, None, (), (), ())
+            with patch("strategies.v35_signals.classify_entry_pattern", return_value=no_pattern):
+                result = find_trend_continuation_candidates(
+                    "TEST",
+                    frames,
+                    end - pd.Timedelta(hours=2),
+                    end,
+                )
+            self.assertEqual(result, [], direction)
+
+            pattern_name = "BULL_FLAG_BREAKOUT" if direction == "LONG" else "BEAR_FLAG_BREAKDOWN"
+            named_pattern = PatternMatch(
+                pattern_name,
+                "CONTINUATION",
+                direction,
+                85,
+                ("test",),
             )
+            decision = PatternDecision(True, named_pattern, (named_pattern,), (), (named_pattern,))
+            with patch("strategies.v35_signals.classify_entry_pattern", return_value=decision):
+                result = find_trend_continuation_candidates(
+                    "TEST",
+                    frames,
+                    end - pd.Timedelta(hours=2),
+                    end,
+                )
             self.assertTrue(result, direction)
             self.assertEqual(result[-1].direction, direction)
             self.assertEqual(result[-1].entry_pattern, "LOWER_TF_TREND_CONTINUATION")
-            self.assertEqual(result[-1].classic_pattern, "MACRO_TREND_CONTINUATION")
+            self.assertEqual(result[-1].classic_pattern, pattern_name)
             self.assertGreaterEqual(result[-1].execution_score, 5)
 
     def test_v10_short_filter_requires_complete_execution_or_large_hourly_impulse(self) -> None:
