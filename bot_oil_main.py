@@ -9,7 +9,7 @@ import sys
 import time
 from html import unescape as html_unescape
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +55,12 @@ from strategies.ao_chaikin_1h import (
     is_ao_chaikin_strategy,
     evaluate_position as evaluate_ao_chaikin_position,
     entry_ao_peak,
+)
+from strategies.reversal_exit_protection import (
+    EXIT_MODEL_VERSION as REVERSAL_EXIT_MODEL_VERSION,
+    ReversalProtectionState,
+    advance_reversal_protection,
+    new_reversal_protection_state,
 )
 from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from trade_storage import (
@@ -407,6 +413,15 @@ class InstrumentState:
     entry_stop_distance_pct: float = 0.0
     entry_stop_description: str = ""
     entry_peak_ao_abs: float = 0.0
+    exit_model_version: str = ""
+    exit_phase: str = ""
+    exit_current_stop_price: float | None = None
+    exit_initial_risk_distance: float = 0.0
+    exit_entry_atr: float = 0.0
+    exit_best_move: float = 0.0
+    exit_worst_move: float = 0.0
+    exit_profit_trail_armed: bool = False
+    exit_last_trail_30m: str = ""
     last_entry_path: str = ""
     entry_commission_accounted: bool = False
     realized_gross_pnl_rub: float = 0.0
@@ -594,7 +609,18 @@ def load_state(symbol: str) -> InstrumentState:
     if not path.exists():
         return InstrumentState()
     try:
-        return InstrumentState(**json.loads(path.read_text(encoding="utf-8")))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("state должен быть JSON-объектом")
+        allowed_fields = {item.name for item in fields(InstrumentState)}
+        unknown_fields = sorted(set(payload) - allowed_fields)
+        if unknown_fields:
+            logging.warning(
+                "State %s содержит неизвестные поля, они будут безопасно проигнорированы: %s",
+                path,
+                ", ".join(unknown_fields),
+            )
+        return InstrumentState(**{key: value for key, value in payload.items() if key in allowed_fields})
     except Exception as error:
         logging.warning("Не удалось прочитать state %s: %s", path, error)
         return InstrumentState()
@@ -629,7 +655,158 @@ def clear_entry_protection(state: InstrumentState) -> None:
     state.entry_stop_distance_pct = 0.0
     state.entry_stop_description = ""
     state.entry_peak_ao_abs = 0.0
+    clear_reversal_exit_protection(state)
     state.last_entry_path = ""
+
+
+def clear_reversal_exit_protection(state: InstrumentState) -> None:
+    state.exit_model_version = ""
+    state.exit_phase = ""
+    state.exit_current_stop_price = None
+    state.exit_initial_risk_distance = 0.0
+    state.exit_entry_atr = 0.0
+    state.exit_best_move = 0.0
+    state.exit_worst_move = 0.0
+    state.exit_profit_trail_armed = False
+    state.exit_last_trail_30m = ""
+
+
+def has_reversal_exit_protection(state: InstrumentState) -> bool:
+    return (
+        str(state.entry_strategy or "").strip().lower() == "reversal_1h"
+        and state.exit_model_version == REVERSAL_EXIT_MODEL_VERSION
+    )
+
+
+def initialize_reversal_exit_protection(
+    state: InstrumentState,
+    *,
+    strategy_name: str,
+    entry_price: float,
+    stop_plan: dict[str, float | str],
+    entry_df: pd.DataFrame | None,
+) -> None:
+    clear_reversal_exit_protection(state)
+    if str(strategy_name or "").strip().lower() != "reversal_1h" or entry_df is None or entry_df.empty:
+        return
+    working_stop = float(stop_plan.get("working_stop_price") or 0.0)
+    entry_atr = float(entry_df.iloc[-1].get("atr") or 0.0)
+    distance = abs(float(entry_price) - working_stop)
+    if entry_price <= 0.0 or working_stop <= 0.0 or entry_atr <= 0.0 or distance <= 0.0:
+        return
+    state.exit_model_version = REVERSAL_EXIT_MODEL_VERSION
+    state.exit_phase = "RISK"
+    state.exit_current_stop_price = working_stop
+    state.exit_initial_risk_distance = distance
+    state.exit_entry_atr = entry_atr
+
+
+def finalize_reversal_exit_protection_entry(state: InstrumentState, fill_price: float) -> None:
+    if state.exit_model_version != REVERSAL_EXIT_MODEL_VERSION:
+        return
+    try:
+        protection = new_reversal_protection_state(
+            state.position_side,
+            float(fill_price),
+            float(state.entry_stop_price or 0.0),
+            entry_atr=float(state.exit_entry_atr or 0.0),
+        )
+    except (TypeError, ValueError) as error:
+        logging.warning("Не удалось активировать новую защиту выхода после исполнения: %s", error)
+        clear_reversal_exit_protection(state)
+        return
+    state.exit_phase = protection.phase
+    state.exit_current_stop_price = protection.current_stop
+    state.exit_initial_risk_distance = protection.initial_distance
+    state.exit_best_move = 0.0
+    state.exit_worst_move = 0.0
+    state.exit_profit_trail_armed = False
+    state.exit_last_trail_30m = ""
+    state.breakeven_armed = False
+
+
+def advance_state_reversal_exit_protection(
+    state: InstrumentState,
+    *,
+    current_price: float,
+    completed_30m: pd.DataFrame | None,
+    tick_size: float,
+) -> str:
+    if not has_reversal_exit_protection(state) or state.entry_price is None or state.entry_stop_price is None:
+        return ""
+    eligible_30m = completed_30m
+    if completed_30m is not None and not completed_30m.empty and state.entry_time:
+        time_column = "closed_at" if "closed_at" in completed_30m.columns else "time"
+        latest_30m = pd.to_datetime(
+            completed_30m.iloc[-1].get(time_column),
+            utc=True,
+            errors="coerce",
+        )
+        entry_time = pd.to_datetime(state.entry_time, utc=True, errors="coerce")
+        if pd.isna(latest_30m) or pd.isna(entry_time) or latest_30m <= entry_time:
+            eligible_30m = pd.DataFrame()
+    best_price = (
+        float(state.max_price or state.entry_price)
+        if state.position_side == "LONG"
+        else float(state.min_price or state.entry_price)
+    )
+    protection = ReversalProtectionState(
+        direction=state.position_side,
+        entry_price=float(state.entry_price),
+        initial_stop=float(state.entry_stop_price),
+        current_stop=float(state.exit_current_stop_price or state.entry_stop_price),
+        initial_distance=float(state.exit_initial_risk_distance or abs(state.entry_price - state.entry_stop_price)),
+        entry_atr=float(state.exit_entry_atr or 0.0),
+        phase=str(state.exit_phase or "RISK"),
+        best_price=best_price,
+        best_move=float(state.exit_best_move or 0.0),
+        worst_move=float(state.exit_worst_move or 0.0),
+        breakeven_armed=bool(state.breakeven_armed),
+        profit_trail_armed=bool(state.exit_profit_trail_armed),
+        last_trail_30m=str(state.exit_last_trail_30m or ""),
+    )
+    updated = advance_reversal_protection(
+        protection,
+        current_price=float(current_price),
+        completed_30m=eligible_30m,
+        tick_size=float(tick_size or 0.0),
+    )
+    state.exit_phase = updated.phase
+    state.exit_current_stop_price = updated.current_stop
+    state.exit_initial_risk_distance = updated.initial_distance
+    state.exit_best_move = updated.best_move
+    state.exit_worst_move = updated.worst_move
+    state.breakeven_armed = updated.breakeven_armed
+    state.exit_profit_trail_armed = updated.profit_trail_armed
+    state.exit_last_trail_30m = updated.last_trail_30m
+    if state.position_side == "LONG":
+        state.max_price = max(float(state.max_price or updated.best_price), updated.best_price)
+    else:
+        state.min_price = min(float(state.min_price or updated.best_price), updated.best_price)
+    return updated.exit_reason
+
+
+def describe_reversal_exit_protection_reason(
+    code: str,
+    state: InstrumentState,
+    current_price: float,
+) -> str:
+    stop_price = float(state.exit_current_stop_price or state.entry_stop_price or 0.0)
+    if code == "BREAKEVEN_STOP":
+        return (
+            f"Защита безубыточности: цена {current_price:.4f}, "
+            f"защитный уровень {stop_price:.4f}"
+        )
+    if code == "PROFIT_TRAILING_STOP":
+        return (
+            f"Защита прибыли: цена {current_price:.4f}, "
+            f"подтянутый уровень {stop_price:.4f}"
+        )
+    if code == "CONFIRMED_REVERSAL":
+        return "Подтверждённый разворот на двух закрытых 30-минутных свечах"
+    if code == "PROFIT_CONSOLIDATION":
+        return "Сжатие движения после перехода в фазу защиты прибыли"
+    return ""
 
 
 def clear_delayed_close_recovery(state: InstrumentState) -> None:
@@ -815,6 +992,23 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "strategy_version": str(state.entry_strategy_version or state.pending_strategy_version or ""),
         "signal_summary": signal_summary,
         "execution_status": str(state.execution_status or ""),
+        "exit_protection": {
+            "model_version": str(state.exit_model_version or ""),
+            "phase": str(state.exit_phase or ""),
+            "current_stop_price": state.exit_current_stop_price,
+            "initial_risk_distance": round(float(state.exit_initial_risk_distance or 0.0), 8),
+            "entry_atr": round(float(state.exit_entry_atr or 0.0), 8),
+            "best_move_r": round(
+                float(state.exit_best_move or 0.0) / float(state.exit_initial_risk_distance or 1.0),
+                4,
+            ),
+            "worst_move_r": round(
+                float(state.exit_worst_move or 0.0) / float(state.exit_initial_risk_distance or 1.0),
+                4,
+            ),
+            "profit_trail_armed": bool(state.exit_profit_trail_armed),
+            "last_trail_30m": str(state.exit_last_trail_30m or ""),
+        } if state.exit_model_version else {},
         "shadow_ai": {
             "action": str(state.last_shadow_ai_action or ""),
             "direction": str(state.last_shadow_ai_direction or ""),
@@ -2723,6 +2917,7 @@ def confirm_pending_open_from_broker(
     )
     if operation_time is not None:
         state.entry_time = operation_time.isoformat()
+    finalize_reversal_exit_protection_entry(state, float(state.entry_price))
     active_open_lots = get_active_journal_lots(instrument.symbol, state.position_side)
     missing_open_lots = max(0, int(state.position_qty) - int(active_open_lots))
     has_matching_open_entry = (
@@ -6530,6 +6725,35 @@ def get_configured_higher_tf_df(client: Client, config: BotConfig, instrument: I
         ),
         include_ema200=False,
     )
+
+
+def get_reversal_exit_30m_df(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+) -> pd.DataFrame:
+    frame = add_indicators(
+        get_candles(
+            client,
+            config,
+            instrument,
+            CandleInterval.CANDLE_INTERVAL_30_MIN,
+            lookback_hours=get_lower_tf_lookback_hours(
+                config,
+                instrument.symbol,
+                interval_minutes=30,
+            ),
+        ),
+        include_ema200=False,
+    )
+    frame = frame.copy()
+    frame["closed_at"] = pd.to_datetime(frame["time"], utc=True, errors="coerce") + pd.Timedelta(minutes=30)
+    frame["ao_delta"] = pd.to_numeric(frame["ao"], errors="coerce").diff()
+    frame["macd_hist"] = (
+        pd.to_numeric(frame["macd"], errors="coerce")
+        - pd.to_numeric(frame["macd_signal"], errors="coerce")
+    )
+    return frame.dropna(subset=["closed_at", "ao_delta", "macd_hist", "body"]).reset_index(drop=True)
 
 
 def evaluate_signal(
@@ -11153,6 +11377,7 @@ def sync_pending_order(
             state.entry_time = datetime.now(UTC).isoformat()
             state.entry_reason = compact_reason(state.pending_entry_reason or "Сделка исполнена по рыночному входу")
             state.execution_status = "confirmed_open"
+            finalize_reversal_exit_protection_entry(state, fill_price)
             reset_daily_pnl_if_needed(state)
             state.realized_commission_rub += fill_commission_rub
             state.realized_pnl -= fill_commission_rub
@@ -11509,6 +11734,13 @@ def open_position(
         entry_ao_peak(entry_df, side)
         if is_ao_chaikin_strategy(strategy_name) and entry_df is not None else 0.0
     )
+    initialize_reversal_exit_protection(
+        state,
+        strategy_name=strategy_name,
+        entry_price=price,
+        stop_plan=stop_plan,
+        entry_df=entry_df,
+    )
     clear_retired_signal_ai_context(state)
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
@@ -11529,6 +11761,7 @@ def open_position(
         state.entry_strategy_version = get_ao_live_strategy_version(config) if is_ao_chaikin_strategy(strategy_name) else ""
         state.entry_reason = compact_reason(entry_reason or "Тестовый вход по стратегии.")
         state.execution_status = "confirmed_open"
+        finalize_reversal_exit_protection_entry(state, price)
         save_state(instrument.symbol, state)
         append_trade_journal(
             instrument,
@@ -11755,6 +11988,7 @@ def check_exit(
     df: pd.DataFrame,
     fresh_signal: str,
     higher_tf_df: pd.DataFrame | None = None,
+    reversal_exit_30m_df: pd.DataFrame | None = None,
 ) -> None:
     if state.position_qty <= 0 or state.position_side == "FLAT" or state.entry_price is None:
         return
@@ -11829,6 +12063,72 @@ def check_exit(
     ema20 = float(last["ema20"])
     prev_close = float(prev["close"])
     close = float(last["close"])
+
+    if has_reversal_exit_protection(state):
+        working_stop = float(
+            state.entry_stop_price
+            or state.entry_price * (1 - config.stop_loss_pct if state.position_side == "LONG" else 1 + config.stop_loss_pct)
+        )
+        emergency_stop = float(state.entry_emergency_stop_price or working_stop)
+        emergency_hit = (
+            price <= emergency_stop
+            if state.position_side == "LONG"
+            else price >= emergency_stop
+        )
+        if emergency_hit:
+            comparator = "<=" if state.position_side == "LONG" else ">="
+            close_position(
+                client,
+                config,
+                instrument,
+                state,
+                f"Аварийный стоп: цена {price:.4f} {comparator} {emergency_stop:.4f}",
+            )
+            return
+
+        working_stop_hit = (
+            close <= working_stop
+            if state.position_side == "LONG"
+            else close >= working_stop
+        )
+        if str(state.exit_phase or "RISK") == "RISK" and bool(last.get("is_complete", True)) and working_stop_hit:
+            comparator = "<=" if state.position_side == "LONG" else ">="
+            close_position(
+                client,
+                config,
+                instrument,
+                state,
+                f"Часовой защитный стоп: закрытие {close:.4f} {comparator} {working_stop:.4f}",
+            )
+            return
+
+        previous_phase = str(state.exit_phase or "RISK")
+        previous_stop = float(state.exit_current_stop_price or working_stop)
+        protection_exit = advance_state_reversal_exit_protection(
+            state,
+            current_price=price,
+            completed_30m=reversal_exit_30m_df,
+            tick_size=float(instrument.min_price_increment or 0.0),
+        )
+        current_stop = float(state.exit_current_stop_price or working_stop)
+        if state.exit_phase != previous_phase or current_stop != previous_stop:
+            initial_distance = float(state.exit_initial_risk_distance or 0.0)
+            logging.info(
+                "symbol=%s exit_model=%s phase=%s->%s stop=%.8f->%.8f best_r=%.3f worst_r=%.3f",
+                instrument.symbol,
+                state.exit_model_version,
+                previous_phase,
+                state.exit_phase,
+                previous_stop,
+                current_stop,
+                float(state.exit_best_move or 0.0) / initial_distance if initial_distance > 0.0 else 0.0,
+                float(state.exit_worst_move or 0.0) / initial_distance if initial_distance > 0.0 else 0.0,
+            )
+        if protection_exit:
+            reason = describe_reversal_exit_protection_reason(protection_exit, state, price)
+            if reason:
+                close_position(client, config, instrument, state, reason)
+        return
 
     if state.position_side == "LONG":
         profit_pct = (price - state.entry_price) / state.entry_price
@@ -12034,6 +12334,7 @@ def process_instrument(
     )
 
     higher_tf_df: pd.DataFrame | None = None
+    reversal_exit_30m_df: pd.DataFrame | None = None
     if (
         not uses_unified_reversal(instrument.symbol)
         and (
@@ -12055,6 +12356,16 @@ def process_instrument(
             reconcile_state_accounting(instrument.symbol, state)
             save_state(instrument.symbol, state)
             return
+
+    if state.position_qty > 0 and has_reversal_exit_protection(state):
+        try:
+            reversal_exit_30m_df = get_reversal_exit_30m_df(client, config, instrument)
+        except RuntimeError as error:
+            logging.warning(
+                "symbol=%s status=waiting_for_reversal_exit_30m reason=%s",
+                instrument.symbol,
+                error,
+            )
 
     higher_tf_bias = "" if uses_unified_reversal(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_position_owned_signal(lower_df, config, instrument, higher_tf_bias, state)
@@ -12449,7 +12760,16 @@ def process_instrument(
                             ).strip()
                             state.last_signal_summary = [reentry_reason, *state.last_signal_summary[:2]]
     else:
-        check_exit(client, config, instrument, state, lower_df, signal, higher_tf_df=higher_tf_df)
+        check_exit(
+            client,
+            config,
+            instrument,
+            state,
+            lower_df,
+            signal,
+            higher_tf_df=higher_tf_df,
+            reversal_exit_30m_df=reversal_exit_30m_df,
+        )
 
     reconcile_state_accounting(instrument.symbol, state)
     save_state(instrument.symbol, state)
