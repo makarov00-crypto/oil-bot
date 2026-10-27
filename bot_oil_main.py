@@ -1,5 +1,4 @@
 import json
-import hashlib
 import logging
 import math
 import os
@@ -20,7 +19,6 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import ta
-from ao_chaikin_shadow import AoChaikinShadowJournal, build_shadow_exit_analytics, read_shadow_records
 from dotenv import load_dotenv
 from active_contracts import get_instrument_history_symbol, replace_with_active_symbols
 from custom_instruments import merge_with_custom_symbols
@@ -39,7 +37,6 @@ from instrument_groups import (
 )
 from news_bias import NewsBias, calibrate_news_biases, detect_news_bias, select_active_biases
 from news_ai_analyzer import NewsAiSignal, request_news_ai_signals
-from signal_ai_reviewer import SignalAiReview, request_signal_ai_reviews, get_signal_ai_model, SIGNAL_AI_PROMPT_VERSION
 from news_ingest import (
     CHANNEL_URLS,
     WEB_SOURCE_URLS,
@@ -89,7 +86,6 @@ from trade_quality import (
     early_exit_threshold_pct,
     is_material_early_exit,
     pair_closed_trades,
-    restore_shadow_ai_from_signal_observations,
     summarize_trade_dimension,
     summarize_trade_quality,
 )
@@ -107,8 +103,6 @@ from tinkoff.invest import (
     RequestError,
 )
 from strategies.base import StrategyProfile
-from strategies.v35_signals import enrich_candles as enrich_v35_candles
-from v35_shadow import V35ShadowJournal, V35ShadowPortfolio
 
 
 APP_NAME = "oil-bot-main"
@@ -145,28 +139,15 @@ NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 NEWS_SEEN_PATH = STATE_DIR / "_news_seen.json"
 CASH_MANAGER_STATE_PATH = STATE_DIR / "_cash_manager.json"
 LOG_DIR = Path(__file__).with_name("logs")
-SIGNAL_AI_SHADOW_PATH = LOG_DIR / "signal_ai_shadow.jsonl"
-AO_CHAIKIN_SHADOW_PATH = LOG_DIR / "ao_chaikin_shadow.jsonl"
-V35_SHADOW_PATH = LOG_DIR / "v35_shadow_candidates.jsonl"
-V35_SHADOW_EVENT_PATH = LOG_DIR / "v35_shadow_positions.jsonl"
-V35_SHADOW_CYCLE_PATH = LOG_DIR / "v35_shadow_cycles.jsonl"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
-V35_SHADOW_STATUS_PATH = STATE_DIR / "_v35_shadow_status.json"
-V35_SHADOW_PORTFOLIO_PATH = STATE_DIR / "_v35_shadow_portfolio.json"
-V35_SHADOW_LOCK_PATH = STATE_DIR / "_v35_shadow_cycle.lock"
 TRADE_QUALITY_LOCK_PATH = STATE_DIR / "_trade_quality_analytics.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
 NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
-AO_CHAIKIN_SHADOW_JOURNAL: AoChaikinShadowJournal | None = None
-V35_SHADOW_JOURNAL: V35ShadowJournal | None = None
-V35_SHADOW_PORTFOLIO: V35ShadowPortfolio | None = None
-V35_SHADOW_LAST_SLOT = ""
-V35_SHADOW_LAST_ATTEMPT_MONOTONIC = 0.0
 TRADE_QUALITY_REFRESH_SECONDS = 3600
 TRADE_QUALITY_ANALYTICS_VERSION = 11
 POSITION_RECONCILE_EVENT = "POSITION_RECONCILE"
@@ -384,14 +365,6 @@ class InstrumentState:
     last_atr_pct: float = 0.0
     last_range_width_pct: float = 0.0
     last_signal_summary: list[str] = field(default_factory=list)
-    last_shadow_ai_action: str = ""
-    last_shadow_ai_direction: str = ""
-    last_shadow_ai_confidence: float = 0.0
-    last_shadow_ai_reason: str = ""
-    last_shadow_ai_candle_time: str = ""
-    last_shadow_ai_candidate_id: str = ""
-    last_shadow_ai_status: str = ""
-    last_shadow_ai_error: str = ""
     last_allocator_summary: str = ""
     last_allocator_quantity: int = 0
     last_allocator_open_risk_budget_rub: float = 0.0
@@ -952,16 +925,6 @@ def parse_state_datetime(value: str) -> datetime | None:
     return parsed
 
 
-def clear_retired_signal_ai_context(state: InstrumentState) -> None:
-    """Prevent retired signal-AI metadata from leaking into a new trade."""
-    state.last_shadow_ai_action = ""
-    state.last_shadow_ai_direction = ""
-    state.last_shadow_ai_confidence = 0.0
-    state.last_shadow_ai_reason = ""
-    state.last_shadow_ai_candle_time = ""
-    state.last_shadow_ai_candidate_id = ""
-    state.last_shadow_ai_status = ""
-    state.last_shadow_ai_error = ""
 
 
 def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
@@ -1010,15 +973,6 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
             "profit_trail_armed": bool(state.exit_profit_trail_armed),
             "last_trail_30m": str(state.exit_last_trail_30m or ""),
         } if state.exit_model_version else {},
-        "shadow_ai": {
-            "action": str(state.last_shadow_ai_action or ""),
-            "direction": str(state.last_shadow_ai_direction or ""),
-            "confidence": round(float(state.last_shadow_ai_confidence or 0.0), 3),
-            "reason": str(state.last_shadow_ai_reason or ""),
-        } if state.last_shadow_ai_action else {},
-        "shadow_ai_status": str(state.last_shadow_ai_status or ""),
-        "candidate_id": str(state.last_shadow_ai_candidate_id or ""),
-        "shadow_ai_error": str(state.last_shadow_ai_error or ""),
     }
     return {key: value for key, value in context.items() if value not in ("", [], {}, None)}
 
@@ -1247,8 +1201,6 @@ def append_signal_observation_decision(
         "correlation_note": str(candidate.get("correlation_note") or ""),
         "candle_time": str(candidate.get("candle_time") or ""),
         "candidate_id": str(candidate.get("candidate_id") or ""),
-        "shadow_ai_model": str(candidate.get("shadow_ai_model") or ""),
-        "shadow_ai_prompt_version": str(candidate.get("shadow_ai_prompt_version") or ""),
         "execution_status": str(candidate.get("execution_status") or ""),
         "execution_note": str(candidate.get("execution_note") or ""),
         "defer_kind": str(candidate.get("defer_kind") or ""),
@@ -1257,25 +1209,8 @@ def append_signal_observation_decision(
         "open_risk_reserved_rub": float(candidate.get("open_risk_reserved_rub") or 0.0),
         "open_risk_available_rub": float(candidate.get("open_risk_available_rub") or 0.0),
         "risk_per_contract_rub": float(candidate.get("risk_per_contract_rub") or 0.0),
-        "shadow_ai_status": str(candidate.get("shadow_ai_status") or ""),
-        "shadow_ai_error": str(candidate.get("shadow_ai_error") or ""),
-        "shadow_ai_retry_attempt": int(candidate.get("shadow_ai_retry_attempt") or 0),
-        "shadow_ai_next_retry_at": str(candidate.get("shadow_ai_next_retry_at") or ""),
-        "shadow_ai_context": candidate.get("shadow_ai_context") if isinstance(candidate.get("shadow_ai_context"), dict) else {},
-        "ai_canary_bucket": int(candidate.get("ai_canary_bucket") or 0),
-        "ai_canary_percent": int(candidate.get("ai_canary_percent") or 0),
-        "ai_canary_result": str(candidate.get("ai_canary_result") or ""),
         "strategy_version": str(candidate.get("strategy_version") or ""),
     }
-    shadow_ai = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
-    if shadow_ai:
-        context["shadow_ai"] = {
-            "action": str(shadow_ai.get("action") or ""),
-            "direction": str(shadow_ai.get("direction") or ""),
-            "confidence": round(float(shadow_ai.get("confidence") or 0.0), 3),
-            "reason": str(shadow_ai.get("reason") or ""),
-            "risk_note": str(shadow_ai.get("risk_note") or ""),
-        }
     observation_key = str(
         candidate.get("observation_key")
         or context.get("candle_time")
@@ -1303,7 +1238,7 @@ def append_signal_observation_decision(
         "context": {
             key: value
             for key, value in context.items()
-            if value not in ("", None, 0.0) or key in {"ai_canary_bucket", "ai_canary_percent"}
+            if value not in ("", None, 0.0)
         },
     }
     return append_signal_observation(TRADE_DB_PATH, row)
@@ -1549,7 +1484,7 @@ def get_hourly_horizon_price(
             interval=CandleInterval.CANDLE_INTERVAL_HOUR,
         )
     except Exception as error:
-        logging.info("symbol=%s signal_ai_shadow_hourly_price_unavailable error=%s", instrument.symbol, error)
+        logging.info("symbol=%s hourly_price_unavailable error=%s", instrument.symbol, error)
         return None
 
     candidates: list[tuple[datetime, float]] = []
@@ -1696,85 +1631,6 @@ def update_signal_observation_outcomes(
     return updated
 
 
-def update_signal_ai_shadow_outcomes(
-    client: Client,
-    config: BotConfig,
-    watchlist: Sequence[InstrumentConfig],
-    *,
-    limit: int = 500,
-) -> int:
-    """Evaluate shadow AI opinions at several hourly horizons without touching trading."""
-    instruments_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
-    now = datetime.now(UTC)
-    updated = 0
-    for row in load_signal_observations(TRADE_DB_PATH, limit=limit, newest_first=True):
-        context = row.get("context") if isinstance(row.get("context"), dict) else {}
-        shadow_ai = context.get("shadow_ai") if isinstance(context.get("shadow_ai"), dict) else {}
-        if not shadow_ai:
-            continue
-        symbol = str(row.get("symbol") or "").upper()
-        instrument = instruments_by_symbol.get(symbol)
-        observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
-        observed_price = float(row.get("observed_price") or 0.0)
-        signal = str(row.get("signal") or "").upper()
-        if instrument is None or observed_at is None or observed_price <= 0.0 or signal not in {"LONG", "SHORT"}:
-            continue
-        outcomes = context.get("shadow_ai_outcomes") if isinstance(context.get("shadow_ai_outcomes"), dict) else {}
-        changed = False
-        for hours in (1, 2, 4, 8):
-            key = f"{hours}h"
-            existing_outcome = outcomes.get(key) if isinstance(outcomes.get(key), dict) else {}
-            if existing_outcome.get("evaluation_version") == HOURLY_OUTCOME_EVALUATION_VERSION:
-                continue
-            target_time = observed_at + timedelta(hours=hours)
-            if now < target_time:
-                continue
-            horizon_snapshot = get_hourly_horizon_price(
-                client,
-                config,
-                instrument,
-                target_time,
-            )
-            if horizon_snapshot is None:
-                if now >= target_time + timedelta(days=3):
-                    outcomes[key] = {
-                        "status": "unavailable",
-                        "reason": "не найдена рыночная цена в течение трёх дней после горизонта",
-                    }
-                    changed = True
-                else:
-                    logging.info(
-                        "symbol=%s signal_ai_shadow_outcome_wait horizon=%s target_time=%s",
-                        symbol,
-                        key,
-                        target_time.astimezone(MOSCOW_TZ).isoformat(),
-                    )
-                continue
-            current_price, evaluated_at, price_source = horizon_snapshot
-            move_pct = (
-                (current_price - observed_price) / observed_price * 100.0
-                if signal == "LONG"
-                else (observed_price - current_price) / observed_price * 100.0
-            )
-            outcomes[key] = {
-                "evaluated_at": evaluated_at.isoformat(),
-                "current_price": round(current_price, 6),
-                "move_pct": round(move_pct, 4),
-                "favorable": move_pct > 0.0,
-                "price_source": price_source,
-                "evaluation_version": HOURLY_OUTCOME_EVALUATION_VERSION,
-            }
-            changed = True
-        if changed:
-            update_signal_observation_context(
-                TRADE_DB_PATH,
-                str(row.get("observation_uid") or ""),
-                {"shadow_ai_outcomes": outcomes},
-            )
-            updated += 1
-    if updated:
-        logging.info("signal_ai_shadow_outcomes_updated count=%s", updated)
-    return updated
 
 
 def load_trade_quality_payload() -> dict[str, Any]:
@@ -1850,10 +1706,6 @@ def build_trade_quality_analytics(
 
     completed: list[dict[str, Any]] = []
     for trade in pair_closed_trades(raw_rows):
-        trade = restore_shadow_ai_from_signal_observations(
-            trade,
-            observations_by_symbol.get(str(trade.get("symbol") or "").upper(), []),
-        )
         entry_time = parse_state_datetime(str(trade.get("entry_time") or ""))
         exit_time = parse_state_datetime(str(trade.get("exit_time") or ""))
         instrument = by_symbol.get(str(trade.get("symbol") or "").upper())
@@ -4270,663 +4122,48 @@ def enrich_news_biases_with_ai(active: dict[str, NewsBias]) -> dict[str, NewsBia
     return enriched
 
 
-def get_signal_ai_shadow_enabled() -> bool:
-    return parse_bool_env("OIL_SIGNAL_AI_SHADOW_ENABLED", False)
 
 
-def get_signal_ai_mode() -> str:
-    mode = os.getenv("OIL_SIGNAL_AI_MODE", "shadow").strip().lower()
-    return mode if mode in {"shadow", "canary"} else "shadow"
 
 
-def get_signal_ai_canary_percent() -> int:
-    try:
-        return max(0, min(100, int(os.getenv("OIL_SIGNAL_AI_CANARY_PERCENT", "25"))))
-    except ValueError:
-        return 25
 
 
-def get_ao_chaikin_shadow_enabled() -> bool:
-    return parse_bool_env("OIL_AO_CHAIKIN_SHADOW_ENABLED", False)
 
 
-def build_conditional_shadow_exit_report(
-    trade: dict[str, Any],
-    experiment: dict[str, Any],
-) -> str:
-    """Describe a completed shadow-only two-hour exit observation."""
-    held = (trade.get("holds") or {}).get("2") or {}
-    delta = float(held.get("delta_rub_1lot") or 0.0)
-    outcome = "лучше" if delta > 0.01 else "хуже" if delta < -0.01 else "без заметной разницы"
-    return build_telegram_card(
-        "Проверка удержания после выхода",
-        "🔎",
-        [
-            f"Инструмент: {trade.get('symbol') or '-'} · {str(trade.get('direction') or '-').lower()}",
-            f"Обычный выход: {format_rub(trade.get('actual_net_rub_1lot'), signed=True)}",
-            f"Если удержать ещё 2 часа: {format_rub(held.get('net_result_rub_1lot'), signed=True)}",
-            f"Разница: {format_rub(delta, signed=True)} · {outcome}",
-            f"Накоплено наблюдений: {int(experiment.get('evaluated') or 0)} из {int((experiment.get('readiness') or {}).get('target_evaluated') or 20)}",
-            "Это только наблюдение: реальные правила выхода не менялись.",
-        ],
-    )
 
 
-def notify_completed_conditional_shadow_exit_reports(config: BotConfig) -> None:
-    """Send each completed shadow observation once, without affecting orders."""
-    analytics = build_shadow_exit_analytics(read_shadow_records(AO_CHAIKIN_SHADOW_PATH))
-    experiment = analytics.get("conditional_two_hour_experiment") or {}
-    completed = [
-        row
-        for row in analytics.get("trades") or []
-        if row.get("conditional_two_hour_eligible") and (row.get("holds") or {}).get("2")
-    ]
-    if not completed:
-        return
-    meta = load_meta_state()
-    reported = {
-        str(key)
-        for key in meta.get("conditional_shadow_exit_reported_keys", [])
-        if str(key).strip()
-    }
-    pending = [row for row in reversed(completed) if str(row.get("key") or "") not in reported]
-    if not pending:
-        return
-    for row in pending:
-        key = str(row.get("key") or "")
-        if not key:
-            continue
-        send_msg(config, build_conditional_shadow_exit_report(row, experiment))
-        reported.add(key)
-    meta["conditional_shadow_exit_reported_keys"] = sorted(reported)[-200:]
-    save_meta_state(meta)
 
 
-def observe_ao_chaikin_shadow_strategy(
-    config: BotConfig,
-    instrument: InstrumentConfig,
-    candles: pd.DataFrame,
-    *,
-    interval_minutes: int,
-) -> None:
-    """Record an independent hourly opinion without changing live decisions."""
-    if not get_ao_chaikin_shadow_enabled() or interval_minutes != 60:
-        return
-    global AO_CHAIKIN_SHADOW_JOURNAL
-    if AO_CHAIKIN_SHADOW_JOURNAL is None:
-        AO_CHAIKIN_SHADOW_JOURNAL = AoChaikinShadowJournal(
-            AO_CHAIKIN_SHADOW_PATH,
-            history_symbol_resolver=get_instrument_history_symbol,
-        )
-
-    point_value = 1.0
-    if instrument.min_price_increment > 0.0 and instrument.min_price_increment_amount > 0.0:
-        point_value = instrument.min_price_increment_amount / instrument.min_price_increment
-    minimum_strength_atr_ratio = max(
-        0.0,
-        parse_float_env("OIL_AO_CHAIKIN_SHADOW_MIN_AO_ATR_RATIO", 0.60),
-    )
-    exit_ao_retention_ratio = clamp_float(
-        parse_float_env("OIL_AO_CHAIKIN_SHADOW_EXIT_AO_RETENTION_RATIO", 0.70),
-        0.10,
-        1.00,
-    )
-    commission_rate = max(
-        0.0,
-        parse_float_env("OIL_AO_CHAIKIN_SHADOW_COMMISSION_RATE", 0.00025),
-    )
-    try:
-        created = AO_CHAIKIN_SHADOW_JOURNAL.observe(
-            symbol=instrument.symbol,
-            candles=candles,
-            point_value=point_value,
-            minimum_strength_atr_ratio=minimum_strength_atr_ratio,
-            exit_ao_retention_ratio=exit_ao_retention_ratio,
-            commission_rate=commission_rate,
-        )
-    except Exception as error:
-        logging.warning(
-            "symbol=%s ao_chaikin_shadow_unavailable error=%s",
-            instrument.symbol,
-            error,
-        )
-        return
-    for row in created:
-        logging.info(
-            "symbol=%s ao_chaikin_shadow decision=%s direction=%s candle=%s",
-            instrument.symbol,
-            row.get("decision"),
-            row.get("direction"),
-            row.get("candle_closed_at"),
-        )
-    if created:
-        try:
-            notify_completed_conditional_shadow_exit_reports(config)
-        except Exception as error:
-            logging.warning("Не удалось подготовить отчёт по теневому выходу: %s", error)
 
 
-def get_v35_shadow_enabled() -> bool:
-    return parse_bool_env("OIL_V35_SHADOW_ENABLED", False)
 
 
-def maybe_observe_v35_shadow_cycle(
-    client: Client,
-    config: BotConfig,
-    watchlist: list[InstrumentConfig],
-) -> dict[str, Any] | None:
-    """Collect one independent v35 decision set per completed 15m slot."""
-    if not get_v35_shadow_enabled() or get_market_session() in {"CLOSED", "CLEARING"}:
-        return None
-    global V35_SHADOW_JOURNAL, V35_SHADOW_LAST_SLOT, V35_SHADOW_LAST_ATTEMPT_MONOTONIC
-    now = pd.Timestamp.now(tz="UTC")
-    slot = now.floor("15min").isoformat()
-    if slot == V35_SHADOW_LAST_SLOT:
-        return None
-    monotonic_now = time.monotonic()
-    if monotonic_now - V35_SHADOW_LAST_ATTEMPT_MONOTONIC < 60:
-        return None
-    V35_SHADOW_LAST_ATTEMPT_MONOTONIC = monotonic_now
-    if V35_SHADOW_JOURNAL is None:
-        V35_SHADOW_JOURNAL = V35ShadowJournal(V35_SHADOW_PATH, V35_SHADOW_STATUS_PATH)
-    try:
-        frames_by_symbol: dict[str, dict[int, pd.DataFrame]] = {}
-        for instrument in watchlist:
-            frames_by_symbol[instrument.symbol] = {
-                interval_minutes: enrich_v35_candles(
-                    get_candles(
-                        client,
-                        config,
-                        instrument,
-                        SUPPORTED_INTERVALS[interval_minutes],
-                        lookback_hours=lookback_hours,
-                    ),
-                    interval_minutes,
-                )
-                for interval_minutes, lookback_hours in ((60, 240), (30, 120), (15, 72))
-            }
-        status = V35_SHADOW_JOURNAL.observe(
-            frames_by_symbol,
-            start=now - pd.Timedelta(hours=12),
-            end=now,
-            contract_by_symbol={item.symbol: item.symbol for item in watchlist},
-        )
-    except Exception as error:
-        logging.warning("v35_shadow_cycle_unavailable error=%s", error)
-        return None
-    V35_SHADOW_LAST_SLOT = slot
-    logging.info(
-        "v35_shadow_cycle candidates=%s v10=%s allowed=%s new=%s orders=%s",
-        status.get("multitimeframe_candidates"),
-        status.get("v10_allowed"),
-        status.get("hierarchical_allowed"),
-        status.get("new_records"),
-        status.get("order_submission_enabled"),
-    )
-    return status
 
 
-def maybe_start_v35_shadow_refresh() -> None:
-    """Run the 33 candle requests outside the latency-sensitive trading loop."""
-    if not get_v35_shadow_enabled() or get_market_session() in {"CLOSED", "CLEARING"}:
-        return
-    current_slot = pd.Timestamp.now(tz="UTC").floor("15min")
-    if V35_SHADOW_STATUS_PATH.exists():
-        try:
-            payload = json.loads(V35_SHADOW_STATUS_PATH.read_text(encoding="utf-8"))
-            updated_at = pd.to_datetime(payload.get("updated_at"), utc=True, errors="coerce")
-            if pd.notna(updated_at) and updated_at.floor("15min") >= current_slot:
-                return
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            pass
-    if V35_SHADOW_LOCK_PATH.exists():
-        try:
-            age_seconds = datetime.now(UTC).timestamp() - V35_SHADOW_LOCK_PATH.stat().st_mtime
-            if age_seconds < 20 * 60:
-                return
-        except OSError:
-            return
-        V35_SHADOW_LOCK_PATH.unlink(missing_ok=True)
-    V35_SHADOW_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    V35_SHADOW_LOCK_PATH.write_text(current_slot.isoformat(), encoding="utf-8")
-    script_path = Path(__file__).with_name("scripts") / "collect_v35_shadow_cycle.py"
-    try:
-        subprocess.Popen(
-            [sys.executable, str(script_path)],
-            cwd=str(Path(__file__).resolve().parent),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        logging.info("v35_shadow_refresh_started slot=%s", current_slot.isoformat())
-    except OSError as error:
-        V35_SHADOW_LOCK_PATH.unlink(missing_ok=True)
-        logging.warning("v35_shadow_refresh_start_failed error=%s", error)
 
 
-def manage_v35_shadow_positions(
-    client: Client,
-    watchlist: list[InstrumentConfig],
-) -> dict[str, Any] | None:
-    """Advance accepted v35 shadow positions on every 10-second bot cycle."""
-    if not get_v35_shadow_enabled() or get_market_session() in {"CLOSED", "CLEARING"}:
-        return None
-    global V35_SHADOW_PORTFOLIO
-    if V35_SHADOW_PORTFOLIO is None:
-        V35_SHADOW_PORTFOLIO = V35ShadowPortfolio(
-            V35_SHADOW_PATH,
-            V35_SHADOW_EVENT_PATH,
-            V35_SHADOW_PORTFOLIO_PATH,
-            V35_SHADOW_STATUS_PATH,
-        )
-    symbols = V35_SHADOW_PORTFOLIO.symbols_requiring_prices()
-    if not symbols:
-        return V35_SHADOW_PORTFOLIO.advance({}, {})
-    instruments = {
-        instrument.symbol: instrument
-        for instrument in watchlist
-        if instrument.symbol in symbols
-    }
-    if not instruments:
-        return None
-    try:
-        response = client.market_data.get_last_prices(
-            figi=[instrument.figi for instrument in instruments.values()]
-        )
-        prices_by_figi = {
-            str(getattr(item, "figi", "")): quotation_to_float(getattr(item, "price", None))
-            for item in response.last_prices
-        }
-        prices = {
-            symbol: prices_by_figi.get(instrument.figi, 0.0)
-            for symbol, instrument in instruments.items()
-        }
-        metadata: dict[str, dict[str, float]] = {}
-        for symbol, instrument in instruments.items():
-            point_value = 1.0
-            if instrument.min_price_increment > 0 and instrument.min_price_increment_amount > 0:
-                point_value = instrument.min_price_increment_amount / instrument.min_price_increment
-            metadata[symbol] = {
-                "tick_size": max(0.000001, instrument.min_price_increment),
-                "point_value": max(0.000001, point_value),
-            }
-        return V35_SHADOW_PORTFOLIO.advance(prices, metadata)
-    except Exception as error:
-        logging.warning("v35_shadow_position_cycle_unavailable error=%s", error)
-        return None
 
 
-def load_signal_ai_shadow_index() -> dict[str, dict[str, Any]]:
-    if not SIGNAL_AI_SHADOW_PATH.exists():
-        return {}
-    index: dict[str, dict[str, Any]] = {}
-    try:
-        lines = SIGNAL_AI_SHADOW_PATH.read_text(encoding="utf-8").splitlines()[-300:]
-    except OSError:
-        return {}
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        key = str(row.get("key") or "").strip()
-        if key:
-            index[key] = row
-    return index
 
 
-def build_shadow_ai_key(candidate: dict[str, Any]) -> str:
-    return ":".join(
-        [
-            str(candidate.get("symbol") or "").upper(),
-            str(candidate.get("signal") or "").upper(),
-            str(candidate.get("candle_time") or ""),
-        ]
-    )
 
 
-def build_signal_ai_candidate_id(candidate: dict[str, Any]) -> str:
-    return ":".join([str(candidate.get("strategy_name") or ""), build_shadow_ai_key(candidate)])
 
 
-def get_signal_ai_canary_bucket(candidate: dict[str, Any]) -> int:
-    digest = hashlib.sha256(build_shadow_ai_key(candidate).encode("utf-8")).digest()
-    return int.from_bytes(digest[:4], "big") % 100
 
 
-def filter_signal_ai_canary_candidates(
-    candidates: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Apply a deterministic, fail-open AI veto to a small candidate cohort."""
-    if not get_signal_ai_shadow_enabled() or get_signal_ai_mode() != "canary":
-        return candidates, []
-
-    canary_percent = get_signal_ai_canary_percent()
-    allowed: list[dict[str, Any]] = []
-    blocked: list[dict[str, Any]] = []
-    expected_directions = {"LONG": "ЛОНГ", "SHORT": "ШОРТ"}
-    for candidate in candidates:
-        # The canary evidence was collected on reversal_1h. AO/Chaikin has a
-        # different entry rule and needs its own shadow sample before an AI veto.
-        if is_ao_chaikin_strategy(candidate.get("strategy_name")):
-            candidate["ai_canary_result"] = "shadow_only_ao"
-            candidate["ai_canary_percent"] = 0
-            allowed.append(candidate)
-            continue
-        bucket = get_signal_ai_canary_bucket(candidate)
-        candidate["ai_canary_bucket"] = bucket
-        candidate["ai_canary_percent"] = canary_percent
-        if bucket >= canary_percent:
-            candidate["ai_canary_result"] = "control"
-            allowed.append(candidate)
-            continue
-
-        review = candidate.get("shadow_ai") if isinstance(candidate.get("shadow_ai"), dict) else {}
-        status = str(candidate.get("shadow_ai_status") or "").strip().lower()
-        action = str(review.get("action") or "").strip().upper()
-        expected_direction = expected_directions.get(str(candidate.get("signal") or "").strip().upper(), "")
-        ai_direction = str(review.get("direction") or "").strip().upper()
-
-        if status == "ready" and action in {"ВХОД", "ENTER"} and ai_direction == expected_direction:
-            candidate["ai_canary_result"] = "supported"
-            allowed.append(candidate)
-            continue
-        if status == "ready" and action in {"ВОЗДЕРЖАТЬСЯ", "ABSTAIN"}:
-            candidate["ai_canary_result"] = "blocked"
-            candidate["defer_kind"] = "ai_canary"
-            reason = str(review.get("reason") or "преимущества для нового входа недостаточно")
-            candidate["defer_reason"] = f"ИИ canary не поддержал вход: {reason[:240]}"
-            blocked.append(candidate)
-            continue
-
-        candidate["ai_canary_result"] = "fallback"
-        allowed.append(candidate)
-    return allowed, blocked
 
 
-def get_signal_ai_shadow_retry_delay_seconds(attempt: int) -> int:
-    """Use a bounded backoff so an unavailable model cannot flood the API."""
-    try:
-        base_delay = max(60, int(os.getenv("OIL_SIGNAL_AI_SHADOW_RETRY_SECONDS", "300")))
-    except ValueError:
-        base_delay = 300
-    return min(30 * 60, base_delay * max(1, int(attempt or 1)))
 
 
-def get_signal_ai_shadow_max_attempts() -> int:
-    try:
-        return max(1, min(5, int(os.getenv("OIL_SIGNAL_AI_SHADOW_MAX_ATTEMPTS", "3"))))
-    except ValueError:
-        return 3
 
 
-def append_signal_ai_shadow_record(row: dict[str, Any]) -> None:
-    SIGNAL_AI_SHADOW_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with SIGNAL_AI_SHADOW_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def signal_ai_shadow_failure_record(candidate: dict[str, Any], error_text: str, attempt: int) -> dict[str, Any]:
-    now = datetime.now(UTC).astimezone(MOSCOW_TZ)
-    next_retry_at = now + timedelta(seconds=get_signal_ai_shadow_retry_delay_seconds(attempt))
-    return {
-        "time": str(candidate.get("shadow_ai_observed_at") or now.isoformat()),
-        "last_attempt_at": now.isoformat(),
-        "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
-        "candidate_id": str(candidate.get("candidate_id") or build_signal_ai_candidate_id(candidate)),
-        "model": str(candidate.get("shadow_ai_model") or get_signal_ai_model()),
-        "prompt_version": str(candidate.get("shadow_ai_prompt_version") or SIGNAL_AI_PROMPT_VERSION),
-        "symbol": str(candidate.get("symbol") or "").upper(),
-        "signal": str(candidate.get("signal") or "").upper(),
-        "strategy": str(candidate.get("strategy_name") or ""),
-        "candle_time": str(candidate.get("candle_time") or ""),
-        "status": "unavailable",
-        "error": error_text,
-        "attempt": int(attempt),
-        "next_retry_at": next_retry_at.isoformat(),
-    }
 
 
-def apply_signal_ai_shadow_reviews(candidates: list[dict[str, Any]]) -> None:
-    """Attach AI opinions for later comparison; never change live trade decisions."""
-    for candidate in candidates:
-        candidate["candidate_id"] = build_signal_ai_candidate_id(candidate)
-        candidate["shadow_ai_model"] = get_signal_ai_model()
-        candidate["shadow_ai_prompt_version"] = SIGNAL_AI_PROMPT_VERSION
-    if not candidates:
-        return
-    if not get_signal_ai_shadow_enabled():
-        for candidate in candidates:
-            state = load_state(str(candidate.get("symbol") or "").upper())
-            state.last_shadow_ai_candidate_id = str(candidate["candidate_id"])
-            state.last_shadow_ai_action = ""
-            state.last_shadow_ai_status = "disabled"
-            save_state(str(candidate.get("symbol") or "").upper(), state)
-        return
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        logging.warning("OIL_SIGNAL_AI_SHADOW_ENABLED включён, но OPENAI_API_KEY не задан")
-        for candidate in candidates:
-            state = load_state(str(candidate.get("symbol") or "").upper())
-            state.last_shadow_ai_candidate_id = str(candidate["candidate_id"])
-            state.last_shadow_ai_action = ""
-            state.last_shadow_ai_status = "unavailable"
-            state.last_shadow_ai_error = "OPENAI_API_KEY не задан"
-            save_state(str(candidate.get("symbol") or "").upper(), state)
-        return
-    previous = load_signal_ai_shadow_index()
-    pending: list[dict[str, Any]] = []
-    for candidate in candidates:
-        key = build_shadow_ai_key(candidate)
-        candidate["shadow_ai_key"] = key
-        # A prior answer belongs to a different candle and must never leak into a new trade.
-        state = load_state(str(candidate.get("symbol") or "").upper())
-        state.last_shadow_ai_action = ""
-        state.last_shadow_ai_direction = ""
-        state.last_shadow_ai_confidence = 0.0
-        state.last_shadow_ai_reason = ""
-        state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
-        state.last_shadow_ai_candidate_id = str(candidate.get("candidate_id") or "")
-        state.last_shadow_ai_status = "pending"
-        state.last_shadow_ai_error = ""
-        save_state(str(candidate.get("symbol") or "").upper(), state)
-        existing = previous.get(key)
-        if existing:
-            candidate["shadow_ai"] = dict(existing.get("review") or {})
-            candidate["shadow_ai_status"] = str(existing.get("status") or "ready")
-            candidate["shadow_ai_error"] = str(existing.get("error") or "")
-            review = candidate["shadow_ai"]
-            if review:
-                state.last_shadow_ai_action = str(review.get("action") or "")
-                state.last_shadow_ai_direction = str(review.get("direction") or "")
-                state.last_shadow_ai_confidence = float(review.get("confidence") or 0.0)
-                state.last_shadow_ai_reason = str(review.get("reason") or "")
-                state.last_shadow_ai_status = "ready"
-                save_state(str(candidate.get("symbol") or "").upper(), state)
-        else:
-            pending.append(candidate)
-    if not pending:
-        return
-    try:
-        reviews = request_signal_ai_reviews(api_key, pending)
-    except Exception as error:
-        logging.warning("Теневой ИИ-разбор сигналов не выполнен: %s", error)
-        error_text = f"Теневой ИИ не ответил: {error}"
-        for candidate in pending:
-            symbol = str(candidate.get("symbol") or "").upper()
-            failure = signal_ai_shadow_failure_record(candidate, error_text, 1)
-            candidate["shadow_ai_status"] = "unavailable"
-            candidate["shadow_ai_error"] = error_text
-            candidate["shadow_ai_retry_attempt"] = int(failure["attempt"])
-            candidate["shadow_ai_next_retry_at"] = str(failure["next_retry_at"])
-            append_signal_ai_shadow_record(failure)
-            state = load_state(symbol)
-            state.last_shadow_ai_status = "unavailable"
-            state.last_shadow_ai_error = error_text
-            save_state(symbol, state)
-        return
-    now = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
-    for candidate in pending:
-        symbol = str(candidate.get("symbol") or "").upper()
-        review = reviews.get(symbol)
-        if review is None:
-            continue
-        review_payload = review.as_dict()
-        candidate["shadow_ai"] = review_payload
-        candidate["shadow_ai_status"] = "ready"
-        append_signal_ai_shadow_record({
-            "time": now,
-            "key": str(candidate.get("shadow_ai_key") or build_shadow_ai_key(candidate)),
-            "candidate_id": str(candidate.get("candidate_id") or build_signal_ai_candidate_id(candidate)),
-            "model": str(candidate.get("shadow_ai_model") or get_signal_ai_model()),
-            "prompt_version": str(candidate.get("shadow_ai_prompt_version") or SIGNAL_AI_PROMPT_VERSION),
-            "symbol": symbol,
-            "signal": str(candidate.get("signal") or "").upper(),
-            "strategy": str(candidate.get("strategy_name") or ""),
-            "candle_time": str(candidate.get("candle_time") or ""),
-            "review": review_payload,
-            "status": "ready",
-        })
-        state = load_state(symbol)
-        state.last_shadow_ai_action = review.action
-        state.last_shadow_ai_direction = review.direction
-        state.last_shadow_ai_confidence = review.confidence
-        state.last_shadow_ai_reason = review.reason
-        state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
-        state.last_shadow_ai_status = "ready"
-        state.last_shadow_ai_error = ""
-        save_state(symbol, state)
-        logging.info(
-            "symbol=%s signal_ai_shadow action=%s direction=%s confidence=%.2f",
-            symbol,
-            review.action,
-            review.direction,
-            review.confidence,
-        )
 
 
-def retry_signal_ai_shadow_reviews() -> int:
-    """Retry unavailable shadow reviews after the trade decision has already completed."""
-    if not get_signal_ai_shadow_enabled():
-        return 0
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return 0
-    now = datetime.now(UTC).astimezone(MOSCOW_TZ)
-    observations = load_signal_observations(TRADE_DB_PATH, limit=800, newest_first=True)
-    observations_by_key: dict[str, dict[str, Any]] = {}
-    for observation in observations:
-        context = observation.get("context") if isinstance(observation.get("context"), dict) else {}
-        key = ":".join([
-            str(observation.get("symbol") or "").upper(),
-            str(observation.get("signal") or "").upper(),
-            str(context.get("candle_time") or observation.get("observation_key") or ""),
-        ])
-        if key:
-            observations_by_key.setdefault(key, observation)
-
-    pending: list[dict[str, Any]] = []
-    for key, failure in load_signal_ai_shadow_index().items():
-        if str(failure.get("status") or "").lower() != "unavailable":
-            continue
-        attempt = int(failure.get("attempt") or 1)
-        if attempt >= get_signal_ai_shadow_max_attempts():
-            continue
-        due_at = parse_state_datetime(str(failure.get("next_retry_at") or ""))
-        if due_at is None or due_at.astimezone(MOSCOW_TZ) > now:
-            continue
-        observation = observations_by_key.get(key)
-        if not observation:
-            continue
-        context = observation.get("context") if isinstance(observation.get("context"), dict) else {}
-        shadow_context = context.get("shadow_ai_context") if isinstance(context.get("shadow_ai_context"), dict) else {}
-        if not shadow_context:
-            # Old journal rows did not retain the model prompt context and are kept as-is.
-            continue
-        pending.append({
-            "shadow_ai_key": key,
-            "symbol": str(observation.get("symbol") or "").upper(),
-            "signal": str(observation.get("signal") or "").upper(),
-            "strategy_name": str(observation.get("strategy") or ""),
-            "candle_time": str(context.get("candle_time") or observation.get("observation_key") or ""),
-            "reason": str(observation.get("decision_reason") or ""),
-            "shadow_ai_context": shadow_context,
-            "observation_uid": str(observation.get("observation_uid") or ""),
-            "shadow_ai_observed_at": str(observation.get("observed_at") or ""),
-            "retry_attempt": attempt,
-        })
-
-    if not pending:
-        return 0
-    try:
-        reviews = request_signal_ai_reviews(api_key, pending)
-    except Exception as error:
-        error_text = f"Теневой ИИ не ответил повторно: {error}"
-        for candidate in pending:
-            attempt = int(candidate.get("retry_attempt") or 1) + 1
-            failure = signal_ai_shadow_failure_record(candidate, error_text, attempt)
-            append_signal_ai_shadow_record(failure)
-            update_signal_observation_context(
-                TRADE_DB_PATH,
-                str(candidate.get("observation_uid") or ""),
-                {
-                    "shadow_ai_status": "unavailable",
-                    "shadow_ai_error": error_text,
-                    "shadow_ai_retry_attempt": attempt,
-                    "shadow_ai_next_retry_at": str(failure["next_retry_at"]),
-                },
-            )
-        logging.warning("Теневой ИИ повторно не ответил: %s", error)
-        return 0
-
-    completed = 0
-    reviewed_at = now.isoformat()
-    for candidate in pending:
-        symbol = str(candidate.get("symbol") or "").upper()
-        review = reviews.get(symbol)
-        if review is None:
-            continue
-        review_payload = review.as_dict()
-        append_signal_ai_shadow_record({
-            "time": str(candidate.get("shadow_ai_observed_at") or reviewed_at),
-            "reviewed_at": reviewed_at,
-            "key": str(candidate.get("shadow_ai_key") or ""),
-            "candidate_id": str(candidate.get("candidate_id") or build_signal_ai_candidate_id(candidate)),
-            "model": get_signal_ai_model(),
-            "prompt_version": SIGNAL_AI_PROMPT_VERSION,
-            "symbol": symbol,
-            "signal": str(candidate.get("signal") or "").upper(),
-            "strategy": str(candidate.get("strategy_name") or ""),
-            "candle_time": str(candidate.get("candle_time") or ""),
-            "review": review_payload,
-            "status": "ready",
-            "retry_attempt": int(candidate.get("retry_attempt") or 1),
-        })
-        update_signal_observation_context(
-            TRADE_DB_PATH,
-            str(candidate.get("observation_uid") or ""),
-            {
-                "shadow_ai": review_payload,
-                "shadow_ai_status": "ready",
-                "shadow_ai_model": get_signal_ai_model(),
-                "shadow_ai_prompt_version": SIGNAL_AI_PROMPT_VERSION,
-                "shadow_ai_error": "",
-                "shadow_ai_retry_attempt": int(candidate.get("retry_attempt") or 1),
-                "shadow_ai_next_retry_at": "",
-            },
-        )
-        state = load_state(symbol)
-        state.last_shadow_ai_action = review.action
-        state.last_shadow_ai_direction = review.direction
-        state.last_shadow_ai_confidence = review.confidence
-        state.last_shadow_ai_reason = review.reason
-        state.last_shadow_ai_candle_time = str(candidate.get("candle_time") or "")
-        state.last_shadow_ai_status = "ready"
-        state.last_shadow_ai_error = ""
-        save_state(symbol, state)
-        completed += 1
-        logging.info("symbol=%s signal_ai_shadow retry_completed attempt=%s", symbol, candidate.get("retry_attempt"))
-    return completed
 
 
 def floor_time_slot(dt: datetime, minutes: int) -> datetime:
@@ -11790,7 +11027,6 @@ def open_position(
         stop_plan=stop_plan,
         entry_df=entry_df,
     )
-    clear_retired_signal_ai_context(state)
     direction = (
         OrderDirection.ORDER_DIRECTION_BUY
         if signal == "LONG"
@@ -12375,13 +11611,6 @@ def process_instrument(
             return None
         raise
 
-    observe_ao_chaikin_shadow_strategy(
-        config,
-        instrument,
-        lower_df,
-        interval_minutes=signal_interval_minutes,
-    )
-
     higher_tf_df: pd.DataFrame | None = None
     reversal_exit_30m_df: pd.DataFrame | None = None
     if (
@@ -12907,8 +12136,6 @@ def run_bot() -> int:
                             )
                             if candidate:
                                 cycle_candidates.append(candidate)
-                        maybe_start_v35_shadow_refresh()
-                        manage_v35_shadow_positions(client, watchlist)
                         ranked_candidates = cycle_candidates
                         selected_candidates, deferred_candidates = rank_cycle_entry_candidates(
                             ranked_candidates,

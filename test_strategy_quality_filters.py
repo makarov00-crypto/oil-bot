@@ -10,7 +10,11 @@ from bot_oil_main import InstrumentConfig
 from instrument_groups import DEFAULT_SYMBOLS, uses_unified_reversal_1h
 from strategy_registry import get_primary_strategies, get_secondary_strategies
 from strategies.reversal_1h import evaluate_signal as evaluate_reversal_1h
-from strategies.reversal_core import get_profile as get_reversal_profile
+from strategies.reversal_core import (
+    MIN_TREND_PATH_EFFICIENCY_6H,
+    _path_efficiency,
+    get_profile as get_reversal_profile,
+)
 
 
 def make_config() -> SimpleNamespace:
@@ -101,6 +105,16 @@ class StrategyQualityFilterTests(unittest.TestCase):
             self.assertEqual(get_primary_strategies(symbol), ["reversal_1h"])
             self.assertEqual(get_secondary_strategies(symbol), [])
 
+    def test_six_hour_path_efficiency_separates_trend_from_chop(self) -> None:
+        self.assertGreater(
+            _path_efficiency([100.0, 100.3, 100.7, 101.0, 101.4, 101.8]),
+            MIN_TREND_PATH_EFFICIENCY_6H,
+        )
+        self.assertLessEqual(
+            _path_efficiency([100.0, 101.0, 99.8, 101.1, 99.9, 100.4]),
+            MIN_TREND_PATH_EFFICIENCY_6H,
+        )
+
     def test_legacy_strategy_name_is_not_evaluated_live(self) -> None:
         instrument = InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
         df = candle_rows([{}, {}, {}, {}, {}, {}, {}, {}])
@@ -179,8 +193,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("reversal_1h", reason)
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("только в устойчивом тренде", reason)
 
     def test_unified_reversal_1h_allows_short_when_macd_ao_and_volume_align(self) -> None:
         df = candle_rows(
@@ -199,8 +213,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "SHORT")
-        self.assertIn("reversal_1h", reason)
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("только в устойчивом тренде", reason)
 
     def test_unified_reversal_blocks_new_short_when_oscillators_are_exhausted(self) -> None:
         df = candle_rows(
@@ -460,8 +474,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
 
-        self.assertEqual(signal, "LONG")
-        self.assertIn("reversal_1h", reason)
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("только в устойчивом тренде", reason)
 
     def test_unified_trend_score_distinguishes_live_trend_from_reversal(self) -> None:
         alive = candle_rows(
@@ -549,8 +563,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "LONG")
-        self.assertIn("ранний импульс AO", reason)
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("только в устойчивом тренде", reason)
 
     def test_unified_exit_waits_for_ao_exhaustion_after_peak(self) -> None:
         premature = candle_rows(

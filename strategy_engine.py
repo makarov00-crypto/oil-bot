@@ -1,11 +1,9 @@
 from strategy_registry import get_primary_strategies
 from strategies.reversal_1h import evaluate_signal as evaluate_reversal_1h
-from strategies.ao_chaikin_1h import STRATEGY_NAME, evaluate_signal as evaluate_ao_chaikin_1h
 
 
 PRIMARY_EVALUATORS = {
     "reversal_1h": evaluate_reversal_1h,
-    STRATEGY_NAME: evaluate_ao_chaikin_1h,
 }
 
 

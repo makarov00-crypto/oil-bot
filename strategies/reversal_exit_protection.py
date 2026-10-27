@@ -5,17 +5,12 @@ from dataclasses import dataclass, replace
 
 import pandas as pd
 
-from strategies.v35_risk import (
-    BREAKEVEN_TRIGGER_R,
-    PROFIT_TRIGGER_R,
-    TRAIL_DISTANCE_ATR,
-    TRAIL_LOOKBACK_30M,
-    breakeven_stop_price,
-    closing_pattern,
-)
-
-
 EXIT_MODEL_VERSION = "reversal-r-protection-v1"
+COMMISSION_RATE_PER_SIDE = 0.00025
+BREAKEVEN_TRIGGER_R = 1.0
+PROFIT_TRIGGER_R = 1.25
+TRAIL_DISTANCE_ATR = 1.2
+TRAIL_LOOKBACK_30M = 3
 
 
 @dataclass(frozen=True)
@@ -42,6 +37,14 @@ class _ExitCandidate:
     atr: float
 
 
+def _finite(value, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if pd.notna(result) else default
+
+
 def _sign(direction: str) -> float:
     return 1.0 if direction == "LONG" else -1.0
 
@@ -52,6 +55,89 @@ def _tighten_stop(current: float, proposed: float, direction: str) -> float:
 
 def _stop_hit(direction: str, price: float, stop: float) -> bool:
     return price <= stop if direction == "LONG" else price >= stop
+
+
+def _adverse_slippage_price(
+    price: float,
+    direction: str,
+    tick_size: float,
+    ticks: float,
+) -> float:
+    if tick_size <= 0.0 or ticks <= 0.0:
+        return float(price)
+    return round(float(price) + tick_size * ticks * _sign(direction), 12)
+
+
+def breakeven_stop_price(
+    entry_price: float,
+    direction: str,
+    tick_size: float,
+    *,
+    commission_rate_per_side: float = COMMISSION_RATE_PER_SIDE,
+    exit_slippage_ticks: float = 1.0,
+) -> float:
+    rate = commission_rate_per_side
+    if direction == "LONG":
+        raw = entry_price * (1 + rate) / (1 - rate)
+        breakeven = math.ceil(raw / tick_size) * tick_size if tick_size > 0 else raw
+    else:
+        raw = entry_price * (1 - rate) / (1 + rate)
+        breakeven = math.floor(raw / tick_size) * tick_size if tick_size > 0 else raw
+    return _adverse_slippage_price(
+        breakeven,
+        direction,
+        tick_size,
+        exit_slippage_ticks,
+    )
+
+
+def _path_efficiency(closes: pd.Series) -> float:
+    values = pd.to_numeric(closes, errors="coerce").dropna()
+    if len(values) < 2:
+        return 0.0
+    path = float(values.diff().abs().sum())
+    return abs(float(values.iloc[-1] - values.iloc[0])) / path if path > 0 else 0.0
+
+
+def closing_pattern(
+    candidate: _ExitCandidate,
+    completed_30m: pd.DataFrame,
+    *,
+    profit_phase: bool,
+    confirm_bars: int = 2,
+) -> str | None:
+    if len(completed_30m) < max(5, confirm_bars + 2):
+        return None
+    recent = completed_30m.tail(confirm_bars)
+    sign = _sign(candidate.direction)
+    opposite_candles = (((recent["close"] - recent["open"]) * sign) < 0).all()
+    opposite_body = float(recent["body"].sum()) >= candidate.atr * 0.28
+    ao_reversal = ((recent["ao_delta"] * sign) < 0).all()
+    latest_histogram = _finite(recent.iloc[-1]["macd_hist"])
+    previous_histogram = _finite(recent.iloc[-2]["macd_hist"])
+    histogram_opposite = latest_histogram * sign < 0
+    histogram_accelerating = latest_histogram * sign < previous_histogram * sign
+    if (
+        opposite_candles
+        and opposite_body
+        and ao_reversal
+        and histogram_opposite
+        and histogram_accelerating
+    ):
+        return "CONFIRMED_REVERSAL"
+
+    if profit_phase:
+        tail = completed_30m.tail(5)
+        price_range = _finite(tail["high"].max()) - _finite(tail["low"].min())
+        body_mean = _finite(tail["body"].mean())
+        efficiency = _path_efficiency(tail["close"])
+        if (
+            price_range <= candidate.atr * 0.55
+            and body_mean <= candidate.atr * 0.10
+            and efficiency < 0.30
+        ):
+            return "PROFIT_CONSOLIDATION"
+    return None
 
 
 def new_reversal_protection_state(

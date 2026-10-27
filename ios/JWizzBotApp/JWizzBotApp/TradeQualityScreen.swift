@@ -62,11 +62,11 @@ struct TradeQualityScreen: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeader(
-                    title: "AO / Чайкин · результат за \(quality.periodDays ?? 30) дней",
+                    title: "Часовой разворот · результат за \(quality.periodDays ?? 30) дней",
                     subtitle: "Расчёт по часовым свечам; минутные данные используются только на границах сделки."
                 )
                 if (overview?.closedTrades ?? 0) == 0 {
-                    Text("Закрытых сделок AO пока нет. Результаты появятся после первого закрытия; гипотеза удержания доступна в «Выходах».")
+                    Text("Закрытых сделок текущей стратегии пока нет. Результаты появятся после первого закрытия.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 } else {
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
@@ -88,7 +88,7 @@ struct TradeQualityScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeader(title: "По инструментам", subtitle: "Фактический результат и качество удержания движения.")
                 if quality.bySymbol.isEmpty {
-                    Text("Закрытых сделок AO по инструментам пока нет.")
+                    Text("Закрытых сделок по инструментам пока нет.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 ForEach(quality.bySymbol) { item in
@@ -171,29 +171,6 @@ struct TradeQualityScreen: View {
                         holdRow(hours: 2, value: trade.hold2hNetRub, delta: trade.hold2hDeltaRub)
                         holdRow(hours: 4, value: trade.hold4hNetRub, delta: trade.hold4hDeltaRub)
                         holdRow(hours: 8, value: trade.hold8hNetRub, delta: trade.hold8hDeltaRub)
-                        if let action = trade.shadowAIAction, !action.isEmpty {
-                            Divider().overlay(Color.white.opacity(0.08))
-                            InfoRow(title: "Решение ИИ", value: aiAction(action))
-                            if let confidence = trade.shadowAIConfidence {
-                                InfoRow(title: "Уверенность", value: formatPct(confidence * 100.0))
-                            }
-                            if let reason = trade.shadowAIReason, !reason.isEmpty {
-                                Text("Почему: \(reason)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if let risk = trade.shadowAIRiskNote, !risk.isEmpty {
-                                Text("Риск: \(risk)")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            }
-                        } else {
-                            Divider().overlay(Color.white.opacity(0.08))
-                            InfoRow(title: "Теневой ИИ", value: "Оценка не сохранялась")
-                            Text("На момент этого входа оценка ИИ ещё не записывалась в историю сделки.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
                         Text(trade.exitReason ?? "Причина выхода не сохранена")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -205,23 +182,9 @@ struct TradeQualityScreen: View {
 
     @ViewBuilder
     private func exitsContent(payload: DashboardPayload, quality: TradeQualityPayload) -> some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 12) {
-                SectionHeader(title: "Гипотеза выхода AO", subtitle: "Теневые выходы, один лот. Это оценка, не фактический результат торговли.")
-                let experiment = quality.exitExperiment
-                InfoRow(title: "Оценено", value: "\(experiment?.evaluated ?? 0) из \(experiment?.readiness?.targetEvaluated ?? 20)")
-                InfoRow(title: "Разница при удержании ещё 2ч", value: formatRub(experiment?.deltaRub1Lot))
-                Text(experiment?.readiness?.status == "ready_for_limited_trial"
-                    ? "Условия первичной проверки выполнены; нужен разбор перед изменением выхода."
-                    : experiment?.readiness?.status == "not_confirmed"
-                    ? "На текущей выборке гипотеза не подтвердилась."
-                    : "Выборка пока мала для вывода.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
         let exits = (quality.exitDiagnostics ?? []).filter { $0.isMaterialEarlyExit == true }
         if exits.isEmpty {
-            EmptyGlassState(title: "Ранних выходов AO пока нет", subtitle: "Появятся после закрытия и проверки следующего движения цены.", systemImage: "arrow.uturn.backward")
+            EmptyGlassState(title: "Ранних выходов пока нет", subtitle: "Появятся после закрытия и проверки следующего движения цены.", systemImage: "arrow.uturn.backward")
         } else {
             ForEach(Array(exits.prefix(12))) { item in
                 GlassCard {
@@ -239,7 +202,7 @@ struct TradeQualityScreen: View {
     private func hypothesesContent(payload: DashboardPayload, quality: TradeQualityPayload) -> some View {
         let rows = quality.strategyHypotheses ?? []
         if rows.isEmpty {
-            EmptyGlassState(title: "Гипотез AO пока нет", subtitle: "Здесь появятся проверенные движения после сигнала без входа.", systemImage: "chart.line.uptrend.xyaxis")
+            EmptyGlassState(title: "Гипотез пока нет", subtitle: "Здесь появятся проверенные движения после сигнала без входа.", systemImage: "chart.line.uptrend.xyaxis")
         } else {
             ForEach(Array(rows.prefix(12))) { item in
                 GlassCard {
@@ -253,96 +216,12 @@ struct TradeQualityScreen: View {
         }
     }
 
-    @ViewBuilder
-    private func shadowAIContent(_ data: SignalAIEntryPayload?) -> some View {
-        if let data {
-            let c = data.counts
-            GlassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    SectionHeader(title: "ИИ на входах AO / Чайкин", subtitle: "Цепочка от кандидата до закрытой сделки. ИИ пока наблюдает и не меняет входы AO.")
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        MetricGlassTile(title: "Кандидатов AO", value: "\(c.candidates)")
-                        MetricGlassTile(title: "Ответов ИИ", value: "\(c.reviewed) / \(c.candidates)")
-                        MetricGlassTile(title: "Вход подтверждён", value: "\(c.confirmed) / \(c.selected)")
-                        MetricGlassTile(title: "Закрыто", value: "\(c.closed) / \(c.confirmed)")
-                    }
-                    if c.candidates == 0 {
-                        Text("После перехода на AO кандидатов пока нет. Исторические ответы прежней стратегии исключены.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Text("\(c.unavailable) ответов ИИ не получено; \(c.unmatchedClosed) закрытых сделок не связаны с кандидатом.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if c.candidates > 0 {
-                GlassCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Результат закрытых", subtitle: "NET по журналу брокера. Группы наблюдательные; эффект ИИ на торговлю не доказан.")
-                        aiOutcomeRow("ИИ: вход", data.byAction["enter"])
-                        aiOutcomeRow("ИИ: пропустить", data.byAction["abstain"])
-                        InfoRow(title: "Поддержал убыточный", value: "\(c.supportedLosers) из \(data.byAction["enter"]?.closed ?? 0) закрытых")
-                        InfoRow(title: "Советовал пропустить прибыльный", value: "\(c.abstainWinners) из \(data.byAction["abstain"]?.closed ?? 0) закрытых")
-                        Divider().overlay(Color.white.opacity(0.08))
-                        InfoRow(title: "Диагностика цены 4ч", value: "\(c.priceChecked4h) проверено, \(c.priceCheckLate) поздних")
-                        InfoRow(title: "Вход: цена по сигналу", value: "\(c.enterFavorable4h) из \(c.enterChecked4h)")
-                        InfoRow(title: "Пропуск: цена против сигнала", value: "\(c.abstainUnfavorable4h) из \(c.abstainChecked4h)")
-                        Text("Проверка 4ч не включает комиссию, стоп и размер позиции; она не показывает прибыль.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                ForEach(data.recent) { item in
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 9) {
-                            HStack {
-                                Text(item.symbol ?? "—").font(.headline)
-                                Spacer()
-                                SignalPill(text: item.aiAction?.isEmpty == false ? item.aiAction! : "НЕТ ОТВЕТА", raw: item.signal)
-                            }
-                            InfoRow(title: "Сигнал", value: displaySignal(item.signal))
-                            InfoRow(title: "Аллокатор", value: item.decision ?? "—")
-                            InfoRow(title: "Исполнение", value: item.executionStatus?.isEmpty == false ? item.executionStatus! : "не подтверждено")
-                            InfoRow(title: "NET", value: item.closedNetPnlRub.map { formatRub($0) } ?? "сделка не закрыта или не связана")
-                            Text(item.aiReason?.isEmpty == false ? item.aiReason! : "Причина не записана")
-                                .font(.caption).foregroundStyle(.secondary)
-                            Text("\(item.model?.isEmpty == false ? item.model! : "модель не записана") · \(item.promptVersion?.isEmpty == false ? item.promptVersion! : "версия не записана")")
-                                .font(.caption2).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-            }
-        } else {
-            EmptyGlassState(title: "Нет данных ИИ", subtitle: "Данные о кандидатах AO ещё не загружены.", systemImage: "brain.head.profile")
-        }
-    }
-
-    @ViewBuilder
-    private func aiOutcomeRow(_ title: String, _ group: SignalAIEntryGroup?) -> some View {
-        if let group {
-            InfoRow(title: title, value: "\(group.closed > 0 ? formatRub(group.netPnlRub) : "—") · \(group.closed) закрыто / \(group.executed) входов")
-            if let averageR = group.averageR {
-                InfoRow(title: "Средний R", value: String(format: "%.2f (%d сделок)", averageR, group.rEvaluated ?? 0))
-            }
-        }
-    }
-
     private func holdRow(hours: Int, value: Double?, delta: Double?) -> some View {
         InfoRow(
             title: "Если держать \(hours)ч",
             value: value == nil ? "ждём данные" : "\(formatRub(value)) · к факту \(formatRub(delta))",
             accent: statusTone(for: delta)
         )
-    }
-
-    private func aiAction(_ raw: String) -> String {
-        switch raw.uppercased() {
-        case "ENTER": return "ВОЙТИ"
-        case "HOLD": return "УДЕРЖИВАТЬ"
-        case "EXIT": return "ВЫЙТИ"
-        case "REVERSE": return "ПЕРЕВЕРНУТЬ"
-        case "ABSTAIN": return "ВОЗДЕРЖАТЬСЯ"
-        default: return raw
-        }
     }
 
     private func instrumentName(_ symbol: String, payload: DashboardPayload) -> String {

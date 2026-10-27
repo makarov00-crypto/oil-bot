@@ -5,7 +5,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from active_contracts import get_active_contract_symbol
-from ao_chaikin_shadow import STRATEGY_VERSION
 from trade_storage import append_signal_observation
 
 try:
@@ -89,94 +88,12 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('id="strategyHypothesesOverview"', html)
         self.assertIn('id="strategyHypothesesReasons"', html)
         self.assertIn("Пропущенные возможности", html)
-        self.assertIn("Ожидает оценки", html)
+        self.assertIn("Нет подтверждённых пропущенных движений", html)
         self.assertNotIn('id="qualityShadowCount"', html)
         self.assertNotIn('id="shadowStrategyDecisions"', html)
         self.assertNotIn('class="quality-ai"', quality_render)
         self.assertNotIn("buildReviewRowRich(", quality_render)
-        self.assertIn('id="qualityEntryPathBlock"', html)
-        self.assertIn('id="qualityEntryPathOverview"', html)
-        self.assertIn('id="qualityEntryPathBody"', html)
-        self.assertIn("Быстрые и поздние входы AO", html)
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_exit_experiment_is_in_quality_and_research_page_redirects(self) -> None:
-        dashboard_html = dashboard.build_dashboard_html()
-        self.assertNotIn('href="/shadow-strategy"', dashboard_html)
-        self.assertNotIn('id="shadowAiCandidates"', dashboard_html)
-        self.assertNotIn('id="shadowAiPerformance"', dashboard_html)
-        self.assertIn('id="aoExitExperiment"', dashboard_html)
-        self.assertEqual(dashboard.shadow_strategy().headers["location"], "/#trade-review-quality-exits")
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_ao_chaikin_shadow_payload_is_loaded_newest_first_with_russian_decisions(self) -> None:
-        candle_time = datetime.now(timezone.utc).astimezone(dashboard.MOSCOW_TZ).replace(
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        rows = [
-            {
-                "version": STRATEGY_VERSION,
-                "symbol": "VBU6",
-                "candle_closed_at": candle_time.isoformat(),
-                "decision": "ВХОД",
-                "position_after": "ЛОНГ",
-                "minimum_strength_pct": 0.7,
-            },
-            {
-                "version": STRATEGY_VERSION,
-                "symbol": "VBU6",
-                "candle_closed_at": (candle_time + timedelta(hours=3)).isoformat(),
-                "decision": "ВЫХОД",
-                "position_after": "НЕТ",
-                "estimated_net_rub_1lot": 20.0,
-            },
-        ]
-        with TemporaryDirectory() as temp_dir:
-            path = dashboard.Path(temp_dir) / "ao-shadow.jsonl"
-            path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
-            with patch.object(dashboard, "AO_CHAIKIN_SHADOW_PATH", path), patch.dict(
-                dashboard.os.environ,
-                {"OIL_AO_CHAIKIN_SHADOW_ENABLED": "1"},
-            ):
-                result = dashboard.load_ao_chaikin_shadow_strategy()
-
-        self.assertTrue(result["enabled"])
-        self.assertEqual(result["decisions"][0]["decision"], "ВЫХОД")
-        self.assertEqual(result["decisions"][1]["decision"], "ВХОД")
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_ao_chaikin_shadow_payload_is_cached_until_source_changes(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            path = dashboard.Path(temp_dir) / "ao-shadow.jsonl"
-            path.write_text("{}\n", encoding="utf-8")
-            dashboard._load_ao_chaikin_shadow_strategy_cached.cache_clear()
-            with patch.object(dashboard, "AO_CHAIKIN_SHADOW_PATH", path), patch.object(
-                dashboard, "build_shadow_strategy_payload", return_value={"available": True}
-            ) as build_mock:
-                dashboard.load_ao_chaikin_shadow_strategy()
-                dashboard.load_ao_chaikin_shadow_strategy()
-                path.write_text("{}\n{}\n", encoding="utf-8")
-                dashboard.load_ao_chaikin_shadow_strategy()
-
-        self.assertEqual(build_mock.call_count, 2)
-
-    @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_dashboard_sends_only_visible_ao_hypothesis_rows(self) -> None:
-        source = {
-            "available": True,
-            "entry_hypotheses": {
-                "summary": {"eligible": 20},
-                "items": [{"key": str(index)} for index in range(20)],
-            },
-        }
-        with patch.object(dashboard, "load_ao_chaikin_shadow_strategy", return_value=source):
-            result = dashboard.build_dashboard_ao_shadow_payload()
-
-        self.assertEqual(len(result["entry_hypotheses"]["items"]), 12)
-        self.assertEqual(result["entry_hypotheses"]["summary"]["eligible"], 20)
-        self.assertEqual(len(source["entry_hypotheses"]["items"]), 20)
+        self.assertNotIn('AO / Чайкин · архив', html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_dashboard_starts_initial_api_request_before_large_inline_script(self) -> None:
@@ -200,6 +117,10 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn("aiReviewRefreshBtn", html)
         self.assertNotIn("/api/ai-review/refresh", paths)
         self.assertNotIn("/api/ai-review/followup", paths)
+        self.assertNotIn("/v35", paths)
+        self.assertNotIn("/api/v35", paths)
+        self.assertNotIn("/api/shadow-strategy", paths)
+        self.assertNotIn("AO / Чайкин · архив", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_active_strategy_uses_registry_when_flat_and_position_owner_when_open(self) -> None:
@@ -270,12 +191,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
                 result = dashboard.load_trade_quality_analytics()
 
         self.assertEqual(result["trades"][0]["exit_time"], "2026-08-13T10:00:00+03:00")
-        self.assertEqual(result["archive"]["trades"][0]["exit_time"], "2026-08-12T10:00:00+03:00")
         self.assertEqual(result["overview"]["net_pnl_rub"], -100)
-        self.assertEqual(result["archive"]["overview"]["net_pnl_rub"], 5)
         self.assertEqual(result["missed_entries"], [])
         self.assertEqual(result["strategy_hypotheses"], [])
-        self.assertEqual(result["archive"]["strategy_hypotheses"][0]["observed_at"], "2026-08-11T12:00:00+03:00")
         self.assertEqual(result["unexecuted_entries"], [])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")

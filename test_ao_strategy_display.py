@@ -26,9 +26,8 @@ class AoStrategyDisplayTests(unittest.TestCase):
         self.assertEqual(dashboard.humanize_strategy_name('reversal_1h'), 'часовой разворот')
         html = dashboard.build_dashboard_html()
         self.assertIn("ao_chaikin_1h: 'AO / Чайкин 1ч'", html)
-        self.assertIn('Часовой разворот · текущая', html)
-        self.assertIn('AO / Чайкин · архив', html)
-        self.assertIn('AO / ЧАЙКИН 1Ч', html)
+        self.assertIn('Текущий часовой разворот', html)
+        self.assertNotIn('AO / Чайкин · архив', html)
         self.assertIn('ЧАСОВОЙ РАЗВОРОТ', html)
 
 

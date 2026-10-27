@@ -5,6 +5,7 @@ from instrument_groups import is_brent_symbol
 
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+MIN_TREND_PATH_EFFICIENCY_6H = 0.35
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,14 @@ def _macd_flip_count(macd: list[float], signal: list[float]) -> int:
             flips += 1
         prev_sign = sign
     return flips
+
+
+def _path_efficiency(values) -> float:
+    series = [float(value) for value in values]
+    if len(series) < 2:
+        return 0.0
+    path = sum(abs(current - previous) for previous, current in zip(series, series[1:]))
+    return abs(series[-1] - series[0]) / path if path > 0.0 else 0.0
 
 
 def _rsi_direction_ok(current: float, previous: float, earlier: float, direction: str, *, floor: float, ceiling: float) -> bool:
@@ -264,6 +273,11 @@ def evaluate_signal_core(
         regime = "trend"
     else:
         regime = "mixed"
+    path_efficiency_6h = _path_efficiency(recent["close"].tail(6).tolist())
+    entry_regime_quality_ok = (
+        regime == "trend"
+        and path_efficiency_6h > MIN_TREND_PATH_EFFICIENCY_6H
+    )
     trend_like_regime = regime in {"trend", "expansion"}
 
     ao_long_ok = _ao_direction_ok(ao, prev_ao, prev2_ao, "LONG") or (ao >= prev_ao and macd_hist > prev_hist)
@@ -510,6 +524,7 @@ def evaluate_signal_core(
 
     long_reasons = [
         f"режим={regime}",
+        f"эффективность пути 6ч={path_efficiency_6h:.2f}",
         f"MACD cross вверх: {'да' if recent_long_cross else 'нет'}",
         f"RSI={rsi:.2f} и {'растёт' if rsi >= prev_rsi else 'падает'}",
         f"AO={ao:.4f} и {'растёт' if ao >= prev_ao else 'падает'}",
@@ -523,6 +538,7 @@ def evaluate_signal_core(
     ]
     short_reasons = [
         f"режим={regime}",
+        f"эффективность пути 6ч={path_efficiency_6h:.2f}",
         f"MACD cross вниз: {'да' if recent_short_cross else 'нет'}",
         f"RSI={rsi:.2f} и {'падает' if rsi <= prev_rsi else 'растёт'}",
         f"AO={ao:.4f} и {'падает' if ao <= prev_ao else 'растёт'}",
@@ -539,6 +555,16 @@ def evaluate_signal_core(
     short_blockers: list[str] = []
     long_warnings: list[str] = []
     short_warnings: list[str] = []
+    if regime != "trend":
+        long_blockers.append("новые входы разрешены только в устойчивом тренде")
+        short_blockers.append("новые входы разрешены только в устойчивом тренде")
+    if path_efficiency_6h <= MIN_TREND_PATH_EFFICIENCY_6H:
+        efficiency_reason = (
+            f"эффективность пути 6ч {path_efficiency_6h:.2f} <= "
+            f"{MIN_TREND_PATH_EFFICIENCY_6H:.2f}: движение похоже на пилу"
+        )
+        long_blockers.append(efficiency_reason)
+        short_blockers.append(efficiency_reason)
     if regime == "chop":
         long_blockers.append("режим chop: переворот запрещён")
         short_blockers.append("режим chop: переворот запрещён")
@@ -621,8 +647,8 @@ def evaluate_signal_core(
         and not exhausted_short_entry
         and not rsi_short_extreme_bad
     )
-    long_ok = normal_long_ok or early_momentum_long_ok
-    short_ok = normal_short_ok or early_momentum_short_ok
+    long_ok = entry_regime_quality_ok and (normal_long_ok or early_momentum_long_ok)
+    short_ok = entry_regime_quality_ok and (normal_short_ok or early_momentum_short_ok)
     if long_warnings:
         long_reasons.extend(long_warnings)
     if short_warnings:

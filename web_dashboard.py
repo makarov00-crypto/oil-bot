@@ -15,13 +15,6 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.middleware.gzip import GZipMiddleware
 from dotenv import load_dotenv
-from ao_chaikin_shadow import (
-    build_shadow_exit_analytics,
-    build_shadow_strategy_comparison,
-    build_shadow_strategy_payload,
-    normalize_shadow_record_for_display,
-    read_shadow_records,
-)
 from active_contracts import get_instrument_history_symbol, list_active_contracts, replace_with_active_symbols
 from custom_instruments import (
     list_custom_instruments,
@@ -45,15 +38,12 @@ from trade_storage import (
     summarize_news_allocator_impact,
     summarize_news_source_stats,
 )
-from strategy_research import AO_ROLLOUT_AT, build_ao_execution_research
 from trade_quality import (
     build_trade_quality_overview,
     pair_closed_trades,
-    summarize_ao_entry_paths,
     summarize_trade_dimension,
     summarize_trade_quality,
 )
-from v35_dashboard import build_v35_dashboard_html, build_v35_dashboard_payload
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -64,7 +54,6 @@ STATE_DIR = BASE_DIR / "bot_state"
 LOG_DIR = BASE_DIR / "logs"
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
 ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
-AO_CHAIKIN_SHADOW_PATH = LOG_DIR / "ao_chaikin_shadow.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
@@ -151,7 +140,6 @@ STRATEGY_DOCS: dict[str, dict[str, str]] = {
 def build_site_nav(active: str) -> str:
     links = [
         ("/", "Дашборд", "dashboard"),
-        ("/v35", "Стратегия v3.7", "v35"),
         ("/contracts", "Параметры контрактов", "contracts"),
     ]
     items: list[str] = []
@@ -2833,7 +2821,6 @@ def load_trade_quality_analytics() -> dict[str, Any]:
     return _load_trade_quality_analytics_cached(
         _path_cache_signature(TRADE_QUALITY_ANALYTICS_PATH),
         _path_cache_signature(TRADE_JOURNAL_PATH),
-        _path_cache_signature(AO_CHAIKIN_SHADOW_PATH),
     )
 
 
@@ -2841,7 +2828,6 @@ def load_trade_quality_analytics() -> dict[str, Any]:
 def _load_trade_quality_analytics_cached(
     _analytics_signature: tuple[str, int, int],
     _journal_signature: tuple[str, int, int],
-    _shadow_signature: tuple[str, int, int],
 ) -> dict[str, Any]:
     return _load_trade_quality_analytics_uncached()
 
@@ -2935,8 +2921,6 @@ def _load_trade_quality_analytics_uncached() -> dict[str, Any]:
     def strategy_of(row: dict[str, Any]) -> str:
         return str(row.get("strategy") or provenance.get(str(row.get("observation_uid") or "")) or "")
 
-    actual_trade_rows = load_all_trade_rows()
-
     def cohort(strategy: str) -> dict[str, Any]:
         trades = [row for row in result["trades"] if strategy_of(row) == strategy]
         missed = [row for row in result["missed_entries"] if strategy_of(row) == strategy]
@@ -2967,113 +2951,27 @@ def _load_trade_quality_analytics_uncached() -> dict[str, Any]:
             "overview": overview,
             "by_regime": summarize_trade_dimension(trades, "market_regime"),
             "by_entry_quality": summarize_trade_dimension(trades, "entry_edge_label"),
-            "entry_path_analysis": (
-                summarize_ao_entry_paths(trades, actual_trade_rows)
-                if strategy == "ao_chaikin_1h"
-                else {}
-            ),
+            "entry_path_analysis": {},
             "exit_diagnostics": sorted(exits, key=lambda row: str(row.get("exit_time") or ""), reverse=True),
         }
 
     current = cohort("reversal_1h")
-    archive = cohort("ao_chaikin_1h")
     result.update(current)
-    result["archive"] = archive
     result["unattributed_hypotheses"] = sum(1 for row in result["missed_entry_evaluations"] if row.get("source_kind") == "strategy_hold" and not strategy_of(row))
     result.pop("missed_entry_evaluations", None)
-    try:
-        stat = AO_CHAIKIN_SHADOW_PATH.stat()
-        result["exit_experiment"] = _exit_experiment_cached(str(AO_CHAIKIN_SHADOW_PATH), stat.st_mtime_ns, stat.st_size)
-    except OSError:
-        result["exit_experiment"] = {}
     return result
 
 
-@lru_cache(maxsize=2)
-def _exit_experiment_cached(path: str, mtime_ns: int, size: int) -> dict[str, Any]:
-    return build_shadow_exit_analytics(read_shadow_records(Path(path))).get("conditional_two_hour_experiment") or {}
 
 
-def load_ao_chaikin_shadow_strategy() -> dict[str, Any]:
-    enabled = os.getenv("OIL_AO_CHAIKIN_SHADOW_ENABLED", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    path, mtime_ns, size = _path_cache_signature(AO_CHAIKIN_SHADOW_PATH)
-    return _load_ao_chaikin_shadow_strategy_cached(path, mtime_ns, size, enabled)
 
 
-@lru_cache(maxsize=4)
-def _load_ao_chaikin_shadow_strategy_cached(
-    path: str,
-    _mtime_ns: int,
-    _size: int,
-    enabled: bool,
-) -> dict[str, Any]:
-    return build_shadow_strategy_payload(
-        Path(path),
-        enabled=enabled,
-        period_days=30,
-    )
 
 
-def build_dashboard_ao_shadow_payload() -> dict[str, Any]:
-    """Keep dashboard totals while sending only the rows the UI can display."""
-    payload = load_ao_chaikin_shadow_strategy()
-    compact = dict(payload)
-    hypotheses = dict(payload.get("entry_hypotheses") or {})
-    hypotheses["items"] = list(hypotheses.get("items") or [])[:12]
-    compact["entry_hypotheses"] = hypotheses
-    return compact
 
 
-def load_shadow_strategy_workspace() -> dict[str, Any]:
-    generated_at = datetime.now(timezone.utc)
-    strategy = load_ao_chaikin_shadow_strategy()
-    quality = load_trade_quality_analytics()
-    shadow_records = [normalize_shadow_record_for_display(row) for row in read_shadow_records(AO_CHAIKIN_SHADOW_PATH)]
-    comparison = build_shadow_strategy_comparison(
-        shadow_records,
-        list(quality.get("trades") or []),
-        history_symbol_resolver=get_instrument_history_symbol,
-    )
-    exit_analytics = build_shadow_exit_analytics(shadow_records)
-    symbols = {
-        str(row.get("symbol") or "").upper()
-        for row in list(comparison.get("by_symbol") or [])
-        if str(row.get("symbol") or "").strip()
-    }
-    for row in list(strategy.get("open_positions") or []) + list(strategy.get("closed_trades") or []):
-        symbol = str(row.get("symbol") or "").upper()
-        if symbol:
-            symbols.add(symbol)
-    catalog = {
-        symbol: INSTRUMENT_DISPLAY_NAMES.get(symbol, symbol)
-        for symbol in sorted(symbols)
-    }
-    return {
-        "generated_at": generated_at.isoformat(),
-        "generated_at_moscow": generated_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
-        "strategy": strategy,
-        "comparison": comparison,
-        "exit_analytics": exit_analytics,
-        "instrument_catalog": catalog,
-    }
 
 
-def load_strategy_research_workspace() -> dict[str, Any]:
-    observations = load_signal_observations_from_storage(
-        TRADE_DB_PATH, newest_first=True, since=AO_ROLLOUT_AT.isoformat()
-    )
-    records = read_shadow_records(AO_CHAIKIN_SHADOW_PATH)
-    exit_analytics = build_shadow_exit_analytics(records)
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "execution": build_ao_execution_research(observations),
-        "exit_experiment": exit_analytics.get("conditional_two_hour_experiment") or {},
-    }
 
 
 def load_trade_review_for_day(
@@ -5299,10 +5197,6 @@ def build_dashboard_html() -> str:
       </div>
       <div id="reviewTabQuality" class="review-tab-panel">
         <div class="muted" id="tradeQualityMeta">Качество сделок ещё рассчитывается.</div>
-        <div class="quality-tabs" role="group" aria-label="Стратегия для диагностики" style="margin:12px 0;">
-          <button class="quality-tab active" type="button" data-quality-strategy="current">Часовой разворот · текущая</button>
-          <button class="quality-tab" type="button" data-quality-strategy="archive">AO / Чайкин · архив</button>
-        </div>
         <div class="trade-review-summary" id="tradeQualityOverview"></div>
         <div class="quality-tabs" role="tablist" aria-label="Диагностика качества">
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
@@ -5311,12 +5205,6 @@ def build_dashboard_html() -> str:
           <button class="quality-tab" type="button" data-quality-tab="hypotheses">Пропущенные возможности <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
-          <div class="review-block" id="qualityEntryPathBlock" style="margin-bottom:16px;">
-            <h3>Быстрые и поздние входы AO</h3>
-            <div class="muted" id="qualityEntryPathMeta">Фактические сделки после включения нового правила.</div>
-            <div class="trade-review-summary" id="qualityEntryPathOverview"></div>
-            <div class="quality-card-list" id="qualityEntryPathBody" style="margin-top:12px;"></div>
-          </div>
           <div class="table-scroll desktop-table">
             <table>
             <thead>
@@ -5337,12 +5225,11 @@ def build_dashboard_html() -> str:
           <div id="qualityTradesBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelExits" class="quality-panel">
-          <div class="muted" style="margin-bottom:10px;">Условный выход AO показан отдельно от фактических ранних закрытий.</div>
-          <div id="aoExitExperiment" class="quality-card-list" style="margin-bottom:12px;"></div>
+          <div class="muted" style="margin-bottom:10px;">Фактические ранние закрытия и движение цены после выхода.</div>
           <div id="qualityExitsBody" class="quality-card-list"></div>
         </div>
         <div id="qualityPanelHypotheses" class="quality-panel">
-          <div class="muted" id="strategyHypothesesIntro" style="margin-bottom:10px;">Почти-входы текущей стратегии AO: фильтр остановил вход, после чего движение проверяется через 1, 2, 4 и 8 часов. Это условная проверка цены, а не фактическая сделка или доход.</div>
+          <div class="muted" id="strategyHypothesesIntro" style="margin-bottom:10px;">Уникальные движения после решения «воздержаться». Повторные наблюдения одного движения объединены.</div>
           <div id="strategyHypothesesOverview" class="trade-review-summary" style="margin-bottom:12px;"></div>
           <div id="strategyHypothesesReasons" class="quality-card-list" style="margin-bottom:12px;"></div>
           <div id="strategyHypothesesBody" class="quality-card-list"></div>
@@ -6290,7 +6177,6 @@ def build_dashboard_html() -> str:
       });
     }
 
-    let selectedQualityStrategy = 'current';
     let initialDashboardRequest = window.__initialDashboardRequest || null;
 
     async function loadData() {
@@ -6845,9 +6731,7 @@ def build_dashboard_html() -> str:
       }
 
       const qualityWorkspace = data.trade_quality || {};
-      const tradeQuality = selectedQualityStrategy === 'archive'
-        ? (qualityWorkspace.archive || {})
-        : qualityWorkspace;
+      const tradeQuality = qualityWorkspace;
       const tradeQualityMeta = document.getElementById('tradeQualityMeta');
       const tradeQualityBody = document.getElementById('tradeQualityBody');
       const strategyHypothesesBody = document.getElementById('strategyHypothesesBody');
@@ -6859,27 +6743,13 @@ def build_dashboard_html() -> str:
       const qualityTradesBody = document.getElementById('qualityTradesBody');
       const qualityRegimeBody = document.getElementById('qualityRegimeBody');
       const qualityEdgeBody = document.getElementById('qualityEdgeBody');
-      const qualityEntryPathBlock = document.getElementById('qualityEntryPathBlock');
-      const qualityEntryPathMeta = document.getElementById('qualityEntryPathMeta');
-      const qualityEntryPathOverview = document.getElementById('qualityEntryPathOverview');
-      const qualityEntryPathBody = document.getElementById('qualityEntryPathBody');
       const qualityRows = Array.isArray(tradeQuality.by_symbol) ? tradeQuality.by_symbol : [];
       const qualityOverview = tradeQuality.overview || {};
       const qualityExits = Array.isArray(tradeQuality.exit_diagnostics) ? tradeQuality.exit_diagnostics : [];
       const qualityTrades = Array.isArray(tradeQuality.trades) ? tradeQuality.trades : [];
       const qualityRegimes = Array.isArray(tradeQuality.by_regime) ? tradeQuality.by_regime : [];
       const qualityEdges = Array.isArray(tradeQuality.by_entry_quality) ? tradeQuality.by_entry_quality : [];
-      const entryPathAnalysis = tradeQuality.entry_path_analysis || {};
-      const aoEntryHypotheses = data.ao_chaikin_shadow?.entry_hypotheses || {};
-      const strategyHypotheses = selectedQualityStrategy === 'archive'
-        ? (Array.isArray(aoEntryHypotheses.items) ? aoEntryHypotheses.items : [])
-        : (Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : []);
-      const strategyHypothesesSummary = selectedQualityStrategy === 'archive'
-        ? (aoEntryHypotheses.summary || {})
-        : {};
-      const strategyHypothesesByReason = selectedQualityStrategy === 'archive' && Array.isArray(aoEntryHypotheses.by_reason)
-        ? aoEntryHypotheses.by_reason
-        : [];
+      const strategyHypotheses = Array.isArray(tradeQuality.strategy_hypotheses) ? tradeQuality.strategy_hypotheses : [];
       const sortedQualityTrades = qualityTrades.slice().sort((a, b) => String(b.exit_time || '').localeCompare(String(a.exit_time || '')));
       const materialQualityExits = qualityExits
         .filter((item) => item.is_material_early_exit)
@@ -6887,11 +6757,8 @@ def build_dashboard_html() -> str:
       const sortedStrategyHypotheses = strategyHypotheses.slice().sort((a, b) => String(b.last_observed_at || b.observed_at || '').localeCompare(String(a.last_observed_at || a.observed_at || '')));
       document.getElementById('qualityTradesCount').textContent = String(Math.min(sortedQualityTrades.length, 20));
       document.getElementById('qualityHypothesesCount').textContent = String(Math.min(sortedStrategyHypotheses.length, 12));
-      document.querySelectorAll('[data-quality-strategy]').forEach((button) => {
-        button.classList.toggle('active', button.dataset.qualityStrategy === selectedQualityStrategy);
-      });
       tradeQualityMeta.textContent = qualityWorkspace.available
-        ? `${selectedQualityStrategy === 'archive' ? 'Архив AO / Чайкин' : 'Текущий часовой разворот'} · период ${qualityWorkspace.period_days || 30} дней · обновлено ${formatMoscowTime(qualityWorkspace.generated_at || '')}. Расчёт по часовым свечам; минутные данные — на границах сделки.`
+        ? `Текущий часовой разворот · период ${qualityWorkspace.period_days || 30} дней · обновлено ${formatMoscowTime(qualityWorkspace.generated_at || '')}. Расчёт по часовым свечам; минутные данные — на границах сделки.`
         : 'Качество сделок ещё рассчитывается: бот подготовит первый снимок после следующего цикла.';
       const capture = qualityOverview.profit_capture_pct == null ? '-' : `${Number(qualityOverview.profit_capture_pct).toFixed(1)}%`;
       const commissionShare = qualityOverview.commission_share_pct == null ? 'нет базы' : `${Number(qualityOverview.commission_share_pct).toFixed(1)}% валового результата`;
@@ -6907,61 +6774,13 @@ def build_dashboard_html() -> str:
         buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
         buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
         buildTradeSummaryCard(
-          selectedQualityStrategy === 'archive' ? 'Почти-входы AO' : 'Проверка удержаний',
-          selectedQualityStrategy === 'archive'
-            ? `${strategyHypothesesSummary.confirmed || 0} из ${strategyHypothesesSummary.evaluated || 0}`
-            : `${qualityOverview.strategy_hypotheses_positive_count || 0} из ${qualityOverview.strategy_hypotheses_evaluated_count || 0}`,
-          selectedQualityStrategy === 'archive'
-            ? `${strategyHypothesesSummary.waiting || 0} ожидают оценки через 4 часа`
-            : qualityOverview.strategy_hypotheses_evaluated_count
-              ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_observations_count || 0} существенных`
-              : 'часовые окна после HOLD ещё копятся'
+          'Проверка удержаний',
+          `${qualityOverview.strategy_hypotheses_positive_count || 0} из ${qualityOverview.strategy_hypotheses_evaluated_count || 0}`,
+          qualityOverview.strategy_hypotheses_evaluated_count
+            ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_observations_count || 0} существенных`
+            : 'часовые окна после HOLD ещё копятся'
         ),
       ].join('') : '';
-      qualityEntryPathBlock.hidden = selectedQualityStrategy !== 'archive';
-      if (selectedQualityStrategy === 'archive') {
-        const entryPathRows = Array.isArray(entryPathAnalysis.paths) ? entryPathAnalysis.paths : [];
-        const statusLabels = {
-          no_entries: 'Ждём первые входы',
-          collecting: 'Данные накапливаются',
-          concentrated: 'Нужна проверка устойчивости',
-          ready: 'Можно сравнивать',
-        };
-        qualityEntryPathMeta.textContent = entryPathAnalysis.rollout_at
-          ? `Только фактические входы после ${formatMoscowTime(entryPathAnalysis.rollout_at)}. Денежный результат указан после комиссии.`
-          : 'Фактические сделки после включения нового правила.';
-        qualityEntryPathOverview.innerHTML = [
-          buildTradeSummaryCard('Добавило позднее правило', String(entryPathAnalysis.added_delayed_entries || 0), 'фактических входов'),
-          buildTradeSummaryCard('Накоплено', `${entryPathAnalysis.closed_trades || 0} / ${entryPathAnalysis.target_closed_trades || 10}`, `${entryPathAnalysis.entries || 0} входов · закрытые сделки`),
-          buildTradeSummaryCard('Статус', statusLabels[entryPathAnalysis.status] || 'Данные накапливаются', entryPathAnalysis.status_text || 'Выборка ещё не собрана'),
-        ].join('');
-        qualityEntryPathBody.innerHTML = entryPathRows.length
-          ? entryPathRows.map((row) => {
-              const net = Number(row.net_pnl_rub || 0);
-              const netClass = net >= 0 ? 'good' : 'bad';
-              const average = row.average_net_pnl_rub == null ? 'ждём закрытия' : formatSignedRub(row.average_net_pnl_rub);
-              const winRate = row.win_rate_pct == null ? 'ждём закрытия' : `${Number(row.win_rate_pct).toFixed(1)}%`;
-              const concentration = row.dominant_symbol
-                ? `${instrumentText(row.dominant_symbol)} · ${Number(row.dominant_symbol_share_pct || 0).toFixed(0)}% влияния на результат`
-                : 'пока нет закрытых сделок';
-              return `<article class="quality-card">
-                <div class="quality-card-head">
-                  <div><div class="quality-card-title">${escapeHtml(row.label || '-')}</div><div class="quality-card-meta">входов ${escapeHtml(String(row.entries || 0))} · открыто ${escapeHtml(String(row.open_trades || 0))} · закрыто ${escapeHtml(String(row.closed_trades || 0))}</div></div>
-                  <div class="quality-card-result ${netClass}">${row.closed_trades ? escapeHtml(formatSignedRub(net)) : '—'}</div>
-                </div>
-                <div class="quality-metric-grid">
-                  <div class="quality-metric"><div class="quality-metric-label">Итог после комиссии</div><div class="quality-metric-value ${netClass}">${row.closed_trades ? escapeHtml(formatSignedRub(net)) : 'ждём закрытия'}</div><div class="quality-metric-note">комиссии ${escapeHtml(formatRub(row.commission_rub || 0))}</div></div>
-                  <div class="quality-metric"><div class="quality-metric-label">Средняя закрытая сделка</div><div class="quality-metric-value">${escapeHtml(average)}</div><div class="quality-metric-note">на ${escapeHtml(String(row.closed_trades || 0))} закрытых</div></div>
-                  <div class="quality-metric"><div class="quality-metric-label">Доля прибыльных</div><div class="quality-metric-value">${escapeHtml(winRate)}</div><div class="quality-metric-note">прибыльных ${escapeHtml(String(row.wins || 0))}</div></div>
-                  <div class="quality-metric"><div class="quality-metric-label">Зависимость от инструмента</div><div class="quality-metric-value">${escapeHtml(concentration)}</div><div class="quality-metric-note">считается по абсолютному влиянию на итог</div></div>
-                </div>
-              </article>`;
-            }).join('')
-          : '<div class="muted">Данные по типам входа ещё не накоплены.</div>';
-        if (Number(entryPathAnalysis.unclassified_entries || 0) > 0) {
-          qualityEntryPathBody.insertAdjacentHTML('beforeend', `<div class="quality-card-note"><strong>Требует внимания:</strong> ${escapeHtml(String(entryPathAnalysis.unclassified_entries))} входов не удалось отнести к быстрому или позднему пути.</div>`);
-        }
-      }
       tradeQualityBody.innerHTML = qualityRows.length
         ? qualityRows.map((row) => {
             const pnl = Number(row.net_pnl_rub || 0);
@@ -7040,18 +6859,6 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет закрытых сделок для лаборатории за период.</div>';
-      const exitExperiment = qualityWorkspace.exit_experiment || {};
-      const exitExperimentEl = document.getElementById('aoExitExperiment');
-      exitExperimentEl.innerHTML = selectedQualityStrategy === 'archive' ? `<article class="quality-card">
-        <div class="quality-card-head"><div><div class="quality-card-title">Гипотеза: удержать AO ещё 2 часа</div>
-        <div class="quality-card-meta">Теневые выходы AO · оценка на 1 лот · не фактический P&L</div></div></div>
-        <div class="quality-metric-grid">
-          <div class="quality-metric"><div class="quality-metric-label">Оценено</div><div class="quality-metric-value">${escapeHtml(String(exitExperiment.evaluated || 0))} / ${escapeHtml(String(exitExperiment.readiness?.target_evaluated || 20))}</div></div>
-          <div class="quality-metric"><div class="quality-metric-label">Лучше обычного выхода</div><div class="quality-metric-value">${escapeHtml(String(exitExperiment.better || 0))}</div></div>
-          <div class="quality-metric"><div class="quality-metric-label">Разница, ₽/лот</div><div class="quality-metric-value ${Number(exitExperiment.delta_rub_1lot || 0) >= 0 ? 'good' : 'bad'}">${escapeHtml(formatSignedRub(exitExperiment.delta_rub_1lot || 0))}</div></div>
-        </div>
-        <div class="quality-card-note">${escapeHtml(exitExperiment.readiness?.status === 'ready_for_limited_trial' ? 'Условия первичной проверки выполнены; нужен разбор перед изменением выхода.' : exitExperiment.readiness?.status === 'not_confirmed' ? 'На текущей выборке гипотеза не подтвердилась.' : 'Выборка пока мала для вывода.')}</div>
-      </article>` : '';
       qualityExitsBody.innerHTML = materialQualityExits.length
         ? materialQualityExits.slice(0, 12).map((item) => {
             const pnl = Number(item.net_pnl_rub || 0);
@@ -7073,58 +6880,6 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
-      if (selectedQualityStrategy === 'archive') {
-        const confirmedRate = strategyHypothesesSummary.confirmed_rate_pct == null
-          ? 'ещё нет оценки'
-          : `${Number(strategyHypothesesSummary.confirmed_rate_pct).toFixed(0)}%`;
-        strategyHypothesesIntro.textContent = 'Архивные почти-входы AO: фильтр остановил вход, после чего движение проверялось через 1, 2, 4 и 8 часов. Это условная проверка цены, а не фактическая сделка или доход.';
-        strategyHypothesesOverview.innerHTML = [
-          buildTradeSummaryCard('Почти-входы', String(strategyHypothesesSummary.eligible || 0), `${strategyHypothesesSummary.eligible_observations || 0} отдельных наблюдений`),
-          buildTradeSummaryCard('Оценено через 4 часа', String(strategyHypothesesSummary.evaluated || 0), `${strategyHypothesesSummary.waiting || 0} ещё накапливаются`),
-          buildTradeSummaryCard('Движение подтвердилось', String(strategyHypothesesSummary.confirmed || 0), confirmedRate, Number(strategyHypothesesSummary.confirmed || 0) ? 'good' : ''),
-          buildTradeSummaryCard('Не подтвердилось', String(strategyHypothesesSummary.not_confirmed || 0), 'не прошло порог обычного шума', Number(strategyHypothesesSummary.not_confirmed || 0) ? 'bad' : ''),
-        ].join('');
-        strategyHypothesesReasons.innerHTML = strategyHypothesesByReason.length
-          ? `<article class="quality-card"><div class="quality-card-title">Что остановило вход</div><div class="quality-metric-grid">${strategyHypothesesByReason.map((row) => `<div class="quality-metric"><div class="quality-metric-label">${escapeHtml(row.label || '-')}</div><div class="quality-metric-value">${escapeHtml(String(row.total || 0))}</div><div class="quality-metric-note">оценено ${escapeHtml(String(row.evaluated || 0))} · подтвердилось ${escapeHtml(String(row.confirmed || 0))} · ждут ${escapeHtml(String(row.waiting || 0))}</div></div>`).join('')}</div></article>`
-          : '';
-        const statusLabels = {
-          confirmed: 'Подтверждено',
-          not_confirmed: 'Не подтвердилось',
-          waiting: 'Ожидает оценки',
-          unavailable: 'Цена недоступна',
-        };
-        const renderHorizon = (item, hours) => {
-          const horizon = item.horizons?.[String(hours)] || {status: 'waiting'};
-          if (horizon.status === 'evaluated') {
-            const move = Number(horizon.move_pct || 0);
-            return `<div class="quality-metric"><div class="quality-metric-label">Через ${hours} ч</div><div class="quality-metric-value ${horizon.confirmed ? 'good' : move < 0 ? 'bad' : ''}">${escapeHtml(`${move >= 0 ? '+' : ''}${move.toFixed(2)}%`)}</div><div class="quality-metric-note">${horizon.confirmed ? 'выше порога' : 'ниже порога'}</div></div>`;
-          }
-          if (horizon.status === 'unavailable') {
-            return `<div class="quality-metric"><div class="quality-metric-label">Через ${hours} ч</div><div class="quality-metric-value">Цена недоступна</div><div class="quality-metric-note">нет подходящей свечи</div></div>`;
-          }
-          return `<div class="quality-metric"><div class="quality-metric-label">Через ${hours} ч</div><div class="quality-metric-value">Ожидает оценки</div><div class="quality-metric-note">окно ещё не закрыто</div></div>`;
-        };
-        strategyHypothesesBody.innerHTML = sortedStrategyHypotheses.length
-          ? sortedStrategyHypotheses.slice(0, 12).map((item) => {
-              const firstAt = item.first_observed_at || '';
-              const lastAt = item.last_observed_at || firstAt;
-              const observations = Number(item.observation_count || 1);
-              const status = statusLabels[item.status] || 'Ожидает оценки';
-              const statusClass = item.status === 'confirmed' ? 'good' : item.status === 'not_confirmed' ? 'bad' : '';
-              return `<article class="quality-card">
-                <div class="quality-card-head">
-                  <div>
-                    <div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${signalBadge(item.signal || '-')}</div>
-                    <div class="quality-card-meta">${escapeHtml(formatMoscowTime(firstAt))} — ${escapeHtml(formatMoscowTime(lastAt))} · ${observations} ${observations === 1 ? 'наблюдение' : 'наблюдения'}</div>
-                  </div>
-                  <div class="quality-card-result ${statusClass}">${escapeHtml(status)}</div>
-                </div>
-                <div class="quality-horizon-grid">${[1, 2, 4, 8].map((hours) => renderHorizon(item, hours)).join('')}</div>
-                <div class="quality-card-note"><strong>Почему не вошли:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 260))}<br><strong>Порог значимого движения:</strong> +${escapeHtml(Number(item.threshold_pct || 0).toFixed(2))}%.</div>
-              </article>`;
-            }).join('')
-          : '<div class="muted">Почти-входов пока нет. Обычные часы без сформированного сигнала сюда не попадают.</div>';
-      } else {
         strategyHypothesesIntro.textContent = 'Текущая стратегия: уникальные движения после решения «воздержаться». Повторные наблюдения одного движения объединены.';
         strategyHypothesesOverview.innerHTML = '';
         strategyHypothesesReasons.innerHTML = '';
@@ -7142,7 +6897,7 @@ def build_dashboard_html() -> str:
               </article>`;
             }).join('')
           : '<div class="muted">Нет подтверждённых пропущенных движений.</div>';
-      }
+
 
     }
 
@@ -7261,12 +7016,6 @@ def build_dashboard_html() -> str:
           });
         });
       });
-      document.querySelectorAll('[data-quality-strategy]').forEach((button) => {
-        button.addEventListener('click', () => {
-          selectedQualityStrategy = button.dataset.qualityStrategy;
-          loadData();
-        });
-      });
       if (window.location.hash === '#trade-review-quality-exits') {
         document.querySelector('[data-review-tab="quality"]')?.click();
         document.querySelector('[data-quality-tab="exits"]')?.click();
@@ -7303,9 +7052,6 @@ def dashboard() -> str:
     return build_dashboard_html()
 
 
-@app.get("/v35", response_class=HTMLResponse)
-def v35_dashboard() -> str:
-    return build_v35_dashboard_html().replace("__SITE_NAV__", build_site_nav("v35"))
 
 
 @app.get("/docs", response_class=HTMLResponse)
@@ -7313,9 +7059,6 @@ def docs() -> str:
     return build_docs_html()
 
 
-@app.get("/shadow-strategy", response_class=RedirectResponse)
-def shadow_strategy() -> RedirectResponse:
-    return RedirectResponse(url="/#trade-review-quality-exits", status_code=307)
 
 
 @app.get("/allocator", response_class=RedirectResponse)
@@ -7369,7 +7112,6 @@ def api_dashboard(date: str | None = None) -> dict:
         "portfolio": portfolio_view,
         "runtime": runtime,
         "news": load_news_snapshot(),
-        "ao_chaikin_shadow": build_dashboard_ao_shadow_payload(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),
         "allocator_workspace": allocator_workspace,
@@ -7387,11 +7129,6 @@ def api_dashboard(date: str | None = None) -> dict:
     }
 
 
-@app.get("/api/v35", response_class=JSONResponse)
-def api_v35(days: int = 7, symbol: str | None = None) -> JSONResponse:
-    selected_days = None if days == 0 else max(1, min(days, 365))
-    payload = build_v35_dashboard_payload(days=selected_days, symbol=symbol)
-    return JSONResponse(content=payload, headers=NO_CACHE_HEADERS)
 
 
 @app.get("/api/allocator", response_class=JSONResponse)
@@ -7406,14 +7143,8 @@ def api_allocator(date: str | None = None) -> dict:
     return load_allocator_workspace(target_day, states, load_portfolio_snapshot())
 
 
-@app.get("/api/shadow-strategy", response_class=JSONResponse)
-def api_shadow_strategy() -> JSONResponse:
-    return JSONResponse(content=load_shadow_strategy_workspace(), headers=NO_CACHE_HEADERS)
 
 
-@app.get("/api/strategy-research", response_class=JSONResponse)
-def api_strategy_research() -> JSONResponse:
-    return JSONResponse(content=load_strategy_research_workspace(), headers=NO_CACHE_HEADERS)
 
 
 @app.post("/api/trades/recover", response_class=JSONResponse)
