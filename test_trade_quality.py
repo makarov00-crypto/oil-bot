@@ -219,6 +219,57 @@ class TradeQualityTests(unittest.TestCase):
 
         self.assertEqual(len(group_strategy_hypotheses(rows)), 2)
 
+    def test_does_not_group_hold_hypotheses_across_strategy_versions(self) -> None:
+        rows = [
+            {
+                "symbol": "BRV6",
+                "signal": "LONG",
+                "strategy": "reversal_1h",
+                "strategy_version": "legacy",
+                "observed_at": "2026-09-22T22:00:00+03:00",
+                "move_4h_pct": 0.8,
+            },
+            {
+                "symbol": "BRV6",
+                "signal": "LONG",
+                "strategy": "reversal_1h",
+                "strategy_version": "trend-gate-v1",
+                "observed_at": "2026-09-22T23:00:00+03:00",
+                "move_4h_pct": -0.4,
+            },
+        ]
+
+        self.assertEqual(len(group_strategy_hypotheses(rows)), 2)
+
+    def test_grouped_hypothesis_keeps_positive_and_negative_denominator(self) -> None:
+        rows = [
+            {
+                "symbol": "BRV6",
+                "signal": "LONG",
+                "strategy": "reversal_1h",
+                "strategy_version": "trend-gate-v1",
+                "observed_at": "2026-09-22T22:00:00+03:00",
+                "move_4h_pct": 0.8,
+                "move_4h_rub": 80.0,
+            },
+            {
+                "symbol": "BRV6",
+                "signal": "LONG",
+                "strategy": "reversal_1h",
+                "strategy_version": "trend-gate-v1",
+                "observed_at": "2026-09-22T23:00:00+03:00",
+                "move_4h_pct": -0.4,
+                "move_4h_rub": -40.0,
+            },
+        ]
+
+        grouped = group_strategy_hypotheses(rows)
+
+        self.assertEqual(grouped[0]["positive_observation_count"], 1)
+        self.assertEqual(grouped[0]["negative_observation_count"], 1)
+        self.assertEqual(grouped[0]["worst_move_4h_pct"], -0.4)
+        self.assertEqual(grouped[0]["worst_move_4h_rub"], -40.0)
+
     def test_summarizes_early_exit_only_when_direction_continued(self) -> None:
         trade = {
             "symbol": "BRU6",

@@ -2861,11 +2861,18 @@ def _load_trade_quality_analytics_uncached() -> dict[str, Any]:
         evaluations = [row for row in result["missed_entry_evaluations"] if strategy_of(row) == strategy and row.get("source_kind") == "strategy_hold"]
         overview = build_trade_quality_overview(trades, missed)
         positive = sum(1 for row in evaluations if float(row.get("move_4h_pct") or 0) > 0)
+        threshold_pct = float(result.get("potential_threshold_pct") or 0.35)
+        material = sum(
+            1
+            for row in evaluations
+            if float(row.get("move_4h_pct") or 0) >= threshold_pct
+        )
         overview.update({
             "strategy_hypotheses_evaluated_count": len(evaluations),
             "strategy_hypotheses_positive_count": positive,
             "strategy_hypotheses_positive_rate_pct": round(positive / len(evaluations) * 100, 1) if evaluations else None,
-            "strategy_hypotheses_observations_count": sum(int(row.get("observation_count") or 1) for row in hypotheses),
+            "strategy_hypotheses_observations_count": len(evaluations),
+            "strategy_hypotheses_material_count": material,
         })
         exits = [{
             "symbol": row.get("symbol"), "side": row.get("side"), "exit_time": row.get("exit_time"),
@@ -4946,7 +4953,7 @@ def build_dashboard_html() -> str:
           <button class="quality-tab active" type="button" data-quality-tab="summary">Итог</button>
           <button class="quality-tab" type="button" data-quality-tab="trades">Лаборатория <span class="quality-tab-count" id="qualityTradesCount">0</span></button>
           <button class="quality-tab" type="button" data-quality-tab="exits">Выходы</button>
-          <button class="quality-tab" type="button" data-quality-tab="hypotheses">Пропущенные возможности <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
+          <button class="quality-tab" type="button" data-quality-tab="hypotheses">Гипотезы после ожидания <span class="quality-tab-count" id="qualityHypothesesCount">0</span></button>
         </div>
         <div id="qualityPanelSummary" class="quality-panel active">
           <div class="table-scroll desktop-table">
@@ -5446,6 +5453,13 @@ def build_dashboard_html() -> str:
       if (!Number.isFinite(num)) return '-';
       const sign = num > 0 ? '+' : '';
       return `${sign}${num.toFixed(2)} RUB`;
+    }
+
+    function formatSignedPercent(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return '-';
+      const sign = num > 0 ? '+' : '';
+      return `${sign}${num.toFixed(2)}%`;
     }
 
     function formatMoscowTime(value) {
@@ -6195,10 +6209,10 @@ def build_dashboard_html() -> str:
         buildTradeSummaryCard('Комиссии', formatRub(qualityOverview.commission_rub || 0), commissionShare),
         buildTradeSummaryCard('Ранние выходы', String(qualityOverview.material_early_exit_count || 0), earlyExitSub),
         buildTradeSummaryCard(
-          'Проверка удержаний',
+          'Проверка ожиданий',
           `${qualityOverview.strategy_hypotheses_positive_count || 0} из ${qualityOverview.strategy_hypotheses_evaluated_count || 0}`,
           qualityOverview.strategy_hypotheses_evaluated_count
-            ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_observations_count || 0} существенных`
+            ? `${Number(qualityOverview.strategy_hypotheses_positive_rate_pct || 0).toFixed(0)}% продолжили в нужную сторону · ${qualityOverview.strategy_hypotheses_material_count || 0} существенных из ${qualityOverview.strategy_hypotheses_observations_count || 0}`
             : 'часовые окна после HOLD ещё копятся'
         ),
       ].join('') : '';
@@ -6301,7 +6315,7 @@ def build_dashboard_html() -> str:
             </article>`;
           }).join('')
         : '<div class="muted">Нет подтверждённых ранних выходов за период.</div>';
-        strategyHypothesesIntro.textContent = 'Текущая стратегия: уникальные движения после решения «воздержаться». Повторные наблюдения одного движения объединены.';
+        strategyHypothesesIntro.textContent = 'Все проверенные направления после решения «ожидать» для текущей версии стратегии. Это диагностические гипотезы, а не пропущенные заявки; повторные наблюдения одного движения объединены.';
         strategyHypothesesOverview.innerHTML = '';
         strategyHypothesesReasons.innerHTML = '';
         strategyHypothesesBody.innerHTML = sortedStrategyHypotheses.length
@@ -6311,13 +6325,24 @@ def build_dashboard_html() -> str:
               const firstAt = item.first_observed_at || item.observed_at || '';
               const lastAt = item.last_observed_at || item.observed_at || '';
               const observations = Number(item.observation_count || 1);
+              const worstMove = Number(item.worst_move_4h_pct ?? item.move_4h_pct ?? 0);
+              const resultClass = bestMove > 0 ? 'good' : 'bad';
+              const firstClass = firstMove > 0 ? 'good' : 'bad';
+              const worstClass = worstMove > 0 ? 'good' : 'bad';
+              const mfe = Number(item.mfe_4h_pct || 0);
+              const mae = Number(item.mae_4h_pct || 0);
+              const stopText = item.would_hit_initial_stop == null
+                ? 'стоп ещё не рассчитан'
+                : item.would_hit_initial_stop
+                  ? 'начальный стоп был бы задет'
+                  : 'начальный стоп сохранился бы';
               return `<article class="quality-card">
-                <div class="quality-card-head"><div><div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${signalBadge(item.signal || '-')}</div><div class="quality-card-meta">${escapeHtml(formatMoscowTime(firstAt))} — ${escapeHtml(formatMoscowTime(lastAt))} · ${observations} наблюдений</div></div><div class="quality-card-result good">+${escapeHtml(bestMove.toFixed(2))}%</div></div>
-                <div class="quality-metric-grid"><div class="quality-metric"><div class="quality-metric-label">Первый сигнал через 4ч</div><div class="quality-metric-value good">+${escapeHtml(firstMove.toFixed(2))}%</div></div><div class="quality-metric"><div class="quality-metric-label">Лучший срез через 4ч</div><div class="quality-metric-value good">+${escapeHtml(bestMove.toFixed(2))}%</div></div><div class="quality-metric"><div class="quality-metric-label">Порог движения</div><div class="quality-metric-value">+${escapeHtml(Number(item.threshold_pct || 0).toFixed(2))}%</div></div></div>
+                <div class="quality-card-head"><div><div class="quality-card-title">${escapeHtml(instrumentText(item.symbol || '-'))} · ${signalBadge(item.signal || '-')}</div><div class="quality-card-meta">${escapeHtml(formatMoscowTime(firstAt))} — ${escapeHtml(formatMoscowTime(lastAt))} · ${observations} наблюдений · версия ${escapeHtml(String(item.strategy_version || 'не указана'))}</div></div><div class="quality-card-result ${resultClass}">${escapeHtml(formatSignedPercent(bestMove))}</div></div>
+                <div class="quality-metric-grid"><div class="quality-metric"><div class="quality-metric-label">Первое наблюдение через 4ч</div><div class="quality-metric-value ${firstClass}">${escapeHtml(formatSignedPercent(firstMove))}</div></div><div class="quality-metric"><div class="quality-metric-label">Лучший / худший срез через 4ч</div><div class="quality-metric-value"><span class="${resultClass}">${escapeHtml(formatSignedPercent(bestMove))}</span> / <span class="${worstClass}">${escapeHtml(formatSignedPercent(worstMove))}</span></div><div class="quality-metric-note">${Number(item.positive_observation_count || 0)} в плюс · ${Number(item.negative_observation_count || 0)} не подтвердились</div></div><div class="quality-metric"><div class="quality-metric-label">Движение по направлению / против</div><div class="quality-metric-value"><span class="good">+${escapeHtml(mfe.toFixed(2))}%</span> / <span class="bad">-${escapeHtml(mae.toFixed(2))}%</span></div><div class="quality-metric-note">${escapeHtml(stopText)}</div></div></div>
                 <div class="quality-card-note"><strong>Почему не вошли:</strong> ${escapeHtml(shortDiagnosticText(item.reason || 'Причина не сохранена', 260))}</div>
               </article>`;
             }).join('')
-          : '<div class="muted">Нет подтверждённых пропущенных движений.</div>';
+          : '<div class="muted">Для текущей версии стратегии ещё нет четырёхчасовых проверок после решения «ожидать».</div>';
 
 
     }

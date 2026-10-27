@@ -298,7 +298,7 @@ def group_strategy_hypotheses(
 ) -> list[dict[str, Any]]:
     """Combine repeated HOLD diagnostics for one continuing directional move."""
     groups: list[list[dict[str, Any]]] = []
-    previous_by_key: dict[tuple[str, str, str], tuple[datetime, list[dict[str, Any]]]] = {}
+    previous_by_key: dict[tuple[str, str, str, str], tuple[datetime, list[dict[str, Any]]]] = {}
     for row in sorted(rows, key=lambda item: str(item.get("observed_at") or "")):
         symbol = str(row.get("symbol") or "").upper()
         signal = str(row.get("signal") or "").upper()
@@ -308,7 +308,12 @@ def group_strategy_hypotheses(
             continue
         if not symbol or signal not in {"LONG", "SHORT"} or observed_at.tzinfo is None:
             continue
-        key = (symbol, signal, str(row.get("strategy") or ""))
+        key = (
+            symbol,
+            signal,
+            str(row.get("strategy") or ""),
+            str(row.get("strategy_version") or ""),
+        )
         previous = previous_by_key.get(key)
         if previous is not None and observed_at - previous[0] <= max_gap:
             group = previous[1]
@@ -323,6 +328,11 @@ def group_strategy_hypotheses(
         first = dict(group[0])
         last = group[-1]
         strongest = max(group, key=lambda item: float(item.get("move_4h_pct") or 0.0))
+        weakest = min(group, key=lambda item: float(item.get("move_4h_pct") or 0.0))
+        positive_count = sum(1 for item in group if float(item.get("move_4h_pct") or 0.0) > 0.0)
+        best_mfe = max((float(item.get("mfe_4h_pct") or 0.0) for item in group), default=0.0)
+        worst_mae = max((float(item.get("mae_4h_pct") or 0.0) for item in group), default=0.0)
+        stop_results = [item.get("would_hit_initial_stop") for item in group if item.get("would_hit_initial_stop") is not None]
         reasons = list(dict.fromkeys(str(item.get("reason") or "").strip() for item in group if str(item.get("reason") or "").strip()))
         first.update({
             "first_observed_at": first.get("observed_at"),
@@ -331,6 +341,14 @@ def group_strategy_hypotheses(
             "best_move_4h_pct": strongest.get("move_4h_pct"),
             "best_move_4h_rub": strongest.get("move_4h_rub"),
             "best_move_observed_at": strongest.get("observed_at"),
+            "worst_move_4h_pct": weakest.get("move_4h_pct"),
+            "worst_move_4h_rub": weakest.get("move_4h_rub"),
+            "worst_move_observed_at": weakest.get("observed_at"),
+            "positive_observation_count": positive_count,
+            "negative_observation_count": len(group) - positive_count,
+            "mfe_4h_pct": round(best_mfe, 4),
+            "mae_4h_pct": round(worst_mae, 4),
+            "would_hit_initial_stop": any(bool(value) for value in stop_results) if stop_results else None,
             "reason": " | ".join(reasons[:3]),
         })
         result.append(first)

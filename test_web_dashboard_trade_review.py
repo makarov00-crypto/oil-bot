@@ -64,8 +64,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertIn('id="qualityHypothesesCount"', html)
         self.assertIn('id="strategyHypothesesOverview"', html)
         self.assertIn('id="strategyHypothesesReasons"', html)
-        self.assertIn("Пропущенные возможности", html)
-        self.assertIn("Нет подтверждённых пропущенных движений", html)
+        self.assertIn("Гипотезы после ожидания", html)
+        self.assertIn("ещё нет четырёхчасовых проверок", html)
         self.assertNotIn('id="qualityShadowCount"', html)
         self.assertNotIn('id="shadowStrategyDecisions"', html)
         self.assertNotIn('class="quality-ai"', quality_render)
@@ -188,6 +188,9 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertIn("Лучший результат до выхода", html)
         self.assertIn("Разница с лучшим моментом", html)
+        self.assertIn("Гипотезы после ожидания", html)
+        self.assertNotIn("Пропущенные возможности", html)
+        self.assertIn("Движение по направлению / против", html)
         self.assertIn("ориентир внутри сделки, не совет удерживать", html)
         self.assertIn("Закрыть на ${hours}ч позже", html)
 
@@ -197,8 +200,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
 
         self.assertNotIn('data-quality-tab="missed"', html)
         self.assertNotIn('data-quality-tab="execution"', html)
-        self.assertIn("Повторные наблюдения одного движения объединены", html)
-        self.assertIn("Лучший срез через 4ч", html)
+        self.assertIn("повторные наблюдения одного движения объединены", html)
+        self.assertIn("Лучший / худший срез через 4ч", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_load_trade_review_for_day_keeps_pairing_when_raw_rows_exceed_limit(self) -> None:

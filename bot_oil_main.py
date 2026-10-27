@@ -49,6 +49,7 @@ from strategies.reversal_exit_protection import (
     advance_reversal_protection,
     new_reversal_protection_state,
 )
+from strategies.reversal_1h import STRATEGY_VERSION as REVERSAL_STRATEGY_VERSION
 from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from trade_storage import (
     append_signal_observation,
@@ -141,7 +142,7 @@ RETIRED_STATE_FIELDS = {
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 TRADE_QUALITY_REFRESH_SECONDS = 3600
-TRADE_QUALITY_ANALYTICS_VERSION = 11
+TRADE_QUALITY_ANALYTICS_VERSION = 12
 POSITION_RECONCILE_EVENT = "POSITION_RECONCILE"
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
 SIGNAL_OUTCOME_MAX_WAIT = timedelta(days=3)
@@ -1211,6 +1212,8 @@ def append_hold_signal_observation(
     atr_pct: float = 0.0,
     volume_ratio: float = 0.0,
     body_ratio: float = 0.0,
+    strategy_version: str = "",
+    stop_distance_pct: float = 0.0,
 ) -> str:
     observed_at = datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat()
     summary = [str(item).strip() for item in signal_summary[:3] if str(item).strip()]
@@ -1242,6 +1245,8 @@ def append_hold_signal_observation(
             "atr_pct": round(float(atr_pct or 0.0), 6),
             "volume_ratio": round(float(volume_ratio or 0.0), 3),
             "body_ratio": round(float(body_ratio or 0.0), 3),
+            "strategy_version": strategy_version,
+            "stop_distance_pct": round(float(stop_distance_pct or 0.0), 4),
         },
     }
     return append_signal_observation(TRADE_DB_PATH, row)
@@ -1715,6 +1720,11 @@ def build_trade_quality_analytics(
     potential_rows: list[tuple[dict[str, Any], str, float, str]] = []
     for row in signal_observations:
         context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        strategy_name = str(row.get("strategy") or "")
+        active_strategy_version = get_live_strategy_version(config, strategy_name)
+        observation_strategy_version = str(context.get("strategy_version") or "")
+        if active_strategy_version and observation_strategy_version != active_strategy_version:
+            continue
         classification = classify_trade_quality_observation(row)
         if classification is None:
             continue
@@ -1747,6 +1757,7 @@ def build_trade_quality_analytics(
             **(cached or {}),
             "observation_uid": observation_uid,
             "strategy": str(row.get("strategy") or ""),
+            "strategy_version": str(context.get("strategy_version") or ""),
             "symbol": symbol,
             "signal": direction,
             "observed_at": observed_at.isoformat(),
@@ -1785,6 +1796,46 @@ def build_trade_quality_analytics(
             )
             evaluation[f"evaluated_{hours}h_at"] = evaluated_at.isoformat()
             evaluation[f"price_source_{hours}h"] = source
+            evaluation[f"price_{hours}h"] = round(future_price, 6)
+        if evaluation.get("move_4h_pct") is not None and evaluation.get("mfe_4h_pct") is None:
+            future_price = float(evaluation.get("price_4h") or 0.0)
+            if future_price <= 0.0:
+                move_4h_pct = float(evaluation.get("move_4h_pct") or 0.0)
+                future_price = (
+                    observed_price * (1.0 + move_4h_pct / 100.0)
+                    if direction == "LONG"
+                    else observed_price * (1.0 - move_4h_pct / 100.0)
+                )
+            excursion_rows = get_candle_rows_in_range(
+                client,
+                instrument,
+                observed_at,
+                observed_at + timedelta(hours=4),
+                CandleInterval.CANDLE_INTERVAL_HOUR,
+            )
+            highs = [observed_price, future_price]
+            lows = [observed_price, future_price]
+            for candle in excursion_rows:
+                try:
+                    highs.append(float(candle["high"]))
+                    lows.append(float(candle["low"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if direction == "LONG":
+                mfe_pct = (max(highs) - observed_price) / observed_price * 100.0
+                mae_pct = (observed_price - min(lows)) / observed_price * 100.0
+            else:
+                mfe_pct = (observed_price - min(lows)) / observed_price * 100.0
+                mae_pct = (max(highs) - observed_price) / observed_price * 100.0
+            evaluation["mfe_4h_pct"] = round(max(0.0, mfe_pct), 4)
+            evaluation["mae_4h_pct"] = round(max(0.0, mae_pct), 4)
+            stop_distance_pct = float(context.get("stop_distance_pct") or 0.0)
+            evaluation["stop_distance_pct"] = round(stop_distance_pct, 4) if stop_distance_pct > 0.0 else None
+            evaluation["would_hit_initial_stop"] = (
+                bool(mae_pct >= stop_distance_pct)
+                if stop_distance_pct > 0.0
+                else None
+            )
         if evaluation.get("move_4h_pct") is not None:
             missed_entry_evaluations.append(evaluation)
 
@@ -1796,7 +1847,7 @@ def build_trade_quality_analytics(
     all_strategy_hypothesis_evaluations = [
         item for item in missed_entry_evaluations if item.get("source_kind") == "strategy_hold"
     ]
-    raw_strategy_hypotheses = [item for item in material_evaluations if item.get("source_kind") == "strategy_hold"]
+    raw_strategy_hypotheses = all_strategy_hypothesis_evaluations
     strategy_hypotheses = group_strategy_hypotheses(raw_strategy_hypotheses)
     unexecuted_entries = [
         item for item in material_evaluations
@@ -1810,6 +1861,11 @@ def build_trade_quality_analytics(
                 sum(float(item.get("best_move_4h_pct") or 0.0) for item in strategy_hypotheses) / len(strategy_hypotheses), 3
             ) if strategy_hypotheses else None,
             "strategy_hypotheses_observations_count": len(raw_strategy_hypotheses),
+            "strategy_hypotheses_material_count": sum(
+                1
+                for item in raw_strategy_hypotheses
+                if float(item.get("move_4h_pct") or 0.0) >= float(item.get("threshold_pct") or 0.35)
+            ),
             "strategy_hypotheses_evaluated_count": len(all_strategy_hypothesis_evaluations),
             "strategy_hypotheses_positive_count": sum(
                 1 for item in all_strategy_hypothesis_evaluations
@@ -6816,6 +6872,14 @@ def get_ao_live_strategy_version(config: BotConfig | Any) -> str:
     return AO_CANARY_STRATEGY_VERSION if bool(getattr(config, "ao_canary_enabled", False)) else "4"
 
 
+def get_live_strategy_version(config: BotConfig | Any, strategy_name: str) -> str:
+    if is_unified_reversal_strategy(strategy_name):
+        return REVERSAL_STRATEGY_VERSION
+    if is_ao_chaikin_strategy(strategy_name):
+        return get_ao_live_strategy_version(config)
+    return ""
+
+
 def calculate_ao_canary_closed_net(
     rows: list[dict[str, Any]],
     *,
@@ -10422,7 +10486,7 @@ def open_position(
         state.breakeven_armed = False
         state.entry_time = datetime.now(UTC).isoformat()
         state.entry_strategy = strategy_name
-        state.entry_strategy_version = get_ao_live_strategy_version(config) if is_ao_chaikin_strategy(strategy_name) else ""
+        state.entry_strategy_version = get_live_strategy_version(config, strategy_name)
         state.entry_reason = compact_reason(entry_reason or "Тестовый вход по стратегии.")
         state.execution_status = "confirmed_open"
         finalize_reversal_exit_protection_entry(state, price)
@@ -10468,7 +10532,7 @@ def open_position(
         logging.warning("symbol=%s status=order_rejected reason=%s", instrument.symbol, request_reason)
         return
     state.entry_strategy = strategy_name
-    state.entry_strategy_version = get_ao_live_strategy_version(config) if is_ao_chaikin_strategy(strategy_name) else ""
+    state.entry_strategy_version = get_live_strategy_version(config, strategy_name)
     state.pending_strategy_version = state.entry_strategy_version
     state.pending_entry_reason = compact_reason(entry_reason)
     state.pending_order_id = order_id
@@ -11106,6 +11170,22 @@ def process_instrument(
         and not has_pending_order(state)
     ):
         diagnostic_direction, diagnostic_score = infer_hold_diagnostic_direction(lower_df)
+        diagnostic_stop_plan = (
+            build_strategy_entry_stop_plan(
+                lower_df,
+                current_price,
+                diagnostic_direction,
+                config,
+                primary_strategy_name,
+            )
+            if diagnostic_direction in {"LONG", "SHORT"}
+            else {}
+        )
+        diagnostic_stop_distance_pct = (
+            float(diagnostic_stop_plan.get("distance") or 0.0) / current_price * 100.0
+            if current_price > 0.0
+            else 0.0
+        )
         append_hold_signal_observation(
             symbol=instrument.symbol,
             strategy_name=primary_strategy_name,
@@ -11122,6 +11202,8 @@ def process_instrument(
             atr_pct=float(regime_metrics.get("atr_pct") or 0.0),
             volume_ratio=float(regime_metrics.get("volume_ratio") or 0.0),
             body_ratio=float(regime_metrics.get("body_ratio") or 0.0),
+            strategy_version=get_live_strategy_version(config, primary_strategy_name),
+            stop_distance_pct=diagnostic_stop_distance_pct,
         )
     state.last_allocator_quantity = 0
     if signal not in {"LONG", "SHORT"}:
@@ -11344,10 +11426,9 @@ def process_instrument(
                                                 "symbol": instrument.symbol,
                                                 "signal": signal,
                                                 "strategy_name": primary_strategy_name,
-                                                "strategy_version": (
-                                                    get_ao_live_strategy_version(config)
-                                                    if is_ao_chaikin_strategy(primary_strategy_name)
-                                                    else ""
+                                                "strategy_version": get_live_strategy_version(
+                                                    config,
+                                                    primary_strategy_name,
                                                 ),
                                                 "reason": reason,
                                                 "observed_at": datetime.now(UTC).astimezone(MOSCOW_TZ).isoformat(),

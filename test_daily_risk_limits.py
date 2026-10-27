@@ -1139,6 +1139,8 @@ class DailyRiskLimitTests(unittest.TestCase):
                 regime_confidence=0.61,
                 setup_quality_label="medium",
                 entry_edge_score=0.54,
+                strategy_version="trend-gate-v1",
+                stop_distance_pct=0.75,
             )
             second_uid = mod.append_hold_signal_observation(
                 symbol="IMOEXF",
@@ -1151,6 +1153,8 @@ class DailyRiskLimitTests(unittest.TestCase):
                 regime_confidence=0.64,
                 setup_quality_label="medium",
                 entry_edge_score=0.58,
+                strategy_version="trend-gate-v1",
+                stop_distance_pct=0.8,
             )
             rows = mod.load_signal_observations(mod.TRADE_DB_PATH)
 
@@ -1160,6 +1164,8 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(rows[0]["decision"], "hold")
         self.assertEqual(rows[0]["observed_price"], 2682.0)
         self.assertEqual(rows[0]["context"]["candle_time"], "2026-05-12 10:00")
+        self.assertEqual(rows[0]["context"]["strategy_version"], "trend-gate-v1")
+        self.assertEqual(rows[0]["context"]["stop_distance_pct"], 0.8)
         self.assertTrue(rows[0]["evaluated_at"])
 
     def test_mark_cycle_deferred_candidate_persists_learning_reason(self) -> None:
