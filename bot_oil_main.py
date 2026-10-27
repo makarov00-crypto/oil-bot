@@ -144,6 +144,16 @@ ALLOCATOR_DECISIONS_PATH = LOG_DIR / "allocator_decisions.jsonl"
 TRADE_DB_PATH = STATE_DIR / "trade_analytics.sqlite3"
 TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
 TRADE_QUALITY_LOCK_PATH = STATE_DIR / "_trade_quality_analytics.lock"
+RETIRED_STATE_FIELDS = {
+    "last_shadow_ai_action",
+    "last_shadow_ai_candidate_id",
+    "last_shadow_ai_candle_time",
+    "last_shadow_ai_confidence",
+    "last_shadow_ai_direction",
+    "last_shadow_ai_error",
+    "last_shadow_ai_reason",
+    "last_shadow_ai_status",
+}
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
 NEWS_CACHE_TTL_SECONDS = 300
@@ -587,7 +597,7 @@ def load_state(symbol: str) -> InstrumentState:
         if not isinstance(payload, dict):
             raise ValueError("state должен быть JSON-объектом")
         allowed_fields = {item.name for item in fields(InstrumentState)}
-        unknown_fields = sorted(set(payload) - allowed_fields)
+        unknown_fields = sorted(set(payload) - allowed_fields - RETIRED_STATE_FIELDS)
         if unknown_fields:
             logging.warning(
                 "State %s содержит неизвестные поля, они будут безопасно проигнорированы: %s",

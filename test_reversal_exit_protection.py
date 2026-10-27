@@ -166,6 +166,32 @@ class ReversalExitProtectionTests(unittest.TestCase):
         self.assertEqual(restored.entry_price, 100.0)
         self.assertEqual(restored.position_qty, 2)
 
+    def test_retired_shadow_ai_state_is_ignored_without_repeated_warning(self) -> None:
+        with TemporaryDirectory() as directory:
+            original = bot.STATE_DIR
+            bot.STATE_DIR = Path(directory)
+            try:
+                bot.STATE_DIR.mkdir(parents=True, exist_ok=True)
+                bot.state_path_for("TEST").write_text(
+                    json.dumps(
+                        {
+                            "entry_strategy": "reversal_1h",
+                            "position_side": "LONG",
+                            "position_qty": 2,
+                            "last_shadow_ai_action": "ENTER",
+                            "last_shadow_ai_reason": "retired",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.object(bot.logging, "warning") as warning:
+                    restored = bot.load_state("TEST")
+            finally:
+                bot.STATE_DIR = original
+
+        self.assertEqual(restored.position_qty, 2)
+        warning.assert_not_called()
+
     def test_new_reversal_entry_records_versioned_protection_and_clear_resets_it(self) -> None:
         state = bot.InstrumentState(
             entry_strategy="reversal_1h",
