@@ -11259,6 +11259,21 @@ def process_instrument(
         state = load_state(instrument.symbol)
     if not config.dry_run and sync_pending_order(client, config, instrument, state):
         return None
+    portfolio_synced = False
+    if (
+        not config.dry_run
+        and state.position_qty > 0
+        and has_reversal_exit_protection(state)
+    ):
+        sync_state_with_portfolio(client, config, instrument, state)
+        portfolio_synced = True
+        if has_pending_order(state):
+            reconcile_state_accounting(instrument.symbol, state)
+            save_state(instrument.symbol, state)
+            return None
+        if state.position_qty > 0:
+            sync_broker_protective_stop(client, config, instrument, state)
+            save_state(instrument.symbol, state)
     higher_tf_cleared = False
     if uses_unified_reversal(instrument.symbol) and state.last_higher_tf_bias:
         state.last_higher_tf_bias = ""
@@ -11341,7 +11356,7 @@ def process_instrument(
 
     # Reconcile ownership before choosing signals: a just-filled or recovered
     # legacy position must retain its own diagnostics as well as its exit rules.
-    if not config.dry_run:
+    if not config.dry_run and not portfolio_synced:
         sync_state_with_portfolio(client, config, instrument, state)
         if has_pending_order(state):
             reconcile_state_accounting(instrument.symbol, state)
