@@ -58,6 +58,165 @@ def completed_30m(*, reversal: bool = False) -> pd.DataFrame:
 
 
 class ReversalExitProtectionTests(unittest.TestCase):
+    @staticmethod
+    def live_stop_config() -> SimpleNamespace:
+        return SimpleNamespace(
+            dry_run=False,
+            allow_orders=True,
+            broker_protective_stops_enabled=True,
+            account_id="account",
+        )
+
+    @staticmethod
+    def live_instrument() -> bot.InstrumentConfig:
+        return bot.InstrumentConfig(
+            symbol="TEST",
+            figi="figi-test",
+            display_name="Test future",
+            min_price_increment=0.1,
+        )
+
+    @staticmethod
+    def protected_live_state(*, phase: str = "RISK") -> bot.InstrumentState:
+        return bot.InstrumentState(
+            entry_strategy="reversal_1h",
+            entry_strategy_version="trend-gate-v2",
+            entry_price=100.0,
+            entry_stop_price=98.0,
+            entry_emergency_stop_price=97.0,
+            position_side="LONG",
+            position_qty=2,
+            entry_time="2026-10-22T12:00:00+00:00",
+            exit_model_version=EXIT_MODEL_VERSION,
+            exit_phase=phase,
+            exit_current_stop_price=100.1 if phase != "RISK" else 98.0,
+            exit_initial_risk_distance=2.0,
+            exit_entry_atr=1.0,
+        )
+
+    def test_live_risk_phase_posts_broker_emergency_stop(self) -> None:
+        sent = {}
+
+        class StopOrders:
+            @staticmethod
+            def get_stop_orders(**_kwargs):
+                return SimpleNamespace(stop_orders=[])
+
+            @staticmethod
+            def post_stop_order(**kwargs):
+                sent.update(kwargs)
+                return SimpleNamespace(stop_order_id="protective-1")
+
+        state = self.protected_live_state()
+        client = SimpleNamespace(stop_orders=StopOrders())
+
+        result = bot.sync_broker_protective_stop(
+            client,
+            self.live_stop_config(),
+            self.live_instrument(),
+            state,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(state.broker_stop_order_id, "protective-1")
+        self.assertEqual(state.broker_stop_price, 97.0)
+        self.assertEqual(sent["quantity"], 2)
+        self.assertEqual(sent["direction"], bot.StopOrderDirection.STOP_ORDER_DIRECTION_SELL)
+        self.assertEqual(sent["price_type"], bot.PriceType.PRICE_TYPE_POINT)
+        self.assertEqual(bot.quotation_to_float(sent["stop_price"]), 97.0)
+
+    def test_breakeven_phase_cancels_and_replaces_broker_stop(self) -> None:
+        calls = []
+        tracked = SimpleNamespace(
+            stop_order_id="old-stop",
+            figi="figi-test",
+            direction=bot.StopOrderDirection.STOP_ORDER_DIRECTION_SELL,
+            order_type=bot.StopOrderType.STOP_ORDER_TYPE_STOP_LOSS,
+            lots_requested=2,
+            stop_price=bot.quotation_from_float(97.0),
+        )
+
+        class StopOrders:
+            @staticmethod
+            def get_stop_orders(**_kwargs):
+                return SimpleNamespace(stop_orders=[tracked])
+
+            @staticmethod
+            def cancel_stop_order(**kwargs):
+                calls.append(("cancel", kwargs["stop_order_id"]))
+
+            @staticmethod
+            def post_stop_order(**kwargs):
+                calls.append(("post", bot.quotation_to_float(kwargs["stop_price"])))
+                return SimpleNamespace(stop_order_id="new-stop")
+
+        state = self.protected_live_state(phase="BREAKEVEN")
+        state.broker_stop_order_id = "old-stop"
+        state.broker_stop_price = 97.0
+        state.broker_stop_qty = 2
+
+        result = bot.sync_broker_protective_stop(
+            SimpleNamespace(stop_orders=StopOrders()),
+            self.live_stop_config(),
+            self.live_instrument(),
+            state,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(calls, [("cancel", "old-stop"), ("post", 100.1)])
+        self.assertEqual(state.broker_stop_order_id, "new-stop")
+        self.assertEqual(state.broker_stop_price, 100.1)
+
+    def test_broker_stop_execution_enqueues_close_reconciliation(self) -> None:
+        state = self.protected_live_state()
+        state.broker_stop_order_id = "protective-1"
+        state.broker_stop_price = 97.0
+        state.broker_stop_qty = 2
+        config = SimpleNamespace(account_id="account", dry_run=False)
+
+        with patch.object(bot, "extract_position_data", return_value=(0, None, None, None, None)):
+            quantity = bot.sync_state_with_portfolio(
+                SimpleNamespace(),
+                config,
+                self.live_instrument(),
+                state,
+            )
+
+        self.assertEqual(quantity, 0)
+        self.assertEqual(state.broker_stop_order_id, "")
+        self.assertTrue(state.delayed_close_recovery_needed)
+        self.assertEqual(len(state.delayed_close_queue), 1)
+        self.assertIn("Брокерский защитный стоп", state.delayed_close_queue[0]["reason"])
+
+    def test_market_close_cancels_broker_stop_before_submitting_order(self) -> None:
+        calls = []
+        state = self.protected_live_state()
+        state.broker_stop_order_id = "protective-1"
+        state.broker_stop_price = 97.0
+        state.broker_stop_qty = 2
+        config = self.live_stop_config()
+
+        with patch.object(bot, "get_last_price", return_value=101.0), patch.object(
+            bot,
+            "cancel_broker_protective_stop",
+            side_effect=lambda *_args: calls.append("cancel") or True,
+        ), patch.object(
+            bot,
+            "place_market_order",
+            side_effect=lambda *_args: calls.append("market") or "market-close-1",
+        ), patch.object(bot, "save_state"):
+            bot.close_position(
+                SimpleNamespace(),
+                config,
+                self.live_instrument(),
+                state,
+                "Тестовое закрытие",
+            )
+
+        self.assertEqual(calls, ["cancel", "market"])
+        self.assertEqual(state.pending_order_id, "market-close-1")
+        self.assertEqual(state.pending_order_action, "CLOSE")
+
     def test_long_moves_to_cost_aware_breakeven_at_one_r(self) -> None:
         state = new_reversal_protection_state("LONG", 100.0, 98.0, entry_atr=1.0)
 

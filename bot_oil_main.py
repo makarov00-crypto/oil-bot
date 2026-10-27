@@ -81,7 +81,13 @@ from tinkoff.invest import (
     OrderDirection,
     OrderExecutionReportStatus,
     OrderType,
+    PriceType,
     Quotation,
+    ExchangeOrderType,
+    StopOrderDirection,
+    StopOrderExpirationType,
+    StopOrderStatusOption,
+    StopOrderType,
     TimeInForceType,
     OperationState,
     OperationType,
@@ -240,6 +246,7 @@ class BotConfig:
     ao_canary_daily_loss_pct: float
     ao_canary_weekly_loss_pct: float
     ao_allow_delayed_entries: bool
+    broker_protective_stops_enabled: bool
 
 
 @dataclass
@@ -385,6 +392,10 @@ class InstrumentState:
     exit_worst_move: float = 0.0
     exit_profit_trail_armed: bool = False
     exit_last_trail_30m: str = ""
+    broker_stop_order_id: str = ""
+    broker_stop_price: float | None = None
+    broker_stop_qty: int = 0
+    broker_stop_verified_at: str = ""
     last_entry_path: str = ""
     entry_commission_accounted: bool = False
     realized_gross_pnl_rub: float = 0.0
@@ -609,6 +620,223 @@ def has_reversal_exit_protection(state: InstrumentState) -> bool:
         str(state.entry_strategy or "").strip().lower() == "reversal_1h"
         and state.exit_model_version == REVERSAL_EXIT_MODEL_VERSION
     )
+
+
+BROKER_STOP_VERIFY_SECONDS = 60.0
+
+
+def clear_broker_stop_tracking(state: InstrumentState) -> None:
+    state.broker_stop_order_id = ""
+    state.broker_stop_price = None
+    state.broker_stop_qty = 0
+    state.broker_stop_verified_at = ""
+
+
+def desired_broker_stop_price(state: InstrumentState) -> float | None:
+    if not has_reversal_exit_protection(state):
+        return None
+    if str(state.exit_phase or "RISK") == "RISK":
+        price = state.entry_emergency_stop_price or state.exit_current_stop_price
+    else:
+        price = state.exit_current_stop_price
+    try:
+        normalized = float(price or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0.0 else None
+
+
+def normalize_broker_stop_price(price: float, direction: str, tick_size: float) -> float:
+    tick = float(tick_size or 0.0)
+    if tick <= 0.0:
+        return round(float(price), 9)
+    units = float(price) / tick
+    rounded = math.floor(units + 1e-9) if direction == "LONG" else math.ceil(units - 1e-9)
+    return round(rounded * tick, 9)
+
+
+def quotation_from_float(value: float) -> Quotation:
+    nano_value = int(round(float(value) * 1_000_000_000))
+    units, nano = divmod(nano_value, 1_000_000_000)
+    return Quotation(units=units, nano=nano)
+
+
+def broker_stop_verification_due(state: InstrumentState, *, now: datetime | None = None) -> bool:
+    verified_at = parse_state_datetime(state.broker_stop_verified_at)
+    if verified_at is None:
+        return True
+    current = now or datetime.now(UTC)
+    return (current - verified_at).total_seconds() >= BROKER_STOP_VERIFY_SECONDS
+
+
+def cancel_broker_protective_stop(
+    client: Client,
+    config: BotConfig,
+    state: InstrumentState,
+) -> bool:
+    stop_order_id = str(state.broker_stop_order_id or "")
+    if not stop_order_id:
+        clear_broker_stop_tracking(state)
+        return True
+    try:
+        client.stop_orders.cancel_stop_order(
+            account_id=config.account_id,
+            stop_order_id=stop_order_id,
+        )
+    except RequestError as error:
+        state.last_error = f"Не удалось отменить брокерский защитный стоп {stop_order_id}: {error}"
+        logging.warning("broker_stop cancel_failed id=%s error=%s", stop_order_id, error)
+        return False
+    clear_broker_stop_tracking(state)
+    return True
+
+
+def sync_broker_protective_stop(
+    client: Client,
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if (
+        config.dry_run
+        or not config.allow_orders
+        or not bool(getattr(config, "broker_protective_stops_enabled", True))
+        or state.position_side not in {"LONG", "SHORT"}
+        or int(state.position_qty or 0) <= 0
+    ):
+        return True
+    desired = desired_broker_stop_price(state)
+    if desired is None:
+        return True
+    desired = normalize_broker_stop_price(
+        desired,
+        state.position_side,
+        float(instrument.min_price_increment or 0.0),
+    )
+    quantity = int(state.position_qty)
+    tick = float(instrument.min_price_increment or 0.0)
+    price_matches = (
+        state.broker_stop_price is not None
+        and abs(float(state.broker_stop_price) - desired) <= max(1e-9, tick / 2.0)
+    )
+    quantity_matches = int(state.broker_stop_qty or 0) == quantity
+    current = now or datetime.now(UTC)
+    needs_lookup = (
+        not state.broker_stop_order_id
+        or not price_matches
+        or not quantity_matches
+        or broker_stop_verification_due(state, now=current)
+    )
+    active_orders: list[Any] = []
+    if needs_lookup:
+        try:
+            response = client.stop_orders.get_stop_orders(
+                account_id=config.account_id,
+                status=StopOrderStatusOption.STOP_ORDER_STATUS_ACTIVE,
+            )
+            active_orders = list(getattr(response, "stop_orders", []) or [])
+        except RequestError as error:
+            state.last_error = f"Не удалось проверить брокерские защитные стопы: {error}"
+            logging.warning("symbol=%s broker_stop lookup_failed error=%s", instrument.symbol, error)
+            return False
+
+        tracked = next(
+            (
+                item
+                for item in active_orders
+                if str(getattr(item, "stop_order_id", "") or "") == state.broker_stop_order_id
+            ),
+            None,
+        )
+        if tracked is None and state.broker_stop_order_id:
+            clear_broker_stop_tracking(state)
+            price_matches = False
+            quantity_matches = False
+        elif tracked is not None and price_matches and quantity_matches:
+            state.broker_stop_verified_at = current.isoformat()
+            return True
+
+        if not state.broker_stop_order_id:
+            expected_direction = (
+                StopOrderDirection.STOP_ORDER_DIRECTION_SELL
+                if state.position_side == "LONG"
+                else StopOrderDirection.STOP_ORDER_DIRECTION_BUY
+            )
+            matching = next(
+                (
+                    item
+                    for item in active_orders
+                    if str(getattr(item, "figi", "") or "") == instrument.figi
+                    and getattr(item, "direction", None) == expected_direction
+                    and getattr(item, "order_type", None) == StopOrderType.STOP_ORDER_TYPE_STOP_LOSS
+                    and int(getattr(item, "lots_requested", 0) or 0) == quantity
+                    and abs(quotation_to_float(getattr(item, "stop_price", None)) - desired)
+                    <= max(1e-9, tick / 2.0)
+                ),
+                None,
+            )
+            if matching is not None:
+                state.broker_stop_order_id = str(matching.stop_order_id)
+                state.broker_stop_price = desired
+                state.broker_stop_qty = quantity
+                state.broker_stop_verified_at = current.isoformat()
+                return True
+
+    if state.broker_stop_order_id and price_matches and quantity_matches:
+        return True
+    if state.broker_stop_order_id and not cancel_broker_protective_stop(client, config, state):
+        return False
+
+    direction = (
+        StopOrderDirection.STOP_ORDER_DIRECTION_SELL
+        if state.position_side == "LONG"
+        else StopOrderDirection.STOP_ORDER_DIRECTION_BUY
+    )
+    request_id = str(uuid4())
+    try:
+        response = client.stop_orders.post_stop_order(
+            quantity=quantity,
+            price=None,
+            stop_price=quotation_from_float(desired),
+            direction=direction,
+            account_id=config.account_id,
+            expiration_type=StopOrderExpirationType.STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL,
+            stop_order_type=StopOrderType.STOP_ORDER_TYPE_STOP_LOSS,
+            instrument_id=instrument.figi,
+            exchange_order_type=ExchangeOrderType.EXCHANGE_ORDER_TYPE_MARKET,
+            price_type=PriceType.PRICE_TYPE_POINT,
+            order_id=request_id,
+            confirm_margin_trade=False,
+        )
+    except RequestError as error:
+        state.last_error = f"Не удалось выставить брокерский защитный стоп {desired:.4f}: {error}"
+        logging.warning(
+            "symbol=%s broker_stop submit_failed price=%.8f qty=%s error=%s",
+            instrument.symbol,
+            desired,
+            quantity,
+            error,
+        )
+        return False
+    stop_order_id = str(getattr(response, "stop_order_id", "") or "")
+    if not stop_order_id:
+        state.last_error = "Брокер не вернул идентификатор защитного стопа."
+        return False
+    state.broker_stop_order_id = stop_order_id
+    state.broker_stop_price = desired
+    state.broker_stop_qty = quantity
+    state.broker_stop_verified_at = current.isoformat()
+    logging.info(
+        "symbol=%s broker_stop active id=%s phase=%s price=%.8f qty=%s",
+        instrument.symbol,
+        stop_order_id,
+        state.exit_phase or "RISK",
+        desired,
+        quantity,
+    )
+    return True
 
 
 def initialize_reversal_exit_protection(
@@ -3711,6 +3939,7 @@ def load_config() -> BotConfig:
         ao_canary_daily_loss_pct=max(0.0, parse_float_env("OIL_AO_CANARY_DAILY_LOSS_PCT", 0.5)),
         ao_canary_weekly_loss_pct=max(0.0, parse_float_env("OIL_AO_CANARY_WEEKLY_LOSS_PCT", 1.0)),
         ao_allow_delayed_entries=parse_bool_env("OIL_AO_ALLOW_DELAYED_ENTRIES", True),
+        broker_protective_stops_enabled=parse_bool_env("OIL_BROKER_PROTECTIVE_STOPS_ENABLED", True),
     )
 
 
@@ -6607,6 +6836,30 @@ def sync_state_with_portfolio(
     previous_exit_at = parse_state_datetime(state.last_exit_time)
     state.position_qty = abs(qty)
     if qty == 0:
+        if (
+            previous_side in {"LONG", "SHORT"}
+            and previous_qty > 0
+            and state.broker_stop_order_id
+        ):
+            stop_price = float(state.broker_stop_price or state.exit_current_stop_price or 0.0)
+            phase = str(state.exit_phase or "RISK")
+            enqueue_delayed_close_snapshot(
+                state,
+                build_delayed_close_snapshot(
+                    previous_side=previous_side,
+                    previous_qty=previous_qty,
+                    previous_entry_price=state.entry_price,
+                    previous_entry_commission=float(state.entry_commission_rub or 0.0),
+                    previous_strategy=state.entry_strategy,
+                    previous_strategy_version=state.entry_strategy_version,
+                    previous_exit_reason=(
+                        f"Брокерский защитный стоп: фаза {phase}, уровень {stop_price:.4f}"
+                    ),
+                    previous_entry_time=previous_entry_at,
+                    submitted_at=datetime.now(UTC),
+                ),
+            )
+        clear_broker_stop_tracking(state)
         # A broker-side close can be observed before the order reconciliation
         # receives its execution details.  Preserve an exit marker so the next
         # poll cannot immediately reopen the same side on stale indicators.
@@ -10649,6 +10902,10 @@ def close_position(
         save_state(instrument.symbol, state)
         return
 
+    if state.broker_stop_order_id and not cancel_broker_protective_stop(client, config, state):
+        save_state(instrument.symbol, state)
+        return
+
     try:
         order_id = place_market_order(client, config, instrument, qty, direction)
     except RequestError as error:
@@ -10867,6 +11124,7 @@ def check_exit(
                 float(state.exit_best_move or 0.0) / initial_distance if initial_distance > 0.0 else 0.0,
                 float(state.exit_worst_move or 0.0) / initial_distance if initial_distance > 0.0 else 0.0,
             )
+            sync_broker_protective_stop(client, config, instrument, state)
         if protection_exit:
             reason = describe_reversal_exit_protection_reason(protection_exit, state, price)
             if reason:
@@ -11089,6 +11347,9 @@ def process_instrument(
             reconcile_state_accounting(instrument.symbol, state)
             save_state(instrument.symbol, state)
             return
+
+    if state.position_qty > 0 and has_reversal_exit_protection(state):
+        sync_broker_protective_stop(client, config, instrument, state)
 
     if state.position_qty > 0 and has_reversal_exit_protection(state):
         try:
