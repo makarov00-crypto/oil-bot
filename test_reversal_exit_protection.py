@@ -362,6 +362,35 @@ class ReversalExitProtectionTests(unittest.TestCase):
 
         self.assertEqual(exit_reason, "")
 
+    def test_pre_entry_candle_cannot_join_one_post_entry_candle_into_reversal(self) -> None:
+        frame = completed_30m(reversal=True)
+        entry_time = pd.Timestamp(frame.iloc[-2]["closed_at"])
+        state = bot.InstrumentState(
+            entry_strategy="reversal_1h",
+            entry_price=100.0,
+            entry_stop_price=98.0,
+            position_side="LONG",
+            position_qty=1,
+            max_price=101.0,
+            min_price=100.0,
+            entry_time=entry_time.isoformat(),
+            exit_model_version=EXIT_MODEL_VERSION,
+            exit_phase="RISK",
+            exit_current_stop_price=98.0,
+            exit_initial_risk_distance=2.0,
+            exit_entry_atr=1.0,
+            exit_best_move=1.0,
+        )
+
+        exit_reason = bot.advance_state_reversal_exit_protection(
+            state,
+            current_price=101.0,
+            completed_30m=frame,
+            tick_size=0.1,
+        )
+
+        self.assertEqual(exit_reason, "")
+
     def test_dry_run_reversal_open_activates_new_model_at_public_entry_seam(self) -> None:
         state = bot.InstrumentState()
         config = SimpleNamespace(

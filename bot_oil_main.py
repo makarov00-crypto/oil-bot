@@ -670,14 +670,16 @@ def advance_state_reversal_exit_protection(
     eligible_30m = completed_30m
     if completed_30m is not None and not completed_30m.empty and state.entry_time:
         time_column = "closed_at" if "closed_at" in completed_30m.columns else "time"
-        latest_30m = pd.to_datetime(
-            completed_30m.iloc[-1].get(time_column),
+        entry_time = pd.to_datetime(state.entry_time, utc=True, errors="coerce")
+        candle_times = pd.to_datetime(
+            completed_30m[time_column],
             utc=True,
             errors="coerce",
         )
-        entry_time = pd.to_datetime(state.entry_time, utc=True, errors="coerce")
-        if pd.isna(latest_30m) or pd.isna(entry_time) or latest_30m <= entry_time:
+        if pd.isna(entry_time):
             eligible_30m = pd.DataFrame()
+        else:
+            eligible_30m = completed_30m.loc[candle_times > entry_time].copy()
     best_price = (
         float(state.max_price or state.entry_price)
         if state.position_side == "LONG"
