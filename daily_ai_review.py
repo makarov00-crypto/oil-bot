@@ -149,9 +149,6 @@ def get_accounting_history_path(base_dir: Path) -> Path:
     return get_state_dir(base_dir) / "_accounting_history.json"
 
 
-def get_news_snapshot_path(base_dir: Path) -> Path:
-    return get_state_dir(base_dir) / "_news_snapshot.json"
-
 
 def load_states(base_dir: Path) -> dict[str, dict[str, Any]]:
     states: dict[str, dict[str, Any]] = {}
@@ -748,7 +745,6 @@ def build_historical_portfolio_context(
 def build_prompt(
     target_day: date,
     portfolio: dict[str, Any],
-    news: dict[str, Any],
     states: dict[str, dict[str, Any]],
     closed_trades: list[ClosedTrade],
     recent_closed_trades: list[ClosedTrade] | None = None,
@@ -764,7 +760,6 @@ def build_prompt(
     recent_summary = summarize_closed_trades(recent_closed_trades_data)
     signal_summary = summarize_signal_observations(signal_observations_data)
     recent_signal_summary = summarize_signal_observations(recent_signal_observations_data)
-    active_news = list(news.get("active_biases") or [])
     market_notes = build_market_observations(closed_trades, states)
 
     portfolio_lines = [
@@ -803,21 +798,11 @@ def build_prompt(
     for symbol, state in sorted(states.items()):
         signal_lines.append(
             f"- {symbol}: сигнал={humanize_side_name(state.get('last_signal','-'))}, стратегия={humanize_strategy_name(state.get('last_strategy_name') or state.get('entry_strategy') or '-')}, "
-            f"старший ТФ={humanize_signal_timeframe(state)}, новости={state.get('last_news_bias','NEUTRAL')}, "
+            f"старший ТФ={humanize_signal_timeframe(state)}, "
             f"блокер={first_summary_line(state)}"
         )
     if not signal_lines:
         signal_lines.append("- Нет сохранённого сигнального среза для выбранной даты.")
-
-    news_lines = []
-    for item in active_news[:10]:
-        news_lines.append(
-            f"- {item.get('symbol','-')}: {item.get('bias','-')}/{item.get('strength','-')} | "
-            f"горизонт={item.get('horizon','-')} | действие={item.get('actionability','-')} | "
-            f"{item.get('source','-')} | {item.get('summary') or item.get('reason','-')}"
-        )
-    if not news_lines:
-        news_lines.append("- Активных новостных сигналов сейчас нет.")
 
     by_symbol_lines = [f"- {symbol}: {pnl:.2f} RUB" for symbol, pnl in summary["by_symbol"].items()]
     if not by_symbol_lines:
@@ -1048,9 +1033,6 @@ def build_prompt(
         "Текущие сигналы:",
         *signal_lines,
         "",
-        "Новости:",
-        *news_lines,
-        "",
         "Наблюдения по инструментам:",
         *[f"- {item}" for item in market_notes],
     ]
@@ -1162,11 +1144,9 @@ def build_review_prompt(base_dir: Path, target_day: date) -> str:
     today = datetime.now(MOSCOW_TZ).date()
     if target_day == today:
         portfolio = load_json(get_portfolio_snapshot_path(base_dir))
-        news = load_json(get_news_snapshot_path(base_dir))
         states = load_states(base_dir)
     else:
         portfolio = build_historical_portfolio_context(base_dir, target_day, closed_trades)
-        news = {"active_biases": []}
         states = {}
     recent_rows: list[dict[str, Any]] = []
     for offset in range(3):
@@ -1179,7 +1159,6 @@ def build_review_prompt(base_dir: Path, target_day: date) -> str:
     return build_prompt(
         target_day,
         portfolio,
-        news,
         states,
         closed_trades,
         recent_closed_trades,

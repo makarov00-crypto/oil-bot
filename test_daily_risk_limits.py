@@ -46,7 +46,6 @@ class DailyRiskLimitTests(unittest.TestCase):
             "HOLD",
             "новая свеча уже не содержит вход",
             "ao_chaikin_1h",
-            None,
             {
                 "signal": "SHORT",
                 "reason": "подтверждённый снимок шорт-сигнала",
@@ -585,7 +584,6 @@ class DailyRiskLimitTests(unittest.TestCase):
             last_market_regime_confidence=0.80,
             last_market_regime="trend_expansion",
             last_setup_quality_label="strong",
-            last_news_bias="LONG/HIGH",
         )
 
         with patch.object(mod, "get_strategy_health_score", return_value=(1.10, "связка сильна")), patch.object(
@@ -606,9 +604,8 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertGreater(float(details["score"]), 0.0)
         self.assertIn("components", details)
         self.assertAlmostEqual(details["components"]["качество входа"], 0.44)
-        self.assertAlmostEqual(details["components"]["новости"], 0.10)
         self.assertAlmostEqual(details["components"]["обучение"], 0.04)
-        self.assertEqual(details["news_priority_adjustment"], 0.10)
+        self.assertNotIn("news_priority_adjustment", details)
         self.assertEqual(details["learning_adjustment"], 0.04)
 
     def test_recent_strategy_regime_performance_uses_context_regime(self) -> None:
@@ -718,64 +715,8 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertIn("высокое качество входа", reason)
         self.assertIn("режим подтверждён", reason)
 
-    def test_entry_priority_score_rewards_confirmed_news(self) -> None:
-        state = mod.InstrumentState(
-            last_signal="LONG",
-            last_news_bias="LONG/HIGH",
-            last_setup_quality_label="medium",
-            last_market_regime="trend_expansion",
-            last_market_regime_confidence=0.72,
-            last_entry_edge_score=0.66,
-        )
 
-        with patch.object(mod, "get_strategy_health_score", return_value=(1.0, "")), patch.object(
-            mod, "get_strategy_regime_health_score", return_value=(1.0, "")
-        ), patch.object(mod, "get_recovery_mode_status", return_value={"active": False}), patch.object(
-            mod, "calculate_signal_learning_priority_adjustment", return_value=(0.0, "")
-        ):
-            score, reason = mod.calculate_entry_priority_score(state, "BMM6", "reversal_1h")
 
-        self.assertGreaterEqual(score, 0.65)
-        self.assertIn("новости подтверждают сигнал", reason)
-
-    def test_entry_priority_score_penalizes_conflicting_news(self) -> None:
-        state = mod.InstrumentState(
-            last_signal="LONG",
-            last_news_bias="SHORT/HIGH",
-            last_setup_quality_label="medium",
-            last_market_regime="trend_expansion",
-            last_market_regime_confidence=0.72,
-            last_entry_edge_score=0.66,
-        )
-
-        with patch.object(mod, "get_strategy_health_score", return_value=(1.0, "")), patch.object(
-            mod, "get_strategy_regime_health_score", return_value=(1.0, "")
-        ), patch.object(mod, "get_recovery_mode_status", return_value={"active": False}), patch.object(
-            mod, "calculate_signal_learning_priority_adjustment", return_value=(0.0, "")
-        ):
-            score, reason = mod.calculate_entry_priority_score(state, "BMM6", "reversal_1h")
-
-        self.assertLess(score, 0.55)
-        self.assertIn("новости против сигнала", reason)
-
-    def test_mark_cycle_deferred_candidate_persists_news_priority_fields(self) -> None:
-        candidate = {
-            "symbol": "BMM6",
-            "signal": "LONG",
-            "priority_score": 0.71,
-            "entry_edge_score": 0.66,
-            "news_priority_adjustment": 0.10,
-            "news_priority_reason": "новости подтверждают сигнал: +0.10",
-        }
-        recorded: list[dict] = []
-
-        with patch.object(mod, "append_allocator_decision", side_effect=lambda **kwargs: recorded.append(kwargs)), patch.object(
-            mod, "load_state", return_value=mod.InstrumentState()
-        ), patch.object(mod, "save_state", lambda *_args, **_kwargs: None):
-            mod.mark_cycle_deferred_candidate(candidate, "кандидат отложен")
-
-        self.assertEqual(recorded[0]["news_priority_adjustment"], 0.10)
-        self.assertEqual(recorded[0]["news_priority_reason"], "новости подтверждают сигнал: +0.10")
 
     def test_entry_priority_score_penalizes_bad_signal_learning_combo(self) -> None:
         state = mod.InstrumentState(

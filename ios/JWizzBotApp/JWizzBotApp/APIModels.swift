@@ -25,7 +25,6 @@ struct DashboardPayload: Decodable {
     let portfolio: PortfolioSnapshot
     let runtime: RuntimeStatus
     let summary: SummaryData
-    let news: NewsSnapshot
     let tradeReview: TradeReview
     let daily: DailyAnalytics
     let aiReview: AIReviewPayload
@@ -47,7 +46,6 @@ struct DashboardPayload: Decodable {
         case portfolio
         case runtime
         case summary
-        case news
         case tradeReview = "trade_review"
         case daily
         case aiReview = "ai_review"
@@ -1042,8 +1040,6 @@ struct InstrumentSignalState: Decodable, Identifiable {
     let strategyName: String?
     let entryStrategy: String?
     let higherTFBias: String?
-    let newsBias: String?
-    let newsImpact: String?
     let signalSummary: [String]
     let lastError: String?
     let positionSide: String?
@@ -1058,8 +1054,6 @@ struct InstrumentSignalState: Decodable, Identifiable {
         strategyName = try container.decodeIfPresent(String.self, forKey: .strategyName)
         entryStrategy = try container.decodeIfPresent(String.self, forKey: .entryStrategy)
         higherTFBias = try container.decodeIfPresent(String.self, forKey: .higherTFBias)
-        newsBias = try container.decodeIfPresent(String.self, forKey: .newsBias)
-        newsImpact = try container.decodeIfPresent(String.self, forKey: .newsImpact)
         signalSummary = try container.decodeIfPresent([String].self, forKey: .signalSummary) ?? []
         lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
         positionSide = try container.decodeIfPresent(String.self, forKey: .positionSide)
@@ -1073,8 +1067,6 @@ struct InstrumentSignalState: Decodable, Identifiable {
         case strategyName = "last_strategy_name"
         case entryStrategy = "entry_strategy"
         case higherTFBias = "last_higher_tf_bias"
-        case newsBias = "last_news_bias"
-        case newsImpact = "last_news_impact"
         case signalSummary = "last_signal_summary"
         case lastError = "last_error"
         case positionSide = "position_side"
@@ -1129,126 +1121,6 @@ struct CustomInstrumentItem: Decodable, Identifiable {
     }
 }
 
-struct NewsSnapshot: Decodable {
-    let fetchedAtMoscow: String?
-    let activeBiases: [NewsBiasItem]
-    let analytics: NewsAnalytics?
-    let allocatorImpact: NewsAllocatorImpact?
-
-    enum CodingKeys: String, CodingKey {
-        case fetchedAtMoscow = "fetched_at_moscow"
-        case activeBiases = "active_biases"
-        case analytics
-        case allocatorImpact = "allocator_impact"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        fetchedAtMoscow = try container.decodeIfPresent(String.self, forKey: .fetchedAtMoscow)
-        activeBiases = try container.decodeIfPresent([NewsBiasItem].self, forKey: .activeBiases) ?? []
-        analytics = try? container.decodeIfPresent(NewsAnalytics.self, forKey: .analytics)
-        allocatorImpact = try? container.decodeIfPresent(NewsAllocatorImpact.self, forKey: .allocatorImpact)
-    }
-}
-
-struct NewsAnalytics: Decodable {
-    let days: Int
-    let totalCount: Int
-    let evaluatedCount: Int
-    let unavailableCount: Int
-    let pendingCount: Int
-    let favorableCount: Int
-    let winRatePct: Double
-    let avgMovePct: Double
-    let sources: [NewsAnalyticsRow]
-    let directions: [NewsAnalyticsRow]
-    let horizons: [NewsAnalyticsRow]
-    let actions: [NewsAnalyticsRow]
-    let aiConfirmation: [NewsAnalyticsRow]
-
-    enum CodingKeys: String, CodingKey {
-        case days
-        case totalCount = "total_count"
-        case evaluatedCount = "evaluated_count"
-        case unavailableCount = "unavailable_count"
-        case pendingCount = "pending_count"
-        case favorableCount = "favorable_count"
-        case winRatePct = "win_rate_pct"
-        case avgMovePct = "avg_move_pct"
-        case sources, directions, horizons, actions
-        case aiConfirmation = "ai_confirmation"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        days = try container.decodeIfPresent(Int.self, forKey: .days) ?? 10
-        totalCount = try container.decodeIfPresent(Int.self, forKey: .totalCount) ?? 0
-        evaluatedCount = try container.decodeIfPresent(Int.self, forKey: .evaluatedCount) ?? 0
-        unavailableCount = try container.decodeIfPresent(Int.self, forKey: .unavailableCount) ?? 0
-        pendingCount = try container.decodeIfPresent(Int.self, forKey: .pendingCount) ?? 0
-        favorableCount = try container.decodeIfPresent(Int.self, forKey: .favorableCount) ?? 0
-        winRatePct = try container.decodeIfPresent(Double.self, forKey: .winRatePct) ?? 0
-        avgMovePct = try container.decodeIfPresent(Double.self, forKey: .avgMovePct) ?? 0
-        sources = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .sources) ?? []
-        directions = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .directions) ?? []
-        horizons = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .horizons) ?? []
-        actions = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .actions) ?? []
-        aiConfirmation = try container.decodeIfPresent([NewsAnalyticsRow].self, forKey: .aiConfirmation) ?? []
-    }
-}
-
-struct NewsAnalyticsRow: Decodable, Identifiable {
-    let label: String
-    let totalCount: Int
-    let favorableCount: Int
-    let winRatePct: Double
-    let avgMovePct: Double
-
-    var id: String { label }
-
-    enum CodingKeys: String, CodingKey {
-        case label
-        case totalCount = "total_count"
-        case favorableCount = "favorable_count"
-        case winRatePct = "win_rate_pct"
-        case avgMovePct = "avg_move_pct"
-    }
-}
-
-struct NewsAllocatorImpact: Decodable {
-    let totalCount: Int
-    let boostCount: Int
-    let penaltyCount: Int
-    let selectedCount: Int
-    let deferredCount: Int
-    let evaluatedSelectedCount: Int
-    let favorableSelectedCount: Int
-    let selectedWinRatePct: Double
-
-    enum CodingKeys: String, CodingKey {
-        case totalCount = "total_count"
-        case boostCount = "boost_count"
-        case penaltyCount = "penalty_count"
-        case selectedCount = "selected_count"
-        case deferredCount = "deferred_count"
-        case evaluatedSelectedCount = "evaluated_selected_count"
-        case favorableSelectedCount = "favorable_selected_count"
-        case selectedWinRatePct = "selected_win_rate_pct"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        totalCount = try container.decodeIfPresent(Int.self, forKey: .totalCount) ?? 0
-        boostCount = try container.decodeIfPresent(Int.self, forKey: .boostCount) ?? 0
-        penaltyCount = try container.decodeIfPresent(Int.self, forKey: .penaltyCount) ?? 0
-        selectedCount = try container.decodeIfPresent(Int.self, forKey: .selectedCount) ?? 0
-        deferredCount = try container.decodeIfPresent(Int.self, forKey: .deferredCount) ?? 0
-        evaluatedSelectedCount = try container.decodeIfPresent(Int.self, forKey: .evaluatedSelectedCount) ?? 0
-        favorableSelectedCount = try container.decodeIfPresent(Int.self, forKey: .favorableSelectedCount) ?? 0
-        selectedWinRatePct = try container.decodeIfPresent(Double.self, forKey: .selectedWinRatePct) ?? 0
-    }
-}
-
 struct AllocatorWorkspace: Decodable {
     let generatedAtMoscow: String?
     let summary: AllocatorWorkspaceSummary
@@ -1293,7 +1165,6 @@ struct AllocatorCandidate: Decodable, Identifiable {
     let marketRegime: String?
     let setupQuality: String?
     let priorityComponents: [String: Double]
-    let newsPriorityAdjustment: Double
     let learningAdjustment: Double
     let requestedMarginRub: Double
     let allocatableMarginRub: Double
@@ -1318,7 +1189,6 @@ struct AllocatorCandidate: Decodable, Identifiable {
         case marketRegime = "market_regime"
         case setupQuality = "setup_quality"
         case priorityComponents = "priority_components"
-        case newsPriorityAdjustment = "news_priority_adjustment"
         case learningAdjustment = "learning_adjustment"
         case requestedMarginRub = "requested_margin_rub"
         case allocatableMarginRub = "allocatable_margin_rub"
@@ -1343,7 +1213,6 @@ struct AllocatorCandidate: Decodable, Identifiable {
         marketRegime = try container.decodeIfPresent(String.self, forKey: .marketRegime)
         setupQuality = try container.decodeIfPresent(String.self, forKey: .setupQuality)
         priorityComponents = try container.decodeIfPresent([String: Double].self, forKey: .priorityComponents) ?? [:]
-        newsPriorityAdjustment = try container.decodeIfPresent(Double.self, forKey: .newsPriorityAdjustment) ?? 0
         learningAdjustment = try container.decodeIfPresent(Double.self, forKey: .learningAdjustment) ?? 0
         requestedMarginRub = try container.decodeIfPresent(Double.self, forKey: .requestedMarginRub) ?? 0
         allocatableMarginRub = try container.decodeIfPresent(Double.self, forKey: .allocatableMarginRub) ?? 0
@@ -1353,76 +1222,6 @@ struct AllocatorCandidate: Decodable, Identifiable {
         reason = try container.decodeIfPresent(String.self, forKey: .reason) ?? "причина не сохранена"
         allocatorSummary = try container.decodeIfPresent(String.self, forKey: .allocatorSummary)
         outcome = try container.decodeIfPresent(String.self, forKey: .outcome)
-    }
-}
-
-struct NewsBiasItem: Decodable, Identifiable {
-    let symbol: String
-    let category: String?
-    let bias: String
-    let strength: String
-    let source: String
-    let sourceLabel: String?
-    let sourceType: String?
-    let sourceSpeed: Double?
-    let sourceReliability: Double?
-    let sourceCount: Int?
-    let confirmingSources: [String]?
-    let aiDirection: String?
-    let aiStrength: String?
-    let aiConfidence: Double?
-    let aiHorizon: String?
-    let aiEventType: String?
-    let aiReason: String?
-    let aiRisk: String?
-    let reason: String
-    let summary: String?
-    let horizon: String?
-    let actionability: String?
-    let topics: [String]?
-    let messageText: String?
-    let messageURL: String?
-    let expiresAtMoscow: String?
-    let calibrationFactor: Double?
-    let calibrationSample: Int?
-    let calibrationReason: String?
-    let tradeEligible: Bool?
-    let tradeGateReason: String?
-
-    var id: String { "\(symbol)-\(source)-\(bias)" }
-
-    enum CodingKeys: String, CodingKey {
-        case symbol
-        case category
-        case bias
-        case strength
-        case source
-        case sourceLabel = "source_label"
-        case sourceType = "source_type"
-        case sourceSpeed = "source_speed"
-        case sourceReliability = "source_reliability"
-        case sourceCount = "source_count"
-        case confirmingSources = "confirming_sources"
-        case aiDirection = "ai_direction"
-        case aiStrength = "ai_strength"
-        case aiConfidence = "ai_confidence"
-        case aiHorizon = "ai_horizon"
-        case aiEventType = "ai_event_type"
-        case aiReason = "ai_reason"
-        case aiRisk = "ai_risk"
-        case reason
-        case summary
-        case horizon
-        case actionability
-        case topics
-        case messageText = "message_text"
-        case messageURL = "message_url"
-        case expiresAtMoscow = "expires_at_moscow"
-        case calibrationFactor = "calibration_factor"
-        case calibrationSample = "calibration_sample"
-        case calibrationReason = "calibration_reason"
-        case tradeEligible = "trade_eligible"
-        case tradeGateReason = "trade_gate_reason"
     }
 }
 

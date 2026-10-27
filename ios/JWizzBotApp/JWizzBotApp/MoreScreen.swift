@@ -24,19 +24,6 @@ struct MoreScreen: View {
                         Divider().overlay(Color.white.opacity(0.08))
 
                         NavigationLink {
-                            NewsScreen(store: store)
-                        } label: {
-                            menuRow(
-                                title: "Новости",
-                                subtitle: "Активные сигналы, качество источников и влияние на входы",
-                                systemImage: "newspaper"
-                            )
-                        }
-                        .buttonStyle(.plain)
-
-                        Divider().overlay(Color.white.opacity(0.08))
-
-                        NavigationLink {
                             AIReviewScreen(store: store)
                         } label: {
                             menuRow(

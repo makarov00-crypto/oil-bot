@@ -15,7 +15,7 @@ class PositionSizingTests(unittest.TestCase):
             initial_margin_on_buy=1000.0,
             initial_margin_on_sell=1000.0,
         )
-        self.state = mod.InstrumentState(last_higher_tf_bias="SHORT", last_news_bias="NEUTRAL")
+        self.state = mod.InstrumentState(last_higher_tf_bias="SHORT")
         self.config = SimpleNamespace(
             account_id="acc",
             max_margin_usage_pct=0.35,
@@ -138,7 +138,7 @@ class PositionSizingTests(unittest.TestCase):
             initial_margin_on_buy=6164.1,
             initial_margin_on_sell=6164.1,
         )
-        state = mod.InstrumentState(last_higher_tf_bias="SHORT", last_news_bias="NEUTRAL")
+        state = mod.InstrumentState(last_higher_tf_bias="SHORT")
         snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
         with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
             mod, "get_margin_headroom_rub", return_value=5972.04
@@ -199,7 +199,6 @@ class PositionSizingTests(unittest.TestCase):
         )
         state = mod.InstrumentState(
             last_higher_tf_bias="LONG",
-            last_news_bias="LONG/HIGH",
             last_setup_quality_label="strong",
             last_market_regime="trend_expansion",
             last_market_regime_confidence=0.78,
@@ -247,7 +246,6 @@ class PositionSizingTests(unittest.TestCase):
         )
         state = mod.InstrumentState(
             last_higher_tf_bias="LONG",
-            last_news_bias="LONG/HIGH",
             last_setup_quality_label="medium",
             last_market_regime="trend_expansion",
             last_market_regime_confidence=0.72,

@@ -8,7 +8,7 @@ import sys
 import time
 from html import unescape as html_unescape
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,16 +35,6 @@ from instrument_groups import (
     uses_unified_reversal,
     uses_unified_reversal_1h,
 )
-from news_bias import NewsBias, calibrate_news_biases, detect_news_bias, select_active_biases
-from news_ai_analyzer import NewsAiSignal, request_news_ai_signals
-from news_ingest import (
-    CHANNEL_URLS,
-    WEB_SOURCE_URLS,
-    build_news_messages_from_web,
-    detect_biases_for_posts,
-    fetch_posts_for_day,
-    fetch_web_news_items,
-)
 from strategy_engine import evaluate_primary_signal_bundle, evaluate_owned_signal_bundle
 from strategies.ao_chaikin_1h import (
     LIVE_STRATEGY_VERSION as AO_CANARY_STRATEGY_VERSION,
@@ -62,16 +52,10 @@ from strategies.reversal_exit_protection import (
 from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from trade_storage import (
     append_signal_observation,
-    append_news_event,
     append_trade_row,
-    load_news_events,
     load_signal_observations,
     load_trade_rows as load_trade_rows_from_storage,
-    mark_news_event_outcome_unavailable,
     mark_signal_observation_outcome_unavailable,
-    summarize_news_analytics,
-    summarize_news_source_stats,
-    update_news_event_outcome,
     sync_journal_to_db,
     update_signal_observation_context,
     update_signal_observation_outcome,
@@ -135,8 +119,6 @@ PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 FUNDING_HISTORY_PATH = STATE_DIR / "_funding_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
-NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
-NEWS_SEEN_PATH = STATE_DIR / "_news_seen.json"
 CASH_MANAGER_STATE_PATH = STATE_DIR / "_cash_manager.json"
 LOG_DIR = Path(__file__).with_name("logs")
 TRADE_JOURNAL_PATH = LOG_DIR / "trade_journal.jsonl"
@@ -153,17 +135,15 @@ RETIRED_STATE_FIELDS = {
     "last_shadow_ai_error",
     "last_shadow_ai_reason",
     "last_shadow_ai_status",
+    "last_news_bias",
+    "last_news_impact",
 }
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 UTC = timezone.utc
-NEWS_CACHE_TTL_SECONDS = 300
-NEWS_CACHE: dict[str, Any] = {"fetched_at": None, "biases": {}}
 TRADE_QUALITY_REFRESH_SECONDS = 3600
 TRADE_QUALITY_ANALYTICS_VERSION = 11
 POSITION_RECONCILE_EVENT = "POSITION_RECONCILE"
 HOURLY_OUTCOME_EVALUATION_VERSION = "hourly_close_v3"
-NEWS_AI_DEFAULT_MODEL = "gpt-5.6-luna"
-NEWS_OUTCOME_MAX_WAIT = timedelta(hours=24)
 SIGNAL_OUTCOME_MAX_WAIT = timedelta(days=3)
 ACCOUNTING_AUDIT_START_DAY = date(2026, 7, 13)
 ACCOUNTING_RECONCILE_RECHECK_SECONDS = 30 * 60
@@ -360,8 +340,6 @@ class InstrumentState:
     entry_reason: str = ""
     last_strategy_name: str = ""
     last_higher_tf_bias: str = ""
-    last_news_bias: str = "NEUTRAL"
-    last_news_impact: str = ""
     last_market_regime: str = ""
     last_market_regime_confidence: float = 0.0
     last_market_regime_reason: str = ""
@@ -554,36 +532,6 @@ def save_runtime_status(payload: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     RUNTIME_STATUS_PATH.write_text(
         json.dumps(payload, ensure_ascii=True, indent=2),
-        encoding="utf-8",
-    )
-
-
-def save_news_snapshot(payload: dict[str, Any]) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    NEWS_SNAPSHOT_PATH.write_text(
-        json.dumps(payload, ensure_ascii=True, indent=2),
-        encoding="utf-8",
-    )
-
-
-def load_news_seen_links() -> dict[str, list[str]]:
-    if not NEWS_SEEN_PATH.exists():
-        return {}
-    try:
-        payload = json.loads(NEWS_SEEN_PATH.read_text(encoding="utf-8"))
-    except Exception as error:
-        logging.warning("Не удалось прочитать список увиденных новостей: %s", error)
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return {str(key): [str(item) for item in value] for key, value in payload.items() if isinstance(value, list)}
-
-
-def save_news_seen_links(payload: dict[str, list[str]]) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    trimmed = {source: links[:300] for source, links in payload.items()}
-    NEWS_SEEN_PATH.write_text(
-        json.dumps(trimmed, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
 
@@ -943,8 +891,6 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
     signal_summary = [str(item) for item in list(state.last_signal_summary or [])[:4] if str(item).strip()]
     context = {
         "higher_tf_bias": str(state.last_higher_tf_bias or ""),
-        "news_bias": str(state.last_news_bias or ""),
-        "news_impact": str(state.last_news_impact or ""),
         "market_regime": str(state.last_market_regime or ""),
         "market_regime_confidence": round(float(state.last_market_regime_confidence or 0.0), 3),
         "market_regime_reason": str(state.last_market_regime_reason or ""),
@@ -1123,8 +1069,6 @@ def append_allocator_decision(
     replaced_hold_score: float = 0.0,
     learning_adjustment: float = 0.0,
     learning_reason: str = "",
-    news_priority_adjustment: float = 0.0,
-    news_priority_reason: str = "",
     priority_components: dict[str, Any] | None = None,
     defer_kind: str = "",
     defer_winners: list[dict[str, Any]] | None = None,
@@ -1150,8 +1094,6 @@ def append_allocator_decision(
         "replaced_hold_score": round(float(replaced_hold_score or 0.0), 3),
         "learning_adjustment": round(float(learning_adjustment or 0.0), 3),
         "learning_reason": learning_reason,
-        "news_priority_adjustment": round(float(news_priority_adjustment or 0.0), 3),
-        "news_priority_reason": news_priority_reason,
         "defer_kind": defer_kind,
         "candle_time": candle_time,
         "execution_status": execution_status,
@@ -1199,8 +1141,6 @@ def append_signal_observation_decision(
         "priority_components": candidate.get("priority_components") if isinstance(candidate.get("priority_components"), dict) else {},
         "learning_adjustment": round(float(candidate.get("learning_adjustment") or 0.0), 3),
         "learning_reason": str(candidate.get("learning_reason") or ""),
-        "news_priority_adjustment": round(float(candidate.get("news_priority_adjustment") or 0.0), 3),
-        "news_priority_reason": str(candidate.get("news_priority_reason") or ""),
         "entry_edge_label": str(candidate.get("entry_edge_label") or ""),
         "instrument_class": str(candidate.get("instrument_class") or ""),
         "allocator_quantity": int(candidate.get("allocator_quantity") or 0),
@@ -1950,165 +1890,6 @@ def maybe_start_trade_quality_refresh() -> None:
     except OSError as error:
         TRADE_QUALITY_LOCK_PATH.unlink(missing_ok=True)
         logging.warning("trade_quality_analytics_refresh_start_failed error=%s", error)
-
-
-def get_news_event_horizon_minutes(news_bias: NewsBias) -> int:
-    if news_bias.horizon == "NOW":
-        return 60
-    if news_bias.horizon == "INTRADAY":
-        return 240
-    return 24 * 60
-
-
-def save_active_news_events(
-    client: Client,
-    config: BotConfig,
-    watchlist: Sequence[InstrumentConfig],
-    active: dict[str, NewsBias],
-) -> int:
-    instruments_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
-    now = datetime.now(UTC)
-    saved = 0
-    for symbol, news_bias in active.items():
-        if news_bias.bias not in {"LONG", "SHORT", "BLOCK"}:
-            continue
-        instrument = instruments_by_symbol.get(symbol.upper())
-        observed_price: float | None = None
-        if instrument is not None and news_bias.bias in {"LONG", "SHORT"}:
-            try:
-                observed_price = get_last_price(client, instrument)
-            except Exception as error:
-                logging.info("symbol=%s news_event_price_unavailable error=%s", symbol, error)
-        append_news_event(
-            TRADE_DB_PATH,
-            {
-                "observed_at": now.isoformat(),
-                "symbol": news_bias.symbol,
-                "category": news_bias.category,
-                "bias": news_bias.bias,
-                "strength": news_bias.strength,
-                "source": news_bias.source,
-                "source_label": news_bias.source_label,
-                "source_type": news_bias.source_type,
-                "source_speed": news_bias.source_speed,
-                "source_reliability": news_bias.source_reliability,
-                "source_count": news_bias.source_count,
-                "confirming_sources": list(news_bias.confirming_sources),
-                "horizon": news_bias.horizon,
-                "actionability": news_bias.actionability,
-                "score": news_bias.score,
-                "reason": news_bias.reason,
-                "summary": news_bias.summary,
-                "topics": list(news_bias.topics),
-                "message_url": news_bias.message_url,
-                "message_text": news_bias.message_text,
-                "ai_direction": news_bias.ai_direction,
-                "ai_strength": news_bias.ai_strength,
-                "ai_confidence": news_bias.ai_confidence,
-                "ai_horizon": news_bias.ai_horizon,
-                "ai_event_type": news_bias.ai_event_type,
-                "ai_reason": news_bias.ai_reason,
-                "ai_risk": news_bias.ai_risk,
-                "expires_at": news_bias.expires_at.isoformat(),
-                "observed_price": observed_price,
-                "horizon_minutes": get_news_event_horizon_minutes(news_bias),
-            },
-        )
-        saved += 1
-    return saved
-
-
-def update_news_event_outcomes(
-    client: Client,
-    config: BotConfig,
-    watchlist: Sequence[InstrumentConfig],
-    *,
-    limit: int = 200,
-) -> int:
-    instruments_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
-    rows = load_news_events(TRADE_DB_PATH, limit=limit, unevaluated_only=True)
-    now = datetime.now(UTC)
-    updated = 0
-    for row in rows:
-        symbol = str(row.get("symbol") or "").upper()
-        instrument = instruments_by_symbol.get(symbol)
-        if instrument is None:
-            mark_news_event_outcome_unavailable(
-                TRADE_DB_PATH,
-                str(row.get("news_uid") or ""),
-                checked_at=now.isoformat(),
-                note="инструмент больше не входит в активный список",
-            )
-            continue
-        bias = str(row.get("bias") or "").upper()
-        if bias not in {"LONG", "SHORT"}:
-            mark_news_event_outcome_unavailable(
-                TRADE_DB_PATH,
-                str(row.get("news_uid") or ""),
-                checked_at=now.isoformat(),
-                note="направление новости не подходит для оценки результата",
-            )
-            continue
-        observed_at = parse_state_datetime(str(row.get("observed_at") or ""))
-        if observed_at is None:
-            mark_news_event_outcome_unavailable(
-                TRADE_DB_PATH,
-                str(row.get("news_uid") or ""),
-                checked_at=now.isoformat(),
-                note="не удалось прочитать время новости",
-            )
-            continue
-        horizon_minutes = int(row.get("horizon_minutes") or 60)
-        target_time = observed_at + timedelta(minutes=max(1, horizon_minutes))
-        if now < target_time:
-            continue
-        observed_price = float(row.get("observed_price") or 0.0)
-        if observed_price <= 0.0:
-            mark_news_event_outcome_unavailable(
-                TRADE_DB_PATH,
-                str(row.get("news_uid") or ""),
-                checked_at=now.isoformat(),
-                note="не удалось зафиксировать цену в момент новости",
-            )
-            continue
-        horizon_snapshot = get_price_near_observation_horizon(client, config, instrument, target_time)
-        if horizon_snapshot is None:
-            if now >= target_time + NEWS_OUTCOME_MAX_WAIT:
-                mark_news_event_outcome_unavailable(
-                    TRADE_DB_PATH,
-                    str(row.get("news_uid") or ""),
-                    checked_at=now.isoformat(),
-                    note="историческая минутная свеча на горизонте новости недоступна",
-                )
-                logging.info(
-                    "symbol=%s news_event_outcome_unavailable target_time=%s",
-                    symbol,
-                    target_time.astimezone(MOSCOW_TZ).isoformat(),
-                )
-                continue
-            logging.info(
-                "symbol=%s news_event_outcome_wait horizon_price_unavailable target_time=%s",
-                symbol,
-                target_time.astimezone(MOSCOW_TZ).isoformat(),
-            )
-            continue
-        current_price, evaluated_at = horizon_snapshot
-        if bias == "LONG":
-            move_pct = (current_price - observed_price) / observed_price * 100.0
-        else:
-            move_pct = (observed_price - current_price) / observed_price * 100.0
-        update_news_event_outcome(
-            TRADE_DB_PATH,
-            str(row.get("news_uid") or ""),
-            evaluated_at=evaluated_at.isoformat(),
-            current_price=current_price,
-            move_pct=round(move_pct, 4),
-            favorable=move_pct > 0.0,
-        )
-        updated += 1
-    if updated:
-        logging.info("news_event_outcomes_updated count=%s", updated)
-    return updated
 
 
 def get_signal_observation_horizon_minutes(strategy_name: str) -> int:
@@ -3949,191 +3730,6 @@ def compact_reason(reason: str) -> str:
     return cleaned
 
 
-def parse_bias_label(value: str) -> tuple[str, str]:
-    raw = (value or "").strip().upper()
-    if not raw:
-        return "NEUTRAL", ""
-    if "/" in raw:
-        bias, strength = raw.split("/", 1)
-        return bias.strip(), strength.strip()
-    return raw, ""
-
-
-def format_news_bias_label(news_bias: NewsBias | None) -> str:
-    if news_bias is None:
-        return "NEUTRAL"
-    return f"{news_bias.bias}/{news_bias.strength}"
-
-
-def describe_news_bias_impact(signal: str, news_bias: NewsBias | None) -> str:
-    if news_bias is None or news_bias.bias == "NEUTRAL":
-        return "новости не вмешиваются"
-    eligible, gate_reason = news_bias_trade_gate(news_bias)
-    if not eligible:
-        return f"новости только в наблюдении: {gate_reason}"
-    if news_bias.bias == "BLOCK":
-        return "сильная новость блокирует новый вход"
-    if signal == "HOLD":
-        if news_bias.actionability == "ACTION":
-            return f"новости поддерживают движение {news_bias.bias}, но техника ещё не дала вход"
-        if news_bias.actionability == "WATCH":
-            return f"новости дают фон {news_bias.bias.lower()}, но это пока скорее контекст"
-        return f"новости подсвечивают тему {news_bias.category}, но вход не подтверждён"
-    if news_bias.bias == signal:
-        if news_bias.actionability == "ACTION":
-            return f"новости заметно усиливают сигнал {signal}"
-        return f"новости поддерживают сигнал {signal}"
-    return f"новости спорят с сигналом {signal}"
-
-
-def format_news_bias_lines(news_bias: NewsBias | None) -> list[str]:
-    if news_bias is None:
-        return ["• Новости: нейтрально"]
-    source_text = news_bias.source_label or news_bias.source
-    if news_bias.source_count > 1:
-        source_text = f"{source_text} + ещё {news_bias.source_count - 1}"
-    eligible, gate_reason = news_bias_trade_gate(news_bias)
-    influence_text = "допущена к решению" if eligible else f"только наблюдение: {gate_reason}"
-    return [
-        f"• Новости: {news_bias.bias} ({news_bias.strength})",
-        f"• Влияние: {influence_text}",
-        f"• Горизонт: {news_bias.horizon}",
-        f"• Действие: {news_bias.actionability}",
-        f"• Источник: {source_text}",
-        f"• Причина: {news_bias.reason}",
-    ]
-
-
-def get_news_ai_enabled() -> bool:
-    value = os.getenv("OIL_NEWS_AI_ENABLED", "").strip().lower()
-    return value in {"1", "true", "yes", "on", "да"}
-
-
-def get_news_ai_model() -> str:
-    return (
-        os.getenv("OIL_NEWS_AI_MODEL", "").strip()
-        or os.getenv("OIL_AI_MODEL", "").strip()
-        or NEWS_AI_DEFAULT_MODEL
-    )
-
-
-def get_news_ai_trade_min_confidence() -> float:
-    try:
-        return max(0.0, min(1.0, float(os.getenv("OIL_NEWS_AI_TRADE_MIN_CONFIDENCE", "0.70"))))
-    except ValueError:
-        return 0.70
-
-
-def strength_rank(value: str) -> int:
-    return {"LOW": 1, "MEDIUM": 2, "HIGH": 3}.get((value or "").upper(), 0)
-
-
-def stronger_strength(left: str, right: str) -> str:
-    return right if strength_rank(right) > strength_rank(left) else left
-
-
-def apply_ai_signal_to_news_bias(item: NewsBias, ai_signal: NewsAiSignal) -> NewsBias:
-    direction = (ai_signal.direction or "NEUTRAL").upper()
-    confidence = max(0.0, min(1.0, float(ai_signal.confidence or 0.0)))
-    score = float(item.score)
-    strength = item.strength
-    actionability = item.actionability
-    reason = item.reason
-
-    if direction == item.bias and direction in {"LONG", "SHORT", "BLOCK"}:
-        score = round(score + max(0.0, score) * 0.25 * confidence, 2)
-        strength = stronger_strength(strength, ai_signal.strength)
-        if (
-            confidence >= 0.75
-            and actionability == "WATCH"
-            and (item.calibration_factor >= 0.90 or item.source_count > 1)
-        ):
-            actionability = "ACTION"
-        reason = f"{reason} AI подтвердил новость: {ai_signal.reason}"
-    elif direction in {"LONG", "SHORT", "BLOCK"} and direction != item.bias and confidence >= 0.75:
-        reason = f"{reason} AI видит конфликт: {ai_signal.reason}"
-
-    return replace(
-        item,
-        strength=strength,
-        actionability=actionability,
-        score=score,
-        reason=reason,
-        ai_direction=direction,
-        ai_strength=ai_signal.strength,
-        ai_confidence=confidence,
-        ai_horizon=ai_signal.horizon,
-        ai_event_type=ai_signal.event_type,
-        ai_reason=ai_signal.reason,
-        ai_risk=ai_signal.risk,
-    )
-
-
-def news_bias_trade_gate(news_bias: NewsBias | None) -> tuple[bool, str]:
-    if news_bias is None or news_bias.bias == "NEUTRAL":
-        return False, "новостей по инструменту нет"
-    if news_bias.bias != "BLOCK" and news_bias.calibration_factor <= 0.85 and news_bias.source_count <= 1:
-        details = news_bias.calibration_reason or "слабая накопленная статистика"
-        return False, f"историческая точность новости недостаточна: {details}"
-    if not get_news_ai_enabled():
-        if news_bias.actionability == "BACKGROUND" or news_bias.horizon == "BACKGROUND":
-            return False, "новость только фоновая"
-        return True, "ИИ-фильтр новостей выключен"
-
-    direction = (news_bias.ai_direction or "").upper()
-    confidence = float(news_bias.ai_confidence or 0.0)
-    horizon = (news_bias.ai_horizon or news_bias.horizon or "").upper()
-    min_confidence = get_news_ai_trade_min_confidence()
-
-    if direction not in {"LONG", "SHORT", "BLOCK"}:
-        return False, "ИИ не дал торгового направления"
-    if direction != news_bias.bias:
-        return False, f"ИИ спорит со словарём: {direction}"
-    if horizon == "BACKGROUND":
-        return False, "ИИ считает новость фоном"
-    if confidence < min_confidence:
-        return False, f"уверенность ИИ {confidence:.2f} ниже порога {min_confidence:.2f}"
-    if news_bias.actionability == "BACKGROUND":
-        return False, "новость оставлена как фон"
-    return True, f"ИИ подтвердил: {direction}, уверенность {confidence:.2f}"
-
-
-def is_news_bias_trade_eligible(news_bias: NewsBias | None) -> bool:
-    eligible, _ = news_bias_trade_gate(news_bias)
-    return eligible
-
-
-def format_trading_news_bias_label(news_bias: NewsBias | None) -> str:
-    if not is_news_bias_trade_eligible(news_bias):
-        return "NEUTRAL"
-    return format_news_bias_label(news_bias)
-
-
-def enrich_news_biases_with_ai(active: dict[str, NewsBias]) -> dict[str, NewsBias]:
-    if not active or not get_news_ai_enabled():
-        return active
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        logging.warning("OIL_NEWS_AI_ENABLED включён, но OPENAI_API_KEY не задан")
-        return active
-
-    items = sorted(active.values(), key=lambda item: (-float(item.score), item.symbol))[:12]
-    try:
-        ai_signals = request_news_ai_signals(api_key, get_news_ai_model(), items)
-    except Exception as error:
-        logging.warning("AI-анализ новостей не выполнен: %s", error)
-        return active
-
-    by_symbol = {signal.symbol: signal for signal in ai_signals}
-    enriched: dict[str, NewsBias] = {}
-    for symbol, item in active.items():
-        ai_signal = by_symbol.get(symbol)
-        enriched[symbol] = apply_ai_signal_to_news_bias(item, ai_signal) if ai_signal else item
-    return enriched
-
-
-
-
 
 
 
@@ -4376,147 +3972,16 @@ SUMMARY_STATUS_INTERVAL_MINUTES = 120
 BROKER_CLOSE_CONFIRMATION_GRACE_SECONDS = 120
 
 
-def get_active_news_biases(force: bool = False) -> dict[str, NewsBias]:
-    now = datetime.now(UTC)
-    fetched_at = NEWS_CACHE.get("fetched_at")
-    if (
-        not force
-        and isinstance(fetched_at, datetime)
-        and (now - fetched_at).total_seconds() < NEWS_CACHE_TTL_SECONDS
-    ):
-        return NEWS_CACHE.get("biases", {})
-
-    all_biases: list[NewsBias] = []
-    target_day = current_moscow_time().date()
-    for channel in CHANNEL_URLS:
-        try:
-            posts = fetch_posts_for_day(channel, target_day=target_day)
-            for _, biases in detect_biases_for_posts(posts):
-                all_biases.extend(biases)
-        except Exception as error:
-            logging.warning("Не удалось обновить новости из %s: %s", channel, error)
-
-    seen_links = load_news_seen_links()
-    seen_changed = False
-    for source in WEB_SOURCE_URLS:
-        try:
-            items = fetch_web_news_items(source)
-            if not items:
-                logging.info("Новостной источник %s пока не дал пригодных заголовков", source)
-                continue
-            source_seen = set(seen_links.get(source, []))
-            if not source_seen:
-                seen_links[source] = [item.url for item in items]
-                seen_changed = True
-                logging.info("Новостной источник %s запомнен без торгового сигнала: %s ссылок", source, len(items))
-                continue
-            fresh_items = [item for item in items if item.url not in source_seen]
-            if fresh_items:
-                for message in build_news_messages_from_web(fresh_items):
-                    all_biases.extend(detect_news_bias(message))
-                seen_links[source] = [item.url for item in items] + [url for url in seen_links.get(source, []) if url not in {item.url for item in items}]
-                seen_changed = True
-        except Exception as error:
-            logging.warning("Не удалось обновить новости из %s: %s", source, error)
-    if seen_changed:
-        save_news_seen_links(seen_links)
-
-    try:
-        source_stats = summarize_news_source_stats(TRADE_DB_PATH, days=10, limit=50)
-        direction_stats = summarize_news_analytics(TRADE_DB_PATH, days=10, limit=10).get("directions", [])
-        all_biases = calibrate_news_biases(all_biases, source_stats, direction_stats)
-    except Exception as error:
-        logging.warning("Не удалось откалибровать новости по истории: %s", error)
-    active = enrich_news_biases_with_ai(select_active_biases(all_biases, now=now))
-    NEWS_CACHE["fetched_at"] = now
-    NEWS_CACHE["biases"] = active
-
-    def news_snapshot_row(item: NewsBias) -> dict[str, Any]:
-        eligible, gate_reason = news_bias_trade_gate(item)
-        return {
-            "symbol": item.symbol,
-            "category": item.category,
-            "bias": item.bias,
-            "strength": item.strength,
-            "source": item.source,
-            "source_label": item.source_label or item.source,
-            "source_type": item.source_type,
-            "source_speed": item.source_speed,
-            "source_reliability": item.source_reliability,
-            "source_count": item.source_count,
-            "confirming_sources": list(item.confirming_sources),
-            "calibration_factor": item.calibration_factor,
-            "calibration_sample": item.calibration_sample,
-            "calibration_reason": item.calibration_reason,
-            "trade_eligible": eligible,
-            "trade_gate_reason": gate_reason,
-            "ai_direction": item.ai_direction,
-            "ai_strength": item.ai_strength,
-            "ai_confidence": item.ai_confidence,
-            "ai_horizon": item.ai_horizon,
-            "ai_event_type": item.ai_event_type,
-            "ai_reason": item.ai_reason,
-            "ai_risk": item.ai_risk,
-            "reason": item.reason,
-            "summary": item.summary,
-            "horizon": item.horizon,
-            "actionability": item.actionability,
-            "message_text": item.message_text,
-            "message_url": item.message_url,
-            "topics": list(item.topics),
-            "expires_at": item.expires_at.isoformat(),
-            "expires_at_moscow": item.expires_at.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
-            "score": item.score,
-        }
-
-    save_news_snapshot(
-        {
-            "fetched_at": now.isoformat(),
-            "fetched_at_moscow": now.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M:%S МСК"),
-            "active_biases": [
-                news_snapshot_row(item)
-                for item in sorted(active.values(), key=lambda x: (-x.score, x.symbol))
-            ],
-        }
-    )
-    return active
-
-
-def apply_news_bias_to_signal(signal: str, reason: str, news_bias: NewsBias | None) -> tuple[str, str]:
-    if news_bias is None:
-        return signal, reason
-    eligible, gate_reason = news_bias_trade_gate(news_bias)
-    if not eligible:
-        return signal, f"{reason}. Новости не влияют на сделку: {gate_reason}."
-    if news_bias.bias == "BLOCK" and signal in {"LONG", "SHORT"}:
-        return "HOLD", f"{reason}. Новости дают жёсткий блок: {news_bias.reason}."
-    if signal == "LONG" and news_bias.bias == "SHORT":
-        if news_bias.actionability in {"ACTION", "BLOCK"} or news_bias.strength == "HIGH":
-            return "HOLD", f"{reason}. Новости конфликтуют с лонгом: {news_bias.reason}."
-        return signal, f"{reason}. Новости спорят с LONG, но это пока лишь фон: {news_bias.reason}."
-    if signal == "SHORT" and news_bias.bias == "LONG":
-        if news_bias.actionability in {"ACTION", "BLOCK"} or news_bias.strength == "HIGH":
-            return "HOLD", f"{reason}. Новости конфликтуют с шортом: {news_bias.reason}."
-        return signal, f"{reason}. Новости спорят с SHORT, но это пока лишь фон: {news_bias.reason}."
-    if signal in {"LONG", "SHORT"} and news_bias.bias == signal:
-        if news_bias.actionability == "ACTION":
-            return signal, f"{reason}. Новости подтверждают сигнал: {news_bias.reason}."
-        return signal, f"{reason}. Новости поддерживают сигнал как фон: {news_bias.reason}."
-    return signal, reason
-
-
 def resolve_cycle_entry_signal(
     signal: str,
     reason: str,
     strategy_name: str,
-    news_bias: NewsBias | None,
     selected_entry_candidate: dict[str, Any] | None,
 ) -> tuple[str, str, str]:
     if selected_entry_candidate is None:
-        adjusted_signal, adjusted_reason = apply_news_bias_to_signal(signal, reason, news_bias)
-        return adjusted_signal, adjusted_reason, strategy_name
-    # Исполняем неизменный снимок, уже прошедший правила стратегии, новости
-    # и ранжирование в первой фазе цикла. Повторный расчёт мог потерять
+        return signal, reason, strategy_name
+    # Исполняем неизменный снимок, уже прошедший правила стратегии и
+    # ранжирование в первой фазе цикла. Повторный расчёт мог потерять
     # подтверждённый сигнал на границе новой часовой свечи.
     return (
         str(selected_entry_candidate.get("signal") or "HOLD").upper(),
@@ -6218,7 +5683,6 @@ def estimate_setup_quality(
     higher_tf_bias: str,
     market_regime: str,
     metrics: dict[str, float | str],
-    news_bias: NewsBias | None = None,
     strategy_name: str = "",
 ) -> tuple[int, str]:
     if signal not in {"LONG", "SHORT"}:
@@ -6243,9 +5707,8 @@ def estimate_setup_quality(
             score += 1
     elif market_regime in {"trend_expansion", "trend_pullback", "impulse"} and regime_confidence >= 0.58:
         score += 1
-    if news_bias is not None and news_bias.bias == signal:
-        score += 1
-    if score >= 5:
+    strong_threshold = 4 if is_unified_reversal else 5
+    if score >= strong_threshold:
         return score, "strong"
     if score >= 3:
         return score, "medium"
@@ -6279,7 +5742,6 @@ def build_periodic_status_message(
     candle_time: str,
     higher_tf_bias: str,
     df: pd.DataFrame,
-    news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> str:
     position_text = "нет" if state.position_side == "FLAT" else f"{state.position_side}, лотов={state.position_qty}"
@@ -6294,8 +5756,6 @@ def build_periodic_status_message(
         f"🧾 Позиция: {position_text}",
         f"📌 Стратегия: {state.entry_strategy or state.last_strategy_name or '-'}",
         f"📈 Старший тренд: {higher_tf_bias}",
-        f"📰 Новости: {format_news_bias_label(news_bias)}",
-        f"• Влияние: {describe_news_bias_impact(signal, news_bias)}",
         "",
         "Коротко почему:",
         *[f"• {line}" for line in summary[:3]],
@@ -6310,7 +5770,6 @@ def notify_signal_change(
     signal: str,
     price: float,
     reason: str,
-    news_bias: NewsBias | None = None,
 ) -> None:
     return
 
@@ -6325,7 +5784,6 @@ def notify_periodic_status(
     candle_time: str,
     higher_tf_bias: str,
     df: pd.DataFrame,
-    news_bias: NewsBias | None = None,
     compare_lines: list[str] | None = None,
 ) -> None:
     # Периодические сигнальные карточки в Telegram отключены: оставляем только
@@ -6339,7 +5797,6 @@ def build_global_diagnostic_message(
     client: Client,
     watchlist: list[InstrumentConfig],
 ) -> str:
-    news = get_active_news_biases()
     session_name = get_market_session()
     lines = [
         f"🕒 Сессия: {session_name}",
@@ -6348,7 +5805,6 @@ def build_global_diagnostic_message(
     ]
 
     for instrument in watchlist:
-        news_bias = news.get(instrument.symbol)
         try:
             signal_interval = get_signal_interval_for_symbol(config, instrument.symbol)
             signal_interval_minutes = get_signal_interval_minutes_for_symbol(config, instrument.symbol)
@@ -6368,14 +5824,12 @@ def build_global_diagnostic_message(
             )
             higher_tf_bias = "" if uses_unified_reversal(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
             signal, reason, strategy_name = evaluate_signal(lower_df, config, instrument, higher_tf_bias)
-            signal, reason = apply_news_bias_to_signal(signal, reason, news_bias)
             summary = summarize_signal_reason(signal, reason)
             higher_tf_label = get_unified_reversal_timeframe_label(strategy_name) or higher_tf_bias
             lines.extend(
                 [
                     f"{signal_emoji(signal)} {instrument.symbol}: {signal}",
                     f"• Стратегия: {strategy_name} | Старший ТФ: {higher_tf_label}",
-                    f"• Влияние: {describe_news_bias_impact(signal, news_bias)}",
                     f"• Ключевое: {summary[0] if summary else 'нет явного вывода'}",
                     "",
                 ]
@@ -6385,8 +5839,6 @@ def build_global_diagnostic_message(
                 [
                     f"{signal_emoji('HOLD')} {instrument.symbol}: HOLD",
                     "• Стратегия: ожидание данных",
-                    f"• Новости: {format_news_bias_label(news_bias)}",
-                    f"• Влияние: {describe_news_bias_impact('HOLD', news_bias)}",
                     f"• Статус: {str(error)}",
                     "",
                 ]
@@ -6688,24 +6140,6 @@ def reconcile_accounting_history_audit_if_needed(
         entry.get("actual_varmargin_rub", 0.0),
     )
     return True
-
-
-def maybe_refresh_news_snapshot(refresh_seconds: int = 300) -> None:
-    meta = load_meta_state()
-    now = datetime.now(timezone.utc)
-    raw_ts = str(meta.get("news_snapshot_refreshed_at") or "").strip()
-    if raw_ts:
-        try:
-            last_ts = datetime.fromisoformat(raw_ts)
-            if last_ts.tzinfo is None:
-                last_ts = last_ts.replace(tzinfo=timezone.utc)
-            if (now - last_ts).total_seconds() < refresh_seconds:
-                return
-        except Exception:
-            pass
-    get_active_news_biases(force=True)
-    meta["news_snapshot_refreshed_at"] = now.isoformat()
-    save_meta_state(meta)
 
 
 def build_runtime_status_payload(
@@ -8279,35 +7713,9 @@ def get_signal_conviction_weight(state: InstrumentState, signal: str, strategy_n
     weight = 1.0
     if not is_unified_reversal_strategy(strategy_name) and state.last_higher_tf_bias == signal:
         weight += 0.15
-    news_bias, news_strength = parse_bias_label(state.last_news_bias)
-    if news_bias == signal:
-        if news_strength == "HIGH":
-            weight += 0.30
-        elif news_strength == "MEDIUM":
-            weight += 0.18
-        elif news_strength == "LOW":
-            weight += 0.08
     if is_unified_reversal_strategy(strategy_name):
         weight += 0.12
     return min(weight, 1.65)
-
-
-def calculate_news_priority_adjustment(state: InstrumentState, signal: str) -> tuple[float, str]:
-    news_bias, news_strength = parse_bias_label(state.last_news_bias)
-    if signal not in {"LONG", "SHORT"} or news_bias in {"", "NEUTRAL"}:
-        return 0.0, ""
-    strength_bonus = {"HIGH": 0.10, "MEDIUM": 0.06, "LOW": 0.03}
-    strength_penalty = {"HIGH": -0.16, "MEDIUM": -0.10, "LOW": -0.05}
-    strength = str(news_strength or "").upper()
-    if news_bias == signal:
-        adjustment = strength_bonus.get(strength, 0.04)
-        return adjustment, f"новости подтверждают сигнал: +{adjustment:.2f}"
-    if news_bias in {"LONG", "SHORT"}:
-        adjustment = strength_penalty.get(strength, -0.08)
-        return adjustment, f"новости против сигнала: {adjustment:.2f}"
-    if news_bias == "BLOCK":
-        return -0.25, "новости дают жёсткий риск: -0.25"
-    return 0.0, ""
 
 
 def get_adaptive_entry_size_multiplier(
@@ -8392,8 +7800,6 @@ def calculate_entry_priority_details(
             "components": {},
             "learning_adjustment": 0.0,
             "learning_reason": "",
-            "news_priority_adjustment": 0.0,
-            "news_priority_reason": "",
         }
 
     score = 0.0
@@ -8473,13 +7879,6 @@ def calculate_entry_priority_details(
     if learning_reason:
         reasons.append(learning_reason)
 
-    news_adjustment, news_reason = calculate_news_priority_adjustment(state, signal)
-    if news_adjustment:
-        score += news_adjustment
-        components["новости"] = news_adjustment
-    if news_reason:
-        reasons.append(news_reason)
-
     score = normalize_decision_score(clamp_float(score, 0.0, 1.0))
     return {
         "score": score,
@@ -8487,8 +7886,6 @@ def calculate_entry_priority_details(
         "components": components,
         "learning_adjustment": learning_adjustment,
         "learning_reason": learning_reason,
-        "news_priority_adjustment": news_adjustment,
-        "news_priority_reason": news_reason,
     }
 
 
@@ -9049,8 +8446,6 @@ def execute_capital_rotation_plan(
         replaced_hold_score=hold_score,
         learning_adjustment=float(candidate.get("learning_adjustment") or 0.0),
         learning_reason=str(candidate.get("learning_reason") or ""),
-        news_priority_adjustment=float(candidate.get("news_priority_adjustment") or 0.0),
-        news_priority_reason=str(candidate.get("news_priority_reason") or ""),
         priority_components=candidate.get("priority_components") if isinstance(candidate.get("priority_components"), dict) else None,
     )
 
@@ -9085,8 +8480,6 @@ def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> Non
         allocatable_margin_rub=float(candidate.get("allocatable_margin_rub") or 0.0),
         learning_adjustment=float(candidate.get("learning_adjustment") or 0.0),
         learning_reason=str(candidate.get("learning_reason") or ""),
-        news_priority_adjustment=float(candidate.get("news_priority_adjustment") or 0.0),
-        news_priority_reason=str(candidate.get("news_priority_reason") or ""),
         priority_components=candidate.get("priority_components") if isinstance(candidate.get("priority_components"), dict) else None,
         defer_kind=str(candidate.get("defer_kind") or ""),
         defer_winners=candidate.get("defer_winners") if isinstance(candidate.get("defer_winners"), list) else None,
@@ -10129,26 +9522,6 @@ def position_reentry_allowed(
             min_steps=min_steps,
         )
 
-    def brk6_fresh_impulse_override() -> bool:
-        if not is_brent_symbol(instrument.symbol):
-            return False
-        if signal != "LONG":
-            return False
-        if state.last_exit_side != "LONG" or state.last_exit_pnl_rub <= 0:
-            return False
-        if state.last_higher_tf_bias != "LONG":
-            return False
-        news_bias, news_strength = parse_bias_label(state.last_news_bias)
-        if news_bias != "LONG" or news_strength not in {"MEDIUM", "HIGH"}:
-            return False
-        return price_has_new_extreme_since_exit(
-            instrument,
-            signal,
-            current_price,
-            state.last_exit_price,
-            min_steps=6,
-        )
-
     def fx_strong_reentry_override() -> bool:
         if get_instrument_group(instrument.symbol).name != "fx":
             return False
@@ -10376,8 +9749,6 @@ def position_reentry_allowed(
         if not is_unified_reversal and template_symbol in {"USDRUBF", "SRM6"} and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход в ту же сторону разрешён только после нового экстремума после фиксации прибыли."
-        if brk6_fresh_impulse_override():
-            return True, ""
         if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             if not price_has_new_extreme_since_exit(instrument, signal, current_price, state.last_exit_price, min_steps=2):
                 return False, f"для {instrument.symbol} повторный вход после прибыльного выхода разрешён только после нового экстремума."
@@ -10397,8 +9768,6 @@ def position_reentry_allowed(
 
     next_allowed = last_exit_at + timedelta(minutes=cooldown_minutes)
     now = datetime.now(UTC)
-    if brk6_fresh_impulse_override():
-        return True, ""
     if now >= next_allowed:
         if is_unified_reversal and "RSI вышел" in state.last_exit_reason and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
             min_steps = 2 if not is_natural_gas_symbol(instrument.symbol) else 3
@@ -10426,7 +9795,7 @@ def position_reentry_allowed(
 
     remaining = int((next_allowed - now).total_seconds() // 60) + 1
     if is_brent_symbol(instrument.symbol) and state.last_exit_side == signal and state.last_exit_pnl_rub > 0:
-        return False, f"для {instrument.symbol} после прибыльного выхода нужен либо новый сильный импульс по новостям и цене, либо пауза ещё ~{remaining} мин."
+        return False, f"для {instrument.symbol} после прибыльного выхода нужен новый сильный импульс цены либо пауза ещё ~{remaining} мин."
     return False, f"для {instrument.symbol} действует cooldown после выхода: ждать ещё ~{remaining} мин."
 
 
@@ -11567,7 +10936,6 @@ def process_instrument(
         if state.last_error != closed_message or state.last_signal != "HOLD":
             state.last_error = closed_message
             state.last_signal = "HOLD"
-            state.last_news_impact = "торговая сессия закрыта"
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=session_closed", instrument.symbol)
         else:
@@ -11582,7 +10950,6 @@ def process_instrument(
         elif state.last_error != weekend_message or state.last_signal != "HOLD":
             state.last_error = weekend_message
             state.last_signal = "HOLD"
-            state.last_news_impact = "инструмент недоступен на выходных"
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=weekend_currency_closed", instrument.symbol)
         else:
@@ -11615,7 +10982,6 @@ def process_instrument(
     except RuntimeError as error:
         if "Недостаточно данных для стратегии" in str(error) or "API не вернул свечи" in str(error):
             state.last_error = str(error)
-            state.last_news_impact = "ожидание свечей/индикаторов"
             save_state(instrument.symbol, state)
             logging.info("symbol=%s status=waiting_for_candles", instrument.symbol)
             return None
@@ -11657,12 +11023,10 @@ def process_instrument(
 
     higher_tf_bias = "" if uses_unified_reversal(instrument.symbol) else get_higher_tf_bias(client, config, instrument)
     signal, reason, primary_strategy_name = evaluate_position_owned_signal(lower_df, config, instrument, higher_tf_bias, state)
-    news_bias = get_active_news_biases().get(instrument.symbol)
     signal, reason, primary_strategy_name = resolve_cycle_entry_signal(
         signal,
         reason,
         primary_strategy_name,
-        news_bias,
         selected_entry_candidate,
     )
     context_higher_tf_bias = "" if is_local_hourly_strategy(primary_strategy_name) else higher_tf_bias
@@ -11670,7 +11034,6 @@ def process_instrument(
     signal_summary = summarize_signal_reason(signal, reason)
     compare_lines: list[str] = []
     compare_lines.append(f"Основная: {signal_emoji(signal)} {signal} ({primary_strategy_name})")
-    compare_lines.append(f"News bias: {format_news_bias_label(news_bias)}")
     current_price = float(lower_df.iloc[-1]["close"])
     refresh_position_snapshot(state, instrument, current_price)
     candle_time_value = lower_df.iloc[-1].get("time")
@@ -11691,7 +11054,6 @@ def process_instrument(
         candle_time,
         display_higher_tf_bias,
         lower_df,
-        news_bias,
         compare_lines,
     )
 
@@ -11699,15 +11061,12 @@ def process_instrument(
     state.last_signal = signal
     state.last_strategy_name = primary_strategy_name
     state.last_higher_tf_bias = context_higher_tf_bias
-    state.last_news_bias = format_trading_news_bias_label(news_bias)
-    state.last_news_impact = describe_news_bias_impact(signal, news_bias)
     market_regime, regime_metrics = classify_market_regime(lower_df, context_higher_tf_bias)
     setup_quality_score, setup_quality_label = estimate_setup_quality(
         signal,
         context_higher_tf_bias,
         market_regime,
         regime_metrics,
-        news_bias,
         primary_strategy_name,
     )
     state.last_market_regime = market_regime
@@ -11979,8 +11338,6 @@ def process_instrument(
                                             priority_components = priority_details.get("components")
                                             if not isinstance(priority_components, dict):
                                                 priority_components = {}
-                                            news_priority_adjustment = float(priority_details.get("news_priority_adjustment") or 0.0)
-                                            news_priority_reason = str(priority_details.get("news_priority_reason") or "")
                                             learning_adjustment = float(priority_details.get("learning_adjustment") or 0.0)
                                             learning_reason = str(priority_details.get("learning_reason") or "")
                                             candidate_payload = {
@@ -11999,8 +11356,6 @@ def process_instrument(
                                                 "priority_score": priority_score,
                                                 "priority_reason": priority_reason,
                                                 "priority_components": priority_components,
-                                                "news_priority_adjustment": news_priority_adjustment,
-                                                "news_priority_reason": news_priority_reason,
                                                 "learning_adjustment": learning_adjustment,
                                                 "learning_reason": learning_reason,
                                                 "entry_edge_score": float(state.last_entry_edge_score or 0.0),
@@ -12132,9 +11487,6 @@ def run_bot() -> int:
                         if config.cash_manager_enabled and cash_fund is None:
                             cash_fund = resolve_cash_manager_fund(client, config)
                         refresh_cash_manager_pending_order(client, config, cash_fund)
-                        maybe_refresh_news_snapshot()
-                        active_news = get_active_news_biases()
-                        save_active_news_events(client, config, watchlist, active_news)
                         watchlist_by_symbol = {instrument.symbol.upper(): instrument for instrument in watchlist}
                         cycle_candidates: list[dict[str, Any]] = []
                         for instrument in watchlist:
@@ -12200,8 +11552,6 @@ def run_bot() -> int:
                                 allocatable_margin_rub=float(item.get("allocatable_margin_rub") or 0.0),
                                 learning_adjustment=float(item.get("learning_adjustment") or 0.0),
                                 learning_reason=str(item.get("learning_reason") or ""),
-                                news_priority_adjustment=float(item.get("news_priority_adjustment") or 0.0),
-                                news_priority_reason=str(item.get("news_priority_reason") or ""),
                                 priority_components=item.get("priority_components") if isinstance(item.get("priority_components"), dict) else None,
                                 candle_time=str(item.get("candle_time") or ""),
                                 execution_status=execution_status,
@@ -12237,7 +11587,6 @@ def run_bot() -> int:
                             if journal_integrity_alert:
                                 logging.warning(journal_integrity_alert)
                         update_signal_observation_outcomes(client, config, watchlist)
-                        update_news_event_outcomes(client, config, watchlist)
                         maybe_start_trade_quality_refresh()
                         maybe_park_free_cash_in_fund(client, config, watchlist, cash_fund, cycle_candidates)
                         maybe_refresh_portfolio_snapshot(client, config, watchlist, cash_fund=cash_fund)

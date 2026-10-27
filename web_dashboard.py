@@ -29,14 +29,10 @@ from instrument_groups import (
     uses_unified_reversal,
     uses_unified_reversal_1h,
 )
-from news_rules import NEWS_RULES
 from strategy_registry import get_primary_strategies, get_secondary_strategies
 from trade_storage import (
     load_signal_observations as load_signal_observations_from_storage,
     load_trade_rows as load_trade_rows_from_storage,
-    summarize_news_analytics,
-    summarize_news_allocator_impact,
-    summarize_news_source_stats,
 )
 from trade_quality import (
     build_trade_quality_overview,
@@ -59,7 +55,6 @@ TRADE_QUALITY_ANALYTICS_PATH = STATE_DIR / "_trade_quality_analytics.json"
 PORTFOLIO_SNAPSHOT_PATH = STATE_DIR / "_portfolio_snapshot.json"
 ACCOUNTING_HISTORY_PATH = STATE_DIR / "_accounting_history.json"
 RUNTIME_STATUS_PATH = STATE_DIR / "_runtime_status.json"
-NEWS_SNAPSHOT_PATH = STATE_DIR / "_news_snapshot.json"
 TRADE_RECOVERY_SCRIPT_PATH = BASE_DIR / "scripts" / "recover_trade_operations.py"
 TRADE_RECOVERY_LOCK_PATH = BASE_DIR / ".locks" / "trade_operations_recovery.lock"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -660,16 +655,6 @@ def build_docs_html() -> str:
             </p>
           </div>
         </article>
-        <article class="step">
-          <div class="step__num">04</div>
-          <div>
-            <h3>Новости</h3>
-            <p>
-              Новости показывают внешний контекст по инструментам. Торговое решение и факт исполнения проверяются
-              по сигналам, журналу сделок и состоянию аллокатора.
-            </p>
-          </div>
-        </article>
       </div>
     </section>
   </main>
@@ -1160,56 +1145,6 @@ def runtime_heartbeat_age_seconds(runtime: dict) -> float | None:
     return (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
 
 
-def load_news_snapshot() -> dict:
-    if not NEWS_SNAPSHOT_PATH.exists():
-        payload: dict = {}
-    else:
-        try:
-            payload = load_json(NEWS_SNAPSHOT_PATH)
-        except Exception:
-            payload = {}
-    try:
-        payload["source_stats"] = summarize_news_source_stats(TRADE_DB_PATH, days=10, limit=8)
-    except Exception:
-        payload["source_stats"] = []
-    try:
-        payload["analytics"] = summarize_news_analytics(TRADE_DB_PATH, days=10, limit=8)
-    except Exception:
-        payload["analytics"] = {}
-    try:
-        payload["allocator_impact"] = summarize_news_allocator_impact(TRADE_DB_PATH, days=10)
-    except Exception:
-        payload["allocator_impact"] = {}
-    payload["coverage"] = build_news_coverage_payload()
-    return payload
-
-
-def build_news_coverage_payload() -> dict:
-    watched_symbols = sorted(current_watchlist_symbols())
-    rule_symbols: dict[str, list[str]] = {}
-    for rule in NEWS_RULES:
-        for active_symbol in replace_with_active_symbols([rule.symbol]):
-            rule_symbols.setdefault(active_symbol, [])
-            rule_symbols[active_symbol].extend(rule.keywords)
-    news_symbols = sorted(
-        {
-            symbol for symbol in rule_symbols if symbol
-        }
-    )
-    watched_set = set(watched_symbols)
-    news_set = set(news_symbols)
-    return {
-        "watched_symbols": watched_symbols,
-        "news_symbols": news_symbols,
-        "missing_symbols": sorted(watched_set - news_set),
-        "extra_symbols": sorted(news_set - watched_set),
-        "keyword_samples": {
-            symbol: list(dict.fromkeys(rule_symbols.get(symbol, [])))[:12]
-            for symbol in sorted(watched_set | news_set)
-        },
-    }
-
-
 CAPITAL_ALERT_PATTERNS = (
     "не хватает средств/го",
     "ограничений по го/марже",
@@ -1440,7 +1375,6 @@ def _allocator_candidate_from_observation(row: dict[str, Any]) -> dict[str, Any]
         "market_regime": str(row.get("market_regime") or context.get("market_regime") or ""),
         "setup_quality": str(row.get("setup_quality") or context.get("setup_quality_label") or ""),
         "priority_components": components,
-        "news_priority_adjustment": _signal_observation_context_float(row, "news_priority_adjustment"),
         "learning_adjustment": _signal_observation_context_float(row, "learning_adjustment"),
         "requested_margin_rub": _signal_observation_context_float(row, "requested_margin_rub"),
         "allocatable_margin_rub": _signal_observation_context_float(row, "allocatable_margin_rub"),
@@ -1503,7 +1437,6 @@ def load_allocator_workspace(target_day: date, states: dict[str, dict], portfoli
                 "market_regime": str(state.get("last_market_regime") or ""),
                 "setup_quality": str(state.get("last_setup_quality_label") or ""),
                 "priority_components": {},
-                "news_priority_adjustment": 0.0,
                 "learning_adjustment": 0.0,
                 "requested_margin_rub": 0.0,
                 "allocatable_margin_rub": 0.0,
@@ -3513,7 +3446,7 @@ def build_allocator_html() -> str:
       const target = document.getElementById('comparison');
       if (!left || !right || left.symbol === right.symbol) {{ target.innerHTML = '<div class="muted">Выберите два разных сигнала.</div>'; return; }}
       const componentValue = (item, name) => Number((item.priority_components || {{}})[name] || 0);
-      const fields = [['Приоритет', left.priority_score, right.priority_score], ['Качество входа', left.entry_edge_score, right.entry_edge_score], ['Новости', componentValue(left,'новости'), componentValue(right,'новости')], ['Обучение', componentValue(left,'обучение'), componentValue(right,'обучение')]];
+      const fields = [['Приоритет', left.priority_score, right.priority_score], ['Качество входа', left.entry_edge_score, right.entry_edge_score], ['Обучение', componentValue(left,'обучение'), componentValue(right,'обучение')]];
       target.innerHTML = fields.map(([label,a,b]) => {{ const delta = Number(a) - Number(b); return `<div class="comparison-item">${{esc(label)}}<b>${{esc(left.symbol)}} ${{Number(a).toFixed(2)}} · ${{esc(right.symbol)}} ${{Number(b).toFixed(2)}}</b><span class="${{delta > 0 ? 'good' : delta < 0 ? 'bad' : 'muted'}}">разница ${{delta > 0 ? '+' : ''}}${{delta.toFixed(2)}} в пользу ${{esc(delta >= 0 ? left.symbol : right.symbol)}}</span></div>`; }}).join('');
     }}
     async function load() {{
@@ -3816,12 +3749,8 @@ def build_dashboard_html() -> str:
     }
     #positionsTable,
     #signalsTable,
-    #newsTable,
     #reviewTable {
       min-width: 880px;
-    }
-    #newsTable {
-      min-width: 1040px;
     }
     #tradesTable {
       min-width: 1100px;
@@ -3890,121 +3819,6 @@ def build_dashboard_html() -> str:
       color: #c8d7ea;
       line-height: 1.35;
     }
-    .news-reason {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-    }
-    .news-decision {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 8px;
-      border-radius: 8px;
-      border: 1px solid rgba(255, 202, 98, 0.18);
-      background: rgba(255, 202, 98, 0.09);
-      color: #ffdca2;
-      font-size: 12px;
-      font-weight: 700;
-      line-height: 1.1;
-    }
-    .news-decision.trade {
-      border-color: rgba(55, 230, 164, 0.22);
-      background: rgba(55, 230, 164, 0.11);
-      color: var(--good);
-    }
-    .news-overview {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 16px;
-    }
-    .news-overview-card {
-      min-height: 118px;
-      background: rgba(10, 18, 34, 0.66);
-      border: 1px solid rgba(102, 174, 255, 0.14);
-      border-radius: 8px;
-      padding: 14px 16px;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-    }
-    .news-overview-card.primary {
-      border-color: rgba(55, 230, 164, 0.28);
-      background: linear-gradient(180deg, rgba(13, 34, 34, 0.74), rgba(10, 18, 34, 0.66));
-    }
-    .news-overview-kicker {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }
-    .news-overview-main {
-      margin-top: 8px;
-      color: #eff6ff;
-      font: 800 18px/1.22 "Sora", "Manrope", sans-serif;
-    }
-    .news-overview-sub {
-      margin-top: 8px;
-      color: #9eb1c9;
-      font-size: 13px;
-      line-height: 1.35;
-    }
-    .news-diagnostics {
-      display: grid;
-      grid-template-columns: 1.25fr repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 12px;
-    }
-    .news-diagnostic {
-      min-width: 0;
-      padding: 13px 14px;
-      border: 1px solid rgba(102, 174, 255, 0.14);
-      border-radius: 8px;
-      background: rgba(7, 14, 27, 0.54);
-    }
-    .news-diagnostic-title {
-      color: #b9cbe4;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }
-    .news-diagnostic-main {
-      margin-top: 7px;
-      color: #edf5ff;
-      font: 750 17px/1.25 "Sora", "Manrope", sans-serif;
-    }
-    .news-diagnostic-note {
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .news-diagnostic-list {
-      display: grid;
-      gap: 6px;
-      margin-top: 10px;
-    }
-    .news-diagnostic-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      color: #cbd9ea;
-      font-size: 12px;
-      line-height: 1.25;
-    }
-    .news-diagnostic-row span:last-child {
-      flex: 0 0 auto;
-      color: #edf5ff;
-      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-    }
-    .news-detail-list {
-      display: grid;
-      gap: 4px;
-      color: #aebed2;
-      font-size: 12px;
-      line-height: 1.35;
-    }
     .hint-button {
       flex: 0 0 auto;
       appearance: none;
@@ -4039,32 +3853,6 @@ def build_dashboard_html() -> str:
     .btn-secondary:disabled {
       opacity: 0.55;
       cursor: default;
-    }
-    .news-popover {
-      position: fixed;
-      z-index: 1000;
-      width: min(420px, calc(100vw - 32px));
-      background: linear-gradient(180deg, rgba(9, 16, 31, 0.98) 0%, rgba(6, 12, 25, 0.98) 100%);
-      border: 1px solid rgba(102, 174, 255, 0.22);
-      border-radius: 16px;
-      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 24px rgba(67, 197, 255, 0.10);
-      padding: 14px 16px;
-      display: none;
-    }
-    .news-popover.open {
-      display: block;
-    }
-    .news-popover-title {
-      font-family: "Sora", "Manrope", sans-serif;
-      font-size: 13px;
-      color: #d8ecff;
-      margin-bottom: 8px;
-    }
-    .news-popover-text {
-      white-space: pre-wrap;
-      line-height: 1.45;
-      color: #c8d7ea;
-      font-size: 13px;
     }
     .section-title {
       display: flex;
@@ -4856,12 +4644,6 @@ def build_dashboard_html() -> str:
       .mobile-cards {
         display: grid;
       }
-      .news-overview {
-        grid-template-columns: 1fr;
-      }
-      .news-diagnostics {
-        grid-template-columns: 1fr;
-      }
       .quality-card-head {
         align-items: stretch;
         flex-direction: column;
@@ -4891,7 +4673,7 @@ def build_dashboard_html() -> str:
           <h1>Панель Oil Bot</h1>
           <div class="generated" id="generatedAt">Обновление: -</div>
         </div>
-        <p class="muted">Живой обзор бота, позиций, новостей и состояния сервиса. Обновление каждые 15 секунд.</p>
+        <p class="muted">Живой обзор бота, позиций и состояния сервиса. Обновление каждые 15 секунд.</p>
         <div class="grid">
           <div>
             <div class="muted">Реализовано</div>
@@ -5044,45 +4826,7 @@ def build_dashboard_html() -> str:
         <table id="signalsTable">
           <thead>
             <tr>
-              <th>Инструмент</th><th>Сигнал</th><th>Контур</th><th>Стратегия</th><th>Новости</th><th>Аллокатор</th><th>Почему сейчас</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel" style="margin-top:16px;">
-      <div class="section-title">
-        <h2>Новости</h2>
-        <div class="generated" id="newsUpdatedAt">Новости: -</div>
-      </div>
-      <div class="grid">
-        <div>
-          <div class="muted">Всего в работе</div>
-          <div class="metric" id="newsCount">-</div>
-        </div>
-        <div>
-          <div class="muted">Срочно сейчас</div>
-          <div class="metric" id="newsKeyCount">-</div>
-        </div>
-        <div>
-          <div class="muted">Влияет на сигналы</div>
-          <div class="metric" id="newsSignalCount">-</div>
-        </div>
-        <div>
-          <div class="muted">Жёсткий блок</div>
-          <div class="metric" id="newsBlockCount">-</div>
-        </div>
-      </div>
-      <div id="newsLeadCards" class="news-overview"></div>
-      <div id="newsDiagnostics" class="news-diagnostics"></div>
-      <div id="newsCards" class="mobile-cards" style="margin-top:16px;"></div>
-      <div class="table-scroll desktop-table">
-        <table id="newsTable" style="margin-top:16px;">
-          <thead>
-            <tr>
-              <th>Инструмент</th><th>Сигнал</th><th>Решение</th><th>Источник</th><th>Детали</th>
+              <th>Инструмент</th><th>Сигнал</th><th>Контур</th><th>Стратегия</th><th>Аллокатор</th><th>Почему сейчас</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -5266,10 +5010,6 @@ def build_dashboard_html() -> str:
     </section>
 
   </div>
-  <div id="newsPopover" class="news-popover" role="dialog" aria-hidden="true">
-    <div class="news-popover-title" id="newsPopoverTitle">Текст новости</div>
-    <div class="news-popover-text" id="newsPopoverText"></div>
-  </div>
   <script>
     function escapeHtml(value) {
       return String(value ?? '')
@@ -5432,103 +5172,6 @@ def build_dashboard_html() -> str:
       return map[raw] || raw || '-';
     }
 
-    function formatNewsHorizon(value) {
-      const raw = String(value || '').toUpperCase();
-      const map = { NOW: 'сейчас', INTRADAY: 'внутри дня', BACKGROUND: 'фон' };
-      return map[raw] || raw.toLowerCase() || '-';
-    }
-
-    function formatNewsActionability(value) {
-      const raw = String(value || '').toUpperCase();
-      const map = {
-        ACTION: 'влияет на вход',
-        WATCH: 'держать в уме',
-        BLOCK: 'жёсткий блок',
-        BACKGROUND: 'просто фон',
-      };
-      return map[raw] || raw.toLowerCase() || '-';
-    }
-
-    function formatNewsCategory(value) {
-      const raw = String(value || '').trim();
-      return raw || 'рынок';
-    }
-
-    function formatNewsSourceType(value) {
-      const raw = String(value || '').toLowerCase();
-      const map = {
-        telegram: 'быстрый Telegram',
-        broker_telegram: 'Telegram брокера',
-        broker: 'брокерская аналитика',
-        official: 'официальный источник',
-      };
-      return map[raw] || raw || 'источник';
-    }
-
-    function formatNewsQuality(value) {
-      const num = Number(value);
-      if (!Number.isFinite(num) || num <= 0) return '-';
-      return `${Math.round(num * 100)}%`;
-    }
-
-    function formatNewsSourceSummary(item) {
-      const label = String(item.source_label || item.source || '-').replaceAll('_', ' ');
-      const type = formatNewsSourceType(item.source_type || '');
-      const speed = formatNewsQuality(item.source_speed);
-      const reliability = formatNewsQuality(item.source_reliability);
-      const confirmations = Array.isArray(item.confirming_sources) && item.confirming_sources.length > 1
-        ? ` · подтверждений: ${item.confirming_sources.join(', ')}`
-        : '';
-      return `${label} · ${type} · скорость ${speed} · надёжность ${reliability}${confirmations}`;
-    }
-
-    function classifyNewsBucket(item) {
-      const actionability = String(item.actionability || '').toUpperCase();
-      const horizon = String(item.horizon || '').toUpperCase();
-      if (actionability === 'BLOCK') return 'block';
-      if (actionability === 'ACTION' || horizon === 'NOW') return 'key';
-      if (actionability === 'WATCH') return 'signal';
-      return 'background';
-    }
-
-    function formatNewsWhatMatters(item) {
-      const bias = formatBiasLabel(item.bias || 'NEUTRAL');
-      const action = formatNewsActionability(item.actionability || '');
-      return `${bias} · ${action}`;
-    }
-
-    function formatNewsTradeGate(item) {
-      const reason = String(item.trade_gate_reason || '').trim();
-      if (item.trade_eligible) {
-        return reason ? `влияет на решение · ${reason}` : 'влияет на решение';
-      }
-      return reason ? `только наблюдение · ${reason}` : 'только наблюдение';
-    }
-
-    function formatNewsCalibration(item) {
-      const factor = Number(item.calibration_factor);
-      if (!Number.isFinite(factor) || factor === 1) return '';
-      const reason = String(item.calibration_reason || '').trim();
-      return `исторический вес ${Math.round(factor * 100)}%${reason ? ` · ${reason}` : ''}`;
-    }
-
-    function shortNewsText(value, maxLength = 120) {
-      const text = String(value || '').replace(/\\s+/g, ' ').trim();
-      if (!text) return '-';
-      return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
-    }
-
-    function formatNewsDecision(item) {
-      const css = item.trade_eligible ? 'trade' : 'watch';
-      const label = item.trade_eligible ? 'ВЛИЯЕТ' : 'НАБЛЮДЕНИЕ';
-      return `<span class="news-decision ${css}">${label}</span>`;
-    }
-
-    function formatNewsDecisionReason(item) {
-      const reason = String(item.trade_gate_reason || '').trim();
-      return shortNewsText(reason || (item.trade_eligible ? 'новость допущена к решению' : 'нет допуска к сделке'), 86);
-    }
-
     function formatRuntimeState(value) {
       const raw = String(value || '').toLowerCase();
       const map = {
@@ -5576,7 +5219,6 @@ def build_dashboard_html() -> str:
         regime_health: 'форма режима',
         recovery: 'восстановление',
         learning: 'обучение',
-        news: 'новости',
       };
       return map[raw] || raw.replaceAll('_', ' ');
     }
@@ -5624,13 +5266,6 @@ def build_dashboard_html() -> str:
       if (context && context !== '-') parts.push(context);
       const summary = parts.filter(Boolean).join(' · ');
       return summary.length > 220 ? `${summary.slice(0, 217)}...` : (summary || 'детали не сохранены');
-    }
-
-    function formatNewsSummary(state) {
-      const bias = formatBiasLabel(state.last_news_bias || 'NEUTRAL');
-      const impact = String(state.last_news_impact || '').trim();
-      if (!impact || impact === '-') return bias;
-      return `${bias} · ${impact}`;
     }
 
     function formatEventLabel(value) {
@@ -5911,7 +5546,6 @@ def build_dashboard_html() -> str:
       const componentValue = (item, name) => {
         const components = item.priority_components || {};
         const aliases = {
-          news: ['news', 'новости'],
           learning: ['learning', 'обучение'],
         };
         return (aliases[name] || [name]).reduce((sum, key) => sum + Number(components[key] || 0), 0);
@@ -5919,7 +5553,6 @@ def build_dashboard_html() -> str:
       const fields = [
         ['Приоритет', Number(left.priority_score || 0), Number(right.priority_score || 0)],
         ['Качество входа', Number(left.entry_edge_score || 0), Number(right.entry_edge_score || 0)],
-        ['Новости', componentValue(left, 'news'), componentValue(right, 'news')],
         ['Обучение', componentValue(left, 'learning'), componentValue(right, 'learning')],
       ];
       target.innerHTML = fields.map(([label, leftValue, rightValue]) => {
@@ -6036,49 +5669,6 @@ def build_dashboard_html() -> str:
         WEEKEND: 'ВЫХОДНОЙ',
       };
       return map[raw] || raw || '-';
-    }
-
-    function humanizeNewsReason(value) {
-      const raw = String(value || '').trim();
-      if (!raw) return '-';
-      if (raw.startsWith('keywords=')) {
-        const parts = raw.slice(9).split(',').map((item) => item.trim()).filter(Boolean);
-        return parts.length ? `Ключевые темы: ${parts.join(', ')}` : '-';
-      }
-      return raw;
-    }
-
-    function summarizeNewsCard(item) {
-      const summary = String(item.summary || '').trim();
-      if (summary) return summary;
-      return humanizeNewsReason(item.reason || '-');
-    }
-
-    function closeNewsPopover() {
-      const popover = document.getElementById('newsPopover');
-      if (!popover) return;
-      popover.classList.remove('open');
-      popover.setAttribute('aria-hidden', 'true');
-    }
-
-    function openNewsPopover(trigger) {
-      const popover = document.getElementById('newsPopover');
-      const title = document.getElementById('newsPopoverTitle');
-      const text = document.getElementById('newsPopoverText');
-      if (!popover || !title || !text) return;
-
-      const source = trigger.dataset.source || 'Новость';
-      const newsText = trigger.dataset.newsText || 'Текст новости недоступен.';
-      title.textContent = source;
-      text.textContent = newsText;
-
-      const rect = trigger.getBoundingClientRect();
-      const top = Math.min(rect.bottom + 10, window.innerHeight - 220);
-      const left = Math.min(rect.left, window.innerWidth - Math.min(420, window.innerWidth - 32) - 16);
-      popover.style.top = `${Math.max(16, top)}px`;
-      popover.style.left = `${Math.max(16, left)}px`;
-      popover.classList.add('open');
-      popover.setAttribute('aria-hidden', 'false');
     }
 
     function filterTradeRows(rows) {
@@ -6287,172 +5877,6 @@ def build_dashboard_html() -> str:
         <tr><td>Последняя ошибка</td><td class="reason">${escapeHtml(runtime.last_error || '-')}</td></tr>
       `;
 
-      const news = data.news || {};
-      const activeBiases = Array.isArray(news.active_biases) ? news.active_biases : [];
-      const keyNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'key');
-      const signalNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'signal');
-      const tradeNews = activeBiases.filter((item) => item.trade_eligible);
-      const blockNews = activeBiases.filter((item) => classifyNewsBucket(item) === 'block');
-      document.getElementById('newsUpdatedAt').textContent = `Новости: ${news.fetched_at_moscow || '-'}`;
-      document.getElementById('newsCount').textContent = activeBiases.length;
-      document.getElementById('newsKeyCount').textContent = keyNews.length;
-      document.getElementById('newsSignalCount').textContent = tradeNews.length;
-      document.getElementById('newsBlockCount').textContent = activeBiases.filter((item) => item.bias === 'BLOCK').length;
-
-      const newsLeadCards = document.getElementById('newsLeadCards');
-      const newsDiagnostics = document.getElementById('newsDiagnostics');
-      const newsBody = document.querySelector('#newsTable tbody');
-      const newsCards = document.getElementById('newsCards');
-      newsLeadCards.innerHTML = '';
-      newsDiagnostics.innerHTML = '';
-      newsBody.innerHTML = '';
-      newsCards.innerHTML = '';
-      const analytics = news.analytics || {};
-      const evaluatedNews = Number(analytics.evaluated_count || 0);
-      const unavailableNews = Number(analytics.unavailable_count || 0);
-      const pendingNews = Number(analytics.pending_count || 0);
-      const coverage = news.coverage || {};
-      const watchedSymbols = Array.isArray(coverage.watched_symbols) ? coverage.watched_symbols : [];
-      const newsSymbols = Array.isArray(coverage.news_symbols) ? coverage.news_symbols : [];
-      const missingSymbols = Array.isArray(coverage.missing_symbols) ? coverage.missing_symbols : [];
-      const coveredCount = watchedSymbols.filter((symbol) => newsSymbols.includes(symbol)).length;
-      const mainNews = tradeNews[0] || keyNews[0] || activeBiases[0] || null;
-      const missingText = missingSymbols.length
-        ? `без новостного правила: ${missingSymbols.slice(0, 4).join(', ')}${missingSymbols.length > 4 ? ` +${missingSymbols.length - 4}` : ''}`
-        : 'все торгуемые инструменты закрыты новостями';
-      const overviewItems = [
-        {
-          title: 'Главное сейчас',
-          value: mainNews ? summarizeNewsCard(mainNews) : 'сильных новостей сейчас нет',
-          sub: mainNews ? `${mainNews.symbol || '-'} · ${formatNewsWhatMatters(mainNews)}` : 'техника сейчас важнее новостного фона',
-        },
-        {
-          title: 'Торговое влияние',
-          value: tradeNews.length ? tradeNews.slice(0, 2).map((item) => summarizeNewsCard(item)).join(' | ') : 'новости не допущены к сделкам',
-          sub: tradeNews.length ? 'новостные правила разрешили влияние на вход' : 'нет подтверждённого влияния на входы',
-        },
-        {
-          title: `Качество за ${Number(analytics.days || 10)} дней`,
-          value: evaluatedNews ? `${Number(analytics.win_rate_pct || 0).toFixed(1)}% по ${evaluatedNews} оценённым` : 'история ещё копится',
-          sub: evaluatedNews
-            ? `${evaluatedNews < 30 ? 'выборка пока мала · ' : ''}не удалось оценить ${unavailableNews} · ожидают ${pendingNews} · среднее движение ${Number(analytics.avg_move_pct || 0).toFixed(3)}%`
-            : 'результат появится после завершения горизонта новости',
-        },
-        {
-          title: 'Покрытие',
-          value: watchedSymbols.length ? `${coveredCount} из ${watchedSymbols.length} тикеров` : 'нет списка тикеров',
-          sub: missingText,
-        },
-      ];
-      newsLeadCards.innerHTML = overviewItems.map((item, index) => `
-        <div class="news-overview-card ${index === 0 ? 'primary' : ''}">
-          <div class="news-overview-kicker">${escapeHtml(item.title)}</div>
-          <div class="news-overview-main">${escapeHtml(item.value)}</div>
-          <div class="news-overview-sub">${escapeHtml(item.sub)}</div>
-        </div>
-      `).join('');
-      const diagnosticRows = (items) => {
-        if (!Array.isArray(items) || !items.length) return '<div class="news-diagnostic-note">данные ещё копятся</div>';
-        return `<div class="news-diagnostic-list">${items.slice(0, 4).map((item) => `
-          <div class="news-diagnostic-row"><span>${escapeHtml(item.label || '-')}</span><span>${Number(item.win_rate_pct || 0).toFixed(1)}% · ${Number(item.total_count || 0)}</span></div>
-        `).join('')}</div>`;
-      };
-      const allocatorImpact = news.allocator_impact || {};
-      const allocatorEvaluated = Number(allocatorImpact.evaluated_selected_count || 0);
-      const allocatorWon = Number(allocatorImpact.favorable_selected_count || 0);
-      const allocatorRows = [
-        { label: 'приоритет повышен', value: Number(allocatorImpact.boost_count || 0) },
-        { label: 'приоритет снижен', value: Number(allocatorImpact.penalty_count || 0) },
-        { label: 'вход отложен', value: Number(allocatorImpact.deferred_count || 0) },
-      ];
-      const diagnosticItems = [
-        {
-          title: 'Источники',
-          main: 'попадания · оценено',
-          note: 'минимум 20 наблюдений нужен для сравнения источников',
-          body: diagnosticRows(analytics.sources),
-        },
-        {
-          title: 'Направление',
-          main: 'лонг и шорт отдельно',
-          note: 'показывает, где новостное направление точнее',
-          body: diagnosticRows(analytics.directions),
-        },
-        {
-          title: 'Влияние на аллокатор',
-          main: `${Number(allocatorImpact.total_count || 0)} вмешательств`,
-          note: allocatorEvaluated
-            ? `выбранные входы: ${allocatorWon}/${allocatorEvaluated} в сторону сигнала (${Number(allocatorImpact.selected_win_rate_pct || 0).toFixed(1)}%)`
-            : 'новости ещё не меняли выбор входов',
-          body: `<div class="news-diagnostic-list">${allocatorRows.map((item) => `
-            <div class="news-diagnostic-row"><span>${escapeHtml(item.label)}</span><span>${item.value}</span></div>
-          `).join('')}</div>`,
-        },
-      ];
-      newsDiagnostics.innerHTML = diagnosticItems.map((item) => `
-        <article class="news-diagnostic">
-          <div class="news-diagnostic-title">${escapeHtml(item.title)}</div>
-          <div class="news-diagnostic-main">${escapeHtml(item.main)}</div>
-          <div class="news-diagnostic-note">${escapeHtml(item.note)}</div>
-          ${item.body}
-        </article>
-      `).join('');
-      for (const item of activeBiases) {
-        const hasMessage = String(item.message_text || '').trim().length > 0;
-        const reasonText = humanizeNewsReason(item.reason || '-');
-        const summaryText = summarizeNewsCard(item);
-        const sourceLabel = String(item.source_label || item.source || '-').replaceAll('_', ' ');
-        const sourceSummary = formatNewsSourceSummary(item);
-        const whatMatters = formatNewsWhatMatters(item);
-        const tradeGate = formatNewsTradeGate(item);
-        const tradeGateShort = formatNewsDecisionReason(item);
-        const calibration = formatNewsCalibration(item);
-        const nowText = `${formatNewsHorizon(item.horizon || '')} · ${formatStrength(item.strength || '-')}`;
-        const detailLines = [
-          `${formatNewsCategory(item.category || '')} · ${nowText}`,
-          calibration,
-          item.topics && item.topics.length ? `темы: ${item.topics.slice(0, 3).join(', ')}` : '',
-          `до ${item.expires_at_moscow || '-'}`,
-        ].filter(Boolean);
-        const whyImportant = [
-          tradeGate,
-          formatNewsCategory(item.category || ''),
-          item.topics && item.topics.length ? `темы: ${item.topics.join(', ')}` : '',
-          reasonText,
-        ].filter(Boolean).join(' · ');
-        const detailsButton = hasMessage
-          ? `<button type="button" class="hint-button js-news-popover" data-source="${escapeHtml(sourceLabel)}" data-news-text="${escapeHtml(item.message_text)}">текст</button>`
-          : '';
-        newsBody.insertAdjacentHTML('beforeend', `<tr>
-          <td>${renderInstrumentLabel(item.symbol || '-', item.display_name || '')}</td>
-          <td><div class="trade-cell-main">${escapeHtml(summaryText)}</div><div class="trade-cell-sub">${escapeHtml(whatMatters)}</div></td>
-          <td><div>${formatNewsDecision(item)}</div><div class="trade-cell-sub">${escapeHtml(tradeGateShort)}</div></td>
-          <td><div class="trade-cell-main">${escapeHtml(sourceLabel)}</div><div class="trade-cell-sub">${escapeHtml(sourceSummary)}</div></td>
-          <td><div class="news-reason"><div class="news-detail-list">${detailLines.map((line) => `<span>${escapeHtml(line)}</span>`).join('')}</div>${detailsButton}</div></td>
-        </tr>`);
-        newsCards.insertAdjacentHTML('beforeend', `<article class="mobile-card">
-          <div class="mobile-card-head">
-            <div class="mobile-card-title">${renderInstrumentLabel(item.symbol || '-', item.display_name || '')}</div>
-            ${signalBadge(item.bias || '-')}
-          </div>
-          <div class="mobile-card-grid">
-            <div class="mobile-card-item"><span class="muted">Что важно</span><div class="mobile-card-value">${escapeHtml(whatMatters)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Решение</span><div class="mobile-card-value">${escapeHtml(tradeGate)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Сейчас</span><div class="mobile-card-value">${escapeHtml(nowText)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Источник</span><div class="mobile-card-value">${escapeHtml(sourceSummary)}</div></div>
-            <div class="mobile-card-item"><span class="muted">Актуально до</span><div class="mobile-card-value mono">${escapeHtml(item.expires_at_moscow || '-')}</div></div>
-          </div>
-          <div class="mobile-card-footer">
-            <div class="mobile-card-text"><span class="muted">Почему это важно</span><br>${escapeHtml(whyImportant)}</div>
-            ${hasMessage ? `<div class="mobile-card-text">${detailsButton}</div>` : ''}
-          </div>
-        </article>`);
-      }
-      if (!activeBiases.length) {
-        newsBody.insertAdjacentHTML('beforeend', '<tr><td colspan="5" class="muted">Активных новостных сигналов сейчас нет.</td></tr>');
-        newsCards.insertAdjacentHTML('beforeend', '<div class="muted">Активных новостных сигналов сейчас нет.</div>');
-      }
-
       const posBody = document.querySelector('#positionsTable tbody');
       const posCards = document.getElementById('positionsCards');
       posBody.innerHTML = '';
@@ -6507,13 +5931,11 @@ def build_dashboard_html() -> str:
           : (state.last_error || '-');
         const allocatorSummary = summarizeAllocatorSummary(state.last_allocator_summary || 'Нет активного расчёта размера позиции.');
         const signalReason = summarizeSignalReason(summary);
-        const newsSummary = formatNewsSummary(state);
         signalBody.insertAdjacentHTML('beforeend', `<tr>
           <td>${renderInstrumentLabel(symbol, state.display_name || '')}</td>
           <td>${signalBadge(state.last_signal || '-')}</td>
           <td>${signalScopeBadge(state)}</td>
           <td>${escapeHtml(formatStrategyLabel(state.active_strategy_name || state.entry_strategy || state.last_strategy_name || '-'))}</td>
-          <td class="reason">${escapeHtml(newsSummary)}</td>
           <td class="reason">${escapeHtml(allocatorSummary)}</td>
           <td class="reason">${escapeHtml(signalReason)}</td>
         </tr>`);
@@ -6525,7 +5947,6 @@ def build_dashboard_html() -> str:
           <div class="mobile-card-grid">
             <div class="mobile-card-item"><span class="muted">Контур</span><div class="mobile-card-value">${signalScopeBadge(state)}</div></div>
             <div class="mobile-card-item"><span class="muted">Стратегия</span><div class="mobile-card-value">${escapeHtml(formatStrategyLabel(state.active_strategy_name || state.entry_strategy || state.last_strategy_name || '-'))}</div></div>
-            <div class="mobile-card-item"><span class="muted">Новости</span><div class="mobile-card-value">${escapeHtml(newsSummary)}</div></div>
           </div>
           <div class="mobile-card-footer">
             <div class="mobile-card-text"><span class="muted">Аллокатор</span><br>${escapeHtml(allocatorSummary)}</div>
@@ -7026,17 +6447,6 @@ def build_dashboard_html() -> str:
         document.querySelector('[data-quality-tab="hypotheses"]')?.click();
         document.getElementById('trade-review')?.scrollIntoView({block: 'start'});
       }
-      document.addEventListener('click', (event) => {
-        const trigger = event.target.closest('.js-news-popover');
-        if (trigger) {
-          event.stopPropagation();
-          openNewsPopover(trigger);
-          return;
-        }
-        if (!event.target.closest('#newsPopover')) {
-          closeNewsPopover();
-        }
-      });
       refreshDashboard();
       setInterval(refreshDashboard, 15000);
     });
@@ -7092,7 +6502,6 @@ def api_dashboard(date: str | None = None) -> dict:
             item["last_strategy_name"] = item.get("last_strategy_name") or item.get("entry_strategy") or "-"
             stale_at = item.get("_state_updated_at_moscow") or "-"
             item["last_signal_summary"] = [f"Данные по инструменту устарели: последнее обновление {stale_at}."]
-            item["last_news_impact"] = "стейт не обновляется"
             item["last_error"] = f"State stale с {stale_at}"
         display_states[symbol] = item
     target_day = datetime.now(MOSCOW_TZ).date()
@@ -7111,7 +6520,6 @@ def api_dashboard(date: str | None = None) -> dict:
         "capital_alert": build_capital_alert(display_states),
         "portfolio": portfolio_view,
         "runtime": runtime,
-        "news": load_news_snapshot(),
         "trade_review": load_trade_review_for_day(target_day, 200, display_states, broker_positions),
         "trade_quality": load_trade_quality_analytics(),
         "allocator_workspace": allocator_workspace,

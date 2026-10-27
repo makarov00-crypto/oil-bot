@@ -68,12 +68,8 @@ class DailyAiReviewTests(unittest.TestCase):
                 '{"bot_total_pnl_rub":999.0,"open_positions_count":3,"total_portfolio_rub":70000.0}',
                 encoding="utf-8",
             )
-            (base_dir / "bot_state" / "_news_snapshot.json").write_text(
-                '{"active_biases":[{"symbol":"LIVEONLY","bias":"LONG","strength":"HIGH","source":"test","reason":"current"}]}',
-                encoding="utf-8",
-            )
             (base_dir / "bot_state" / "LIVEONLY.json").write_text(
-                '{"position_side":"LONG","position_qty":2,"last_signal":"BUY","last_strategy_name":"reversal_15m","last_news_bias":"LONG_HIGH","last_signal_summary":["live state"]}',
+                '{"position_side":"LONG","position_qty":2,"last_signal":"BUY","last_strategy_name":"reversal_15m","last_signal_summary":["live state"]}',
                 encoding="utf-8",
             )
             (base_dir / "bot_state" / "_accounting_history.json").write_text(
@@ -86,7 +82,6 @@ class DailyAiReviewTests(unittest.TestCase):
         self.assertIn("- итог: 150.00 RUB", prompt)
         self.assertIn("- Открытых позиций нет.", prompt)
         self.assertIn("- Нет сохранённого сигнального среза для выбранной даты.", prompt)
-        self.assertIn("- Активных новостных сигналов сейчас нет.", prompt)
         self.assertNotIn("LIVEONLY", prompt)
 
     def test_summarize_closed_trades_tracks_regimes_and_setup_quality(self) -> None:
@@ -339,14 +334,12 @@ class DailyAiReviewTests(unittest.TestCase):
                 "open_positions_count": 0,
                 "total_portfolio_rub": 50000.0,
             },
-            news={"active_biases": []},
             states={
                 "CNYRUBF": {
                     "position_side": "FLAT",
                     "last_signal": "SELL",
                     "last_strategy_name": "opening_range_breakout",
                     "last_higher_tf_bias": "SHORT",
-                    "last_news_bias": "NEUTRAL",
                     "last_signal_summary": ["signal ok"],
                 }
             },
@@ -416,7 +409,6 @@ class DailyAiReviewTests(unittest.TestCase):
                 "open_positions_count": 0,
                 "total_portfolio_rub": 50000.0,
             },
-            news={"active_biases": []},
             states={},
             closed_trades=[],
             recent_closed_trades=[],
@@ -487,7 +479,6 @@ class DailyAiReviewTests(unittest.TestCase):
                 "open_positions_count": 0,
                 "total_portfolio_rub": 50000.0,
             },
-            news={"active_biases": []},
             states={},
             closed_trades=[],
             recent_closed_trades=[],
@@ -547,7 +538,6 @@ class DailyAiReviewTests(unittest.TestCase):
                 "open_positions_count": 0,
                 "total_portfolio_rub": 50000.0,
             },
-            news={"active_biases": []},
             states={},
             closed_trades=trades,
             recent_closed_trades=[],
@@ -594,7 +584,6 @@ class DailyAiReviewTests(unittest.TestCase):
                 "open_positions_count": 0,
                 "total_portfolio_rub": 50000.0,
             },
-            news={"active_biases": []},
             states={},
             closed_trades=[],
             recent_closed_trades=[],

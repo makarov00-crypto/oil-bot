@@ -113,8 +113,6 @@ def ensure_trade_db(db_path: Path) -> None:
                 session TEXT,
                 broker_op_id TEXT,
                 higher_tf_bias TEXT,
-                news_bias TEXT,
-                news_impact TEXT,
                 allocator_quantity INTEGER,
                 allocator_summary TEXT,
                 entry_allocator_quantity INTEGER,
@@ -153,91 +151,9 @@ def ensure_trade_db(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_signal_observations_symbol ON signal_observations(symbol);
             CREATE INDEX IF NOT EXISTS idx_signal_observations_evaluated ON signal_observations(evaluated_at);
 
-            CREATE TABLE IF NOT EXISTS news_events (
-                news_uid TEXT PRIMARY KEY,
-                observed_at TEXT NOT NULL,
-                observed_date TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                category TEXT,
-                bias TEXT NOT NULL,
-                strength TEXT,
-                source TEXT,
-                source_label TEXT,
-                source_type TEXT,
-                source_speed REAL,
-                source_reliability REAL,
-                source_count INTEGER,
-                confirming_sources_json TEXT,
-                horizon TEXT,
-                actionability TEXT,
-                score REAL,
-                reason TEXT,
-                summary TEXT,
-                topics_json TEXT,
-                message_url TEXT,
-                message_text TEXT,
-                ai_direction TEXT,
-                ai_strength TEXT,
-                ai_confidence REAL,
-                ai_horizon TEXT,
-                ai_event_type TEXT,
-                ai_reason TEXT,
-                ai_risk TEXT,
-                expires_at TEXT,
-                observed_price REAL,
-                horizon_minutes INTEGER NOT NULL,
-                evaluated_at TEXT,
-                current_price REAL,
-                move_pct REAL,
-                favorable INTEGER,
-                outcome_status TEXT NOT NULL DEFAULT 'PENDING',
-                outcome_note TEXT,
-                outcome_checked_at TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_news_events_observed_date ON news_events(observed_date);
-            CREATE INDEX IF NOT EXISTS idx_news_events_symbol ON news_events(symbol);
-            CREATE INDEX IF NOT EXISTS idx_news_events_evaluated ON news_events(evaluated_at);
-            CREATE INDEX IF NOT EXISTS idx_news_events_source ON news_events(source);
             """
-        )
-        news_columns = {str(item[1]) for item in connection.execute("PRAGMA table_info(news_events)")}
-        for column_name, definition in (
-            ("outcome_status", "TEXT NOT NULL DEFAULT 'PENDING'"),
-            ("outcome_note", "TEXT"),
-            ("outcome_checked_at", "TEXT"),
-        ):
-            if column_name not in news_columns:
-                connection.execute(f"ALTER TABLE news_events ADD COLUMN {column_name} {definition}")
-        connection.execute(
-            """
-            UPDATE news_events
-            SET outcome_status = CASE
-                WHEN evaluated_at IS NOT NULL AND evaluated_at != '' THEN 'EVALUATED'
-                WHEN outcome_status IS NULL OR outcome_status = '' THEN 'PENDING'
-                ELSE outcome_status
-            END
-            """
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_news_events_outcome_status ON news_events(outcome_status)"
         )
         connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-
-
-def _news_event_uid(row: dict[str, Any]) -> str:
-    message_url = str(row.get("message_url") or "").strip()
-    base = {
-        "symbol": str(row.get("symbol") or "").upper(),
-        "bias": str(row.get("bias") or "").upper(),
-        "source": str(row.get("source") or ""),
-        "summary": str(row.get("summary") or "")[:120],
-    }
-    if message_url:
-        base["message_url"] = message_url
-    else:
-        base["observed_at"] = str(row.get("observed_at") or "")[:16]
-    payload = json.dumps(base, ensure_ascii=True, sort_keys=True)
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 def _signal_observation_uid(row: dict[str, Any]) -> str:
@@ -311,294 +227,6 @@ def append_signal_observation(db_path: Path, row: dict[str, Any]) -> str:
     return observation_uid
 
 
-def append_news_event(db_path: Path, row: dict[str, Any]) -> str:
-    ensure_trade_db(db_path)
-    observed_at = str(row.get("observed_at") or row.get("time") or "")
-    news_uid = str(row.get("news_uid") or _news_event_uid(row))
-    confirming_sources = row.get("confirming_sources")
-    if not isinstance(confirming_sources, list):
-        confirming_sources = []
-    topics = row.get("topics")
-    if not isinstance(topics, list):
-        topics = []
-    with _connect(db_path) as connection:
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO news_events (
-                news_uid, observed_at, observed_date, symbol, category, bias, strength,
-                source, source_label, source_type, source_speed, source_reliability,
-                source_count, confirming_sources_json, horizon, actionability, score,
-                reason, summary, topics_json, message_url, message_text,
-                ai_direction, ai_strength, ai_confidence, ai_horizon, ai_event_type,
-                ai_reason, ai_risk, expires_at, observed_price, horizon_minutes,
-                evaluated_at, current_price, move_pct, favorable,
-                outcome_status, outcome_note, outcome_checked_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                news_uid,
-                observed_at,
-                _trade_date(observed_at),
-                str(row.get("symbol") or "").upper(),
-                str(row.get("category") or ""),
-                str(row.get("bias") or "").upper(),
-                str(row.get("strength") or ""),
-                str(row.get("source") or ""),
-                str(row.get("source_label") or ""),
-                str(row.get("source_type") or ""),
-                float(row.get("source_speed")) if row.get("source_speed") not in (None, "") else None,
-                float(row.get("source_reliability")) if row.get("source_reliability") not in (None, "") else None,
-                int(row.get("source_count") or 1),
-                json.dumps(confirming_sources, ensure_ascii=False),
-                str(row.get("horizon") or ""),
-                str(row.get("actionability") or ""),
-                float(row.get("score")) if row.get("score") not in (None, "") else None,
-                str(row.get("reason") or ""),
-                str(row.get("summary") or ""),
-                json.dumps(topics, ensure_ascii=False),
-                str(row.get("message_url") or ""),
-                str(row.get("message_text") or ""),
-                str(row.get("ai_direction") or ""),
-                str(row.get("ai_strength") or ""),
-                float(row.get("ai_confidence")) if row.get("ai_confidence") not in (None, "") else None,
-                str(row.get("ai_horizon") or ""),
-                str(row.get("ai_event_type") or ""),
-                str(row.get("ai_reason") or ""),
-                str(row.get("ai_risk") or ""),
-                str(row.get("expires_at") or ""),
-                float(row.get("observed_price")) if row.get("observed_price") not in (None, "") else None,
-                int(row.get("horizon_minutes") or 60),
-                str(row.get("evaluated_at") or ""),
-                float(row.get("current_price")) if row.get("current_price") not in (None, "") else None,
-                float(row.get("move_pct")) if row.get("move_pct") not in (None, "") else None,
-                int(bool(row.get("favorable"))) if row.get("favorable") not in (None, "") else None,
-                str(row.get("outcome_status") or "PENDING").upper(),
-                str(row.get("outcome_note") or ""),
-                str(row.get("outcome_checked_at") or ""),
-            ),
-        )
-    return news_uid
-
-
-def _news_event_from_db(item: sqlite3.Row) -> dict[str, Any]:
-    row = dict(item)
-    for json_key, output_key in (
-        ("confirming_sources_json", "confirming_sources"),
-        ("topics_json", "topics"),
-    ):
-        raw = str(row.pop(json_key, "") or "")
-        if raw:
-            try:
-                row[output_key] = json.loads(raw)
-            except Exception:
-                row[output_key] = []
-        else:
-            row[output_key] = []
-    if row.get("favorable") is not None:
-        row["favorable"] = bool(row["favorable"])
-    return row
-
-
-def load_news_events(
-    db_path: Path,
-    *,
-    limit: int | None = None,
-    target_day: date | None = None,
-    unevaluated_only: bool = False,
-) -> list[dict[str, Any]]:
-    ensure_trade_db(db_path)
-    query = "SELECT * FROM news_events"
-    params: list[Any] = []
-    clauses: list[str] = []
-    if target_day is not None:
-        clauses.append("observed_date = ?")
-        params.append(target_day.isoformat())
-    if unevaluated_only:
-        clauses.append("(outcome_status IS NULL OR outcome_status = '' OR outcome_status = 'PENDING')")
-    if clauses:
-        query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY observed_at ASC"
-    if limit is not None:
-        query += " LIMIT ?"
-        params.append(limit)
-    with _connect(db_path) as connection:
-        return [_news_event_from_db(item) for item in connection.execute(query, params).fetchall()]
-
-
-def update_news_event_outcome(
-    db_path: Path,
-    news_uid: str,
-    *,
-    evaluated_at: str,
-    current_price: float,
-    move_pct: float,
-    favorable: bool,
-) -> None:
-    ensure_trade_db(db_path)
-    with _connect(db_path) as connection:
-        connection.execute(
-            """
-            UPDATE news_events
-            SET evaluated_at = ?, current_price = ?, move_pct = ?, favorable = ?,
-                outcome_status = 'EVALUATED', outcome_note = '', outcome_checked_at = ?
-            WHERE news_uid = ?
-            """,
-            (
-                evaluated_at,
-                float(current_price),
-                float(move_pct),
-                int(bool(favorable)),
-                evaluated_at,
-                news_uid,
-            ),
-        )
-
-
-def mark_news_event_outcome_unavailable(
-    db_path: Path,
-    news_uid: str,
-    *,
-    checked_at: str,
-    note: str,
-) -> None:
-    ensure_trade_db(db_path)
-    with _connect(db_path) as connection:
-        connection.execute(
-            """
-            UPDATE news_events
-            SET outcome_status = 'UNAVAILABLE', outcome_note = ?, outcome_checked_at = ?
-            WHERE news_uid = ?
-            """,
-            (str(note or "историческая цена недоступна"), checked_at, news_uid),
-        )
-
-
-def summarize_news_source_stats(db_path: Path, *, days: int = 10, limit: int = 12) -> list[dict[str, Any]]:
-    ensure_trade_db(db_path)
-    with _connect(db_path) as connection:
-        rows = connection.execute(
-            """
-            SELECT
-                COALESCE(NULLIF(source_label, ''), source) AS source_label,
-                source,
-                source_type,
-                COUNT(*) AS total_count,
-                SUM(CASE WHEN favorable = 1 THEN 1 ELSE 0 END) AS favorable_count,
-                SUM(CASE WHEN favorable = 0 THEN 1 ELSE 0 END) AS unfavorable_count,
-                AVG(move_pct) AS avg_move_pct,
-                AVG(source_speed) AS avg_speed,
-                AVG(source_reliability) AS avg_reliability
-            FROM news_events
-            WHERE observed_date >= date('now', ?)
-              AND outcome_status = 'EVALUATED'
-              AND bias IN ('LONG', 'SHORT')
-            GROUP BY COALESCE(NULLIF(source_label, ''), source), source, source_type
-            ORDER BY total_count DESC, favorable_count DESC
-            LIMIT ?
-            """,
-            (f"-{int(days)} day", int(limit)),
-        ).fetchall()
-    stats: list[dict[str, Any]] = []
-    for item in rows:
-        total = int(item["total_count"] or 0)
-        favorable = int(item["favorable_count"] or 0)
-        stats.append(
-            {
-                "source_label": str(item["source_label"] or item["source"] or ""),
-                "source": str(item["source"] or ""),
-                "source_type": str(item["source_type"] or ""),
-                "total_count": total,
-                "favorable_count": favorable,
-                "unfavorable_count": int(item["unfavorable_count"] or 0),
-                "win_rate_pct": round((favorable / total * 100.0), 1) if total else 0.0,
-                "avg_move_pct": round(float(item["avg_move_pct"] or 0.0), 4),
-                "avg_speed": round(float(item["avg_speed"] or 0.0), 3),
-                "avg_reliability": round(float(item["avg_reliability"] or 0.0), 3),
-            }
-        )
-    return stats
-
-
-def summarize_news_analytics(db_path: Path, *, days: int = 10, limit: int = 8) -> dict[str, Any]:
-    """Return outcome quality split by the dimensions used in news decisions."""
-    ensure_trade_db(db_path)
-    period = f"-{int(days)} day"
-    where = "observed_date >= date('now', ?) AND bias IN ('LONG', 'SHORT')"
-    with _connect(db_path) as connection:
-        totals = connection.execute(
-            f"""
-            SELECT
-                COUNT(*) AS total_count,
-                SUM(CASE WHEN outcome_status = 'EVALUATED' THEN 1 ELSE 0 END) AS evaluated_count,
-                SUM(CASE WHEN outcome_status = 'UNAVAILABLE' THEN 1 ELSE 0 END) AS unavailable_count,
-                SUM(CASE WHEN outcome_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_count,
-                SUM(CASE WHEN outcome_status = 'EVALUATED' AND favorable = 1 THEN 1 ELSE 0 END) AS favorable_count,
-                AVG(CASE WHEN outcome_status = 'EVALUATED' THEN move_pct END) AS avg_move_pct
-            FROM news_events
-            WHERE {where}
-            """,
-            (period,),
-        ).fetchone()
-
-        dimensions = {
-            "sources": "COALESCE(NULLIF(source_label, ''), source)",
-            "directions": "bias",
-            "horizons": "horizon",
-            "actions": "actionability",
-            "ai_confirmation": """
-                CASE
-                    WHEN ai_direction = bias THEN 'ИИ подтвердил'
-                    WHEN ai_direction IS NULL OR ai_direction = '' THEN 'Без ИИ-разбора'
-                    ELSE 'ИИ не подтвердил'
-                END
-            """,
-        }
-        result: dict[str, list[dict[str, Any]]] = {}
-        for key, expression in dimensions.items():
-            rows = connection.execute(
-                f"""
-                SELECT
-                    {expression} AS label,
-                    COUNT(*) AS total_count,
-                    SUM(CASE WHEN favorable = 1 THEN 1 ELSE 0 END) AS favorable_count,
-                    AVG(move_pct) AS avg_move_pct
-                FROM news_events
-                WHERE {where} AND outcome_status = 'EVALUATED'
-                GROUP BY {expression}
-                ORDER BY total_count DESC, favorable_count DESC
-                LIMIT ?
-                """,
-                (period, int(limit)),
-            ).fetchall()
-            result[key] = [
-                {
-                    "label": str(row["label"] or "Не указано"),
-                    "total_count": int(row["total_count"] or 0),
-                    "favorable_count": int(row["favorable_count"] or 0),
-                    "win_rate_pct": round(
-                        int(row["favorable_count"] or 0) / int(row["total_count"] or 1) * 100.0,
-                        1,
-                    ),
-                    "avg_move_pct": round(float(row["avg_move_pct"] or 0.0), 4),
-                }
-                for row in rows
-            ]
-
-    evaluated_count = int(totals["evaluated_count"] or 0)
-    favorable_count = int(totals["favorable_count"] or 0)
-    return {
-        "days": int(days),
-        "total_count": int(totals["total_count"] or 0),
-        "evaluated_count": evaluated_count,
-        "unavailable_count": int(totals["unavailable_count"] or 0),
-        "pending_count": int(totals["pending_count"] or 0),
-        "favorable_count": favorable_count,
-        "win_rate_pct": round(favorable_count / evaluated_count * 100.0, 1) if evaluated_count else 0.0,
-        "avg_move_pct": round(float(totals["avg_move_pct"] or 0.0), 4),
-        **result,
-    }
-
-
 def _signal_observation_from_db(item: sqlite3.Row) -> dict[str, Any]:
     row = dict(item)
     context_json = str(row.pop("context_json", "") or "")
@@ -645,57 +273,6 @@ def load_signal_observations(
         params.append(limit)
     with _connect(db_path) as connection:
         return [_signal_observation_from_db(item) for item in connection.execute(query, params).fetchall()]
-
-
-def summarize_news_allocator_impact(db_path: Path, *, days: int = 10) -> dict[str, Any]:
-    """Summarize only signal decisions whose priority was changed by news."""
-    ensure_trade_db(db_path)
-    with _connect(db_path) as connection:
-        rows = connection.execute(
-            """
-            SELECT decision, favorable, context_json
-            FROM signal_observations
-            WHERE observed_date >= date('now', ?)
-            """,
-            (f"-{int(days)} day",),
-        ).fetchall()
-
-    impacted: list[tuple[str, bool | None, float]] = []
-    for row in rows:
-        context: dict[str, Any] = {}
-        raw_context = str(row["context_json"] or "")
-        if raw_context:
-            try:
-                context = json.loads(raw_context)
-            except Exception:
-                continue
-        try:
-            adjustment = float(context.get("news_priority_adjustment") or 0.0)
-        except (TypeError, ValueError):
-            adjustment = 0.0
-        if abs(adjustment) < 0.001:
-            continue
-        favorable_raw = row["favorable"]
-        favorable = bool(favorable_raw) if favorable_raw is not None else None
-        impacted.append((str(row["decision"] or ""), favorable, adjustment))
-
-    selected = [item for item in impacted if item[0] == "selected"]
-    evaluated_selected = [item for item in selected if item[1] is not None]
-    favorable_selected = sum(1 for _, favorable, _ in evaluated_selected if favorable)
-    return {
-        "days": int(days),
-        "total_count": len(impacted),
-        "boost_count": sum(1 for _, _, adjustment in impacted if adjustment > 0.0),
-        "penalty_count": sum(1 for _, _, adjustment in impacted if adjustment < 0.0),
-        "selected_count": len(selected),
-        "deferred_count": sum(1 for decision, _, _ in impacted if decision == "deferred"),
-        "evaluated_selected_count": len(evaluated_selected),
-        "favorable_selected_count": favorable_selected,
-        "selected_win_rate_pct": round(
-            favorable_selected / len(evaluated_selected) * 100.0,
-            1,
-        ) if evaluated_selected else 0.0,
-    }
 
 
 def update_signal_observation_outcome(
@@ -806,8 +383,6 @@ def _row_to_db_tuple(row: dict[str, Any], storage_order: int) -> tuple[Any, ...]
         str(row.get("session") or ""),
         str(row.get("broker_op_id") or ""),
         str(_context_value(context, "higher_tf_bias", "")),
-        str(_context_value(context, "news_bias", "")),
-        str(_context_value(context, "news_impact", "")),
         int(_context_value(context, "allocator_quantity", 0) or 0),
         str(_context_value(context, "allocator_summary", "")),
         int(_context_value(context, "entry_allocator_quantity", 0) or 0),
@@ -833,10 +408,10 @@ def sync_journal_to_db(journal_path: Path, db_path: Path) -> None:
                 event_uid, storage_order, time, trade_date, symbol, display_name, event, side,
                 qty_lots, lot_size, price, pnl_rub, gross_pnl_rub, commission_rub, net_pnl_rub,
                 reason, source, strategy, mode, session, broker_op_id,
-                higher_tf_bias, news_bias, news_impact, allocator_quantity, allocator_summary,
+                higher_tf_bias, allocator_quantity, allocator_summary,
                 entry_allocator_quantity, entry_allocator_summary, signal_summary_json,
                 execution_status, context_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [_row_to_db_tuple(row, index) for index, row in enumerate(rows)],
         )
@@ -854,10 +429,10 @@ def append_trade_row(db_path: Path, row: dict[str, Any]) -> None:
                 event_uid, storage_order, time, trade_date, symbol, display_name, event, side,
                 qty_lots, lot_size, price, pnl_rub, gross_pnl_rub, commission_rub, net_pnl_rub,
                 reason, source, strategy, mode, session, broker_op_id,
-                higher_tf_bias, news_bias, news_impact, allocator_quantity, allocator_summary,
+                higher_tf_bias, allocator_quantity, allocator_summary,
                 entry_allocator_quantity, entry_allocator_summary, signal_summary_json,
                 execution_status, context_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             _row_to_db_tuple(row, next_order),
         )
@@ -880,8 +455,6 @@ def _row_from_db(item: sqlite3.Row) -> dict[str, Any]:
             context["signal_summary"] = []
     for key in (
         "higher_tf_bias",
-        "news_bias",
-        "news_impact",
         "allocator_quantity",
         "allocator_summary",
         "entry_allocator_quantity",
@@ -895,8 +468,6 @@ def _row_from_db(item: sqlite3.Row) -> dict[str, Any]:
         "storage_order",
         "trade_date",
         "higher_tf_bias",
-        "news_bias",
-        "news_impact",
         "allocator_quantity",
         "allocator_summary",
         "entry_allocator_quantity",

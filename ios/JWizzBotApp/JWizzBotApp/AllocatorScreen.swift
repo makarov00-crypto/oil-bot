@@ -165,7 +165,6 @@ struct AllocatorScreen: View {
                        left.symbol != right.symbol {
                         comparisonRow("Приоритет", left.priorityScore, right.priorityScore, left.symbol, right.symbol)
                         comparisonRow("Качество входа", left.entryEdgeScore, right.entryEdgeScore, left.symbol, right.symbol)
-                        comparisonRow("Новости", left.priorityComponents["новости"] ?? 0, right.priorityComponents["новости"] ?? 0, left.symbol, right.symbol)
                         comparisonRow("Обучение", left.priorityComponents["обучение"] ?? 0, right.priorityComponents["обучение"] ?? 0, left.symbol, right.symbol)
                     }
                 }

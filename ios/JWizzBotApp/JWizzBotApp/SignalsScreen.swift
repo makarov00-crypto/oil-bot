@@ -57,12 +57,10 @@ struct SignalsScreen: View {
 
                                     HStack(spacing: 8) {
                                         SignalPill(text: displayScope(for: state), raw: scopeRaw(for: state))
-                                        SignalPill(text: displayBias(state.newsBias), raw: state.newsBias)
                                     }
 
                                     Divider().overlay(Color.white.opacity(0.08))
 
-                                    InfoRow(title: "Новости", value: newsSummary(for: state))
                                     if let allocator = state.lastAllocatorSummary, !allocator.isEmpty {
                                         InfoRow(title: "Аллокатор", value: allocatorSummary(allocator))
                                     }
@@ -179,13 +177,6 @@ struct SignalsScreen: View {
             return "UNIFIED"
         }
         return "LEGACY"
-    }
-
-    private func newsSummary(for state: InstrumentSignalState) -> String {
-        let bias = displayBias(state.newsBias)
-        let impact = (state.newsImpact ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !impact.isEmpty, impact != "-" else { return bias }
-        return "\(bias) · \(shortSummary(impact, limit: 120))"
     }
 
     private func allocatorSummary(_ raw: String) -> String {

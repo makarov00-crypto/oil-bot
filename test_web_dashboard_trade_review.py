@@ -49,31 +49,8 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn("dayVmBreakdownBody", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_news_coverage_payload_includes_human_keywords(self) -> None:
-        payload = dashboard.build_news_coverage_payload()
-        ozon_symbol = get_active_contract_symbol("ONU6")
-        gas_symbol = get_active_contract_symbol("NGK6")
-        brent_symbol = get_active_contract_symbol("BRK6")
-
-        self.assertFalse(payload["missing_symbols"])
-        self.assertEqual(brent_symbol, "BRX6")
-        self.assertIn(brent_symbol, payload["news_symbols"])
-        self.assertNotIn("BRV6", payload["news_symbols"])
-        self.assertIn(ozon_symbol, payload["news_symbols"])
-        self.assertEqual(gas_symbol, "NGZ6")
-        self.assertIn(gas_symbol, payload["news_symbols"])
-        self.assertNotIn("NGU6", payload["news_symbols"])
-        self.assertIn("баррель", payload["keyword_samples"][brent_symbol])
-        self.assertIn("озон", payload["keyword_samples"][ozon_symbol])
-        self.assertIn("природный газ", payload["keyword_samples"][gas_symbol])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
-    def test_dashboard_hides_internal_news_keyword_dictionary(self) -> None:
-        html = dashboard.build_dashboard_html()
-
-        self.assertNotIn("Слова для поиска", html)
-        self.assertNotIn("keywordSamples", html)
-        self.assertIn("news-overview", html)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_trade_quality_tabs_use_structured_cards(self) -> None:
@@ -112,7 +89,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertNotIn("AI-разбор дня", html)
         self.assertNotIn("AI-разбор", html)
         self.assertNotIn("Проверка ИИ", html)
-        self.assertNotIn("news-ai-summary", html)
+        self.assertNotIn("Новости", html)
         self.assertNotIn("shadowAiCandidates", html)
         self.assertNotIn("aiReviewRefreshBtn", html)
         self.assertNotIn("/api/ai-review/refresh", paths)
@@ -843,18 +820,19 @@ class DashboardTradeReviewTests(unittest.TestCase):
         ), patch.object(dashboard, "get_bot_service_status", return_value={}), patch.object(
             dashboard, "build_health_payload", return_value={}
         ), patch.object(dashboard, "build_capital_alert", return_value={}), patch.object(
-            dashboard, "load_news_snapshot", return_value={}
-        ), patch.object(dashboard, "load_trade_review_for_day", return_value={}), patch.object(
+            dashboard, "load_trade_review_for_day", return_value={}
+        ), patch.object(
             dashboard, "load_allocator_decisions_for_day", return_value=[]
         ), patch.object(dashboard, "load_signal_observation_summary_for_day", return_value={}), patch.object(
             dashboard, "summarize_states", return_value={}
         ), patch.object(dashboard, "load_meta", return_value={}), patch.object(
             dashboard, "build_manual_instruments_payload", return_value=[]
         ), patch.object(dashboard, "build_daily_performance", return_value={}):
-            dashboard.api_dashboard("2026-04-24")
+            payload = dashboard.api_dashboard("2026-04-24")
 
         rows_mock.assert_called_once_with(date(2026, 4, 24), None)
         annotate_mock.assert_called_once()
+        self.assertNotIn("news", payload)
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_instrument_catalog_has_labels_for_all_dashboard_symbols(self) -> None:
@@ -1123,8 +1101,6 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "priority_score": 0.84,
                     "learning_adjustment": -0.08,
                     "learning_reason": "обучение связки: штраф -0.08, 0% подтверждений, 10 наблюд., среднее движение -1.61%",
-                    "news_priority_adjustment": 0.10,
-                    "news_priority_reason": "новости подтверждают сигнал: +0.10",
                 },
                 {
                     "time": "2026-04-23T10:15:00+03:00",
@@ -1146,8 +1122,6 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(loaded[0]["time_display"], "10:15:00")
         self.assertEqual(loaded[0]["learning_adjustment"], -0.08)
         self.assertIn("штраф -0.08", loaded[0]["learning_reason"])
-        self.assertEqual(loaded[0]["news_priority_adjustment"], 0.10)
-        self.assertIn("новости подтверждают", loaded[0]["news_priority_reason"])
 
     @unittest.skipIf(dashboard is None, f"web_dashboard dependencies are unavailable: {IMPORT_ERROR}")
     def test_allocator_workspace_explains_ranked_and_blocked_signals(self) -> None:
@@ -1163,7 +1137,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
                     "priority_score": 0.84,
                     "entry_edge_score": 0.80,
                     "context": {
-                        "priority_components": {"качество входа": 0.44, "новости": 0.10},
+                        "priority_components": {"качество входа": 0.44},
                         "allocator_summary": "Аллокатор одобрил вход.",
                         "allocator_quantity": 2,
                         "requested_margin_rub": 4000.0,
@@ -1198,7 +1172,7 @@ class DashboardTradeReviewTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["capital_blocked"], 1)
         self.assertEqual(payload["candidates"][0]["decision_display"], "заявка отправлена")
         self.assertEqual(payload["candidates"][1]["decision_display"], "не дошёл до рейтинга")
-        self.assertIn("новости", payload["candidates"][0]["priority_components"])
+        self.assertEqual(payload["candidates"][0]["priority_components"], {"качество входа": 0.44})
         self.assertEqual(payload["candidates"][1]["open_risk_available_rub"], 43.0)
         self.assertEqual(payload["candidates"][1]["risk_per_contract_rub"], 47.0)
         self.assertEqual(payload["candidates"][1]["signal_summary"], ["MACD cross вниз: нет"])

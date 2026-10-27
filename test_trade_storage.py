@@ -9,18 +9,11 @@ from unittest.mock import patch
 import bot_oil_main as mod
 import trade_storage
 from trade_storage import (
-    append_news_event,
     append_signal_observation,
     ensure_trade_db,
-    load_news_events,
     load_signal_observations,
     load_trade_rows,
-    mark_news_event_outcome_unavailable,
     mark_signal_observation_outcome_unavailable,
-    summarize_news_analytics,
-    summarize_news_allocator_impact,
-    summarize_news_source_stats,
-    update_news_event_outcome,
     update_signal_observation_context,
     update_signal_observation_outcome,
 )
@@ -30,246 +23,13 @@ class TradeStorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.instrument = mod.InstrumentConfig(symbol="TEST", figi="FIGI", display_name="Test")
 
-    def test_news_events_are_deduped_and_summarized(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
-            observed_at = datetime.now(timezone.utc).isoformat()
-            row = {
-                "observed_at": observed_at,
-                "symbol": "USDRUBF",
-                "category": "валюта",
-                "bias": "LONG",
-                "strength": "HIGH",
-                "source": "finam",
-                "source_label": "Финам",
-                "source_type": "broker",
-                "source_speed": 0.65,
-                "source_reliability": 0.92,
-                "source_count": 1,
-                "confirming_sources": ["Финам"],
-                "horizon": "INTRADAY",
-                "actionability": "ACTION",
-                "score": 8.5,
-                "reason": "Новость подтверждает рост доллара",
-                "summary": "USDRUBF: фон в лонг",
-                "topics": ["usd/rub"],
-                "message_url": "https://example.com/news/1",
-                "message_text": "USD/RUB выше",
-                "ai_direction": "LONG",
-                "ai_strength": "HIGH",
-                "ai_confidence": 0.8,
-                "ai_horizon": "INTRADAY",
-                "ai_event_type": "валютный импульс",
-                "ai_reason": "AI подтвердил направление",
-                "ai_risk": "шум",
-                "expires_at": "2026-05-12T14:00:00+03:00",
-                "observed_price": 75.0,
-                "horizon_minutes": 240,
-            }
 
-            first_uid = append_news_event(db_path, row)
-            second_uid = append_news_event(db_path, {**row, "observed_at": observed_at})
-            rows = load_news_events(db_path)
 
-            self.assertEqual(first_uid, second_uid)
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["confirming_sources"], ["Финам"])
-            self.assertEqual(rows[0]["topics"], ["usd/rub"])
 
-            update_news_event_outcome(
-                db_path,
-                first_uid,
-                evaluated_at="2026-05-12T14:00:00+03:00",
-                current_price=76.0,
-                move_pct=1.3333,
-                favorable=True,
-            )
-            stats = summarize_news_source_stats(db_path, days=100, limit=5)
-
-            self.assertEqual(len(stats), 1)
-            self.assertEqual(stats[0]["source_label"], "Финам")
-            self.assertEqual(stats[0]["win_rate_pct"], 100.0)
-            self.assertEqual(stats[0]["avg_move_pct"], 1.3333)
-
-    def test_news_analytics_excludes_unavailable_events_from_quality(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
-            observed_at = datetime.now(timezone.utc).isoformat()
-            base = {
-                "observed_at": observed_at,
-                "category": "валюта",
-                "strength": "HIGH",
-                "source": "finam",
-                "source_label": "Финам",
-                "source_type": "broker",
-                "horizon": "INTRADAY",
-                "actionability": "ACTION",
-                "score": 8.5,
-                "summary": "Тестовый новостной сигнал",
-                "horizon_minutes": 240,
-            }
-            confirmed_uid = append_news_event(
-                db_path,
-                {
-                    **base,
-                    "symbol": "USDRUBF",
-                    "bias": "LONG",
-                    "message_url": "https://example.com/news/confirmed",
-                    "ai_direction": "LONG",
-                },
-            )
-            conflict_uid = append_news_event(
-                db_path,
-                {
-                    **base,
-                    "symbol": "CNYRUBF",
-                    "bias": "SHORT",
-                    "message_url": "https://example.com/news/conflict",
-                    "ai_direction": "LONG",
-                    "actionability": "WATCH",
-                },
-            )
-            unavailable_uid = append_news_event(
-                db_path,
-                {
-                    **base,
-                    "symbol": "GNU6",
-                    "bias": "LONG",
-                    "message_url": "https://example.com/news/unavailable",
-                },
-            )
-            update_news_event_outcome(
-                db_path,
-                confirmed_uid,
-                evaluated_at=observed_at,
-                current_price=101.0,
-                move_pct=1.0,
-                favorable=True,
-            )
-            update_news_event_outcome(
-                db_path,
-                conflict_uid,
-                evaluated_at=observed_at,
-                current_price=99.0,
-                move_pct=-1.0,
-                favorable=False,
-            )
-            mark_news_event_outcome_unavailable(
-                db_path,
-                unavailable_uid,
-                checked_at=observed_at,
-                note="историческая свеча недоступна",
-            )
-
-            pending_rows = load_news_events(db_path, unevaluated_only=True)
-            analytics = summarize_news_analytics(db_path, days=10000)
-
-            self.assertEqual(pending_rows, [])
-            self.assertEqual(analytics["total_count"], 3)
-            self.assertEqual(analytics["evaluated_count"], 2)
-            self.assertEqual(analytics["unavailable_count"], 1)
-            self.assertEqual(analytics["favorable_count"], 1)
-            self.assertEqual(analytics["win_rate_pct"], 50.0)
-            self.assertEqual(analytics["ai_confirmation"][0]["label"], "ИИ подтвердил")
-
-    def test_unavailable_news_horizon_is_not_retried_forever(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
-            observed_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-            news_uid = append_news_event(
-                db_path,
-                {
-                    "observed_at": observed_at,
-                    "symbol": "TEST",
-                    "bias": "LONG",
-                    "source": "test",
-                    "summary": "Тестовая новость",
-                    "observed_price": 100.0,
-                    "horizon_minutes": 60,
-                },
-            )
-            with patch.object(mod, "TRADE_DB_PATH", db_path), patch.object(
-                mod,
-                "get_price_near_observation_horizon",
-                return_value=None,
-            ) as horizon_price:
-                mod.update_news_event_outcomes(None, None, [self.instrument])
-                mod.update_news_event_outcomes(None, None, [self.instrument])
-
-            rows = load_news_events(db_path)
-            self.assertEqual(rows[0]["news_uid"], news_uid)
-            self.assertEqual(rows[0]["outcome_status"], "UNAVAILABLE")
-            self.assertIn("историческая минутная свеча", rows[0]["outcome_note"])
-            self.assertEqual(horizon_price.call_count, 1)
-
-    def test_news_allocator_impact_counts_only_changed_priorities(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "bot_state" / "trade_analytics.sqlite3"
-            observed_at = datetime.now(timezone.utc).isoformat()
-            base = {
-                "observed_at": observed_at,
-                "strategy": "reversal_1h",
-                "signal": "LONG",
-                "horizon_minutes": 60,
-            }
-            append_signal_observation(
-                db_path,
-                {
-                    **base,
-                    "symbol": "GNU6",
-                    "decision": "selected",
-                    "observation_key": "news-boost",
-                    "favorable": True,
-                    "context": {"news_priority_adjustment": 0.10},
-                },
-            )
-            append_signal_observation(
-                db_path,
-                {
-                    **base,
-                    "symbol": "RBU6",
-                    "decision": "deferred",
-                    "observation_key": "news-deferred",
-                    "context": {"news_priority_adjustment": 0.10},
-                },
-            )
-            append_signal_observation(
-                db_path,
-                {
-                    **base,
-                    "symbol": "BMQ6",
-                    "decision": "selected",
-                    "observation_key": "news-penalty",
-                    "favorable": False,
-                    "context": {"news_priority_adjustment": -0.10},
-                },
-            )
-            append_signal_observation(
-                db_path,
-                {
-                    **base,
-                    "symbol": "IMOEXF",
-                    "decision": "selected",
-                    "observation_key": "without-news",
-                    "favorable": True,
-                    "context": {"news_priority_adjustment": 0.0},
-                },
-            )
-
-            impact = summarize_news_allocator_impact(db_path, days=10000)
-
-            self.assertEqual(impact["total_count"], 3)
-            self.assertEqual(impact["boost_count"], 2)
-            self.assertEqual(impact["penalty_count"], 1)
-            self.assertEqual(impact["selected_count"], 2)
-            self.assertEqual(impact["deferred_count"], 1)
-            self.assertEqual(impact["selected_win_rate_pct"], 50.0)
 
     def test_append_trade_journal_persists_context_to_sqlite(self) -> None:
         state = mod.InstrumentState(
             last_higher_tf_bias="LONG",
-            last_news_bias="LONG_HIGH",
-            last_news_impact="сильный трендовый фон",
             last_market_regime="trend_expansion",
             last_setup_quality_label="strong",
             last_setup_quality_score=5,
@@ -317,7 +77,6 @@ class TradeStorageTests(unittest.TestCase):
 
                 db_rows = load_trade_rows(journal_path, db_path)
                 self.assertEqual(len(db_rows), 1)
-                self.assertEqual(db_rows[0]["context"]["news_bias"], "LONG_HIGH")
                 self.assertEqual(db_rows[0]["context"]["execution_status"], "confirmed_open")
                 self.assertEqual(db_rows[0]["context"]["setup_quality_score"], 5)
 
@@ -399,10 +158,10 @@ class TradeStorageTests(unittest.TestCase):
                         event_uid, storage_order, time, trade_date, symbol, display_name, event, side,
                         qty_lots, lot_size, price, pnl_rub, gross_pnl_rub, commission_rub, net_pnl_rub,
                         reason, source, strategy, mode, session, broker_op_id,
-                        higher_tf_bias, news_bias, news_impact, allocator_quantity, allocator_summary,
+                        higher_tf_bias, allocator_quantity, allocator_summary,
                         entry_allocator_quantity, entry_allocator_summary, signal_summary_json,
                         execution_status, context_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         "stale-open",
@@ -423,8 +182,6 @@ class TradeStorageTests(unittest.TestCase):
                         "",
                         "",
                         "opening_range_breakout",
-                        "",
-                        "",
                         "",
                         "",
                         "",
