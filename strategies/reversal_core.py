@@ -168,6 +168,8 @@ def evaluate_signal_core(
     *,
     timeframe_minutes: int,
     strategy_label: str,
+    _regime_override: str | None = None,
+    _allow_mixed_confirmation: bool = True,
 ) -> tuple[str, str]:
     profile = get_profile(instrument.symbol, timeframe_minutes)
     if len(df) < 8:
@@ -264,15 +266,16 @@ def evaluate_signal_core(
     )
 
     if compression:
-        regime = "compression"
+        detected_regime = "compression"
     elif chop:
-        regime = "chop"
+        detected_regime = "chop"
     elif expansion_up or expansion_down:
-        regime = "expansion"
+        detected_regime = "expansion"
     elif trend_up or trend_down:
-        regime = "trend"
+        detected_regime = "trend"
     else:
-        regime = "mixed"
+        detected_regime = "mixed"
+    regime = _regime_override or detected_regime
     path_efficiency_6h = _path_efficiency(recent["close"].tail(6).tolist())
     entry_regime_quality_ok = (
         regime == "trend"
@@ -662,6 +665,58 @@ def evaluate_signal_core(
         if early_momentum_short_ok and not normal_short_ok:
             short_reasons.append("ранний импульс AO: две снижающиеся свечи ниже нуля, стартовый размер 50%")
         return "SHORT", f"Сигнал SHORT ({strategy_label}): " + "; ".join(short_reasons) + "."
+    if (
+        _allow_mixed_confirmation
+        and detected_regime == "mixed"
+        and path_efficiency_6h > MIN_TREND_PATH_EFFICIENCY_6H
+        and len(df) >= 9
+    ):
+        previous_df = df.iloc[:-1]
+        current_shadow_signal, current_shadow_reason = evaluate_signal_core(
+            df,
+            config,
+            instrument,
+            higher_tf_bias,
+            timeframe_minutes=timeframe_minutes,
+            strategy_label=strategy_label,
+            _regime_override="trend",
+            _allow_mixed_confirmation=False,
+        )
+        if current_shadow_signal in {"LONG", "SHORT"}:
+            previous_signal, previous_reason = evaluate_signal_core(
+                previous_df,
+                config,
+                instrument,
+                higher_tf_bias,
+                timeframe_minutes=timeframe_minutes,
+                strategy_label=strategy_label,
+                _allow_mixed_confirmation=False,
+            )
+            previous_shadow_signal, _ = evaluate_signal_core(
+                previous_df,
+                config,
+                instrument,
+                higher_tf_bias,
+                timeframe_minutes=timeframe_minutes,
+                strategy_label=strategy_label,
+                _regime_override="trend",
+                _allow_mixed_confirmation=False,
+            )
+            previous_was_mixed_hold = previous_signal == "HOLD" and "режим=mixed" in previous_reason
+        else:
+            previous_was_mixed_hold = False
+            previous_shadow_signal = "HOLD"
+        if previous_was_mixed_hold and current_shadow_signal == previous_shadow_signal:
+            mixed_reason = current_shadow_reason.replace(
+                "режим=trend",
+                "режим=mixed→impulse",
+                1,
+            )
+            return (
+                current_shadow_signal,
+                mixed_reason[:-1]
+                + "; mixed→impulse: два часовых подтверждения, стартовый размер 50%.",
+            )
     return (
         "HOLD",
         f"Сигнал HOLD ({strategy_label}): long не подтверждён ["

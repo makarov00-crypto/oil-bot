@@ -566,6 +566,84 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(signal, "HOLD")
         self.assertIn("только в устойчивом тренде", reason)
 
+    def test_unified_reversal_admits_mixed_after_two_full_trend_confirmations(self) -> None:
+        rows = []
+        closes = [99.0, 99.2, 99.4, 99.6, 99.8, 100.0, 100.2, 100.4, 100.6]
+        macd_values = [-0.05, -0.04, -0.03, -0.02, -0.01, 0.01, 0.03, 0.05, 0.07]
+        ao_values = [-0.04, -0.03, -0.02, -0.01, 0.01, 0.03, 0.05, 0.07, 0.09]
+        for index, close in enumerate(closes):
+            rows.append(
+                {
+                    "open": close - 0.12,
+                    "high": close + 0.10,
+                    "low": close - 0.16,
+                    "close": close,
+                    "ema20": close - 0.10,
+                    "ema50": 102.0,
+                    "rsi": 46.0 + index * 1.5,
+                    "macd": macd_values[index],
+                    "macd_signal": 0.0,
+                    "ao": ao_values[index],
+                    "chaikin": float(index),
+                    "volume": 120.0,
+                    "volume_avg": 100.0,
+                    "body": 0.60,
+                    "body_avg": 0.50,
+                    "atr": 0.30,
+                    "stoch_k": 70.0,
+                    "stoch_d": 65.0,
+                }
+            )
+        instrument = InstrumentConfig(symbol="VBM6", figi="FIGI", display_name="VTB")
+
+        first_signal, _ = evaluate_reversal_1h(candle_rows(rows[:-1]), self.config, instrument, "")
+        second_signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(first_signal, "HOLD")
+        self.assertEqual(second_signal, "LONG")
+        self.assertIn("режим=mixed→impulse", reason)
+        self.assertIn("два часовых подтверждения", reason)
+        self.assertIn("стартовый размер 50%", reason)
+        self.assertEqual(mod.resolve_entry_path(second_signal, "reversal_1h", reason), "early_momentum")
+
+    def test_unified_reversal_admits_mixed_short_after_two_full_trend_confirmations(self) -> None:
+        rows = []
+        closes = [101.0, 100.8, 100.6, 100.4, 100.2, 100.0, 99.8, 99.6, 99.4]
+        macd_values = [0.05, 0.04, 0.03, 0.02, 0.01, -0.01, -0.03, -0.05, -0.07]
+        ao_values = [0.04, 0.03, 0.02, 0.01, -0.01, -0.03, -0.05, -0.07, -0.09]
+        for index, close in enumerate(closes):
+            rows.append(
+                {
+                    "open": close + 0.12,
+                    "high": close + 0.16,
+                    "low": close - 0.10,
+                    "close": close,
+                    "ema20": close + 0.10,
+                    "ema50": 98.0,
+                    "rsi": 54.0 - index * 1.5,
+                    "macd": macd_values[index],
+                    "macd_signal": 0.0,
+                    "ao": ao_values[index],
+                    "chaikin": -float(index),
+                    "volume": 120.0,
+                    "volume_avg": 100.0,
+                    "body": 0.60,
+                    "body_avg": 0.50,
+                    "atr": 0.30,
+                    "stoch_k": 30.0,
+                    "stoch_d": 35.0,
+                }
+            )
+        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
+
+        first_signal, _ = evaluate_reversal_1h(candle_rows(rows[:-1]), self.config, instrument, "")
+        second_signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(first_signal, "HOLD")
+        self.assertEqual(second_signal, "SHORT")
+        self.assertIn("режим=mixed→impulse", reason)
+        self.assertEqual(mod.resolve_entry_path(second_signal, "reversal_1h", reason), "early_momentum")
+
     def test_unified_exit_waits_for_ao_exhaustion_after_peak(self) -> None:
         premature = candle_rows(
             [

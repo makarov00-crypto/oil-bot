@@ -5316,6 +5316,19 @@ def is_unified_reversal_strategy(strategy_name: str | None) -> bool:
     return str(strategy_name or "").strip().lower() in UNIFIED_REVERSAL_STRATEGIES
 
 
+def resolve_entry_path(signal: str, strategy_name: str, reason: str) -> str:
+    if signal not in {"LONG", "SHORT"}:
+        return ""
+    normalized_reason = str(reason or "").lower()
+    if "позднее подтверждение ao" in normalized_reason:
+        return "delayed_ao_confirmation"
+    if strategy_name == "ao_chaikin_1h":
+        return "fast_ao_confirmation"
+    if "ранний импульс ao" in normalized_reason or "mixed→impulse" in normalized_reason:
+        return "early_momentum"
+    return "standard"
+
+
 def is_local_hourly_strategy(strategy_name: str | None) -> bool:
     return is_unified_reversal_strategy(strategy_name) or is_ao_chaikin_strategy(strategy_name)
 
@@ -11138,17 +11151,7 @@ def process_instrument(
     state.last_market_regime_reason = str(regime_metrics.get("regime_reason") or "")
     state.last_setup_quality_score = setup_quality_score
     state.last_setup_quality_label = setup_quality_label
-    state.last_entry_path = (
-        "delayed_ao_confirmation"
-        if signal in {"LONG", "SHORT"} and "позднее подтверждение ao" in reason.lower()
-        else "fast_ao_confirmation"
-        if signal in {"LONG", "SHORT"} and primary_strategy_name == "ao_chaikin_1h"
-        else "early_momentum"
-        if signal in {"LONG", "SHORT"} and "ранний импульс ao" in reason.lower()
-        else "standard"
-        if signal in {"LONG", "SHORT"}
-        else ""
-    )
+    state.last_entry_path = resolve_entry_path(signal, primary_strategy_name, reason)
     entry_edge_score, entry_edge_label, entry_edge_reason = get_entry_edge_profile(
         state,
         instrument.symbol,
