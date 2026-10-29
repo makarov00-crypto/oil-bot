@@ -128,7 +128,7 @@ class PositionSizingTests(unittest.TestCase):
             )
 
         self.assertGreaterEqual(sizing["qty_by_target"], 3)
-        self.assertEqual(sizing["quantity"], sizing["qty_by_target"])
+        self.assertEqual(sizing["quantity"], 1)
 
     def test_srm6_short_can_use_single_lot_when_working_budget_is_almost_enough(self) -> None:
         instrument = mod.InstrumentConfig(
@@ -364,7 +364,7 @@ class PositionSizingTests(unittest.TestCase):
         self.assertGreater(sizing["adaptive_size_multiplier"], 1.15)
         self.assertEqual(sizing["entry_edge_label"], "high")
 
-    def test_floating_point_edge_at_strong_boundary_gets_strong_risk_budget(self) -> None:
+    def test_unified_reversal_does_not_raise_risk_at_strong_boundary(self) -> None:
         self.config.risk_per_trade_pct = 0.01
         self.config.max_open_risk_pct = 0.10
         self.config.symbols = ["CNYRUBF"]
@@ -395,11 +395,12 @@ class PositionSizingTests(unittest.TestCase):
             )
 
         self.assertEqual(sizing["entry_edge_score"], 0.8)
-        self.assertEqual(sizing["risk_tier"], "сильный, без расширения риска")
-        self.assertEqual(sizing["risk_multiplier"], 1.4)
-        self.assertEqual(sizing["risk_budget_rub"], 1400.0)
+        self.assertEqual(sizing["risk_tier"], "проверочный: без повышения риска")
+        self.assertEqual(sizing["risk_multiplier"], 1.0)
+        self.assertEqual(sizing["risk_budget_rub"], 1000.0)
+        self.assertLessEqual(sizing["quantity"], 1)
 
-    def test_real_edge_below_strong_boundary_keeps_good_risk_budget(self) -> None:
+    def test_unified_reversal_keeps_base_risk_below_strong_boundary(self) -> None:
         self.config.risk_per_trade_pct = 0.01
         self.config.max_open_risk_pct = 0.10
         self.config.symbols = ["CNYRUBF"]
@@ -430,9 +431,10 @@ class PositionSizingTests(unittest.TestCase):
             )
 
         self.assertEqual(sizing["entry_edge_score"], 0.79)
-        self.assertEqual(sizing["risk_tier"], "хороший")
-        self.assertEqual(sizing["risk_multiplier"], 1.4)
-        self.assertEqual(sizing["risk_budget_rub"], 1400.0)
+        self.assertEqual(sizing["risk_tier"], "проверочный: без повышения риска")
+        self.assertEqual(sizing["risk_multiplier"], 1.0)
+        self.assertEqual(sizing["risk_budget_rub"], 1000.0)
+        self.assertLessEqual(sizing["quantity"], 1)
 
     def test_fragile_edge_reduces_entry_multiplier(self) -> None:
         self.state.last_setup_quality_label = "medium"
@@ -592,7 +594,7 @@ class PositionSizingTests(unittest.TestCase):
 
         self.assertEqual(sizing["broker_limit"], 12)
         self.assertEqual(sizing["broker_leverage_target_lots"], 9)
-        self.assertEqual(sizing["quantity"], 9)
+        self.assertEqual(sizing["quantity"], 1)
 
     def test_reversal_confirmed_edge_uses_part_of_broker_limit(self) -> None:
         state = mod.InstrumentState(
@@ -631,7 +633,7 @@ class PositionSizingTests(unittest.TestCase):
 
         self.assertEqual(sizing["broker_limit"], 9)
         self.assertEqual(sizing["broker_leverage_target_lots"], 5)
-        self.assertEqual(sizing["quantity"], 5)
+        self.assertEqual(sizing["quantity"], 1)
 
     def test_stop_risk_is_a_hard_cap_after_broker_leverage(self) -> None:
         self.config.risk_per_trade_pct = 0.05
@@ -665,8 +667,8 @@ class PositionSizingTests(unittest.TestCase):
                 None, self.config, self.instrument, self.state, 10.0, "LONG", self.live_strategy
             )
 
-        self.assertEqual(sizing["qty_by_risk"], 2)
-        self.assertEqual(sizing["quantity"], 2)
+        self.assertEqual(sizing["qty_by_risk"], 1)
+        self.assertEqual(sizing["quantity"], 1)
 
     def test_open_positions_consume_the_shared_stop_risk_budget(self) -> None:
         self.config.risk_per_trade_pct = 0.05

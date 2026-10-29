@@ -1182,7 +1182,7 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(reason, "")
 
-    def test_fx_reentry_allows_strong_fresh_impulse_without_waiting_for_new_extreme(self) -> None:
+    def test_fx_reentry_does_not_bypass_new_extreme_after_loss(self) -> None:
         instrument = mod.InstrumentConfig(
             symbol="CNYRUBF",
             figi="FIGI",
@@ -1206,8 +1206,8 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
 
         allowed, reason = mod.position_reentry_allowed(state, instrument, "LONG", 10.938)
 
-        self.assertTrue(allowed)
-        self.assertEqual(reason, "")
+        self.assertFalse(allowed)
+        self.assertIn("нового экстремума", reason)
 
     def test_ngj6_rsi_profit_reentry_requires_new_extreme(self) -> None:
         instrument = mod.InstrumentConfig(
@@ -1320,9 +1320,10 @@ class DelayedCloseRecoveryTests(unittest.TestCase):
             display_name="MOEX",
             min_price_increment=1.0,
         )
+        last_exit_at = datetime.now(timezone.utc) - timedelta(minutes=5)
         state = mod.InstrumentState(
-            trading_day=datetime.now(timezone.utc).astimezone(mod.MOSCOW_TZ).date().isoformat(),
-            last_exit_time=(datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            trading_day=last_exit_at.astimezone(mod.MOSCOW_TZ).date().isoformat(),
+            last_exit_time=last_exit_at.isoformat(),
             last_exit_side="SHORT",
             last_exit_price=2600.0,
             last_exit_reason="Внешнее закрытие у брокера: API не передал торговую причину операции.",

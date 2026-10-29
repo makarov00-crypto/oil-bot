@@ -49,6 +49,7 @@ from strategies.reversal_exit_protection import (
     advance_reversal_protection,
     new_reversal_protection_state,
 )
+from strategies.reversal_core import classify_multiday_direction
 from strategies.reversal_1h import STRATEGY_VERSION as REVERSAL_STRATEGY_VERSION
 from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from trade_storage import (
@@ -5860,7 +5861,7 @@ def normalize_entry_edge_score(value: float) -> float:
     return round(float(value or 0.0), 2)
 
 
-def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, dict[str, float | str]]:
+def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, dict[str, float | str | bool]]:
     last = df.iloc[-1]
     recent = df.iloc[-5:] if len(df) >= 5 else df
     close = float(last["close"])
@@ -5963,6 +5964,8 @@ def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, 
         reason_parts = ["сигналы режима смешаны", "нет устойчивого преимущества", "нужна аккуратность"]
     regime_reason = ", ".join(reason_parts[:3])
 
+    multiday_long = classify_multiday_direction(df, "LONG")
+    multiday_short = classify_multiday_direction(df, "SHORT")
     return regime, {
         "atr_pct": atr_pct,
         "volume_ratio": volume_ratio,
@@ -5975,6 +5978,16 @@ def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, 
         "regime_top_score": round(top_score, 4),
         "regime_score_gap": round(score_gap, 4),
         "regime_reason": regime_reason,
+        "multiday_long_available": bool(multiday_long.get("available")),
+        "multiday_long_regime": str(multiday_long.get("regime") or "unknown"),
+        "multiday_long_score": float(multiday_long.get("stable_score") or 0.0),
+        "multiday_long_move_48_atr": float(multiday_long.get("move_48_atr") or 0.0),
+        "multiday_long_efficiency_24": float(multiday_long.get("efficiency_24") or 0.0),
+        "multiday_short_available": bool(multiday_short.get("available")),
+        "multiday_short_regime": str(multiday_short.get("regime") or "unknown"),
+        "multiday_short_score": float(multiday_short.get("stable_score") or 0.0),
+        "multiday_short_move_48_atr": float(multiday_short.get("move_48_atr") or 0.0),
+        "multiday_short_efficiency_24": float(multiday_short.get("efficiency_24") or 0.0),
     }
 
 
@@ -5982,7 +5995,7 @@ def estimate_setup_quality(
     signal: str,
     higher_tf_bias: str,
     market_regime: str,
-    metrics: dict[str, float | str],
+    metrics: dict[str, float | str | bool],
     strategy_name: str = "",
 ) -> tuple[int, str]:
     if signal not in {"LONG", "SHORT"}:
@@ -5995,15 +6008,16 @@ def estimate_setup_quality(
 
     if not is_unified_reversal and higher_tf_bias == signal:
         score += 1
-    volume_threshold = 0.55 if is_unified_reversal else 1.0
-    body_threshold = 0.35 if is_unified_reversal else 0.8
+    volume_threshold = 1.0
+    body_threshold = 0.75 if is_unified_reversal else 0.8
     if volume_ratio >= volume_threshold:
         score += 1
     if body_ratio >= body_threshold:
         score += 1
-    reversal_regimes = {"trend_expansion", "trend_pullback", "impulse", "mixed", "compression", "chop"}
     if is_unified_reversal:
-        if market_regime in reversal_regimes and regime_confidence >= 0.58:
+        direction_key = signal.lower()
+        multiday_regime = str(metrics.get(f"multiday_{direction_key}_regime") or "unknown")
+        if multiday_regime in {"trend", "emerging"}:
             score += 1
     elif market_regime in {"trend_expansion", "trend_pullback", "impulse"} and regime_confidence >= 0.58:
         score += 1
@@ -6020,7 +6034,7 @@ def regime_entry_block_reason(
     strategy_name: str,
     signal: str,
     market_regime: str,
-    metrics: dict[str, float | str],
+    metrics: dict[str, float | str | bool],
 ) -> str:
     group_name = get_instrument_group(symbol).name
     strategy = (strategy_name or "").strip()
@@ -6028,6 +6042,20 @@ def regime_entry_block_reason(
         return ""
 
     if is_local_hourly_strategy(strategy):
+        direction_key = signal.lower()
+        available = bool(metrics.get(f"multiday_{direction_key}_available"))
+        multiday_regime = str(metrics.get(f"multiday_{direction_key}_regime") or "unknown")
+        if not available:
+            return "режим 48–72ч ещё не подтверждён: недостаточно закрытых часовых свечей"
+        if multiday_regime not in {"trend", "emerging"}:
+            score = float(metrics.get(f"multiday_{direction_key}_score") or 0.0)
+            move_48_atr = float(metrics.get(f"multiday_{direction_key}_move_48_atr") or 0.0)
+            efficiency_24 = float(metrics.get(f"multiday_{direction_key}_efficiency_24") or 0.0)
+            return (
+                f"нет подтверждённого режима {signal} за 48–72ч: "
+                f"оценка={score:.0f}/6, движение 48ч={move_48_atr:.2f} ATR, "
+                f"эффективность 24ч={efficiency_24:.2f}"
+            )
         return ""
     return f"стратегия {strategy or '-'} больше не используется в живом контуре."
 
@@ -7592,13 +7620,13 @@ def get_entry_edge_profile(
     if signal not in {"LONG", "SHORT"}:
         return 0.0, "none", "нет сигнала"
 
-    edge = 0.50
+    edge = 0.45 if is_unified_reversal_strategy(strategy_name) else 0.50
     reasons: list[str] = []
     is_unified_reversal = is_unified_reversal_strategy(strategy_name)
 
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     if setup_label == "strong":
-        edge += 0.14 if is_unified_reversal else 0.16
+        edge += 0.12 if is_unified_reversal else 0.16
         reasons.append("сильный сетап")
     elif setup_label == "medium":
         edge += 0.09 if is_unified_reversal else 0.05
@@ -7610,14 +7638,14 @@ def get_entry_edge_profile(
     regime = str(state.last_market_regime or "").strip().lower()
     regime_confidence = float(state.last_market_regime_confidence or 0.0)
     if regime in {"trend_expansion", "trend_pullback", "impulse"}:
-        edge += 0.08
+        edge += 0.04 if is_unified_reversal else 0.08
         reasons.append(f"режим {regime}")
     elif regime in {"compression", "chop"}:
         edge -= 0.02 if is_unified_reversal else 0.10
         reasons.append(f"режим {regime}")
 
     if regime_confidence >= 0.75:
-        edge += 0.08
+        edge += 0.04 if is_unified_reversal else 0.08
         reasons.append("режим подтверждён")
     elif 0.0 < regime_confidence < 0.50:
         edge -= 0.12
@@ -8930,7 +8958,9 @@ def calculate_position_sizing_context(
 
     risk_multiplier = 1.0
     risk_tier = "обычный"
-    if entry_edge_score >= 0.80 and entry_edge_label in {"confirmed", "high"}:
+    if is_unified_reversal_strategy(strategy_name):
+        risk_tier = "проверочный: без повышения риска"
+    elif entry_edge_score >= 0.80 and entry_edge_label in {"confirmed", "high"}:
         risk_multiplier = 1.40
         risk_tier = "сильный, без расширения риска"
     elif entry_edge_score >= 0.70 and entry_edge_label in {"moderate", "confirmed", "high"}:
@@ -9059,7 +9089,10 @@ def calculate_position_sizing_context(
             and entry_edge_label in {"moderate", "confirmed", "high"}
             and strategy_health_score >= 0.95
             and strategy_regime_health_score >= 0.90
-            and money_risk_per_contract <= risk_budget * 1.20
+            # One indivisible contract may exceed the base percentage budget,
+            # but it remains capped by the aggregate open-risk budget and the
+            # strategy-wide one-lot live limit below.
+            and money_risk_per_contract <= risk_budget * 1.70
             and (
                 max_open_risk_budget <= 0.0
                 or available_open_risk >= money_risk_per_contract
@@ -9086,6 +9119,8 @@ def calculate_position_sizing_context(
         raw_qty = 0
     if ao_strategy and (risk_budget <= 0.0 or money_risk_per_contract <= 0.0 or broker_limit <= 0):
         raw_qty = 0
+    if is_unified_reversal_strategy(strategy_name):
+        raw_qty = min(raw_qty, 1)
 
     return {
         "session_name": session_name,
@@ -9854,36 +9889,6 @@ def position_reentry_allowed(
             min_steps=min_steps,
         )
 
-    def fx_strong_reentry_override() -> bool:
-        if get_instrument_group(instrument.symbol).name != "fx":
-            return False
-        if state.last_exit_side != signal:
-            return False
-        if signal not in {"LONG", "SHORT"}:
-            return False
-        exit_reason = str(state.last_exit_reason or "").lower()
-        if "macd" not in exit_reason and "ema20" not in exit_reason and state.last_exit_pnl_rub >= 0:
-            return False
-        setup_label = str(state.last_setup_quality_label or "").strip().lower()
-        regime = str(state.last_market_regime or "").strip().lower()
-        regime_confidence = float(state.last_market_regime_confidence or 0.0)
-        edge_score = normalize_entry_edge_score(state.last_entry_edge_score)
-        volume_ratio = float(state.last_volume_ratio or 0.0)
-        strategy_name = str(state.last_strategy_name or "").strip().lower()
-        if not is_unified_reversal_strategy(strategy_name):
-            return False
-        if regime in {"compression", "chop"}:
-            return False
-        if regime_confidence < 0.50:
-            return False
-        if volume_ratio < 1.10:
-            return False
-        if setup_label == "strong" and edge_score >= 0.62:
-            return True
-        if setup_label == "medium" and edge_score >= 0.78 and regime in {"impulse", "trend_expansion"}:
-            return True
-        return False
-
     group_name = get_instrument_group(instrument.symbol).name
     guarded_symbols = {"GNM6", "USDRUBF", "SRM6", "RNM6", "IMOEXF", "CNYRUBF", "VBM6"}
     if instrument.symbol not in guarded_symbols and not is_brent_symbol(instrument.symbol) and not is_natural_gas_symbol(instrument.symbol) and group_name not in {"fx", "equity_index", "equity_futures"}:
@@ -9937,9 +9942,6 @@ def position_reentry_allowed(
                     f"для {instrument.symbol} после свежего переворота нужен подтверждённый импульс MACD/AO/RSI; "
                     f"без него ждём ещё ~{remaining} мин.",
                 )
-
-    if fx_strong_reentry_override():
-        return True, ""
 
     if is_unified_reversal and state.last_exit_side == signal and (state.last_exit_pnl_rub < 0 or exit_reason_has_macd_ema_reversal()):
         min_steps = 2
@@ -11430,6 +11432,11 @@ def process_instrument(
     state.last_setup_quality_score = setup_quality_score
     state.last_setup_quality_label = setup_quality_label
     state.last_entry_path = resolve_entry_path(signal, primary_strategy_name, reason)
+    if (
+        signal in {"LONG", "SHORT"}
+        and str(regime_metrics.get(f"multiday_{signal.lower()}_regime") or "") == "emerging"
+    ):
+        state.last_entry_path = "early_momentum"
     entry_edge_score, entry_edge_label, entry_edge_reason = get_entry_edge_profile(
         state,
         instrument.symbol,

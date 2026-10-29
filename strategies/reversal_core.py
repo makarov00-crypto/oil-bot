@@ -6,6 +6,8 @@ from instrument_groups import is_brent_symbol
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 MIN_TREND_PATH_EFFICIENCY_6H = 0.35
+MULTIDAY_REGIME_MIN_HOURS = 48
+MULTIDAY_REGIME_WINDOW_HOURS = 72
 
 
 @dataclass(frozen=True)
@@ -112,6 +114,98 @@ def _path_efficiency(values) -> float:
         return 0.0
     path = sum(abs(current - previous) for previous, current in zip(series, series[1:]))
     return abs(series[-1] - series[0]) / path if path > 0.0 else 0.0
+
+
+def classify_multiday_direction(df, direction: str) -> dict[str, float | str | bool]:
+    """Classify whether a direction is supported by the preceding 48-72 hours.
+
+    The hourly strategy still chooses the exact entry from its latest candles.
+    This slower view only decides whether the broader move is alive, newly
+    emerging, or absent.  Every value is causal and uses completed rows already
+    present in ``df``.
+    """
+    normalized_direction = str(direction or "").strip().upper()
+    if normalized_direction not in {"LONG", "SHORT"}:
+        return {"available": False, "regime": "unknown"}
+    history = df.tail(MULTIDAY_REGIME_WINDOW_HOURS)
+    if len(history) < MULTIDAY_REGIME_MIN_HOURS:
+        return {"available": False, "regime": "unknown"}
+
+    last = history.iloc[-1]
+    tail_12 = history.tail(12)
+    tail_24 = history.tail(24)
+    tail_48 = history.tail(48)
+    atr_values = [float(value) for value in tail_24["atr"].tolist() if float(value) > 0.0]
+    atr = sorted(atr_values)[len(atr_values) // 2] if atr_values else 1e-9
+    atr = max(atr, 1e-9)
+    sign = 1.0 if normalized_direction == "LONG" else -1.0
+
+    ema_stack = sign * (float(last["ema20"]) - float(last["ema50"])) > 0.0
+    ema20_slope_12_atr = sign * (
+        float(last["ema20"]) - float(tail_12.iloc[0]["ema20"])
+    ) / atr
+    ema50_slope_24_atr = sign * (
+        float(last["ema50"]) - float(tail_24.iloc[0]["ema50"])
+    ) / atr
+    move_12_atr = sign * (
+        float(last["close"]) - float(tail_12.iloc[0]["close"])
+    ) / atr
+    move_48_atr = sign * (
+        float(last["close"]) - float(tail_48.iloc[0]["close"])
+    ) / atr
+    if normalized_direction == "LONG":
+        alignment_24 = sum(
+            float(row["close"]) >= float(row["ema20"])
+            for _, row in tail_24.iterrows()
+        ) / len(tail_24)
+    else:
+        alignment_24 = sum(
+            float(row["close"]) <= float(row["ema20"])
+            for _, row in tail_24.iterrows()
+        ) / len(tail_24)
+    efficiency_12 = _path_efficiency(tail_12["close"].tolist())
+    efficiency_24 = _path_efficiency(tail_24["close"].tolist())
+    macd_hist = float(last["macd"]) - float(last["macd_signal"])
+    macd_aligned = sign * macd_hist >= 0.0
+    ao_aligned = sign * float(last.get("ao", macd_hist)) >= 0.0
+
+    stable_score = sum(
+        (
+            1.0 if ema_stack else 0.0,
+            1.0 if ema20_slope_12_atr >= 0.08 else 0.0,
+            1.0 if ema50_slope_24_atr >= 0.04 else 0.0,
+            1.0 if move_48_atr >= 0.55 else 0.0,
+            1.0 if alignment_24 >= 0.58 else 0.0,
+            1.0 if efficiency_24 >= 0.20 else 0.0,
+        )
+    )
+    stable_trend = stable_score >= 4.0 and move_48_atr > 0.0
+    emerging_trend = (
+        ema_stack
+        and ema20_slope_12_atr >= 0.12
+        and move_12_atr >= 0.75
+        and efficiency_12 >= 0.45
+        and macd_aligned
+        and ao_aligned
+    )
+    regime = "trend" if stable_trend else "emerging" if emerging_trend else "no_trend"
+    return {
+        "available": True,
+        "regime": regime,
+        "stable_trend": stable_trend,
+        "emerging_trend": emerging_trend,
+        "stable_score": stable_score,
+        "ema_stack": ema_stack,
+        "ema20_slope_12_atr": round(ema20_slope_12_atr, 4),
+        "ema50_slope_24_atr": round(ema50_slope_24_atr, 4),
+        "move_12_atr": round(move_12_atr, 4),
+        "move_48_atr": round(move_48_atr, 4),
+        "alignment_24": round(alignment_24, 4),
+        "efficiency_12": round(efficiency_12, 4),
+        "efficiency_24": round(efficiency_24, 4),
+        "macd_aligned": macd_aligned,
+        "ao_aligned": ao_aligned,
+    }
 
 
 def _rsi_direction_ok(current: float, previous: float, earlier: float, direction: str, *, floor: float, ceiling: float) -> bool:

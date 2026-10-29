@@ -13,6 +13,7 @@ from strategies.reversal_1h import evaluate_signal as evaluate_reversal_1h
 from strategies.reversal_core import (
     MIN_TREND_PATH_EFFICIENCY_6H,
     _path_efficiency,
+    classify_multiday_direction,
     get_profile as get_reversal_profile,
 )
 
@@ -114,6 +115,92 @@ class StrategyQualityFilterTests(unittest.TestCase):
             _path_efficiency([100.0, 101.0, 99.8, 101.1, 99.9, 100.4]),
             MIN_TREND_PATH_EFFICIENCY_6H,
         )
+
+    def test_multiday_regime_separates_stable_trend_from_flat_market(self) -> None:
+        trend_rows = []
+        flat_rows = []
+        for index in range(72):
+            trend_price = 100.0 + index * 0.12
+            flat_price = 100.0 + (0.08 if index % 2 else -0.08)
+            trend_rows.append(
+                {
+                    "close": trend_price,
+                    "ema20": trend_price - 0.35,
+                    "ema50": trend_price - 0.85,
+                    "atr": 0.5,
+                    "macd": 0.20,
+                    "macd_signal": 0.10,
+                    "ao": 0.25,
+                }
+            )
+            flat_rows.append(
+                {
+                    "close": flat_price,
+                    "ema20": 100.0,
+                    "ema50": 100.0,
+                    "atr": 0.5,
+                    "macd": 0.01 if index % 2 else -0.01,
+                    "macd_signal": 0.0,
+                    "ao": 0.01 if index % 2 else -0.01,
+                }
+            )
+
+        trend = classify_multiday_direction(candle_rows(trend_rows), "LONG")
+        flat = classify_multiday_direction(candle_rows(flat_rows), "LONG")
+
+        self.assertEqual(trend["regime"], "trend")
+        self.assertEqual(flat["regime"], "no_trend")
+
+    def test_live_regime_gate_allows_balanced_trend_and_blocks_no_trend(self) -> None:
+        allowed_metrics = {
+            "multiday_long_available": True,
+            "multiday_long_regime": "emerging",
+        }
+        blocked_metrics = {
+            "multiday_long_available": True,
+            "multiday_long_regime": "no_trend",
+            "multiday_long_score": 2.0,
+            "multiday_long_move_48_atr": -0.4,
+            "multiday_long_efficiency_24": 0.18,
+        }
+
+        self.assertEqual(
+            mod.regime_entry_block_reason("SRM6", "reversal_1h", "LONG", "mixed", allowed_metrics),
+            "",
+        )
+        reason = mod.regime_entry_block_reason(
+            "SRM6", "reversal_1h", "LONG", "trend_expansion", blocked_metrics
+        )
+        self.assertIn("нет подтверждённого режима LONG за 48–72ч", reason)
+
+    def test_unified_quality_requires_real_candle_and_multiday_regime(self) -> None:
+        weak_score, weak_label = mod.estimate_setup_quality(
+            "LONG",
+            "",
+            "chop",
+            {
+                "volume_ratio": 0.60,
+                "body_ratio": 0.40,
+                "regime_confidence": 0.90,
+                "multiday_long_regime": "no_trend",
+            },
+            "reversal_1h",
+        )
+        strong_score, strong_label = mod.estimate_setup_quality(
+            "LONG",
+            "",
+            "trend_expansion",
+            {
+                "volume_ratio": 1.20,
+                "body_ratio": 0.90,
+                "regime_confidence": 0.80,
+                "multiday_long_regime": "trend",
+            },
+            "reversal_1h",
+        )
+
+        self.assertEqual((weak_score, weak_label), (1, "weak"))
+        self.assertEqual((strong_score, strong_label), (4, "strong"))
 
     def test_legacy_strategy_name_is_not_evaluated_live(self) -> None:
         instrument = InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
@@ -442,8 +529,8 @@ class StrategyQualityFilterTests(unittest.TestCase):
         ):
             edge, label, reason = mod.get_entry_edge_profile(state, "VBM6", "reversal_1h", "LONG")
 
-        self.assertGreaterEqual(edge, 0.60)
-        self.assertEqual(label, "confirmed")
+        self.assertEqual(edge, 0.56)
+        self.assertEqual(label, "moderate")
         self.assertIn("локальный 1ч", reason)
 
     def test_reversal_core_profile_is_shared_for_gold_without_special_strategy(self) -> None:
