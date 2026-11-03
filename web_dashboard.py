@@ -79,15 +79,19 @@ INSTRUMENT_DISPLAY_NAMES: dict[str, str] = {
     "BRU6": "BR-9.26 Нефть Brent",
     "BRV6": "BR-10.26 Нефть Brent",
     "BRX6": "BR-11.26 Нефть Brent",
+    "BRZ6": "BR-12.26 Нефть Brent",
     "USDRUBF": "USDRUBF Доллар - Рубль",
     "CNYRUBF": "CNYRUBF Юань - Рубль",
     "IMOEXF": "IMOEXF Индекс МосБиржи",
+    "BTCUSDF": "BTCUSDF Индекс Bitcoin (вечный)",
     "RNM6": "ROSN-6.26 Роснефть",
     "RNU6": "ROSN-9.26 Роснефть",
     "RNZ6": "ROSN-12.26 Роснефть",
     "SRM6": "SBRF-6.26 Сбер Банк",
     "SRU6": "SBRF-9.26 Сбер Банк",
     "SRZ6": "SBRF-12.26 Сбер Банк",
+    "TBZ6": "T-12.26 Т-Технологии",
+    "GZZ6": "GAZR-12.26 Газпром",
     "GNM6": "GOLDM-6.26 Золото (мини)",
     "GNU6": "GOLDM-9.26 Золото (мини)",
     "GLU6": "GL-9.26 Золото",
@@ -5036,15 +5040,19 @@ def build_dashboard_html() -> str:
       BRU6: 'BR-9.26 Нефть Brent',
       BRV6: 'BR-10.26 Нефть Brent',
       BRX6: 'BR-11.26 Нефть Brent',
+      BRZ6: 'BR-12.26 Нефть Brent',
       USDRUBF: 'USDRUBF Доллар - Рубль',
       CNYRUBF: 'CNYRUBF Юань - Рубль',
       IMOEXF: 'IMOEXF Индекс МосБиржи',
+      BTCUSDF: 'BTCUSDF Индекс Bitcoin (вечный)',
       RNM6: 'ROSN-6.26 Роснефть',
       RNU6: 'ROSN-9.26 Роснефть',
       RNZ6: 'ROSN-12.26 Роснефть',
       SRM6: 'SBRF-6.26 Сбер Банк',
       SRU6: 'SBRF-9.26 Сбер Банк',
       SRZ6: 'SBRF-12.26 Сбер Банк',
+      TBZ6: 'T-12.26 Т-Технологии',
+      GZZ6: 'GAZR-12.26 Газпром',
       GNM6: 'GOLDM-6.26 Золото (мини)',
       GNU6: 'GOLDM-9.26 Золото (мини)',
       GLU6: 'GL-9.26 Золото',
@@ -6604,8 +6612,8 @@ def api_instruments_add(payload: dict = Body(default={})) -> dict:
         normalized_clone = validate_custom_symbol(clone_from)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    if normalized_symbol in set(load_base_symbols_from_env()):
-        raise HTTPException(status_code=400, detail="Этот тикер уже есть в базовой конфигурации бота.")
+    if normalized_symbol in set(merge_with_custom_symbols(load_base_symbols_from_env())):
+        raise HTTPException(status_code=400, detail="Этот тикер уже есть в конфигурации бота.")
     available_templates = set(merge_with_custom_symbols(load_base_symbols_from_env()))
     if normalized_clone not in available_templates:
         raise HTTPException(status_code=400, detail="Выбранный шаблон не найден среди доступных инструментов.")

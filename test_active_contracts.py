@@ -117,6 +117,19 @@ class ActiveContractsTest(unittest.TestCase):
         self.assertEqual(get_primary_strategies("BRX6"), get_primary_strategies("BRK6"))
         self.assertTrue(uses_unified_reversal_1h("BRX6"))
 
+    def test_brent_december_rollover_keeps_old_contract_as_alias(self) -> None:
+        for template_symbol in ("BRK6", "BMM6", "BMN6", "BMQ6", "BRU6", "BRV6"):
+            upsert_active_contract(template_symbol, "BRX6")
+
+        upsert_active_contract("BRK6", "BRZ6")
+
+        for symbol in ("BRK6", "BMM6", "BMN6", "BMQ6", "BRU6", "BRV6", "BRX6"):
+            self.assertEqual(get_active_contract_symbol(symbol), "BRZ6")
+            self.assertEqual(get_instrument_history_symbol(symbol), "BRZ6")
+        self.assertEqual(get_active_contract_template("BRZ6"), "BRK6")
+        self.assertEqual(get_primary_strategies("BRZ6"), get_primary_strategies("BRK6"))
+        self.assertTrue(uses_unified_reversal_1h("BRZ6"))
+
     def test_retired_alias_keeps_the_canonical_template_after_rollover(self) -> None:
         upsert_active_contract("SRM6", "SRU6")
         upsert_active_contract("SRM6", "SRZ6")

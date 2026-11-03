@@ -15,6 +15,27 @@ DEFAULT_CUSTOM_INSTRUMENTS_PATH = BASE_DIR / "bot_state" / "_custom_instruments.
 UTC = timezone.utc
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9._-]{2,24}$")
 
+# Тестовые инструменты, которые должны попадать в рабочий список после любого
+# развёртывания. Они проходят тот же путь, что и инструменты, добавленные через
+# панель: наследуют группу, стратегию и все ограничения выбранного шаблона.
+BUILTIN_TEST_INSTRUMENTS: tuple[dict[str, str], ...] = (
+    {
+        "symbol": "TBZ6",
+        "clone_from": "SRM6",
+        "template_symbol": "SRM6",
+    },
+    {
+        "symbol": "GZZ6",
+        "clone_from": "SRM6",
+        "template_symbol": "SRM6",
+    },
+    {
+        "symbol": "BTCUSDF",
+        "clone_from": "IMOEXF",
+        "template_symbol": "IMOEXF",
+    },
+)
+
 
 def get_custom_instruments_path() -> Path:
     raw = os.getenv("OIL_CUSTOM_INSTRUMENTS_PATH", "").strip()
@@ -51,9 +72,13 @@ def _write_payload(payload: dict[str, Any]) -> None:
 
 
 def list_custom_instruments() -> list[dict[str, Any]]:
-    instruments = _read_payload().get("instruments") or []
-    result: list[dict[str, Any]] = []
-    for item in instruments:
+    instruments_with_source = [
+        (item, "repository") for item in BUILTIN_TEST_INSTRUMENTS
+    ] + [
+        (item, "runtime") for item in (_read_payload().get("instruments") or [])
+    ]
+    result_by_symbol: dict[str, dict[str, Any]] = {}
+    for item, source in instruments_with_source:
         if not isinstance(item, dict):
             continue
         symbol = _normalize_symbol(item.get("symbol", ""))
@@ -61,15 +86,15 @@ def list_custom_instruments() -> list[dict[str, Any]]:
         clone_from = _normalize_symbol(item.get("clone_from", "")) or template_symbol
         if not symbol or not template_symbol:
             continue
-        result.append(
-            {
-                "symbol": symbol,
-                "clone_from": clone_from,
-                "template_symbol": template_symbol,
-                "added_at": item.get("added_at") or "",
-                "updated_at": item.get("updated_at") or "",
-            }
-        )
+        result_by_symbol[symbol] = {
+            "symbol": symbol,
+            "clone_from": clone_from,
+            "template_symbol": template_symbol,
+            "added_at": item.get("added_at") or "",
+            "updated_at": item.get("updated_at") or "",
+            "source": source,
+        }
+    result = list(result_by_symbol.values())
     result.sort(key=lambda item: item["symbol"])
     return result
 

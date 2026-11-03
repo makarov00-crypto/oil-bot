@@ -2,30 +2,30 @@
   "contracts": [
     {
       "template_symbol": "BRK6",
-      "active_symbol": "BRX6",
+      "active_symbol": "BRZ6",
       "disabled": false,
-      "updated_at": "2026-10-01T15:37:18+00:00",
+      "updated_at": "2026-11-03T10:27:24+00:00",
       "canonical_template": "BRK6"
     },
     {
       "template_symbol": "BMM6",
-      "active_symbol": "BRX6",
+      "active_symbol": "BRZ6",
       "disabled": false,
-      "updated_at": "2026-10-01T15:37:18+00:00",
+      "updated_at": "2026-11-03T10:27:24+00:00",
       "canonical_template": "BRK6"
     },
     {
       "template_symbol": "BMN6",
-      "active_symbol": "BRX6",
+      "active_symbol": "BRZ6",
       "disabled": false,
-      "updated_at": "2026-10-01T15:37:18+00:00",
+      "updated_at": "2026-11-03T10:27:24+00:00",
       "canonical_template": "BRK6"
     },
     {
       "template_symbol": "BMQ6",
-      "active_symbol": "BRX6",
+      "active_symbol": "BRZ6",
       "disabled": false,
-      "updated_at": "2026-10-01T15:37:18+00:00",
+      "updated_at": "2026-11-03T10:27:24+00:00",
       "canonical_template": "BRK6"
     },
     {
@@ -102,9 +102,9 @@
     },
     {
       "template_symbol": "BRU6",
-      "active_symbol": "BRX6",
+      "active_symbol": "BRZ6",
       "disabled": false,
-      "updated_at": "2026-10-01T15:37:18+00:00",
+      "updated_at": "2026-11-03T10:27:24+00:00",
       "canonical_template": "BRK6"
     },
     {
@@ -148,10 +148,17 @@
     },
     {
       "template_symbol": "BRV6",
-      "active_symbol": "BRX6",
+      "active_symbol": "BRZ6",
       "canonical_template": "BRK6",
       "disabled": false,
-      "updated_at": "2026-10-01T15:37:18+00:00"
+      "updated_at": "2026-11-03T10:27:24+00:00"
+    },
+    {
+      "template_symbol": "BRX6",
+      "active_symbol": "BRZ6",
+      "canonical_template": "BRK6",
+      "disabled": false,
+      "updated_at": "2026-11-03T10:27:24+00:00"
     }
   ]
 }
