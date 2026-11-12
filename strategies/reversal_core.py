@@ -210,9 +210,9 @@ def classify_multiday_direction(df, direction: str) -> dict[str, float | str | b
 
 def _rsi_direction_ok(current: float, previous: float, earlier: float, direction: str, *, floor: float, ceiling: float) -> bool:
     if direction == "LONG":
-        return current >= floor and current >= previous + 0.20 and previous >= earlier - 0.35
+        return floor <= current <= ceiling and current >= previous + 0.20 and previous >= earlier - 0.35
     if direction == "SHORT":
-        return current <= ceiling and current <= previous - 0.20 and previous <= earlier + 0.35
+        return floor <= current <= ceiling and current <= previous - 0.20 and previous <= earlier + 0.35
     return False
 
 
@@ -252,6 +252,19 @@ def _is_late_evening_candle(value) -> bool:
     except Exception:
         return False
     return local_time.hour >= 21
+
+
+def _is_outside_main_session_candle(value) -> bool:
+    try:
+        if hasattr(value, "tz_convert"):
+            local_time = value.tz_convert(MOSCOW_TZ)
+        elif hasattr(value, "astimezone"):
+            local_time = value.astimezone(MOSCOW_TZ)
+        else:
+            return False
+    except Exception:
+        return False
+    return local_time.hour < 9 or local_time.hour >= 19
 
 
 def evaluate_signal_core(
@@ -310,6 +323,7 @@ def evaluate_signal_core(
     )
     distance_to_ema20_pct = abs(close - ema20) / close if close else 0.0
     late_evening = _is_late_evening_candle(last.get("time"))
+    outside_main_session = _is_outside_main_session_candle(last.get("time"))
     recent_high = float(pre_recent["high"].max())
     recent_low = float(pre_recent["low"].min())
     recent_range_pct = (float(recent["high"].max()) - float(recent["low"].min())) / close if close else 0.0
@@ -403,13 +417,18 @@ def evaluate_signal_core(
         and body_ratio >= compression_impulse_floor
     )
 
+    long_rsi_ceiling = min(
+        profile.rsi_long_max,
+        profile.late_rsi_long,
+        68.0 if outside_main_session else profile.late_rsi_long,
+    )
     rsi_long_ok = _rsi_direction_ok(
         rsi,
         prev_rsi,
         prev2_rsi,
         "LONG",
         floor=max(profile.rsi_long_min, 45.0),
-        ceiling=100.0,
+        ceiling=long_rsi_ceiling,
     )
     rsi_short_ok = _rsi_direction_ok(
         rsi,
@@ -544,7 +563,7 @@ def evaluate_signal_core(
         and close >= ema20
         and ema20 >= prev_ema20
         and rsi >= max(47.0, prev_rsi)
-        and rsi <= profile.late_rsi_long
+        and rsi <= long_rsi_ceiling
         and chaikin >= prev_chaikin
         and volume_ratio >= max(0.75, soft_volume_floor)
         and body_ratio >= max(0.60, soft_impulse_floor)
@@ -682,7 +701,12 @@ def evaluate_signal_core(
     if rsi_short_extreme_bad and not slow_short_continuation_ok:
         short_blockers.append("RSI не подтверждает снижение")
     if not rsi_long_ok and not slow_long_continuation_ok:
-        long_blockers.append("RSI ещё не развернулся достаточно уверенно")
+        if rsi > long_rsi_ceiling:
+            long_blockers.append(
+                f"длинный вход перегрет: RSI {rsi:.2f} выше предела {long_rsi_ceiling:.2f}"
+            )
+        else:
+            long_blockers.append("RSI ещё не развернулся достаточно уверенно")
     if not rsi_short_ok and not slow_short_continuation_ok:
         short_blockers.append("RSI ещё не развернулся достаточно уверенно")
     if not ao_long_ok:

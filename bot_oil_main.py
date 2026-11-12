@@ -45,6 +45,7 @@ from strategies.ao_chaikin_1h import (
 )
 from strategies.reversal_exit_protection import (
     EXIT_MODEL_VERSION as REVERSAL_EXIT_MODEL_VERSION,
+    SUPPORTED_EXIT_MODEL_VERSIONS as SUPPORTED_REVERSAL_EXIT_MODEL_VERSIONS,
     ReversalProtectionState,
     advance_reversal_protection,
     new_reversal_protection_state,
@@ -619,7 +620,7 @@ def clear_reversal_exit_protection(state: InstrumentState) -> None:
 def has_reversal_exit_protection(state: InstrumentState) -> bool:
     return (
         str(state.entry_strategy or "").strip().lower() == "reversal_1h"
-        and state.exit_model_version == REVERSAL_EXIT_MODEL_VERSION
+        and state.exit_model_version in SUPPORTED_REVERSAL_EXIT_MODEL_VERSIONS
     )
 
 
@@ -864,7 +865,7 @@ def initialize_reversal_exit_protection(
 
 
 def finalize_reversal_exit_protection_entry(state: InstrumentState, fill_price: float) -> None:
-    if state.exit_model_version != REVERSAL_EXIT_MODEL_VERSION:
+    if state.exit_model_version not in SUPPORTED_REVERSAL_EXIT_MODEL_VERSIONS:
         return
     try:
         protection = new_reversal_protection_state(
@@ -893,6 +894,7 @@ def advance_state_reversal_exit_protection(
     current_price: float,
     completed_30m: pd.DataFrame | None,
     tick_size: float,
+    trend_alive_score: float = 0.0,
 ) -> str:
     if not has_reversal_exit_protection(state) or state.entry_price is None or state.entry_stop_price is None:
         return ""
@@ -934,6 +936,8 @@ def advance_state_reversal_exit_protection(
         current_price=float(current_price),
         completed_30m=eligible_30m,
         tick_size=float(tick_size or 0.0),
+        model_version=state.exit_model_version,
+        trend_alive_score=float(trend_alive_score or 0.0),
     )
     state.exit_phase = updated.phase
     state.exit_current_stop_price = updated.current_stop
@@ -5387,7 +5391,8 @@ def get_market_session(now: datetime | None = None) -> str:
     if current_minutes <= 30:
         return "CLEARING"
     if now.weekday() >= 5:
-        if 9 * 60 + 50 <= current_minutes < 19 * 60:
+        # 09:50–10:00 is the opening auction; regular weekend trading starts at 10:00.
+        if 10 * 60 <= current_minutes < 19 * 60:
             return "WEEKEND"
         return "CLOSED"
     if current_minutes < 7 * 60:
@@ -5409,14 +5414,14 @@ def get_session_position_multiplier(session_name: str, symbol: str | None = None
             return 0.0
         return 0.35
     return {
-        "PREMARKET": 0.5,
+        "PREMARKET": 0.0,
         "MAIN": 1.0,
         "EVENING": 0.5,
     }.get(session_name, 1.0)
 
 
 def session_allows_new_entries(session_name: str, symbol: str) -> bool:
-    if session_name in {"CLOSED", "CLEARING"}:
+    if session_name in {"CLOSED", "CLEARING", "PREMARKET"}:
         return False
     if session_name == "WEEKEND":
         return not is_currency_symbol(symbol)
@@ -5424,7 +5429,7 @@ def session_allows_new_entries(session_name: str, symbol: str) -> bool:
 
 
 def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str, strategy_name: str = "") -> bool:
-    if session_name in {"CLOSED", "CLEARING"}:
+    if session_name in {"CLOSED", "CLEARING", "PREMARKET"}:
         return False
     if session_name == "WEEKEND" and is_currency_symbol(symbol):
         return False
@@ -5461,6 +5466,42 @@ def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, 
     else:
         macd_ok = macd < macd_signal and macd <= prev_macd and prev_macd <= prev_macd_signal
     return sum([volume_ok, impulse_ok, macd_ok]) >= min_score
+
+
+def overnight_carry_exit_reason(
+    state: InstrumentState,
+    current_price: float,
+    trend_alive_score: float,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Return a close reason when a weak RISK-phase position should not roll overnight."""
+    if str(state.entry_strategy or "").strip().lower() != "reversal_1h":
+        return ""
+    current = now or current_moscow_time()
+    minutes = current.hour * 60 + current.minute
+    carry_window = (
+        18 * 60 + 30 <= minutes < 19 * 60
+        if current.weekday() >= 5
+        else 23 * 60 + 20 <= minutes < 23 * 60 + 50
+    )
+    if not carry_window or str(state.exit_phase or "RISK") in {"BREAKEVEN", "PROFIT"}:
+        return ""
+    entry_price = float(state.entry_price or 0.0)
+    initial_distance = float(
+        state.exit_initial_risk_distance
+        or abs(entry_price - float(state.entry_stop_price or entry_price))
+    )
+    if entry_price <= 0.0 or initial_distance <= 0.0 or state.position_side not in {"LONG", "SHORT"}:
+        return ""
+    sign = 1.0 if state.position_side == "LONG" else -1.0
+    favorable_r = (float(current_price) - entry_price) * sign / initial_distance
+    if favorable_r >= 0.30 and float(trend_alive_score or 0.0) >= 0.65:
+        return ""
+    return (
+        "Закрытие перед ночным перерывом: позиция осталась в фазе риска, "
+        f"результат {favorable_r:.2f}R, устойчивость тренда {trend_alive_score:.2f}"
+    )
 
 
 def get_candles(
@@ -6008,8 +6049,8 @@ def estimate_setup_quality(
 
     if not is_unified_reversal and higher_tf_bias == signal:
         score += 1
-    volume_threshold = 1.0
-    body_threshold = 0.75 if is_unified_reversal else 0.8
+    volume_threshold = 1.20 if is_unified_reversal else 1.0
+    body_threshold = 0.90 if is_unified_reversal else 0.8
     if volume_ratio >= volume_threshold:
         score += 1
     if body_ratio >= body_threshold:
@@ -6017,11 +6058,27 @@ def estimate_setup_quality(
     if is_unified_reversal:
         direction_key = signal.lower()
         multiday_regime = str(metrics.get(f"multiday_{direction_key}_regime") or "unknown")
-        if multiday_regime in {"trend", "emerging"}:
+        multiday_score = float(metrics.get(f"multiday_{direction_key}_score") or 0.0)
+        multiday_move = float(metrics.get(f"multiday_{direction_key}_move_48_atr") or 0.0)
+        multiday_efficiency = float(metrics.get(f"multiday_{direction_key}_efficiency_24") or 0.0)
+        if (
+            multiday_regime == "trend" and multiday_score >= 4.0
+        ) or (
+            multiday_regime == "emerging"
+            and multiday_move >= 0.75
+            and multiday_efficiency >= 0.45
+        ):
+            score += 1
+        if market_regime in {"trend_expansion", "trend_pullback", "impulse"}:
+            score += 1
+        if (
+            regime_confidence >= 0.78
+            and market_regime in {"trend_expansion", "trend_pullback", "impulse"}
+        ):
             score += 1
     elif market_regime in {"trend_expansion", "trend_pullback", "impulse"} and regime_confidence >= 0.58:
         score += 1
-    strong_threshold = 4 if is_unified_reversal else 5
+    strong_threshold = 5
     if score >= strong_threshold:
         return score, "strong"
     if score >= 3:
@@ -7616,40 +7673,52 @@ def get_entry_edge_profile(
     symbol: str,
     strategy_name: str,
     signal: str,
+    session_name: str = "MAIN",
 ) -> tuple[float, str, str]:
     if signal not in {"LONG", "SHORT"}:
         return 0.0, "none", "нет сигнала"
 
-    edge = 0.45 if is_unified_reversal_strategy(strategy_name) else 0.50
+    edge = 0.38 if is_unified_reversal_strategy(strategy_name) else 0.50
     reasons: list[str] = []
     is_unified_reversal = is_unified_reversal_strategy(strategy_name)
 
     setup_label = str(state.last_setup_quality_label or "").strip().lower()
     if setup_label == "strong":
-        edge += 0.12 if is_unified_reversal else 0.16
+        edge += 0.18 if is_unified_reversal else 0.16
         reasons.append("сильный сетап")
     elif setup_label == "medium":
-        edge += 0.09 if is_unified_reversal else 0.05
+        edge += 0.08 if is_unified_reversal else 0.05
         reasons.append("средний сетап")
     elif setup_label == "weak":
-        edge -= 0.04 if is_unified_reversal else 0.14
+        edge -= 0.08 if is_unified_reversal else 0.14
         reasons.append("слабый сетап")
 
     regime = str(state.last_market_regime or "").strip().lower()
     regime_confidence = float(state.last_market_regime_confidence or 0.0)
     if regime in {"trend_expansion", "trend_pullback", "impulse"}:
-        edge += 0.04 if is_unified_reversal else 0.08
+        edge += 0.05 if is_unified_reversal else 0.08
         reasons.append(f"режим {regime}")
     elif regime in {"compression", "chop"}:
-        edge -= 0.02 if is_unified_reversal else 0.10
+        edge -= 0.05 if is_unified_reversal else 0.10
         reasons.append(f"режим {regime}")
 
     if regime_confidence >= 0.75:
-        edge += 0.04 if is_unified_reversal else 0.08
+        edge += 0.05 if is_unified_reversal else 0.08
         reasons.append("режим подтверждён")
     elif 0.0 < regime_confidence < 0.50:
         edge -= 0.12
         reasons.append("режим неустойчив")
+
+    normalized_session = str(session_name or "MAIN").strip().upper()
+    if normalized_session == "EVENING":
+        edge -= 0.05
+        reasons.append("вечерняя дополнительная сессия")
+    elif normalized_session == "WEEKEND":
+        edge -= 0.10
+        reasons.append("выходная сессия")
+    elif normalized_session == "PREMARKET":
+        edge -= 0.20
+        reasons.append("утренняя дополнительная сессия")
 
     timeframe_label = get_unified_reversal_timeframe_label(strategy_name)
     if timeframe_label:
@@ -11104,6 +11173,15 @@ def check_exit(
             )
             return
 
+        carry_exit = overnight_carry_exit_reason(
+            state,
+            price,
+            trend_alive_score,
+        )
+        if carry_exit:
+            close_position(client, config, instrument, state, carry_exit)
+            return
+
         previous_phase = str(state.exit_phase or "RISK")
         previous_stop = float(state.exit_current_stop_price or working_stop)
         protection_exit = advance_state_reversal_exit_protection(
@@ -11111,6 +11189,7 @@ def check_exit(
             current_price=price,
             completed_30m=reversal_exit_30m_df,
             tick_size=float(instrument.min_price_increment or 0.0),
+            trend_alive_score=trend_alive_score,
         )
         current_stop = float(state.exit_current_stop_price or working_stop)
         if state.exit_phase != previous_phase or current_stop != previous_stop:
@@ -11442,6 +11521,7 @@ def process_instrument(
         instrument.symbol,
         primary_strategy_name,
         signal,
+        session_name,
     )
     state.last_entry_edge_score = entry_edge_score
     state.last_entry_edge_label = entry_edge_label

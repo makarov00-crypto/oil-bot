@@ -5,7 +5,9 @@ from dataclasses import dataclass, replace
 
 import pandas as pd
 
-EXIT_MODEL_VERSION = "reversal-r-protection-v1"
+LEGACY_EXIT_MODEL_VERSION = "reversal-r-protection-v1"
+EXIT_MODEL_VERSION = "reversal-r-protection-v2"
+SUPPORTED_EXIT_MODEL_VERSIONS = {LEGACY_EXIT_MODEL_VERSION, EXIT_MODEL_VERSION}
 COMMISSION_RATE_PER_SIDE = 0.00025
 BREAKEVEN_TRIGGER_R = 1.0
 PROFIT_TRIGGER_R = 1.25
@@ -140,6 +142,65 @@ def closing_pattern(
     return None
 
 
+def phase_aware_closing_pattern(
+    state: ReversalProtectionState,
+    completed_30m: pd.DataFrame,
+    *,
+    current_price: float,
+    trend_alive_score: float,
+) -> str | None:
+    """Confirm a reversal according to the amount of profit already protected.
+
+    In RISK/BREAKEVEN phases two opposite candles are not sufficient: price
+    must also break the 30-minute EMA20, both MACD histogram bars must be on
+    the opposite side, and the hourly trend score must have weakened.  The
+    fast legacy pattern remains available in PROFIT where profit is already
+    protected by the trailing stop.
+    """
+    if state.phase == "PROFIT":
+        return closing_pattern(
+            _ExitCandidate(direction=state.direction, atr=state.entry_atr),
+            completed_30m,
+            profit_phase=True,
+        )
+    if len(completed_30m) < 5 or "ema20" not in completed_30m.columns:
+        return None
+
+    recent = completed_30m.tail(2)
+    sign = _sign(state.direction)
+    body_floor_atr = 0.40 if state.phase == "BREAKEVEN" else 0.50
+    trend_ceiling = 0.65 if state.phase == "BREAKEVEN" else 0.55
+    opposite_candles = (((recent["close"] - recent["open"]) * sign) < 0).all()
+    opposite_body = float(recent["body"].sum()) >= state.entry_atr * body_floor_atr
+    ao_reversal = ((recent["ao_delta"] * sign) < 0).all()
+    histogram_reversal = ((recent["macd_hist"] * sign) < 0).all()
+    latest_histogram = _finite(recent.iloc[-1]["macd_hist"])
+    previous_histogram = _finite(recent.iloc[-2]["macd_hist"])
+    histogram_accelerating = latest_histogram * sign < previous_histogram * sign
+    structure_broken = (((recent["close"] - recent["ema20"]) * sign) < 0).all()
+    if not (
+        opposite_candles
+        and opposite_body
+        and ao_reversal
+        and histogram_reversal
+        and histogram_accelerating
+        and structure_broken
+        and trend_alive_score < trend_ceiling
+    ):
+        return None
+
+    if state.phase == "RISK":
+        favorable = (float(current_price) - state.entry_price) * sign
+        adverse_r = max(0.0, -favorable) / state.initial_distance
+        failed_progress = (
+            state.best_move >= state.initial_distance * 0.30
+            and favorable <= 0.0
+        )
+        if adverse_r < 0.25 and not failed_progress:
+            return None
+    return "CONFIRMED_REVERSAL"
+
+
 def new_reversal_protection_state(
     direction: str,
     entry_price: float,
@@ -208,6 +269,8 @@ def advance_reversal_protection(
     current_price: float,
     completed_30m: pd.DataFrame | None,
     tick_size: float,
+    model_version: str = EXIT_MODEL_VERSION,
+    trend_alive_score: float = 0.0,
 ) -> ReversalProtectionState:
     """Advance the versioned post-entry protection without changing initial risk.
 
@@ -285,11 +348,19 @@ def advance_reversal_protection(
         return replace(updated, exit_reason=reason)
 
     if not frame.empty:
-        close_reason = closing_pattern(
-            _ExitCandidate(direction=updated.direction, atr=updated.entry_atr),
-            frame,
-            profit_phase=updated.phase == "PROFIT",
-        )
+        if model_version == LEGACY_EXIT_MODEL_VERSION:
+            close_reason = closing_pattern(
+                _ExitCandidate(direction=updated.direction, atr=updated.entry_atr),
+                frame,
+                profit_phase=updated.phase == "PROFIT",
+            )
+        else:
+            close_reason = phase_aware_closing_pattern(
+                updated,
+                frame,
+                current_price=current_price,
+                trend_alive_score=trend_alive_score,
+            )
         if close_reason:
             return replace(updated, exit_reason=close_reason)
     return updated

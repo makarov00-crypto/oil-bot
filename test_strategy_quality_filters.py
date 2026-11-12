@@ -195,12 +195,15 @@ class StrategyQualityFilterTests(unittest.TestCase):
                 "body_ratio": 0.90,
                 "regime_confidence": 0.80,
                 "multiday_long_regime": "trend",
+                "multiday_long_score": 5.0,
+                "multiday_long_move_48_atr": 1.2,
+                "multiday_long_efficiency_24": 0.6,
             },
             "reversal_1h",
         )
 
         self.assertEqual((weak_score, weak_label), (1, "weak"))
-        self.assertEqual((strong_score, strong_label), (4, "strong"))
+        self.assertEqual((strong_score, strong_label), (6, "strong"))
 
     def test_legacy_strategy_name_is_not_evaluated_live(self) -> None:
         instrument = InstrumentConfig(symbol="GNM6", figi="FIGI", display_name="Gold")
@@ -529,7 +532,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         ):
             edge, label, reason = mod.get_entry_edge_profile(state, "VBM6", "reversal_1h", "LONG")
 
-        self.assertEqual(edge, 0.56)
+        self.assertEqual(edge, 0.46)
         self.assertEqual(label, "moderate")
         self.assertIn("локальный 1ч", reason)
 

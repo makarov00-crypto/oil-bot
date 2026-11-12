@@ -10,6 +10,7 @@ import pandas as pd
 import bot_oil_main as bot
 from strategies.reversal_exit_protection import (
     EXIT_MODEL_VERSION,
+    LEGACY_EXIT_MODEL_VERSION,
     advance_reversal_protection,
     new_reversal_protection_state,
 )
@@ -33,6 +34,7 @@ def completed_30m(*, reversal: bool = False) -> pd.DataFrame:
                 "body": abs(close_price - open_price),
                 "ao_delta": 0.05,
                 "macd_hist": 0.10 + index * 0.01,
+                "ema20": open_price - 0.05,
             }
         )
     if reversal:
@@ -44,6 +46,7 @@ def completed_30m(*, reversal: bool = False) -> pd.DataFrame:
             body=0.4,
             ao_delta=-0.08,
             macd_hist=-0.10,
+            ema20=102.8,
         )
         rows[-1].update(
             open=102.6,
@@ -53,6 +56,7 @@ def completed_30m(*, reversal: bool = False) -> pd.DataFrame:
             body=0.4,
             ao_delta=-0.10,
             macd_hist=-0.20,
+            ema20=102.5,
         )
     return pd.DataFrame(rows)
 
@@ -266,7 +270,7 @@ class ReversalExitProtectionTests(unittest.TestCase):
         self.assertLess(updated.current_stop, 100.0)
         self.assertEqual(updated.current_stop, 98.2)
 
-    def test_completed_30m_reversal_produces_exit_reason(self) -> None:
+    def test_two_candle_pullback_is_ignored_while_hourly_trend_is_alive(self) -> None:
         state = new_reversal_protection_state("LONG", 100.0, 98.0, entry_atr=1.0)
 
         updated = advance_reversal_protection(
@@ -274,6 +278,46 @@ class ReversalExitProtectionTests(unittest.TestCase):
             current_price=102.2,
             completed_30m=completed_30m(reversal=True),
             tick_size=0.1,
+            trend_alive_score=0.80,
+        )
+
+        self.assertEqual(updated.exit_reason, "")
+
+    def test_risk_phase_exits_only_after_structure_and_trade_failure(self) -> None:
+        state = new_reversal_protection_state("LONG", 100.0, 98.0, entry_atr=1.0)
+
+        updated = advance_reversal_protection(
+            state,
+            current_price=99.4,
+            completed_30m=completed_30m(reversal=True),
+            tick_size=0.1,
+            trend_alive_score=0.30,
+        )
+
+        self.assertEqual(updated.exit_reason, "CONFIRMED_REVERSAL")
+
+    def test_live_hourly_trend_blocks_risk_phase_reversal_exit(self) -> None:
+        state = new_reversal_protection_state("LONG", 100.0, 98.0, entry_atr=1.0)
+
+        updated = advance_reversal_protection(
+            state,
+            current_price=99.4,
+            completed_30m=completed_30m(reversal=True),
+            tick_size=0.1,
+            trend_alive_score=0.80,
+        )
+
+        self.assertEqual(updated.exit_reason, "")
+
+    def test_legacy_position_keeps_original_reversal_rule(self) -> None:
+        state = new_reversal_protection_state("LONG", 100.0, 98.0, entry_atr=1.0)
+
+        updated = advance_reversal_protection(
+            state,
+            current_price=102.2,
+            completed_30m=completed_30m(reversal=True),
+            tick_size=0.1,
+            model_version=LEGACY_EXIT_MODEL_VERSION,
         )
 
         self.assertEqual(updated.exit_reason, "CONFIRMED_REVERSAL")

@@ -253,11 +253,13 @@ class DailyRiskLimitTests(unittest.TestCase):
 
     def test_weekend_session_closes_after_1900_moscow(self) -> None:
         saturday_before_open = mod.datetime(2026, 4, 18, 9, 49, tzinfo=mod.MOSCOW_TZ)
-        saturday_at_open = mod.datetime(2026, 4, 18, 9, 50, tzinfo=mod.MOSCOW_TZ)
+        saturday_auction = mod.datetime(2026, 4, 18, 9, 50, tzinfo=mod.MOSCOW_TZ)
+        saturday_at_open = mod.datetime(2026, 4, 18, 10, 0, tzinfo=mod.MOSCOW_TZ)
         saturday_before_cutoff = mod.datetime(2026, 4, 18, 18, 59, tzinfo=mod.MOSCOW_TZ)
         saturday_at_cutoff = mod.datetime(2026, 4, 18, 19, 0, tzinfo=mod.MOSCOW_TZ)
 
         self.assertEqual(mod.get_market_session(saturday_before_open), "CLOSED")
+        self.assertEqual(mod.get_market_session(saturday_auction), "CLOSED")
         self.assertEqual(mod.get_market_session(saturday_at_open), "WEEKEND")
         self.assertEqual(mod.get_market_session(saturday_before_cutoff), "WEEKEND")
         self.assertEqual(mod.get_market_session(saturday_at_cutoff), "CLOSED")
@@ -278,9 +280,46 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertEqual(at(19, 0), "EVENING")
         self.assertEqual(at(23, 49), "EVENING")
         self.assertEqual(at(23, 50), "CLEARING")
-        self.assertEqual(mod.get_session_position_multiplier("PREMARKET"), 0.5)
+        self.assertEqual(mod.get_session_position_multiplier("PREMARKET"), 0.0)
         self.assertEqual(mod.get_session_position_multiplier("EVENING"), 0.5)
+        self.assertFalse(mod.session_allows_new_entries("PREMARKET", "BMQ6"))
         self.assertFalse(mod.session_allows_new_entries("CLEARING", "BMQ6"))
+
+    def test_overnight_carry_keeps_only_protected_or_confirmed_position(self) -> None:
+        state = mod.InstrumentState(
+            entry_strategy="reversal_1h",
+            entry_price=100.0,
+            entry_stop_price=98.0,
+            position_side="LONG",
+            position_qty=1,
+            exit_phase="RISK",
+            exit_initial_risk_distance=2.0,
+        )
+        before_close = mod.datetime(2026, 7, 22, 23, 25, tzinfo=mod.MOSCOW_TZ)
+
+        weak_reason = mod.overnight_carry_exit_reason(
+            state,
+            100.2,
+            0.40,
+            now=before_close,
+        )
+        confirmed_reason = mod.overnight_carry_exit_reason(
+            state,
+            100.8,
+            0.70,
+            now=before_close,
+        )
+        state.exit_phase = "BREAKEVEN"
+        protected_reason = mod.overnight_carry_exit_reason(
+            state,
+            99.9,
+            0.20,
+            now=before_close,
+        )
+
+        self.assertIn("Закрытие перед ночным перерывом", weak_reason)
+        self.assertEqual(confirmed_reason, "")
+        self.assertEqual(protected_reason, "")
 
     def test_recent_strategy_performance_blocks_toxic_combo(self) -> None:
         today = mod.datetime.now(mod.MOSCOW_TZ).date().isoformat()
