@@ -116,6 +116,100 @@ class StrategyQualityFilterTests(unittest.TestCase):
             MIN_TREND_PATH_EFFICIENCY_6H,
         )
 
+    def test_live_ao_uses_standard_five_and_thirty_four_periods(self) -> None:
+        rows = []
+        for index in range(80):
+            midpoint = 100.0 + index * 0.15 + (0.30 if index % 5 == 0 else 0.0)
+            rows.append(
+                {
+                    "time": pd.Timestamp("2026-11-10T06:00:00Z") + pd.Timedelta(hours=index),
+                    "is_complete": True,
+                    "open": midpoint - 0.04,
+                    "high": midpoint + 0.10,
+                    "low": midpoint - 0.10,
+                    "close": midpoint + 0.04,
+                    "volume": 1000.0 + index,
+                }
+            )
+        candles = pd.DataFrame(rows)
+        indicators = mod.add_indicators(candles, include_ema200=False)
+        midpoint = (candles["high"] + candles["low"]) / 2.0
+        expected = midpoint.rolling(5).mean().iloc[-1] - midpoint.rolling(34).mean().iloc[-1]
+        legacy = midpoint.rolling(5).mean().iloc[-1] - midpoint.rolling(20).mean().iloc[-1]
+
+        self.assertAlmostEqual(float(indicators.iloc[-1]["ao"]), float(expected), places=9)
+        self.assertNotAlmostEqual(float(indicators.iloc[-1]["ao"]), float(legacy), places=6)
+
+    def test_unified_reversal_accepts_strong_delayed_ao_confirmation_after_recent_cross(self) -> None:
+        rows = []
+        ao_values = [-0.04, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.11, 0.10, 0.08, 0.14]
+        closes = [100.00, 100.01, 100.02, 100.03, 100.04, 100.05, 100.06, 100.07, 100.08, 100.09, 100.10, 100.12, 100.18, 100.80]
+        for index, (ao_value, close) in enumerate(zip(ao_values, closes)):
+            rows.append(
+                {
+                    "time": pd.Timestamp("2026-11-15T09:00:00Z") + pd.Timedelta(hours=index),
+                    "open": close - (0.60 if index == len(closes) - 1 else 0.05),
+                    "high": close + 0.08,
+                    "low": close - 0.08,
+                    "close": close,
+                    "ema20": 100.25 if index == len(closes) - 1 else 100.0,
+                    "ema50": 101.50,
+                    "rsi": 60.0 if index == len(closes) - 1 else 52.0 + index * 0.4,
+                    "macd": 0.16 if index == len(closes) - 1 else 0.08,
+                    "macd_signal": 0.08 if index == len(closes) - 1 else 0.05,
+                    "ao": ao_value,
+                    "chaikin": 8.0 if index == len(closes) - 1 else float(index) - 6.0,
+                    "volume": 220.0 if index == len(closes) - 1 else 100.0,
+                    "volume_avg": 100.0,
+                    "body": 0.60 if index == len(closes) - 1 else 0.05,
+                    "body_avg": 0.35,
+                    "atr": 0.25,
+                    "bb_upper": 101.2,
+                    "bb_lower": 99.2,
+                    "stoch_k": 78.0,
+                    "stoch_d": 70.0,
+                }
+            )
+        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
+
+        signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("позднее подтверждение AO", reason)
+        self.assertIn("стартовый размер 50%", reason)
+        self.assertEqual(mod.resolve_entry_path(signal, "reversal_1h", reason), "delayed_ao_confirmation")
+
+    def test_delayed_ao_confirmation_still_rejects_weak_volume(self) -> None:
+        rows = []
+        ao_values = [-0.04, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.11, 0.10, 0.08, 0.14]
+        for index, ao_value in enumerate(ao_values):
+            close = 100.0 + index * 0.02
+            rows.append(
+                {
+                    "close": close,
+                    "high": close + 0.05,
+                    "low": close - 0.05,
+                    "ema20": close - 0.10,
+                    "ema50": 102.0,
+                    "rsi": 55.0 + index * 0.2,
+                    "macd": 0.12,
+                    "macd_signal": 0.06,
+                    "ao": ao_value,
+                    "chaikin": float(index),
+                    "volume": 90.0,
+                    "volume_avg": 100.0,
+                    "body": 0.60,
+                    "body_avg": 0.40,
+                    "atr": 0.25,
+                }
+            )
+        instrument = InstrumentConfig(symbol="USDRUBF", figi="FIGI", display_name="USD/RUB")
+
+        signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertNotIn("позднее подтверждение AO", reason)
+
     def test_multiday_regime_separates_stable_trend_from_flat_market(self) -> None:
         trend_rows = []
         flat_rows = []

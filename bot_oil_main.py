@@ -5410,8 +5410,6 @@ def get_session_position_multiplier(session_name: str, symbol: str | None = None
     if session_name in {"CLOSED", "CLEARING"}:
         return 0.0
     if session_name == "WEEKEND":
-        if symbol and is_currency_symbol(symbol):
-            return 0.0
         return 0.35
     return {
         "PREMARKET": 0.0,
@@ -5423,15 +5421,11 @@ def get_session_position_multiplier(session_name: str, symbol: str | None = None
 def session_allows_new_entries(session_name: str, symbol: str) -> bool:
     if session_name in {"CLOSED", "CLEARING", "PREMARKET"}:
         return False
-    if session_name == "WEEKEND":
-        return not is_currency_symbol(symbol)
     return True
 
 
 def session_signal_quality_ok(df: pd.DataFrame, signal: str, session_name: str, symbol: str, strategy_name: str = "") -> bool:
     if session_name in {"CLOSED", "CLEARING", "PREMARKET"}:
-        return False
-    if session_name == "WEEKEND" and is_currency_symbol(symbol):
         return False
     if is_ao_chaikin_strategy(strategy_name):
         # AO already confirmed two completed hourly candles. MACD is not part
@@ -5641,7 +5635,7 @@ def add_indicators(df: pd.DataFrame, *, include_ema200: bool = True) -> pd.DataF
     result["macd"] = macd.macd()
     result["macd_signal"] = macd.macd_signal()
     median_price = (result["high"] + result["low"]) / 2
-    result["ao"] = median_price.rolling(5).mean() - median_price.rolling(20).mean()
+    result["ao"] = median_price.rolling(5).mean() - median_price.rolling(34).mean()
     high_low_range = (result["high"] - result["low"]).astype(float).replace(0.0, float("nan"))
     money_flow_multiplier = ((result["close"] - result["low"]) - (result["high"] - result["close"])) / high_low_range
     money_flow_volume = money_flow_multiplier.fillna(0.0).astype(float) * result["volume"]
@@ -9013,7 +9007,8 @@ def calculate_position_sizing_context(
         * daily_loss_recovery_multiplier
         * max(session_multiplier, 0.0)
     )
-    entry_path_multiplier = 0.50 if state.last_entry_path == "early_momentum" else 1.0
+    half_risk_entry_paths = {"early_momentum", "delayed_ao_confirmation"}
+    entry_path_multiplier = 0.50 if state.last_entry_path in half_risk_entry_paths else 1.0
     if ao_strategy:
         entry_path_multiplier = AO_RISK_MULTIPLIER
     target_trade_margin *= entry_path_multiplier
@@ -9145,7 +9140,7 @@ def calculate_position_sizing_context(
 
     if broker_limit > 0:
         raw_qty = min(raw_qty, broker_limit)
-    if state.last_entry_path == "early_momentum" and broker_limit > 0:
+    if state.last_entry_path in half_risk_entry_paths and broker_limit > 0:
         raw_qty = min(raw_qty, max(1, (broker_limit + 1) // 2))
     if qty_by_risk > 0:
         raw_qty = min(raw_qty, qty_by_risk)
@@ -11376,25 +11371,6 @@ def process_instrument(
             if higher_tf_cleared:
                 save_state(instrument.symbol, state)
         return None
-    if session_name == "WEEKEND" and is_currency_symbol(instrument.symbol):
-        weekend_message = "Выходной день: валютный фьючерс не торгуется."
-        if state.position_side != "FLAT" or has_pending_order(state):
-            state.last_signal_summary = [weekend_message, *state.last_signal_summary[:2]]
-        elif state.last_error != weekend_message or state.last_signal != "HOLD":
-            state.last_error = weekend_message
-            state.last_signal = "HOLD"
-            save_state(instrument.symbol, state)
-            logging.info("symbol=%s status=weekend_currency_closed", instrument.symbol)
-        else:
-            state.last_error = weekend_message
-            if higher_tf_cleared:
-                save_state(instrument.symbol, state)
-        if state.position_side == "FLAT" and not has_pending_order(state):
-            state.last_signal = "HOLD"
-            if higher_tf_cleared:
-                save_state(instrument.symbol, state)
-            return None
-
     try:
         signal_interval = get_signal_interval_for_symbol(config, instrument.symbol)
         signal_interval_minutes = get_signal_interval_minutes_for_symbol(config, instrument.symbol)

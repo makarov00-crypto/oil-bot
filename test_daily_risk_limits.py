@@ -247,9 +247,11 @@ class DailyRiskLimitTests(unittest.TestCase):
         self.assertTrue(sizing["daily_loss_recovery_active"])
         self.assertLess(sizing["target_trade_margin_rub"], 3000.0)
 
-    def test_weekend_blocks_currency_but_allows_other_symbols_before_cutoff(self) -> None:
+    def test_weekend_allows_currency_futures_after_moex_expansion(self) -> None:
         self.assertTrue(mod.session_allows_new_entries("WEEKEND", "BRK6"))
-        self.assertFalse(mod.session_allows_new_entries("WEEKEND", "CNYRUBF"))
+        self.assertTrue(mod.session_allows_new_entries("WEEKEND", "CNYRUBF"))
+        self.assertTrue(mod.session_allows_new_entries("WEEKEND", "USDRUBF"))
+        self.assertEqual(mod.get_session_position_multiplier("WEEKEND", "USDRUBF"), 0.35)
 
     def test_weekend_session_closes_after_1900_moscow(self) -> None:
         saturday_before_open = mod.datetime(2026, 4, 18, 9, 49, tzinfo=mod.MOSCOW_TZ)

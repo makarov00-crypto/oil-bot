@@ -92,6 +92,19 @@ def _bars_since_cross(macd: list[float], signal: list[float], direction: str) ->
     return None
 
 
+def _bars_since_zero_cross(values: list[float], direction: str) -> int | None:
+    if len(values) < 2:
+        return None
+    for idx in range(len(values) - 1, 0, -1):
+        previous = values[idx - 1]
+        current = values[idx]
+        if direction == "LONG" and previous <= 0.0 < current:
+            return len(values) - 1 - idx
+        if direction == "SHORT" and previous >= 0.0 > current:
+            return len(values) - 1 - idx
+    return None
+
+
 def _macd_flip_count(macd: list[float], signal: list[float]) -> int:
     if len(macd) < 3 or len(signal) < 3:
         return 0
@@ -342,6 +355,9 @@ def evaluate_signal_core(
     prev_ao = float(prev.get("ao", prev_hist))
     prev2 = df.iloc[-3]
     prev2_ao = float(prev2.get("ao", prev2.get("macd", 0.0) - prev2.get("macd_signal", 0.0)))
+    ao_context = [float(value) for value in df["ao"].tail(14).tolist()]
+    long_ao_cross_age = _bars_since_zero_cross(ao_context, "LONG")
+    short_ao_cross_age = _bars_since_zero_cross(ao_context, "SHORT")
     chaikin = float(last.get("chaikin", 0.0))
     prev_chaikin = float(prev.get("chaikin", 0.0))
     chaikin_delta = chaikin - prev_chaikin
@@ -582,6 +598,50 @@ def evaluate_signal_core(
         and soft_volatility_ok
     )
 
+    # A zero-line cross can occur during a thin weekend session and receive its
+    # real confirmation only after liquidity returns. Keep that context for up
+    # to twelve completed hourly candles, but require a fresh AO saucer plus a
+    # visible price breakout, strong volume/body and confirming money flow.
+    delayed_ao_confirmation_bars = 12
+    ao_saucer_long = prev2_ao > prev_ao and ao > prev_ao and ao > 0.0
+    ao_saucer_short = prev2_ao < prev_ao and ao < prev_ao and ao < 0.0
+    delayed_ao_long_ok = (
+        regime == "mixed"
+        and long_ao_cross_age is not None
+        and 2 <= long_ao_cross_age <= delayed_ao_confirmation_bars
+        and ao_saucer_long
+        and path_efficiency_6h > MIN_TREND_PATH_EFFICIENCY_6H
+        and breakout_up
+        and close >= ema20
+        and ema20 >= prev_ema20
+        and macd_hist > 0.0
+        and macd_hist >= prev_hist
+        and rsi_long_ok
+        and chaikin_long_ok
+        and chaikin > 0.0
+        and volume_ratio >= max(profile.strong_volume_ratio, 1.50)
+        and body_ratio >= max(profile.strong_body_ratio, 1.25)
+        and soft_volatility_ok
+    )
+    delayed_ao_short_ok = (
+        regime == "mixed"
+        and short_ao_cross_age is not None
+        and 2 <= short_ao_cross_age <= delayed_ao_confirmation_bars
+        and ao_saucer_short
+        and path_efficiency_6h > MIN_TREND_PATH_EFFICIENCY_6H
+        and breakout_down
+        and close <= ema20
+        and ema20 <= prev_ema20
+        and macd_hist < 0.0
+        and macd_hist <= prev_hist
+        and rsi_short_ok
+        and chaikin_short_ok
+        and chaikin < 0.0
+        and volume_ratio >= max(profile.strong_volume_ratio, 1.50)
+        and body_ratio >= max(profile.strong_body_ratio, 1.25)
+        and soft_volatility_ok
+    )
+
     late_long = (
         long_cross_age is None
         or long_cross_age > late_cross_age_limit
@@ -768,19 +828,29 @@ def evaluate_signal_core(
         and not exhausted_short_entry
         and not rsi_short_extreme_bad
     )
-    long_ok = entry_regime_quality_ok and (normal_long_ok or early_momentum_long_ok)
-    short_ok = entry_regime_quality_ok and (normal_short_ok or early_momentum_short_ok)
+    long_ok = (entry_regime_quality_ok and (normal_long_ok or early_momentum_long_ok)) or delayed_ao_long_ok
+    short_ok = (entry_regime_quality_ok and (normal_short_ok or early_momentum_short_ok)) or delayed_ao_short_ok
     if long_warnings:
         long_reasons.extend(long_warnings)
     if short_warnings:
         short_reasons.extend(short_warnings)
 
     if long_ok:
-        if early_momentum_long_ok and not normal_long_ok:
+        if delayed_ao_long_ok:
+            long_reasons.append(
+                f"позднее подтверждение AO через {long_ao_cross_age} свечей после пересечения нуля: "
+                "пробой подтверждён ценой, объёмом и потоком Чайкина; стартовый размер 50%"
+            )
+        elif early_momentum_long_ok and not normal_long_ok:
             long_reasons.append("ранний импульс AO: две растущие свечи выше нуля, стартовый размер 50%")
         return "LONG", f"Сигнал LONG ({strategy_label}): " + "; ".join(long_reasons) + "."
     if short_ok:
-        if early_momentum_short_ok and not normal_short_ok:
+        if delayed_ao_short_ok:
+            short_reasons.append(
+                f"позднее подтверждение AO через {short_ao_cross_age} свечей после пересечения нуля: "
+                "пробой подтверждён ценой, объёмом и потоком Чайкина; стартовый размер 50%"
+            )
+        elif early_momentum_short_ok and not normal_short_ok:
             short_reasons.append("ранний импульс AO: две снижающиеся свечи ниже нуля, стартовый размер 50%")
         return "SHORT", f"Сигнал SHORT ({strategy_label}): " + "; ".join(short_reasons) + "."
     if (

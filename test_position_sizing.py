@@ -106,6 +106,38 @@ class PositionSizingTests(unittest.TestCase):
         self.assertEqual(sizing["target_trade_margin_rub"], 3740.0)
         self.assertEqual(sizing["qty_by_headroom"], 20)
 
+    def test_delayed_ao_confirmation_uses_half_target_margin(self) -> None:
+        self.state.last_setup_quality_label = "strong"
+        self.state.last_market_regime = "trend_expansion"
+        snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
+
+        def target_margin(entry_path: str) -> float:
+            self.state.last_entry_path = entry_path
+            with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
+                mod, "get_margin_headroom_rub", return_value=20000.0
+            ), patch.object(
+                mod, "get_signal_conviction_weight", return_value=1.0
+            ), patch.object(
+                mod, "get_session_position_multiplier", return_value=1.0
+            ), patch.object(
+                mod, "get_instrument_allocation_weight", return_value=("лёгкий", 1.0)
+            ), patch.object(
+                mod, "get_strategy_health_score", return_value=(1.0, "нейтральная форма связки")
+            ), patch.object(
+                mod, "get_strategy_regime_health_score", return_value=(1.0, "режим trend_expansion нейтрален")
+            ), patch.object(
+                mod, "get_recovery_mode_status", return_value={"active": False}
+            ):
+                sizing = mod.calculate_position_sizing_context(
+                    None, self.config, self.instrument, self.state, 11.3, "LONG", self.live_strategy
+                )
+            return float(sizing["target_trade_margin_rub"])
+
+        regular = target_margin("")
+        delayed = target_margin("delayed_ao_confirmation")
+
+        self.assertAlmostEqual(delayed, regular * 0.50, places=6)
+
     def test_quantity_uses_internal_budget_when_broker_limit_is_unavailable(self) -> None:
         snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
         with patch.object(mod, "get_account_snapshot", return_value=snapshot), patch.object(
