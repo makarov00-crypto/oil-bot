@@ -50,7 +50,7 @@ from strategies.reversal_exit_protection import (
     advance_reversal_protection,
     new_reversal_protection_state,
 )
-from strategies.reversal_core import classify_multiday_direction
+from strategies.reversal_core import classify_multiday_direction, classify_reversal_regime
 from strategies.reversal_1h import STRATEGY_VERSION as REVERSAL_STRATEGY_VERSION
 from tbank_invest import Client, INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 from trade_storage import (
@@ -5589,6 +5589,8 @@ def resolve_entry_path(signal: str, strategy_name: str, reason: str) -> str:
     normalized_reason = str(reason or "").lower()
     if "позднее подтверждение ao" in normalized_reason:
         return "delayed_ao_confirmation"
+    if "подтверждённое расширение" in normalized_reason:
+        return "expansion_momentum"
     if strategy_name == "ao_chaikin_1h":
         return "fast_ao_confirmation"
     if "ранний импульс ao" in normalized_reason or "mixed→impulse" in normalized_reason:
@@ -5896,7 +5898,13 @@ def normalize_entry_edge_score(value: float) -> float:
     return round(float(value or 0.0), 2)
 
 
-def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, dict[str, float | str | bool]]:
+def classify_market_regime(
+    df: pd.DataFrame,
+    higher_tf_bias: str,
+    *,
+    symbol: str = "",
+    timeframe_minutes: int = 60,
+) -> tuple[str, dict[str, float | str | bool]]:
     last = df.iloc[-1]
     recent = df.iloc[-5:] if len(df) >= 5 else df
     close = float(last["close"])
@@ -5977,7 +5985,38 @@ def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, 
 
     confidence = clamp_float(0.38 + top_score * 0.42 + score_gap * 0.35, 0.35, 0.95)
 
-    if regime == "compression":
+    reversal_regime: dict[str, float | str | bool] | None = None
+    if symbol and uses_unified_reversal(symbol):
+        reversal_regime = classify_reversal_regime(df, symbol, timeframe_minutes)
+        shared_name = str(reversal_regime.get("regime") or "mixed")
+        regime = {
+            "trend": "trend_expansion",
+            "expansion": "impulse",
+            "compression": "compression",
+            "chop": "chop",
+            "mixed": "mixed",
+        }.get(shared_name, "mixed")
+        confidence = float(reversal_regime.get("confidence") or confidence)
+
+    if reversal_regime and regime in {"trend_expansion", "impulse"}:
+        direction = str(reversal_regime.get("direction") or "")
+        direction_text = "вверх" if direction == "LONG" else "вниз" if direction == "SHORT" else ""
+        continuation_text = (
+            ", импульс сохраняется после паузной свечи"
+            if reversal_regime.get("continuation")
+            else ""
+        )
+        if regime == "impulse":
+            reason_parts = [
+                f"подтверждённое расширение {direction_text}".strip(),
+                "объём и направленный путь подтверждают движение" + continuation_text,
+            ]
+        else:
+            reason_parts = [
+                f"устойчивый локальный тренд {direction_text}".strip(),
+                "структура цены и средних согласована",
+            ]
+    elif regime == "compression":
         reason_parts = ["низкие объём и импульс", "узкий диапазон", "цена прижата к EMA20"]
     elif regime == "chop":
         reason_parts = ["низкая волатильность", "плоские средние", "нет направленного преимущества"]
@@ -6013,6 +6052,14 @@ def classify_market_regime(df: pd.DataFrame, higher_tf_bias: str) -> tuple[str, 
         "regime_top_score": round(top_score, 4),
         "regime_score_gap": round(score_gap, 4),
         "regime_reason": regime_reason,
+        "strategy_regime": str(reversal_regime.get("regime") or "") if reversal_regime else "",
+        "regime_direction": str(reversal_regime.get("direction") or "") if reversal_regime else "",
+        "regime_continuation": bool(reversal_regime.get("continuation")) if reversal_regime else False,
+        "effective_expansion_range_pct": (
+            float(reversal_regime.get("effective_expansion_range_pct") or 0.0)
+            if reversal_regime
+            else 0.0
+        ),
         "multiday_long_available": bool(multiday_long.get("available")),
         "multiday_long_regime": str(multiday_long.get("regime") or "unknown"),
         "multiday_long_score": float(multiday_long.get("stable_score") or 0.0),
@@ -9007,7 +9054,7 @@ def calculate_position_sizing_context(
         * daily_loss_recovery_multiplier
         * max(session_multiplier, 0.0)
     )
-    half_risk_entry_paths = {"early_momentum", "delayed_ao_confirmation"}
+    half_risk_entry_paths = {"early_momentum", "delayed_ao_confirmation", "expansion_momentum"}
     entry_path_multiplier = 0.50 if state.last_entry_path in half_risk_entry_paths else 1.0
     if ao_strategy:
         entry_path_multiplier = AO_RISK_MULTIPLIER
@@ -11473,7 +11520,12 @@ def process_instrument(
     state.last_signal = signal
     state.last_strategy_name = primary_strategy_name
     state.last_higher_tf_bias = context_higher_tf_bias
-    market_regime, regime_metrics = classify_market_regime(lower_df, context_higher_tf_bias)
+    market_regime, regime_metrics = classify_market_regime(
+        lower_df,
+        context_higher_tf_bias,
+        symbol=instrument.symbol,
+        timeframe_minutes=signal_interval_minutes,
+    )
     setup_quality_score, setup_quality_label = estimate_setup_quality(
         signal,
         context_higher_tf_bias,

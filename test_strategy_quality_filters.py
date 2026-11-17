@@ -14,6 +14,7 @@ from strategies.reversal_core import (
     MIN_TREND_PATH_EFFICIENCY_6H,
     _path_efficiency,
     classify_multiday_direction,
+    classify_reversal_regime,
     get_profile as get_reversal_profile,
 )
 
@@ -377,8 +378,9 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("только в устойчивом тренде", reason)
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("режим=expansion", reason)
+        self.assertIn("стартовый размер 50%", reason)
 
     def test_unified_reversal_1h_allows_short_when_macd_ao_and_volume_align(self) -> None:
         df = candle_rows(
@@ -397,8 +399,9 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         signal, reason = evaluate_reversal_1h(df, self.config, instrument, "")
 
-        self.assertEqual(signal, "HOLD")
-        self.assertIn("только в устойчивом тренде", reason)
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("режим=expansion", reason)
+        self.assertIn("стартовый размер 50%", reason)
 
     def test_unified_reversal_blocks_new_short_when_oscillators_are_exhausted(self) -> None:
         df = candle_rows(
@@ -827,6 +830,133 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertEqual(second_signal, "SHORT")
         self.assertIn("режим=mixed→impulse", reason)
         self.assertEqual(mod.resolve_entry_path(second_signal, "reversal_1h", reason), "early_momentum")
+
+    def test_unified_reversal_admits_confirmed_short_expansion_before_ema_cross(self) -> None:
+        closes = [100.8, 100.6, 100.4, 100.2, 100.0, 99.8, 99.4, 98.9]
+        ema20_values = [100.60, 100.55, 100.50, 100.45, 100.40, 100.35, 100.30, 100.20]
+        macd_values = [0.08, 0.06, 0.04, 0.02, -0.02, -0.05, -0.09, -0.15]
+        ao_values = [0.10, 0.08, 0.05, 0.02, -0.04, -0.10, -0.18, -0.30]
+        rows = []
+        for index, close in enumerate(closes):
+            rows.append(
+                {
+                    "open": close + 0.65,
+                    "high": close + 0.30,
+                    "low": close - 0.30,
+                    "close": close,
+                    "ema20": ema20_values[index],
+                    # EMA20 has not crossed below EMA50 yet, as on BRZ6 at the
+                    # start of the 16 November sell-off.
+                    "ema50": 100.0,
+                    "rsi": 50.0 - index * 2.0,
+                    "macd": macd_values[index],
+                    "macd_signal": 0.0,
+                    "ao": ao_values[index],
+                    "chaikin": 2.0 - index * 3.0,
+                    "volume": 220.0,
+                    "volume_avg": 100.0,
+                    "body": 0.80,
+                    "body_avg": 0.50,
+                    "atr": 0.60,
+                    "bb_upper": 101.5,
+                    "bb_lower": 98.5,
+                    "stoch_k": 25.0,
+                    "stoch_d": 30.0,
+                }
+            )
+        instrument = InstrumentConfig(symbol="BRZ6", figi="FIGI", display_name="Brent")
+
+        signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("режим=expansion", reason)
+        self.assertIn("стартовый размер 50%", reason)
+        self.assertEqual(mod.resolve_entry_path(signal, "reversal_1h", reason), "expansion_momentum")
+
+    def test_shared_regime_keeps_short_expansion_through_one_pause_candle(self) -> None:
+        closes = [100.8, 100.6, 100.4, 100.2, 100.0, 99.8, 99.4, 98.9, 98.7]
+        ema20_values = [100.60, 100.55, 100.50, 100.45, 100.40, 100.35, 100.30, 100.20, 100.10]
+        macd_values = [0.08, 0.06, 0.04, 0.02, -0.02, -0.05, -0.09, -0.15, -0.18]
+        ao_values = [0.10, 0.08, 0.05, 0.02, -0.04, -0.10, -0.18, -0.30, -0.40]
+        rows = []
+        for index, close in enumerate(closes):
+            pause = index == len(closes) - 1
+            rows.append(
+                {
+                    "open": close + (0.25 if pause else 0.65),
+                    "high": close + 0.30,
+                    "low": close - 0.30,
+                    "close": close,
+                    "ema20": ema20_values[index],
+                    "ema50": 100.0,
+                    "rsi": 50.0 - index * 2.0,
+                    "macd": macd_values[index],
+                    "macd_signal": 0.0,
+                    "ao": ao_values[index],
+                    "chaikin": 2.0 - index * 3.0,
+                    "volume": 180.0 if pause else 220.0,
+                    "volume_avg": 100.0,
+                    "body": 0.35 if pause else 0.80,
+                    "body_avg": 0.50,
+                    "atr": 0.60,
+                    "bb_upper": 101.5,
+                    "bb_lower": 98.5,
+                    "stoch_k": 20.0,
+                    "stoch_d": 25.0,
+                }
+            )
+        df = candle_rows(rows)
+
+        strategy_regime = classify_reversal_regime(df, "BRZ6", 60)
+        dashboard_regime, dashboard_metrics = mod.classify_market_regime(
+            df,
+            "",
+            symbol="BRZ6",
+            timeframe_minutes=60,
+        )
+
+        self.assertEqual(strategy_regime["regime"], "expansion")
+        self.assertEqual(strategy_regime["direction"], "SHORT")
+        self.assertTrue(strategy_regime["continuation"])
+        self.assertEqual(dashboard_regime, "impulse")
+        self.assertEqual(dashboard_metrics["strategy_regime"], "expansion")
+        self.assertEqual(dashboard_metrics["regime_direction"], "SHORT")
+        self.assertTrue(dashboard_metrics["regime_continuation"])
+
+    def test_unified_reversal_rejects_late_expansion_far_from_ema20(self) -> None:
+        closes = [100.8, 100.6, 100.4, 100.2, 100.0, 99.8, 99.4, 98.0]
+        rows = []
+        for index, close in enumerate(closes):
+            rows.append(
+                {
+                    "open": close + 0.70,
+                    "high": close + 0.30,
+                    "low": close - 0.30,
+                    "close": close,
+                    "ema20": 100.60 - index * 0.05,
+                    "ema50": 100.0,
+                    "rsi": 49.0 - index * 2.5,
+                    "macd": 0.08 - index * 0.05,
+                    "macd_signal": 0.0,
+                    "ao": 0.10 - index * 0.08,
+                    "chaikin": 2.0 - index * 4.0,
+                    "volume": 240.0,
+                    "volume_avg": 100.0,
+                    "body": 0.90,
+                    "body_avg": 0.50,
+                    "atr": 0.65,
+                    "bb_upper": 101.5,
+                    "bb_lower": 97.5,
+                    "stoch_k": 12.0,
+                    "stoch_d": 16.0,
+                }
+            )
+        instrument = InstrumentConfig(symbol="BRZ6", figi="FIGI", display_name="Brent")
+
+        signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("расширение уже ушло от EMA20", reason)
 
     def test_unified_exit_waits_for_ao_exhaustion_after_peak(self) -> None:
         premature = candle_rows(

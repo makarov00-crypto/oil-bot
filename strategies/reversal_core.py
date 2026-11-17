@@ -280,6 +280,193 @@ def _is_outside_main_session_candle(value) -> bool:
     return local_time.hour < 9 or local_time.hour >= 19
 
 
+def classify_reversal_regime(df, symbol: str, timeframe_minutes: int = 60) -> dict[str, float | str | bool]:
+    """Classify the local reversal regime from the same evidence used for entries.
+
+    The result is direction-aware. A one-candle pause may retain an already
+    confirmed expansion while price structure, participation and directional
+    indicators still agree.
+    """
+    if len(df) < 8:
+        return {
+            "regime": "mixed",
+            "direction": "",
+            "confidence": 0.35,
+            "continuation": False,
+            "path_efficiency_6h": 0.0,
+            "effective_expansion_range_pct": 0.0,
+        }
+
+    profile = get_profile(symbol, timeframe_minutes)
+
+    def snapshot(frame) -> dict[str, float | str | bool]:
+        last = frame.iloc[-1]
+        prev = frame.iloc[-2]
+        recent = frame.iloc[-8:]
+        pre_recent = frame.iloc[-8:-1]
+        close = float(last["close"])
+        ema20 = float(last["ema20"])
+        ema50 = float(last["ema50"])
+        prev_ema20 = float(prev["ema20"])
+        prev_close = float(prev["close"])
+        volume_avg = float(last["volume_avg"])
+        body_avg = float(last["body_avg"])
+        volume_ratio = float(last["volume"]) / volume_avg if volume_avg > 0.0 else 0.0
+        body_ratio = float(last["body"]) / body_avg if body_avg > 0.0 else 0.0
+        atr_pct = float(last["atr"]) / close if close else 0.0
+        bb_width_pct = (float(last["bb_upper"]) - float(last["bb_lower"])) / close if close else 0.0
+        recent_range_pct = (
+            (float(recent["high"].max()) - float(recent["low"].min())) / close if close else 0.0
+        )
+        pre_volume_ratios = [
+            float(row["volume"]) / float(row["volume_avg"])
+            for _, row in pre_recent.iterrows()
+            if float(row.get("volume_avg", 0.0)) > 0.0
+        ]
+        compression_volume_ratio = (
+            sum(pre_volume_ratios) / len(pre_volume_ratios)
+            if pre_volume_ratios
+            else volume_ratio
+        )
+        macd = float(last["macd"])
+        macd_signal = float(last["macd_signal"])
+        prev_hist = float(prev["macd"]) - float(prev["macd_signal"])
+        macd_hist = macd - macd_signal
+        ao = float(last.get("ao", macd_hist))
+        chaikin = float(last.get("chaikin", 0.0))
+        macd_series = [float(value) for value in recent["macd"].tolist()]
+        macd_signal_series = [float(value) for value in recent["macd_signal"].tolist()]
+        macd_flip_count = _macd_flip_count(macd_series, macd_signal_series)
+        long_cross_age = _bars_since_cross(macd_series, macd_signal_series, "LONG")
+        short_cross_age = _bars_since_cross(macd_series, macd_signal_series, "SHORT")
+        soft_volume_floor = max(0.55, profile.min_volume_ratio - 0.30)
+        soft_impulse_floor = max(0.45, profile.min_body_ratio - 0.35)
+        fresh_impulse_override = (
+            (
+                (long_cross_age is not None and long_cross_age <= 2)
+                or (short_cross_age is not None and short_cross_age <= 2)
+            )
+            and volume_ratio >= soft_volume_floor
+            and body_ratio >= soft_impulse_floor
+        )
+        trend_up = close > ema20 and ema20 >= ema50 and ema20 >= prev_ema20
+        trend_down = close < ema20 and ema20 <= ema50 and ema20 <= prev_ema20
+        structure_up = close > ema20 and close > ema50 and ema20 >= prev_ema20 and close >= prev_close
+        structure_down = close < ema20 and close < ema50 and ema20 <= prev_ema20 and close <= prev_close
+        # Adapt expansion to current volatility, but never let it overlap the
+        # instrument's compression range or exceed its conservative profile.
+        effective_expansion_range_pct = max(
+            profile.compression_range_pct * 1.15,
+            min(profile.expansion_range_pct, atr_pct * 3.0),
+        )
+        expansion_up = (
+            structure_up
+            and macd_hist > 0.0
+            and macd_hist > prev_hist
+            and volume_ratio >= profile.strong_volume_ratio
+            and body_ratio >= profile.strong_body_ratio
+            and recent_range_pct >= effective_expansion_range_pct
+        )
+        expansion_down = (
+            structure_down
+            and macd_hist < 0.0
+            and macd_hist < prev_hist
+            and volume_ratio >= profile.strong_volume_ratio
+            and body_ratio >= profile.strong_body_ratio
+            and recent_range_pct >= effective_expansion_range_pct
+        )
+        compression = (
+            atr_pct <= profile.compression_atr_pct
+            and recent_range_pct <= profile.compression_range_pct
+            and bb_width_pct <= profile.compression_bb_width_pct
+            and compression_volume_ratio < 1.05
+        )
+        chop = (
+            not compression
+            and macd_flip_count >= 4
+            and recent_range_pct <= profile.chop_range_pct
+            and volume_ratio < profile.strong_volume_ratio
+            and not fresh_impulse_override
+        )
+        if compression:
+            regime, direction = "compression", ""
+        elif chop:
+            regime, direction = "chop", ""
+        elif expansion_up:
+            regime, direction = "expansion", "LONG"
+        elif expansion_down:
+            regime, direction = "expansion", "SHORT"
+        elif trend_up:
+            regime, direction = "trend", "LONG"
+        elif trend_down:
+            regime, direction = "trend", "SHORT"
+        else:
+            regime, direction = "mixed", ""
+        path_efficiency_6h = _path_efficiency(recent["close"].tail(6).tolist())
+        confidence = 0.45
+        if regime == "expansion":
+            confidence = min(
+                0.95,
+                0.55
+                + min(path_efficiency_6h, 1.0) * 0.15
+                + min(volume_ratio / max(profile.strong_volume_ratio, 1e-9), 2.0) * 0.075
+                + min(body_ratio / max(profile.strong_body_ratio, 1e-9), 2.0) * 0.075,
+            )
+        elif regime == "trend":
+            confidence = min(0.90, 0.55 + min(path_efficiency_6h, 1.0) * 0.25)
+        elif regime in {"compression", "chop"}:
+            confidence = 0.70
+        return {
+            "regime": regime,
+            "direction": direction,
+            "confidence": round(confidence, 4),
+            "continuation": False,
+            "path_efficiency_6h": round(path_efficiency_6h, 4),
+            "effective_expansion_range_pct": effective_expansion_range_pct,
+            "recent_range_pct": recent_range_pct,
+            "volume_ratio": volume_ratio,
+            "body_ratio": body_ratio,
+            "structure_up": structure_up,
+            "structure_down": structure_down,
+            "macd_hist": macd_hist,
+            "ao": ao,
+            "chaikin": chaikin,
+        }
+
+    current = snapshot(df)
+    if current["regime"] != "mixed" or len(df) < 9:
+        return current
+
+    previous = snapshot(df.iloc[:-1])
+    previous_direction = str(previous.get("direction") or "")
+    if previous.get("regime") != "expansion" or previous_direction not in {"LONG", "SHORT"}:
+        return current
+    directional_continuation = (
+        previous_direction == "LONG"
+        and bool(current.get("structure_up"))
+        and float(current.get("macd_hist") or 0.0) > 0.0
+        and float(current.get("ao") or 0.0) > 0.0
+        and float(current.get("chaikin") or 0.0) > 0.0
+    ) or (
+        previous_direction == "SHORT"
+        and bool(current.get("structure_down"))
+        and float(current.get("macd_hist") or 0.0) < 0.0
+        and float(current.get("ao") or 0.0) < 0.0
+        and float(current.get("chaikin") or 0.0) < 0.0
+    )
+    participation_ok = (
+        float(current.get("volume_ratio") or 0.0) >= profile.min_volume_ratio
+        and float(current.get("body_ratio") or 0.0) >= profile.min_body_ratio
+        and float(current.get("path_efficiency_6h") or 0.0) > MIN_TREND_PATH_EFFICIENCY_6H
+    )
+    if directional_continuation and participation_ok:
+        current["regime"] = "expansion"
+        current["direction"] = previous_direction
+        current["continuation"] = True
+        current["confidence"] = round(max(float(current.get("confidence") or 0.0), 0.70), 4)
+    return current
+
+
 def evaluate_signal_core(
     df,
     config,
@@ -361,48 +548,22 @@ def evaluate_signal_core(
     chaikin = float(last.get("chaikin", 0.0))
     prev_chaikin = float(prev.get("chaikin", 0.0))
     chaikin_delta = chaikin - prev_chaikin
-    macd_flip_count = _macd_flip_count(macd_series, macd_signal_series)
-
+    regime_context = classify_reversal_regime(df, instrument.symbol, timeframe_minutes)
     trend_up = close > ema20 and ema20 >= ema50 and ema20 >= prev_ema20
     trend_down = close < ema20 and ema20 <= ema50 and ema20 <= prev_ema20
     structure_up = close > ema20 and close > ema50 and ema20 >= prev_ema20 and close >= prev_close
     structure_down = close < ema20 and close < ema50 and ema20 <= prev_ema20 and close <= prev_close
-    expansion_up = structure_up and macd_hist > 0 and macd_hist > prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
-    expansion_down = structure_down and macd_hist < 0 and macd_hist < prev_hist and volume_ratio >= profile.strong_volume_ratio and body_ratio >= profile.strong_body_ratio and recent_range_pct >= profile.expansion_range_pct
-    compression = atr_pct <= profile.compression_atr_pct and recent_range_pct <= profile.compression_range_pct and bb_width_pct <= profile.compression_bb_width_pct and compression_volume_ratio < 1.05
+    expansion_up = regime_context["regime"] == "expansion" and regime_context["direction"] == "LONG"
+    expansion_down = regime_context["regime"] == "expansion" and regime_context["direction"] == "SHORT"
+    compression = regime_context["regime"] == "compression"
     soft_volume_floor = max(0.55, profile.min_volume_ratio - 0.30)
     soft_impulse_floor = max(0.45, profile.min_body_ratio - 0.35)
     soft_volatility_floor = profile.min_atr_pct * 0.60
-    fresh_impulse_override = (
-        (
-            (long_cross_age is not None and long_cross_age <= 2)
-            or (short_cross_age is not None and short_cross_age <= 2)
-        )
-        and volume_ratio >= soft_volume_floor
-        and body_ratio >= soft_impulse_floor
-    )
-    chop = (
-        (not compression)
-        and macd_flip_count >= 4
-        and recent_range_pct <= profile.chop_range_pct
-        and volume_ratio < profile.strong_volume_ratio
-        and not fresh_impulse_override
-    )
-
-    if compression:
-        detected_regime = "compression"
-    elif chop:
-        detected_regime = "chop"
-    elif expansion_up or expansion_down:
-        detected_regime = "expansion"
-    elif trend_up or trend_down:
-        detected_regime = "trend"
-    else:
-        detected_regime = "mixed"
+    detected_regime = str(regime_context["regime"])
     regime = _regime_override or detected_regime
-    path_efficiency_6h = _path_efficiency(recent["close"].tail(6).tolist())
+    path_efficiency_6h = float(regime_context["path_efficiency_6h"])
     entry_regime_quality_ok = (
-        regime == "trend"
+        regime in {"trend", "expansion"}
         and path_efficiency_6h > MIN_TREND_PATH_EFFICIENCY_6H
     )
     trend_like_regime = regime in {"trend", "expansion"}
@@ -563,6 +724,11 @@ def evaluate_signal_core(
         and body_ratio >= continuation_impulse_floor
         and soft_volatility_ok
         and not rsi_short_extreme_bad
+    )
+    expansion_entry_distance_limit = profile.max_distance_to_ema20_pct * 0.70
+    fresh_expansion_entry = (
+        regime != "expansion"
+        or distance_to_ema20_pct <= expansion_entry_distance_limit
     )
 
     # A fresh AO zero-line crossing catches the first hour of a movement that
@@ -731,7 +897,7 @@ def evaluate_signal_core(
     short_blockers: list[str] = []
     long_warnings: list[str] = []
     short_warnings: list[str] = []
-    if regime != "trend":
+    if regime not in {"trend", "expansion"}:
         long_blockers.append("новые входы разрешены только в устойчивом тренде")
         short_blockers.append("новые входы разрешены только в устойчивом тренде")
     if path_efficiency_6h <= MIN_TREND_PATH_EFFICIENCY_6H:
@@ -752,6 +918,13 @@ def evaluate_signal_core(
     if regime == "mixed":
         long_blockers.append("режим mixed: новые позиции запрещены")
         short_blockers.append("режим mixed: новые позиции запрещены")
+    if regime == "expansion" and not fresh_expansion_entry:
+        expansion_late_reason = (
+            f"расширение уже ушло от EMA20 на {distance_to_ema20_pct:.4f} > "
+            f"{expansion_entry_distance_limit:.4f}"
+        )
+        long_blockers.append(expansion_late_reason)
+        short_blockers.append(expansion_late_reason)
     if not recent_long_cross and not trend_long_continuation_ok:
         long_blockers.append("нет свежего MACD cross вверх")
     if not recent_short_cross and not trend_short_continuation_ok:
@@ -810,6 +983,7 @@ def evaluate_signal_core(
         and entry_volume_ok
         and entry_impulse_ok
         and soft_volatility_ok
+        and fresh_expansion_entry
         and (not hard_late_long or early_momentum_long_ok)
         and not exhausted_long_entry
         and not rsi_long_extreme_bad
@@ -824,6 +998,7 @@ def evaluate_signal_core(
         and entry_volume_ok
         and entry_impulse_ok
         and soft_volatility_ok
+        and fresh_expansion_entry
         and (not hard_late_short or early_momentum_short_ok)
         and not exhausted_short_entry
         and not rsi_short_extreme_bad
@@ -843,6 +1018,8 @@ def evaluate_signal_core(
             )
         elif early_momentum_long_ok and not normal_long_ok:
             long_reasons.append("ранний импульс AO: две растущие свечи выше нуля, стартовый размер 50%")
+        elif regime == "expansion":
+            long_reasons.append("подтверждённое расширение вверх, стартовый размер 50%")
         return "LONG", f"Сигнал LONG ({strategy_label}): " + "; ".join(long_reasons) + "."
     if short_ok:
         if delayed_ao_short_ok:
@@ -852,6 +1029,8 @@ def evaluate_signal_core(
             )
         elif early_momentum_short_ok and not normal_short_ok:
             short_reasons.append("ранний импульс AO: две снижающиеся свечи ниже нуля, стартовый размер 50%")
+        elif regime == "expansion":
+            short_reasons.append("подтверждённое расширение вниз, стартовый размер 50%")
         return "SHORT", f"Сигнал SHORT ({strategy_label}): " + "; ".join(short_reasons) + "."
     if (
         _allow_mixed_confirmation
