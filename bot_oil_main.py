@@ -5589,6 +5589,8 @@ def resolve_entry_path(signal: str, strategy_name: str, reason: str) -> str:
     normalized_reason = str(reason or "").lower()
     if "позднее подтверждение ao" in normalized_reason:
         return "delayed_ao_confirmation"
+    if "направленный импульс при умеренном объёме" in normalized_reason:
+        return "moderate_volume_impulse"
     if "подтверждённое расширение" in normalized_reason:
         return "expansion_momentum"
     if strategy_name == "ao_chaikin_1h":
@@ -9054,7 +9056,12 @@ def calculate_position_sizing_context(
         * daily_loss_recovery_multiplier
         * max(session_multiplier, 0.0)
     )
-    half_risk_entry_paths = {"early_momentum", "delayed_ao_confirmation", "expansion_momentum"}
+    half_risk_entry_paths = {
+        "early_momentum",
+        "delayed_ao_confirmation",
+        "expansion_momentum",
+        "moderate_volume_impulse",
+    }
     entry_path_multiplier = 0.50 if state.last_entry_path in half_risk_entry_paths else 1.0
     if ao_strategy:
         entry_path_multiplier = AO_RISK_MULTIPLIER

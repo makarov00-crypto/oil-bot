@@ -97,6 +97,57 @@ def candle_rows(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(normalized)
 
 
+def moderate_volume_impulse_rows(direction: str, *, rsi_confirmed: bool = True) -> pd.DataFrame:
+    sign = 1.0 if direction == "LONG" else -1.0
+    closes = [100.0 + sign * step for step in (0.0, 0.10, 0.20, 0.32, 0.45, 0.60, 0.78, 1.05)]
+    rsi_values = (
+        [45.0, 45.4, 46.0, 46.8, 47.7, 48.8, 50.0, 51.5]
+        if direction == "LONG"
+        else [55.0, 54.6, 54.0, 53.2, 52.3, 51.2, 50.0, 48.5]
+    )
+    if not rsi_confirmed:
+        rsi_values[-3:] = [47.0, 49.0, 48.5] if direction == "LONG" else [53.0, 51.0, 51.5]
+    macd_values = (
+        [-0.08, -0.07, -0.06, -0.04, -0.02, 0.01, 0.04, 0.08]
+        if direction == "LONG"
+        else [0.08, 0.07, 0.06, 0.04, 0.02, -0.01, -0.04, -0.08]
+    )
+    ao_values = (
+        [-0.16, -0.15, -0.13, -0.10, -0.07, -0.04, -0.01, 0.03]
+        if direction == "LONG"
+        else [0.16, 0.15, 0.13, 0.10, 0.07, 0.04, 0.01, -0.03]
+    )
+    rows = []
+    for index, close in enumerate(closes):
+        current = index == len(closes) - 1
+        open_price = close - sign * (0.52 if current else 0.12)
+        rows.append(
+            {
+                "open": open_price,
+                "high": max(open_price, close) + 0.12,
+                "low": min(open_price, close) - 0.12,
+                "close": close,
+                "ema20": close - sign * 0.18,
+                "ema50": close - sign * 0.55,
+                "rsi": rsi_values[index],
+                "macd": macd_values[index],
+                "macd_signal": 0.0,
+                "ao": ao_values[index],
+                "chaikin": sign * (index + 1) * 2.0,
+                "volume": 61.0 if current else 100.0,
+                "volume_avg": 100.0,
+                "body": 0.52 if current else 0.12,
+                "body_avg": 0.40,
+                "atr": 0.42,
+                "bb_upper": 102.0,
+                "bb_lower": 98.0,
+                "stoch_k": 72.0 if direction == "LONG" else 28.0,
+                "stoch_d": 65.0 if direction == "LONG" else 35.0,
+            }
+        )
+    return candle_rows(rows)
+
+
 class StrategyQualityFilterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = make_config()
@@ -468,6 +519,55 @@ class StrategyQualityFilterTests(unittest.TestCase):
 
         self.assertEqual(signal, "HOLD")
         self.assertIn("объём слишком слабый", reason)
+
+    def test_unified_reversal_allows_confirmed_long_impulse_with_moderate_volume(self) -> None:
+        instrument = InstrumentConfig(symbol="NGZ6", figi="FIGI", display_name="Natural Gas")
+        candles = moderate_volume_impulse_rows("LONG")
+        # A fresh long reversal can be confirmed while the slower EMA20 is
+        # still marginally falling, as on NGZ6 on 24 November.
+        candles.loc[candles.index[-2], "ema20"] = float(candles.iloc[-1]["close"]) + 0.20
+        candles.loc[candles.index[-1], "ema20"] = float(candles.iloc[-1]["close"]) + 0.10
+        candles.loc[candles.index[-2]:, "ema50"] = float(candles.iloc[-1]["close"]) + 0.55
+
+        signal, reason = evaluate_reversal_1h(
+            candles,
+            self.config,
+            instrument,
+            "",
+        )
+
+        self.assertEqual(signal, "LONG")
+        self.assertIn("направленный импульс при умеренном объёме", reason)
+        self.assertIn("стартовый размер 50%", reason)
+        self.assertEqual(mod.resolve_entry_path(signal, "reversal_1h", reason), "moderate_volume_impulse")
+
+    def test_unified_reversal_allows_confirmed_short_impulse_with_moderate_volume(self) -> None:
+        instrument = InstrumentConfig(symbol="SRZ6", figi="FIGI", display_name="Sber")
+
+        signal, reason = evaluate_reversal_1h(
+            moderate_volume_impulse_rows("SHORT"),
+            self.config,
+            instrument,
+            "",
+        )
+
+        self.assertEqual(signal, "SHORT")
+        self.assertIn("направленный импульс при умеренном объёме", reason)
+        self.assertIn("стартовый размер 50%", reason)
+        self.assertEqual(mod.resolve_entry_path(signal, "reversal_1h", reason), "moderate_volume_impulse")
+
+    def test_moderate_volume_impulse_still_requires_two_candle_rsi_confirmation(self) -> None:
+        instrument = InstrumentConfig(symbol="TBZ6", figi="FIGI", display_name="T-Technologies")
+
+        signal, reason = evaluate_reversal_1h(
+            moderate_volume_impulse_rows("SHORT", rsi_confirmed=False),
+            self.config,
+            instrument,
+            "",
+        )
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("RSI ещё не развернулся достаточно уверенно", reason)
 
     def test_unified_reversal_blocks_weak_trend_continuation_without_fresh_cross(self) -> None:
         df = candle_rows(
@@ -872,6 +972,77 @@ class StrategyQualityFilterTests(unittest.TestCase):
         self.assertIn("режим=expansion", reason)
         self.assertIn("стартовый размер 50%", reason)
         self.assertEqual(mod.resolve_entry_path(signal, "reversal_1h", reason), "expansion_momentum")
+
+    def test_unified_reversal_waits_when_short_expansion_is_exhausted(self) -> None:
+        closes = [100.8, 100.6, 100.4, 100.2, 100.0, 99.8, 99.4, 98.9]
+        rows = []
+        for index, close in enumerate(closes):
+            rows.append(
+                {
+                    "open": close + 0.65,
+                    "high": close + 0.30,
+                    "low": close - 0.30,
+                    "close": close,
+                    "ema20": 100.60 - index * 0.05,
+                    "ema50": 100.0,
+                    "rsi": [50.0, 47.0, 44.0, 41.0, 38.0, 35.0, 33.0, 31.0][index],
+                    "macd": [0.08, 0.06, 0.04, 0.02, -0.02, -0.05, -0.09, -0.15][index],
+                    "macd_signal": 0.0,
+                    "ao": [0.10, 0.08, 0.05, 0.02, -0.04, -0.10, -0.18, -0.30][index],
+                    "chaikin": 2.0 - index * 3.0,
+                    "volume": 157.0,
+                    "volume_avg": 100.0,
+                    "body": 0.62,
+                    "body_avg": 0.50,
+                    "atr": 0.45,
+                    "bb_upper": 101.5,
+                    "bb_lower": 98.5,
+                    "stoch_k": 6.3 if index == len(closes) - 1 else 20.0,
+                    "stoch_d": 11.7 if index == len(closes) - 1 else 25.0,
+                }
+            )
+        instrument = InstrumentConfig(symbol="BRZ6", figi="FIGI", display_name="Brent")
+
+        signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("истощённое расширение вниз", reason)
+        self.assertIn("дождаться новой часовой свечи", reason)
+
+    def test_unified_reversal_waits_when_long_expansion_is_exhausted(self) -> None:
+        closes = [99.2, 99.4, 99.6, 99.8, 100.0, 100.2, 100.6, 101.1]
+        rows = []
+        for index, close in enumerate(closes):
+            rows.append(
+                {
+                    "open": close - 0.65,
+                    "high": close + 0.30,
+                    "low": close - 0.30,
+                    "close": close,
+                    "ema20": 99.40 + index * 0.05,
+                    "ema50": 100.0,
+                    "rsi": [50.0, 53.0, 56.0, 59.0, 62.0, 65.0, 67.0, 69.0][index],
+                    "macd": [-0.08, -0.06, -0.04, -0.02, 0.02, 0.05, 0.09, 0.15][index],
+                    "macd_signal": 0.0,
+                    "ao": [-0.10, -0.08, -0.05, -0.02, 0.04, 0.10, 0.18, 0.30][index],
+                    "chaikin": -2.0 + index * 3.0,
+                    "volume": 157.0,
+                    "volume_avg": 100.0,
+                    "body": 0.62,
+                    "body_avg": 0.50,
+                    "atr": 0.45,
+                    "bb_upper": 101.5,
+                    "bb_lower": 98.5,
+                    "stoch_k": 93.0 if index == len(closes) - 1 else 80.0,
+                    "stoch_d": 88.0 if index == len(closes) - 1 else 75.0,
+                }
+            )
+        instrument = InstrumentConfig(symbol="BRZ6", figi="FIGI", display_name="Brent")
+
+        signal, reason = evaluate_reversal_1h(candle_rows(rows), self.config, instrument, "")
+
+        self.assertEqual(signal, "HOLD")
+        self.assertIn("истощённое расширение вверх", reason)
 
     def test_shared_regime_keeps_short_expansion_through_one_pause_candle(self) -> None:
         closes = [100.8, 100.6, 100.4, 100.2, 100.0, 99.8, 99.4, 98.9, 98.7]

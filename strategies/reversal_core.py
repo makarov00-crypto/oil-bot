@@ -6,6 +6,9 @@ from instrument_groups import is_brent_symbol
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 MIN_TREND_PATH_EFFICIENCY_6H = 0.35
+MODERATE_VOLUME_IMPULSE_PATH_EFFICIENCY_6H = 0.50
+MODERATE_VOLUME_IMPULSE_MIN_VOLUME_RATIO = 0.50
+MODERATE_VOLUME_IMPULSE_MIN_BODY_RATIO = 1.25
 MULTIDAY_REGIME_MIN_HOURS = 48
 MULTIDAY_REGIME_WINDOW_HOURS = 72
 
@@ -663,6 +666,53 @@ def evaluate_signal_core(
         and body_ratio >= soft_impulse_floor
         and volume_ratio >= max(0.45, soft_volume_floor - 0.10)
     )
+    # The opening hours can carry a real directional impulse before the latest
+    # candle reaches the rolling average volume.  Admit only the narrow case
+    # observed on NGZ6 and SRZ6: an established trend, a fresh MACD crossing,
+    # a large directional body and two-candle RSI/AO/Chaikin confirmation.
+    # The explicit reason below keeps this path at half size.
+    moderate_volume_long_structure_ok = (
+        (close >= ema20 and ema20 >= prev_ema20)
+        or (close >= prev_close and distance_to_ema20_pct <= 0.003)
+    )
+    moderate_volume_short_structure_ok = (
+        (close <= ema20 and ema20 <= prev_ema20)
+        or (close <= prev_close and distance_to_ema20_pct <= 0.003)
+    )
+    moderate_volume_long_impulse_ok = (
+        regime == "trend"
+        and path_efficiency_6h >= MODERATE_VOLUME_IMPULSE_PATH_EFFICIENCY_6H
+        and recent_long_cross
+        and macd_long_ok
+        and moderate_volume_long_structure_ok
+        and ao_long_supported
+        and rsi_long_ok
+        and chaikin_long_ok
+        and volume_ratio >= MODERATE_VOLUME_IMPULSE_MIN_VOLUME_RATIO
+        and body_ratio >= MODERATE_VOLUME_IMPULSE_MIN_BODY_RATIO
+        and soft_volatility_ok
+        and not late_evening
+        and not rsi_long_extreme_bad
+    )
+    moderate_volume_short_impulse_ok = (
+        regime == "trend"
+        and path_efficiency_6h >= MODERATE_VOLUME_IMPULSE_PATH_EFFICIENCY_6H
+        and recent_short_cross
+        and macd_short_ok
+        and moderate_volume_short_structure_ok
+        and ao_short_supported
+        and rsi_short_ok
+        and chaikin_short_ok
+        and volume_ratio >= MODERATE_VOLUME_IMPULSE_MIN_VOLUME_RATIO
+        and body_ratio >= MODERATE_VOLUME_IMPULSE_MIN_BODY_RATIO
+        and soft_volatility_ok
+        and not late_evening
+        and not rsi_short_extreme_bad
+    )
+    moderate_volume_long_entry = moderate_volume_long_impulse_ok and not entry_volume_ok
+    moderate_volume_short_entry = moderate_volume_short_impulse_ok and not entry_volume_ok
+    long_entry_volume_ok = entry_volume_ok or moderate_volume_long_entry
+    short_entry_volume_ok = entry_volume_ok or moderate_volume_short_entry
     long_volume_ok = soft_volume_ok or emerging_long_pressure_ok or (late_evening and volume_ratio >= 0.35 and chaikin_long_ok)
     short_volume_ok = soft_volume_ok or emerging_short_pressure_ok or (late_evening and volume_ratio >= 0.35 and chaikin_short_ok)
     evening_long_pressure_ok = (not late_evening) or volume_ratio >= 1.0 or (volume_ratio >= 0.35 and chaikin_long_ok)
@@ -729,6 +779,19 @@ def evaluate_signal_core(
     fresh_expansion_entry = (
         regime != "expansion"
         or distance_to_ema20_pct <= expansion_entry_distance_limit
+    )
+    expansion_exhaustion_distance_floor = max(0.006, atr_pct * 1.50)
+    exhausted_expansion_long = (
+        expansion_up
+        and stoch_k >= profile.late_stoch_high
+        and rsi >= 65.0
+        and distance_to_ema20_pct >= expansion_exhaustion_distance_floor
+    )
+    exhausted_expansion_short = (
+        expansion_down
+        and stoch_k <= profile.late_stoch_low
+        and rsi <= 35.0
+        and distance_to_ema20_pct >= expansion_exhaustion_distance_floor
     )
 
     # A fresh AO zero-line crossing catches the first hour of a movement that
@@ -946,9 +1009,9 @@ def evaluate_signal_core(
         long_blockers.append("AO не подтверждает рост")
     if not ao_short_ok:
         short_blockers.append("AO не подтверждает снижение")
-    if not entry_volume_ok:
+    if not long_entry_volume_ok:
         long_blockers.append("объём слишком слабый")
-    if not entry_volume_ok:
+    if not short_entry_volume_ok:
         short_blockers.append("объём слишком слабый")
     if not entry_impulse_ok:
         long_blockers.append("импульс свечи слишком слабый")
@@ -968,39 +1031,49 @@ def evaluate_signal_core(
         short_blockers.append("вход перегрет: RSI и Stochastic низки далеко от EMA20")
     elif late_short:
         short_warnings.append("late entry мягкий: требуется свежий подтверждённый cross")
+    if exhausted_expansion_long:
+        long_blockers.append(
+            "истощённое расширение вверх: дождаться новой часовой свечи после крайней зоны стохастического осциллятора"
+        )
+    if exhausted_expansion_short:
+        short_blockers.append(
+            "истощённое расширение вниз: дождаться новой часовой свечи после крайней зоны стохастического осциллятора"
+        )
 
     regime_allows_long = regime in {"trend", "expansion"} or compression_long_ok
     regime_allows_short = regime in {"trend", "expansion"} or compression_short_ok
     normal_long_ok = (
         regime_allows_long
-        and (trend_up or expansion_up or early_long_ok)
+        and (trend_up or expansion_up or early_long_ok or moderate_volume_long_entry)
         and (recent_long_cross or trend_long_continuation_ok)
         # A qualified trend continuation deliberately has no recent MACD cross.
         # Requiring macd_long_ok here made that branch unreachable.
         and (macd_long_ok or trend_long_continuation_ok)
         and ao_long_ok
         and rsi_long_ok
-        and entry_volume_ok
+        and long_entry_volume_ok
         and entry_impulse_ok
         and soft_volatility_ok
         and fresh_expansion_entry
         and (not hard_late_long or early_momentum_long_ok)
         and not exhausted_long_entry
+        and not exhausted_expansion_long
         and not rsi_long_extreme_bad
     )
     normal_short_ok = (
         regime_allows_short
-        and (trend_down or expansion_down or early_short_ok)
+        and (trend_down or expansion_down or early_short_ok or moderate_volume_short_entry)
         and (recent_short_cross or trend_short_continuation_ok)
         and (macd_short_ok or trend_short_continuation_ok)
         and ao_short_ok
         and rsi_short_ok
-        and entry_volume_ok
+        and short_entry_volume_ok
         and entry_impulse_ok
         and soft_volatility_ok
         and fresh_expansion_entry
         and (not hard_late_short or early_momentum_short_ok)
         and not exhausted_short_entry
+        and not exhausted_expansion_short
         and not rsi_short_extreme_bad
     )
     long_ok = (entry_regime_quality_ok and (normal_long_ok or early_momentum_long_ok)) or delayed_ao_long_ok
@@ -1018,6 +1091,8 @@ def evaluate_signal_core(
             )
         elif early_momentum_long_ok and not normal_long_ok:
             long_reasons.append("ранний импульс AO: две растущие свечи выше нуля, стартовый размер 50%")
+        elif moderate_volume_long_entry:
+            long_reasons.append("направленный импульс при умеренном объёме, стартовый размер 50%")
         elif regime == "expansion":
             long_reasons.append("подтверждённое расширение вверх, стартовый размер 50%")
         return "LONG", f"Сигнал LONG ({strategy_label}): " + "; ".join(long_reasons) + "."
@@ -1029,6 +1104,8 @@ def evaluate_signal_core(
             )
         elif early_momentum_short_ok and not normal_short_ok:
             short_reasons.append("ранний импульс AO: две снижающиеся свечи ниже нуля, стартовый размер 50%")
+        elif moderate_volume_short_entry:
+            short_reasons.append("направленный импульс при умеренном объёме, стартовый размер 50%")
         elif regime == "expansion":
             short_reasons.append("подтверждённое расширение вниз, стартовый размер 50%")
         return "SHORT", f"Сигнал SHORT ({strategy_label}): " + "; ".join(short_reasons) + "."

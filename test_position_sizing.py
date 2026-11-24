@@ -136,9 +136,11 @@ class PositionSizingTests(unittest.TestCase):
         regular = target_margin("")
         delayed = target_margin("delayed_ao_confirmation")
         expansion = target_margin("expansion_momentum")
+        moderate_volume = target_margin("moderate_volume_impulse")
 
         self.assertAlmostEqual(delayed, regular * 0.50, places=6)
         self.assertAlmostEqual(expansion, regular * 0.50, places=6)
+        self.assertAlmostEqual(moderate_volume, regular * 0.50, places=6)
 
     def test_quantity_uses_internal_budget_when_broker_limit_is_unavailable(self) -> None:
         snapshot = mod.AccountSnapshot(total_portfolio=25000.0, free_rub=8000.0, blocked_guarantee_rub=9000.0)
