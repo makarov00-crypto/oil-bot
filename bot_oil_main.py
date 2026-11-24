@@ -399,6 +399,8 @@ class InstrumentState:
     broker_stop_qty: int = 0
     broker_stop_verified_at: str = ""
     last_entry_path: str = ""
+    last_entry_size_policy: str = ""
+    last_entry_size_policy_reason: str = ""
     entry_commission_accounted: bool = False
     realized_gross_pnl_rub: float = 0.0
     realized_commission_rub: float = 0.0
@@ -1144,6 +1146,8 @@ def build_trade_event_context(state: InstrumentState | None) -> dict[str, Any]:
         "entry_allocator_quantity": int(state.last_entry_allocator_quantity or 0),
         "entry_allocator_summary": str(state.last_entry_allocator_summary or ""),
         "entry_path": str(state.last_entry_path or ""),
+        "entry_size_policy": str(state.last_entry_size_policy or ""),
+        "entry_size_policy_reason": str(state.last_entry_size_policy_reason or ""),
         "entry_time": str(state.entry_time or state.delayed_close_entry_time or ""),
         "strategy_version": str(state.entry_strategy_version or state.pending_strategy_version or ""),
         "signal_summary": signal_summary,
@@ -8964,6 +8968,83 @@ def mark_cycle_deferred_candidate(candidate: dict[str, Any], reason: str) -> Non
     save_state(symbol, state)
 
 
+STABLE_SHORT_TWO_LOT_PILOT_POLICY = "stable_short_two_lot_pilot"
+STABLE_SHORT_TWO_LOT_PILOT_MAX_ENTRIES = 10
+
+
+def count_stable_short_two_lot_pilot_entries(
+    rows: list[dict[str, Any]] | None = None,
+) -> int:
+    journal_rows = rows if rows is not None else load_trade_journal()
+    count = 0
+    for row in journal_rows:
+        if str(row.get("event") or "").strip().upper() != "OPEN":
+            continue
+        if int(row.get("qty_lots") or 0) < 2:
+            continue
+        context = row.get("context")
+        if not isinstance(context, dict):
+            continue
+        if str(context.get("entry_size_policy") or "") == STABLE_SHORT_TWO_LOT_PILOT_POLICY:
+            count += 1
+    return count
+
+
+def get_reversal_live_lot_cap(
+    config: BotConfig,
+    instrument: InstrumentConfig,
+    state: InstrumentState,
+    signal: str,
+    strategy_name: str,
+    session_name: str,
+    *,
+    strategy_health_score: float,
+    strategy_regime_health_score: float,
+    recovery_mode_active: bool,
+    daily_loss_recovery_active: bool,
+) -> tuple[int, str, str]:
+    """Return the live lot cap for the bounded two-lot pilot."""
+    base_cap = 1
+    base_reason = "базовый лимит основной стратегии: 1 лот"
+    if not is_unified_reversal_strategy(strategy_name):
+        return base_cap, "", base_reason
+    if int(getattr(config, "max_order_quantity", 1) or 1) < 2:
+        return base_cap, "", base_reason
+    if str(signal or "").strip().upper() != "SHORT":
+        return base_cap, "", base_reason
+    if str(session_name or "").strip().upper() != "MAIN":
+        return base_cap, "", base_reason
+    if str(state.last_entry_path or "").strip().lower() != "standard":
+        return base_cap, "", base_reason
+    if str(state.last_setup_quality_label or "").strip().lower() != "strong":
+        return base_cap, "", base_reason
+    if str(state.last_market_regime or "").strip().lower() != "trend_expansion":
+        return base_cap, "", base_reason
+    if float(state.last_market_regime_confidence or 0.0) < 0.65:
+        return base_cap, "", base_reason
+    if normalize_entry_edge_score(state.last_entry_edge_score) < 0.60:
+        return base_cap, "", base_reason
+    if str(state.last_entry_edge_label or "").strip().lower() not in {"moderate", "confirmed", "high"}:
+        return base_cap, "", base_reason
+    if get_instrument_group(instrument.symbol).name not in {EQUITY_INDEX.name, EQUITY_FUTURES.name}:
+        return base_cap, "", base_reason
+    if strategy_health_score < 0.95 or strategy_regime_health_score < 0.90:
+        return base_cap, "", base_reason
+    if recovery_mode_active or daily_loss_recovery_active:
+        return base_cap, "", base_reason
+
+    completed = count_stable_short_two_lot_pilot_entries()
+    if completed >= STABLE_SHORT_TWO_LOT_PILOT_MAX_ENTRIES:
+        return base_cap, "", (
+            f"пилот 2 лотов завершён: открыто {completed} из "
+            f"{STABLE_SHORT_TWO_LOT_PILOT_MAX_ENTRIES} сделок"
+        )
+    return 2, STABLE_SHORT_TWO_LOT_PILOT_POLICY, (
+        f"пилот 2 лотов: сильный короткий вход в устойчивом тренде, "
+        f"сделка {completed + 1} из {STABLE_SHORT_TWO_LOT_PILOT_MAX_ENTRIES}"
+    )
+
+
 def calculate_reserved_open_risk_rub(
     config: BotConfig,
     current_symbol: str,
@@ -9237,8 +9318,23 @@ def calculate_position_sizing_context(
         raw_qty = 0
     if ao_strategy and (risk_budget <= 0.0 or money_risk_per_contract <= 0.0 or broker_limit <= 0):
         raw_qty = 0
+    live_lot_cap = 0
+    entry_size_policy = ""
+    live_lot_cap_reason = ""
     if is_unified_reversal_strategy(strategy_name):
-        raw_qty = min(raw_qty, 1)
+        live_lot_cap, entry_size_policy, live_lot_cap_reason = get_reversal_live_lot_cap(
+            config,
+            instrument,
+            state,
+            signal,
+            strategy_name,
+            session_name,
+            strategy_health_score=strategy_health_score,
+            strategy_regime_health_score=strategy_regime_health_score,
+            recovery_mode_active=bool(recovery_status["active"]),
+            daily_loss_recovery_active=daily_loss_recovery_active,
+        )
+        raw_qty = min(raw_qty, live_lot_cap)
 
     return {
         "session_name": session_name,
@@ -9284,6 +9380,9 @@ def calculate_position_sizing_context(
         "risk_min_lot_override": risk_min_lot_override,
         "broker_leverage_target_lots": broker_leverage_target_lots,
         "broker_leverage_reason": broker_leverage_reason,
+        "live_lot_cap": live_lot_cap,
+        "live_lot_cap_reason": live_lot_cap_reason,
+        "entry_size_policy": entry_size_policy,
         "money_risk_per_contract_rub": money_risk_per_contract,
         "risk_multiplier": risk_multiplier,
         "risk_tier": risk_tier,
@@ -9390,6 +9489,11 @@ def build_position_sizing_lines(
             f"Размер по брокерскому лимиту: {int(sizing['broker_leverage_target_lots'])} лот(а) — "
             f"{sizing['broker_leverage_reason']}"
         )
+    if int(sizing.get("live_lot_cap") or 0) > 0:
+        lines.append(
+            f"Рабочий лимит стратегии: {int(sizing['live_lot_cap'])} лот(а) — "
+            f"{sizing.get('live_lot_cap_reason') or '-'}"
+        )
     return lines
 
 
@@ -9404,6 +9508,8 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     broker_limit = int(sizing.get("broker_limit") or 0)
     broker_leverage_target_lots = int(sizing.get("broker_leverage_target_lots") or 0)
     broker_leverage_reason = str(sizing.get("broker_leverage_reason") or "").strip()
+    live_lot_cap = int(sizing.get("live_lot_cap") or 0)
+    live_lot_cap_reason = str(sizing.get("live_lot_cap_reason") or "").strip()
     qty_by_headroom = int(sizing.get("qty_by_headroom") or 0)
     strategy_health_score = float(sizing.get("strategy_health_score") or 1.0)
     edge_score = float(sizing.get("entry_edge_score") or 0.0)
@@ -9425,6 +9531,11 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
         else ""
     )
     broker_leverage_reason_hint = f", {broker_leverage_reason}" if broker_leverage_reason and quantity > 0 else ""
+    live_lot_cap_hint = (
+        f", рабочий лимит {live_lot_cap} лот(а): {live_lot_cap_reason}"
+        if live_lot_cap > 1 and live_lot_cap_reason
+        else ""
+    )
     correlation_note = str(sizing.get("correlation_note") or "").strip()
     correlation_hint = f", {correlation_note}" if correlation_note else ""
     risk_budget = float(sizing.get("risk_budget_rub") or 0.0)
@@ -9458,7 +9569,7 @@ def build_allocator_summary_text(sizing: dict[str, Any]) -> str:
     broker_hint = f", лимит брокера {broker_limit}" if broker_limit > 0 else ""
     return (
         f"Аллокатор: класс {instrument_class}, вес сигнала {conviction_weight:.2f}, "
-        f"форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{risk_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}{correlation_hint}, "
+        f"форма связки {strategy_health_score:.2f}{edge_hint}{edge_cap_hint}{recovery_hint}{daily_loss_hint}{broker_override_hint}{risk_override_hint}{broker_leverage_hint}{broker_leverage_reason_hint}{live_lot_cap_hint}{correlation_hint}, "
         f"запас {margin_headroom:.0f} RUB, доступно {allocatable_margin:.0f} RUB, "
         f"цель {target_trade_margin:.0f} RUB, ГО 1 лота {margin_per_lot:.0f} RUB, "
         f"глубина {qty_by_headroom} лот(а){risk_hint}{broker_hint} -> {quantity} лот(а)."
@@ -10829,6 +10940,8 @@ def open_position(
         state.last_entry_allocator_quantity = quantity
         state.last_entry_allocator_summary = build_allocator_summary_text(allocator_sizing)
         state.last_entry_allocator_time = datetime.now(UTC).isoformat()
+        state.last_entry_size_policy = str(allocator_sizing.get("entry_size_policy") or "")
+        state.last_entry_size_policy_reason = str(allocator_sizing.get("live_lot_cap_reason") or "")
         state.entry_risk_rub = round(
             quantity * float(allocator_sizing.get("money_risk_per_contract_rub") or 0.0),
             2,
@@ -10838,6 +10951,8 @@ def open_position(
         state.last_entry_allocator_quantity = quantity
         state.last_entry_allocator_summary = f"Последний вход: {quantity} лот(а), подробный расчёт аллокатора недоступен."
         state.last_entry_allocator_time = datetime.now(UTC).isoformat()
+        state.last_entry_size_policy = ""
+        state.last_entry_size_policy_reason = ""
         state.entry_risk_rub = 0.0
         state.entry_risk_budget_rub = 0.0
     state.entry_stop_price = float(stop_plan.get("working_stop_price") or 0.0) or None

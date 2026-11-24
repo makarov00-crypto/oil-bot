@@ -782,6 +782,189 @@ class PositionSizingTests(unittest.TestCase):
         self.assertIn("1 лот по допуску", summary)
         self.assertNotIn("риск сделки 564 RUB (0 лот.)", summary)
 
+    def test_stable_main_session_short_can_use_two_lots_in_bounded_pilot(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="SRM6",
+            figi="FIGI",
+            display_name="Сбербанк",
+            initial_margin_on_buy=1000.0,
+            initial_margin_on_sell=1000.0,
+        )
+        state = mod.InstrumentState(
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.72,
+            last_entry_edge_score=0.66,
+            last_entry_edge_label="confirmed",
+            last_entry_path="standard",
+        )
+        snapshot = mod.AccountSnapshot(total_portfolio=100000.0, free_rub=80000.0, blocked_guarantee_rub=0.0)
+        with patch.object(mod, "get_market_session", return_value="MAIN"), patch.object(
+            mod, "get_account_snapshot", return_value=snapshot
+        ), patch.object(
+            mod, "get_margin_headroom_rub", return_value=20000.0
+        ), patch.object(
+            mod, "get_broker_max_lots", return_value=10
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.20
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("средний", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ), patch.object(
+            mod, "get_daily_loss_limit_status", return_value={"mode": "normal"}
+        ), patch.object(
+            mod, "count_stable_short_two_lot_pilot_entries", return_value=0
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None, self.config, instrument, state, 30000.0, "SHORT", self.live_strategy
+            )
+
+        self.assertEqual(sizing["live_lot_cap"], 2)
+        self.assertEqual(sizing["entry_size_policy"], mod.STABLE_SHORT_TWO_LOT_PILOT_POLICY)
+        self.assertEqual(sizing["quantity"], 2)
+        self.assertIn("сделка 1 из 10", sizing["live_lot_cap_reason"])
+        self.assertIn("рабочий лимит 2 лот", mod.build_allocator_summary_text(sizing))
+
+    def test_two_lot_pilot_does_not_bypass_stop_risk_cap(self) -> None:
+        instrument = mod.InstrumentConfig(
+            symbol="SRM6",
+            figi="FIGI",
+            display_name="Сбербанк",
+            initial_margin_on_buy=100.0,
+            initial_margin_on_sell=100.0,
+            min_price_increment=1.0,
+            min_price_increment_amount=1000.0,
+        )
+        state = mod.InstrumentState(
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.80,
+            last_entry_edge_score=0.70,
+            last_entry_edge_label="confirmed",
+            last_entry_path="standard",
+        )
+        self.config.risk_per_trade_pct = 0.01
+        self.config.max_open_risk_pct = 0.10
+        self.config.symbols = ["SRM6"]
+        snapshot = mod.AccountSnapshot(total_portfolio=100000.0, free_rub=80000.0, blocked_guarantee_rub=0.0)
+        with patch.object(mod, "get_market_session", return_value="MAIN"), patch.object(
+            mod, "get_account_snapshot", return_value=snapshot
+        ), patch.object(
+            mod, "get_margin_headroom_rub", return_value=100000.0
+        ), patch.object(
+            mod, "get_broker_max_lots", return_value=100
+        ), patch.object(
+            mod, "get_signal_conviction_weight", return_value=1.25
+        ), patch.object(
+            mod, "get_session_position_multiplier", return_value=1.0
+        ), patch.object(
+            mod, "get_instrument_allocation_weight", return_value=("средний", 1.0)
+        ), patch.object(
+            mod, "get_strategy_health_score", return_value=(1.0, "связка рабочая")
+        ), patch.object(
+            mod, "get_strategy_regime_health_score", return_value=(1.0, "режим рабочий")
+        ), patch.object(
+            mod, "get_recovery_mode_status", return_value={"active": False}
+        ), patch.object(
+            mod, "get_daily_loss_limit_status", return_value={"mode": "normal"}
+        ), patch.object(
+            mod, "count_stable_short_two_lot_pilot_entries", return_value=0
+        ):
+            sizing = mod.calculate_position_sizing_context(
+                None,
+                self.config,
+                instrument,
+                state,
+                30000.0,
+                "SHORT",
+                self.live_strategy,
+                stop_distance_price=1.0,
+            )
+
+        self.assertEqual(sizing["live_lot_cap"], 2)
+        self.assertEqual(sizing["qty_by_risk"], 1)
+        self.assertEqual(sizing["quantity"], 1)
+
+    def test_two_lot_pilot_keeps_risky_entry_classes_at_one_lot(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="SRM6", figi="FIGI", display_name="Сбербанк")
+        base_state = mod.InstrumentState(
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.75,
+            last_entry_edge_score=0.66,
+            last_entry_edge_label="confirmed",
+            last_entry_path="standard",
+        )
+
+        def cap_for(state: mod.InstrumentState, *, signal: str = "SHORT", session: str = "MAIN", target=instrument) -> int:
+            with patch.object(mod, "count_stable_short_two_lot_pilot_entries", return_value=0):
+                cap, _policy, _reason = mod.get_reversal_live_lot_cap(
+                    self.config,
+                    target,
+                    state,
+                    signal,
+                    self.live_strategy,
+                    session,
+                    strategy_health_score=1.0,
+                    strategy_regime_health_score=1.0,
+                    recovery_mode_active=False,
+                    daily_loss_recovery_active=False,
+                )
+            return cap
+
+        self.assertEqual(cap_for(base_state, signal="LONG"), 1)
+        self.assertEqual(cap_for(base_state, session="EVENING"), 1)
+        self.assertEqual(cap_for(mod.InstrumentState(**{**base_state.__dict__, "last_entry_path": ""})), 1)
+        self.assertEqual(cap_for(mod.InstrumentState(**{**base_state.__dict__, "last_entry_path": "early_momentum"})), 1)
+        self.assertEqual(cap_for(mod.InstrumentState(**{**base_state.__dict__, "last_market_regime": "impulse"})), 1)
+        self.assertEqual(cap_for(base_state, target=self.instrument), 1)
+        brent = mod.InstrumentConfig(symbol="BMM6", figi="FIGI", display_name="Brent")
+        self.assertEqual(cap_for(base_state, target=brent), 1)
+
+    def test_two_lot_pilot_stops_automatically_after_ten_entries(self) -> None:
+        instrument = mod.InstrumentConfig(symbol="SRM6", figi="FIGI", display_name="Сбербанк")
+        state = mod.InstrumentState(
+            last_setup_quality_label="strong",
+            last_market_regime="trend_expansion",
+            last_market_regime_confidence=0.75,
+            last_entry_edge_score=0.66,
+            last_entry_edge_label="confirmed",
+            last_entry_path="standard",
+        )
+        with patch.object(mod, "count_stable_short_two_lot_pilot_entries", return_value=10):
+            cap, policy, reason = mod.get_reversal_live_lot_cap(
+                self.config,
+                instrument,
+                state,
+                "SHORT",
+                self.live_strategy,
+                "MAIN",
+                strategy_health_score=1.0,
+                strategy_regime_health_score=1.0,
+                recovery_mode_active=False,
+                daily_loss_recovery_active=False,
+            )
+
+        self.assertEqual(cap, 1)
+        self.assertEqual(policy, "")
+        self.assertIn("завершён", reason)
+
+    def test_two_lot_pilot_counter_uses_only_confirmed_two_lot_opens(self) -> None:
+        rows = [
+            {"event": "OPEN", "qty_lots": 2, "context": {"entry_size_policy": mod.STABLE_SHORT_TWO_LOT_PILOT_POLICY}},
+            {"event": "OPEN", "qty_lots": 1, "context": {"entry_size_policy": mod.STABLE_SHORT_TWO_LOT_PILOT_POLICY}},
+            {"event": "CLOSE", "qty_lots": 2, "context": {"entry_size_policy": mod.STABLE_SHORT_TWO_LOT_PILOT_POLICY}},
+            {"event": "OPEN", "qty_lots": 2, "context": {"entry_size_policy": "другая"}},
+        ]
+        self.assertEqual(mod.count_stable_short_two_lot_pilot_entries(rows), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
