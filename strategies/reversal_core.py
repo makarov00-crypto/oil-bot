@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from instrument_groups import is_brent_symbol
 
 
@@ -143,14 +145,31 @@ def classify_multiday_direction(df, direction: str) -> dict[str, float | str | b
     normalized_direction = str(direction or "").strip().upper()
     if normalized_direction not in {"LONG", "SHORT"}:
         return {"available": False, "regime": "unknown"}
-    history = df.tail(MULTIDAY_REGIME_WINDOW_HOURS)
-    if len(history) < MULTIDAY_REGIME_MIN_HOURS:
+    if "time" not in df.columns:
+        return {"available": False, "regime": "unknown"}
+    history = df.copy()
+    history["time"] = pd.to_datetime(history["time"], utc=True, errors="coerce")
+    history = history.dropna(subset=["time"]).sort_values("time").drop_duplicates("time")
+    if "is_complete" in history:
+        history = history[history["is_complete"].eq(True)]
+    if history.empty:
+        return {"available": False, "regime": "unknown"}
+    # Candle timestamps are OPEN times. Anchor all windows to the last
+    # completed hourly candle's CLOSE, never to a count of trading bars.
+    closed_at = history["time"] + pd.Timedelta(hours=1)
+    end = closed_at.iloc[-1]
+    history = history[closed_at >= end - pd.Timedelta(hours=MULTIDAY_REGIME_WINDOW_HOURS)]
+    closed_at = history["time"] + pd.Timedelta(hours=1)
+    if closed_at.iloc[0] > end - pd.Timedelta(hours=MULTIDAY_REGIME_MIN_HOURS):
         return {"available": False, "regime": "unknown"}
 
     last = history.iloc[-1]
-    tail_12 = history.tail(12)
-    tail_24 = history.tail(24)
-    tail_48 = history.tail(48)
+    tail_12 = history[closed_at >= end - pd.Timedelta(hours=12)]
+    tail_24 = history[closed_at >= end - pd.Timedelta(hours=24)]
+    tail_48 = history[closed_at >= end - pd.Timedelta(hours=48)]
+    # A single candle after a long exchange closure is not a direction.
+    if len(tail_12) < 3 or len(tail_24) < 3 or len(tail_48) < 3:
+        return {"available": False, "regime": "unknown"}
     atr_values = [float(value) for value in tail_24["atr"].tolist() if float(value) > 0.0]
     atr = sorted(atr_values)[len(atr_values) // 2] if atr_values else 1e-9
     atr = max(atr, 1e-9)
@@ -207,6 +226,9 @@ def classify_multiday_direction(df, direction: str) -> dict[str, float | str | b
     regime = "trend" if stable_trend else "emerging" if emerging_trend else "no_trend"
     return {
         "available": True,
+        "window_end": end.isoformat(),
+        "window_start": closed_at.iloc[0].isoformat(),
+        "window_bars": len(history),
         "regime": regime,
         "stable_trend": stable_trend,
         "emerging_trend": emerging_trend,
