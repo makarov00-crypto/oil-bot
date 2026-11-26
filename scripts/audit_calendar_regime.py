@@ -56,4 +56,3 @@ for group, rows in [('prior', [x for x in events if x['at']<'2026-11-25']), ('re
         print(group,typ,'episodes',len(subset),'4h_samples',len(vals),'positive',sum(v>0 for v in vals),'mean_atr',round(sum(vals)/len(vals),3) if vals else None)
         for x in subset: print(json.dumps({k:x[k] for k in ['symbol','at','signal','price','move_4h_atr','move_8h_atr'] if k in x}))
 print('BR25',json.dumps([x for x in events if x['symbol']=='BRZ6' and x['at'].startswith('2026-11-25')],ensure_ascii=False))
-
