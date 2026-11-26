@@ -6067,11 +6067,17 @@ def classify_market_regime(
             else 0.0
         ),
         "multiday_long_available": bool(multiday_long.get("available")),
+        "multiday_long_window_start": str(multiday_long.get("window_start") or ""),
+        "multiday_long_window_end": str(multiday_long.get("window_end") or ""),
+        "multiday_long_window_bars": int(multiday_long.get("window_bars") or 0),
         "multiday_long_regime": str(multiday_long.get("regime") or "unknown"),
         "multiday_long_score": float(multiday_long.get("stable_score") or 0.0),
         "multiday_long_move_48_atr": float(multiday_long.get("move_48_atr") or 0.0),
         "multiday_long_efficiency_24": float(multiday_long.get("efficiency_24") or 0.0),
         "multiday_short_available": bool(multiday_short.get("available")),
+        "multiday_short_window_start": str(multiday_short.get("window_start") or ""),
+        "multiday_short_window_end": str(multiday_short.get("window_end") or ""),
+        "multiday_short_window_bars": int(multiday_short.get("window_bars") or 0),
         "multiday_short_regime": str(multiday_short.get("regime") or "unknown"),
         "multiday_short_score": float(multiday_short.get("stable_score") or 0.0),
         "multiday_short_move_48_atr": float(multiday_short.get("move_48_atr") or 0.0),
@@ -6150,13 +6156,13 @@ def regime_entry_block_reason(
         available = bool(metrics.get(f"multiday_{direction_key}_available"))
         multiday_regime = str(metrics.get(f"multiday_{direction_key}_regime") or "unknown")
         if not available:
-            return "режим 48–72ч ещё не подтверждён: недостаточно закрытых часовых свечей"
+            return "режим за 48–72 календарных часа ещё не подтверждён: недостаточно истории или свежих закрытых свечей"
         if multiday_regime not in {"trend", "emerging"}:
             score = float(metrics.get(f"multiday_{direction_key}_score") or 0.0)
             move_48_atr = float(metrics.get(f"multiday_{direction_key}_move_48_atr") or 0.0)
             efficiency_24 = float(metrics.get(f"multiday_{direction_key}_efficiency_24") or 0.0)
             return (
-                f"нет подтверждённого режима {signal} за 48–72ч: "
+                f"нет подтверждённого режима {signal} за 48–72 календарных часа: "
                 f"оценка={score:.0f}/6, движение 48ч={move_48_atr:.2f} ATR, "
                 f"эффективность 24ч={efficiency_24:.2f}"
             )

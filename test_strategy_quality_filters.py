@@ -270,6 +270,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
             flat_price = 100.0 + (0.08 if index % 2 else -0.08)
             trend_rows.append(
                 {
+                    "time": pd.Timestamp("2026-05-01T10:00:00Z") + pd.Timedelta(hours=index),
                     "close": trend_price,
                     "ema20": trend_price - 0.35,
                     "ema50": trend_price - 0.85,
@@ -281,6 +282,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
             )
             flat_rows.append(
                 {
+                    "time": pd.Timestamp("2026-05-01T10:00:00Z") + pd.Timedelta(hours=index),
                     "close": flat_price,
                     "ema20": 100.0,
                     "ema50": 100.0,
@@ -317,7 +319,7 @@ class StrategyQualityFilterTests(unittest.TestCase):
         reason = mod.regime_entry_block_reason(
             "SRM6", "reversal_1h", "LONG", "trend_expansion", blocked_metrics
         )
-        self.assertIn("нет подтверждённого режима LONG за 48–72ч", reason)
+        self.assertIn("нет подтверждённого режима LONG за 48–72 календарных часа", reason)
 
     def test_unified_quality_requires_real_candle_and_multiday_regime(self) -> None:
         weak_score, weak_label = mod.estimate_setup_quality(
